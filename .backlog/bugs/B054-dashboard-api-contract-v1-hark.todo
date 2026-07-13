@@ -1,0 +1,30 @@
+---
+complexity: medium
+created_at: "2026-07-13T14:18:33Z"
+depends_on: []
+estimate_hours: 3
+id: B054
+priority: high
+status: pending
+tags:
+    - dashboard
+    - api
+    - protocol
+    - rust
+    - schema
+title: 'Dashboard API contract v1 (hark.dashboard.v1): docs, schemas, fixtures'
+updated_at: "2026-07-13T14:18:33Z"
+---
+## Scope
+Define the stable boundary between any hark backend (Python now, Rust later) and the dashboard webui. See docs/plans/I003-dashboard.md.
+
+- docs/DASHBOARD.md: REST + SSE contract (WS reserved; messages transport-agnostic), auth model (localhost default, bearer token for non-localhost), endpoint semantics
+- schemas/dashboard-v1/: JSON Schemas for snapshot responses + stream envelope (stream payloads are hark.event.v1 unchanged)
+- fixtures/dashboard/: request/response/stream fixtures (Rust parity strategy, same as B002)
+- Redaction rules for the config endpoint (test over fixtures)
+
+## Acceptance
+- [ ] docs/DASHBOARD.md covers all endpoints in the I003 plan sketch
+- [ ] Schemas validate the fixtures in CI (extend tests/test_fixtures_parity.py pattern)
+- [ ] Explicit statement of Rust-port obligations (implement contract + pass fixtures)
+- [ ] Redacted-config fixture proves no secret material in any response

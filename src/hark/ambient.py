@@ -357,14 +357,18 @@ def complete_after_wake(
     on_partial: Any | None = None,
     out: TextIO | None = None,
 ) -> AmbientResult:
-    """After wake: beep→record→beep (no spoken 'okay' / 'listening').
+    """After wake: optional lead-in + arm cue → energy-gated cloud listen.
 
-    In radio end_mode, interim STT is streamed as ambient.partial (HOLD) via
-    on_partial / out until the end phrase yields ambient.prompt (final).
+    No spoken 'okay' / 'listening' by default. Post-wake settle, softer/configurable
+    open threshold, and no-open retry/nudge are driven by ``[ambient]`` /
+    ``[listen]`` (B031). In radio end_mode, interim STT is streamed as
+    ambient.partial (HOLD) via on_partial / out until the end phrase yields
+    ambient.prompt (final).
     """
     del announce
     event_id = new_event_id()
     stream_id = new_stream_id()
+    amb = cfg.ambient
 
     def _emit_partial(ev: dict[str, Any]) -> None:
         ev = {**ev, "phrase": hit.phrase}
@@ -385,6 +389,38 @@ def complete_after_wake(
             warning=ev.get("warning"),
         )
 
+    # Post-wake gate overrides (B031)
+    post_abs = getattr(amb, "post_wake_abs_open_db", None)
+    if post_abs is None:
+        post_abs = getattr(cfg.listen, "abs_open_db", -48.0)
+    post_timeout = getattr(amb, "post_wake_timeout_s", None)
+    if post_timeout is None:
+        post_timeout = getattr(cfg.listen, "initial_timeout_s", 45.0)
+    lead_in_ms = int(getattr(amb, "post_wake_lead_in_ms", 150) or 0)
+    arm_cue = bool(getattr(amb, "post_wake_arm_cue", True))
+    no_open_nudge = bool(getattr(amb, "post_wake_no_open_nudge", True))
+    no_open_tts = str(
+        getattr(
+            amb,
+            "post_wake_no_open_tts",
+            "I heard the wake but not your prompt.",
+        )
+        or "I heard the wake but not your prompt."
+    )
+
+    syslog(
+        "ambient.post_wake_listen",
+        component="ambient",
+        level="info",
+        phrase=hit.phrase,
+        wake_backend=hit.backend,
+        stream_id=stream_id,
+        abs_open_db=float(post_abs),
+        initial_timeout_s=float(post_timeout),
+        lead_in_ms=lead_in_ms,
+        arm_cue=arm_cue,
+    )
+
     try:
         listened = run_listen(
             cfg,
@@ -392,14 +428,46 @@ def complete_after_wake(
             on_partial=_emit_partial if cfg.listen.end_mode == "radio" else None,
             stream_id=stream_id,
             partial_kind="ambient.partial",
+            abs_open_db=float(post_abs),
+            initial_timeout_s=float(post_timeout),
+            lead_in_ms=lead_in_ms,
+            arm_cue=arm_cue,
+            no_open_nudge=no_open_nudge,
+            no_open_nudge_text=no_open_tts,
         )
     except Exception as exc:
+        err_s = str(exc)
+        is_no_open = (
+            "no speech detected" in err_s.lower()
+            or "no speech captured" in err_s.lower()
+        )
+        # run_listen already spoke post_wake_no_open_tts as the mid-path nudge
+        # when enabled — do not double-speak on final fail (metrics are enough).
+        syslog(
+            "ambient.error",
+            component="ambient",
+            level="error",
+            message=err_s[:300],
+            phrase=hit.phrase,
+            wake_backend=hit.backend,
+            stream_id=stream_id,
+            event_id=event_id,
+            reason="no_open" if is_no_open else "listen_failed",
+            listen_error=err_s[:240],
+            abs_open_db=float(post_abs),
+            initial_timeout_s=float(post_timeout),
+        )
         return AmbientResult(
             activated=True,
             phrase=hit.phrase,
             text=None,
             wake_backend=hit.backend,
-            listen={"error": str(exc)},
+            listen={
+                "error": err_s,
+                "reason": "no_open" if is_no_open else "listen_failed",
+                "abs_open_db": float(post_abs),
+                "initial_timeout_s": float(post_timeout),
+            },
             event_id=event_id,
             stream_id=stream_id,
             final=True,

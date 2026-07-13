@@ -208,6 +208,67 @@ def run_tts(
 
 
 EMPTY_STT_NUDGE_TEXT = "Sorry, I didn't catch that."
+# Gate never opened (B031) — general listen; ambient post-wake may override
+NO_OPEN_NUDGE_TEXT = "I didn't hear anything. Please speak after the beep."
+
+
+def _is_no_open_timeout(exc: BaseException) -> bool:
+    """True when energy gate never opened (vs empty STT after open)."""
+    msg = str(exc).lower()
+    return "no speech detected" in msg or "no speech captured" in msg
+
+
+def _log_no_open(
+    *,
+    peak_rms: float | None = None,
+    peak_db: float | None = None,
+    open_thresh: float | None = None,
+    after_tts: bool,
+    attempt: int,
+    stream_id: str | None,
+    phase: str,
+    error: str,
+    abs_open_db: float | None = None,
+) -> None:
+    """Structured metric when capture times out before speech opens."""
+    # Best-effort parse peak/open from TimeoutError message
+    if peak_db is None:
+        m = re.search(r"peak_db=(-?[\d.]+)", error)
+        if m:
+            try:
+                peak_db = float(m.group(1))
+            except ValueError:
+                pass
+    if peak_rms is None:
+        m = re.search(r"peak_rms=(-?[\d.]+)", error)
+        if m:
+            try:
+                peak_rms = float(m.group(1))
+            except ValueError:
+                pass
+    if open_thresh is None:
+        m = re.search(r"open_thresh≈(-?[\d.]+)", error)
+        if m:
+            try:
+                open_thresh = float(m.group(1))
+            except ValueError:
+                pass
+    syslog(
+        "speech.no_open",
+        component="stt",
+        level="warn",
+        message="energy gate never opened",
+        peak_db=round(peak_db, 2) if peak_db is not None else None,
+        rms=round(peak_rms, 6) if peak_rms is not None else None,
+        open_thresh=round(open_thresh, 2) if open_thresh is not None else None,
+        abs_open_db=abs_open_db,
+        after_tts=after_tts,
+        attempt=attempt,
+        stream_id=stream_id,
+        phase=phase,
+        error=error[:240],
+    )
+
 
 
 def _tag_meta_command(result: "ListenResult") -> "ListenResult":
@@ -284,6 +345,15 @@ def run_listen(
     partial_kind: str = "ambient.partial",
     discard_leading_ms: int = 0,
     audio_ok_after: Any | None = None,
+    # B031: energy-gate / post-wake overrides (None = config defaults)
+    abs_open_db: float | None = None,
+    open_margin_db: float | None = None,
+    initial_timeout_s: float | None = None,
+    lead_in_ms: int = 0,
+    arm_cue: bool = False,
+    no_open_retry: bool | None = None,
+    no_open_nudge: bool | None = None,
+    no_open_nudge_text: str | None = None,
 ) -> ListenResult:
     """Capture speech. Radio mode streams partials via on_partial when enabled.
 
@@ -294,9 +364,18 @@ def run_listen(
     re-listen once (``empty_stt_retry``), then TTS nudge + re-listen
     (``empty_stt_nudge``) before failing.
 
+    No-open recovery (silence mode, B031): when the energy gate never opens
+    (``no speech detected``), log ``speech.no_open``, optionally re-listen
+    (``no_open_retry``), then TTS nudge + re-listen (``no_open_nudge``).
+
     Overlap pre-arm: pass ``audio_ok_after`` (callable → monotonic deadline or None)
     and/or ``discard_leading_ms`` so TTS tail / residual echo is dropped before the
     energy gate runs.
+
+    Post-wake / soft gate: ``abs_open_db``, ``open_margin_db``, ``initial_timeout_s``
+    override ``[listen]`` defaults. ``lead_in_ms`` settles before the first capture;
+    ``arm_cue`` plays record-start when listen arms (not only when speech opens).
+    ``no_open_nudge_text`` overrides the default no-open TTS line.
     """
     mode = parse_end_mode(end_mode or cfg.listen.end_mode)
     max_listen = float(max_s if max_s is not None else cfg.listen.max_listen_s)
@@ -310,6 +389,37 @@ def run_listen(
     else:
         guard = max(0.0, cfg.audio.post_tts_guard_ms / 1000.0)
     after_tts = last_tts is not None
+
+    gate_abs_open = float(
+        abs_open_db
+        if abs_open_db is not None
+        else getattr(cfg.listen, "abs_open_db", -48.0)
+    )
+    gate_open_margin = float(
+        open_margin_db
+        if open_margin_db is not None
+        else getattr(cfg.listen, "open_margin_db", 8.0)
+    )
+    gate_timeout_s = float(
+        initial_timeout_s
+        if initial_timeout_s is not None
+        else getattr(cfg.listen, "initial_timeout_s", 45.0)
+    )
+    nudge_no_open_text = (
+        no_open_nudge_text
+        if no_open_nudge_text is not None
+        else NO_OPEN_NUDGE_TEXT
+    )
+    allow_no_open_retry = (
+        bool(getattr(cfg.listen, "no_open_retry", True))
+        if no_open_retry is None
+        else bool(no_open_retry)
+    )
+    allow_no_open_nudge = (
+        bool(getattr(cfg.listen, "no_open_nudge", True))
+        if no_open_nudge is None
+        else bool(no_open_nudge)
+    )
 
     stt = resolve_stt(provider or cfg.stt.provider)
     end_silence = (
@@ -367,6 +477,20 @@ def run_listen(
                 mode=mode.value,
             )
 
+    def _arm_cue_if_requested() -> None:
+        """Optional early arm cue (post-wake) so operator knows listen is ready."""
+        nonlocal recording_cued
+        if arm_cue and not recording_cued:
+            recording_cued = True
+            play_record_start()
+            syslog(
+                "listen.armed_cue",
+                component="stt",
+                level="info",
+                stream_id=stream,
+                mode=mode.value,
+            )
+
     def _agent_wants_stop(_pcm: bytes, _elapsed: float) -> bool:
         return poll_listen_action(stream) is not None
 
@@ -379,27 +503,46 @@ def run_listen(
         register_active_listen(stream, mode=mode.value)
         try:
             if mode is EndMode.SILENCE:
-                # attempt: 0 = first, 1 = empty_stt_retry, 2 = after nudge
+                # attempt: 0 = first, 1 = empty/no-open retry, 2 = after nudge
                 attempt = 0
                 did_retry = False
                 did_nudge = False
+                did_no_open_retry = False
+                did_no_open_nudge = False
                 settle = guard
+                if lead_in_ms > 0:
+                    time.sleep(max(0.0, lead_in_ms / 1000.0))
 
                 while True:
                     if settle > 0:
                         time.sleep(settle)
                     # After first attempt, only short re-arm settle (mute/echo)
                     settle = max(0.05, min(0.2, guard if guard > 0 else 0.1))
+                    # Fresh cue state each attempt; optional early arm for post-wake
                     recording_cued = False
+                    if arm_cue:
+                        _arm_cue_if_requested()
                     try:
                         # Overlap discard only on first attempt after TTS
                         lead_discard = discard_leading_ms if attempt == 0 else 0
                         lead_ok = audio_ok_after if attempt == 0 else None
+                        # Skip double beep when we already armed; still log speech open
+                        on_open = (
+                            (lambda: syslog(
+                                "listen.speech_opened",
+                                component="stt",
+                                level="info",
+                                stream_id=stream,
+                                mode=mode.value,
+                            ))
+                            if arm_cue
+                            else _cue_start_once
+                        )
                         cap = capture_utterance(
                             max_s=max_listen,
                             end_silence_s=end_silence,
                             post_tts_guard_s=0,
-                            on_opened=_cue_start_once,
+                            on_opened=on_open,
                             should_stop=_agent_wants_stop,
                             discard_leading_ms=lead_discard,
                             audio_ok_after=lead_ok,
@@ -407,16 +550,76 @@ def run_listen(
                             endpoint_probe_silence_s=cfg.listen.endpoint_probe_silence_s,
                             endpoint_max_silence_s=cfg.listen.endpoint_max_silence_s,
                             on_endpoint_event=_endpoint_event,
+                            abs_open_db=gate_abs_open,
+                            open_margin_db=gate_open_margin,
+                            initial_timeout_s=gate_timeout_s,
                         )
                     except TimeoutError as exc:
                         if recording_cued:
                             play_record_stop()
+                        err_s = str(exc)
                         store.record_stt(
                             text="",
                             provider=getattr(stt, "name", None),
                             ok=False,
-                            error=str(exc)[:200],
+                            error=err_s[:200],
                         )
+                        if _is_no_open_timeout(exc):
+                            phase = (
+                                "nudge"
+                                if did_no_open_nudge
+                                else ("retry" if did_no_open_retry else "initial")
+                            )
+                            _log_no_open(
+                                after_tts=after_tts,
+                                attempt=attempt,
+                                stream_id=stream,
+                                phase=phase,
+                                error=err_s,
+                                abs_open_db=gate_abs_open,
+                            )
+                            if allow_no_open_retry and not did_no_open_retry:
+                                did_no_open_retry = True
+                                attempt = max(attempt, 1)
+                                syslog(
+                                    "speech.no_open_retry",
+                                    component="stt",
+                                    level="info",
+                                    after_tts=after_tts,
+                                    stream_id=stream,
+                                    abs_open_db=gate_abs_open,
+                                )
+                                settle = max(0.05, min(0.2, guard if guard > 0 else 0.1))
+                                continue
+                            if allow_no_open_nudge and not did_no_open_nudge:
+                                did_no_open_nudge = True
+                                attempt = 2
+                                syslog(
+                                    "speech.no_open_nudge",
+                                    component="stt",
+                                    level="info",
+                                    after_tts=after_tts,
+                                    stream_id=stream,
+                                    text=nudge_no_open_text,
+                                )
+                                try:
+                                    run_tts(
+                                        cfg,
+                                        nudge_no_open_text,
+                                        provider=provider,
+                                        play=True,
+                                        mute_mic=cfg.audio.mute_mic_during_tts,
+                                    )
+                                except Exception as nudge_exc:
+                                    syslog(
+                                        "speech.no_open_nudge_failed",
+                                        component="stt",
+                                        level="warn",
+                                        error=str(nudge_exc)[:200],
+                                        stream_id=stream,
+                                    )
+                                settle = max(0.1, cfg.audio.post_tts_guard_ms / 1000.0)
+                                continue
                         raise
                     agent_act = consume_listen_action(stream)
                     if recording_cued:
@@ -573,12 +776,14 @@ def run_listen(
                     cap = capture_utterance(
                         max_s=min(remaining, max_listen),
                         end_silence_s=end_silence,
-                        initial_timeout_s=min(45.0, remaining),
+                        initial_timeout_s=min(gate_timeout_s, remaining),
                         post_tts_guard_s=0,
                         on_opened=_cue_start_once,
                         should_stop=_agent_wants_stop,
                         discard_leading_ms=seg_discard,
                         audio_ok_after=seg_ok_after,
+                        abs_open_db=gate_abs_open,
+                        open_margin_db=gate_open_margin,
                     )
                 except TimeoutError:
                     agent_act = poll_listen_action(stream)

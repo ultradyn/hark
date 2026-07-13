@@ -162,7 +162,7 @@ def capture_utterance(
     min_speech_s: float = 0.25,
     open_margin_db: float = 8.0,
     # Absolute floor: speech louder than this opens even if relative margin fails
-    abs_open_db: float = -38.0,
+    abs_open_db: float = -48.0,
     open_confirm_blocks: int = 4,  # ~80 ms
     # Keep this much audio immediately before speech open (trims long leading silence)
     preroll_ms: int = 200,

@@ -6,6 +6,16 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Post-wake listen gate soften + no-open recovery (B031): energy-gate absolute open
+  floor default softened from -38 dB to **`-48` dB** (`listen.abs_open_db`) so quiet
+  close-talk speech after ambient wake opens the gate (dogfood peak≈-45 never opened).
+  Configurable `open_margin_db`, `initial_timeout_s`, `no_open_retry` / `no_open_nudge`
+  re-listen when the gate never opens (not only empty STT after open). Ambient post-wake
+  knobs: `post_wake_lead_in_ms`, `post_wake_arm_cue`, `post_wake_abs_open_db`,
+  `post_wake_timeout_s` (default 15s for faster nudge), `post_wake_no_open_nudge` +
+  TTS *"I heard the wake but not your prompt."*; clear `ambient.error` / `speech.no_open`
+  metrics.
+
 - Self-detection (B029): when `hark watch` runs inside a herdr pane it now
   detects its own pane (via `HERDR_ENV`/`HERDR_PANE_ID`/`HERDR_SOCKET_PATH`) and
   excludes it from watch — no self events, no self pane reads (prevents feedback

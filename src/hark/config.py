@@ -83,6 +83,12 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "stream_partials",
         "empty_stt_retry",
         "empty_stt_nudge",
+        # Energy-gate open (B031) — softer abs floor so quiet post-wake speech opens
+        "abs_open_db",
+        "open_margin_db",
+        "initial_timeout_s",
+        "no_open_retry",
+        "no_open_nudge",
         # Optional informal closers (default off) — see listen_end.DEFAULT_SOFT_END_PHRASES
         "soft_end_phrases_enabled",
         "soft_end_phrases",
@@ -113,6 +119,13 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "timeout_s",
         "debug",
         "debug_retention_days",
+        # Post-wake listen (B031)
+        "post_wake_lead_in_ms",
+        "post_wake_arm_cue",
+        "post_wake_abs_open_db",
+        "post_wake_timeout_s",
+        "post_wake_no_open_nudge",
+        "post_wake_no_open_tts",
     }),
     "stt": frozenset({"provider"}),
     "tts": frozenset({"provider", "voice", "language", "max_chars", "allow_espeak_fallback"}),
@@ -214,6 +227,17 @@ class ListenConfig:
     empty_stt_retry: bool = True
     # If still empty after retry: TTS "Sorry, I didn't catch that." then re-listen once
     empty_stt_nudge: bool = True
+    # Energy gate absolute open floor (dBFS). Quieter speech needs a lower value.
+    # Dogfood: peak≈-45 with default -38 never opened → default softened to -48 (B031).
+    abs_open_db: float = -48.0
+    # Relative margin above adaptive noise floor (dB)
+    open_margin_db: float = 8.0
+    # Seconds to wait for speech to open the gate before timeout
+    initial_timeout_s: float = 45.0
+    # Gate never opened (TimeoutError "no speech detected"): silent re-listen once
+    no_open_retry: bool = True
+    # Still no open: TTS nudge then one more listen (text overridable by ambient)
+    no_open_nudge: bool = True
     # Optional informal end phrases (default OFF — conservative; utterance-final only)
     soft_end_phrases_enabled: bool = False
     soft_end_phrases: list[str] = field(
@@ -257,6 +281,17 @@ class AmbientConfig:
     # Dev: save wake audio+text under state/debug/wake (7-day cleanup)
     debug: bool = False
     debug_retention_days: float = 7.0
+    # Post-wake cloud listen (B031): settle + arm cue + optional softer gate
+    post_wake_lead_in_ms: int = 150
+    # Play record-start when post-wake listen arms (not only when speech opens)
+    post_wake_arm_cue: bool = True
+    # Override listen.abs_open_db for post-wake only (None = use listen default)
+    post_wake_abs_open_db: float | None = None
+    # Gate open wait after wake (None = listen.initial_timeout_s). Shorter = faster nudge.
+    post_wake_timeout_s: float | None = 15.0
+    # After no-open exhausted: optional TTS before ambient.error (and as last nudge)
+    post_wake_no_open_nudge: bool = True
+    post_wake_no_open_tts: str = "I heard the wake but not your prompt."
     # Full wake policy (names/phrases + learned aliases); set by load_config
     wake_policy: Any = None
 
@@ -390,6 +425,13 @@ strip_phrase = true
 max_listen_s = 300
 empty_stt_retry = true       # re-listen once if STT returns empty transcript
 empty_stt_nudge = true       # TTS "Sorry, I didn't catch that." then re-listen once more
+# Energy gate open (B031). abs_open_db is the absolute floor (dBFS); quieter mics need lower.
+# Default -48 (was hardcoded -38) so normal close-talk speech opens; raise if noisy room.
+abs_open_db = -48.0
+open_margin_db = 8.0         # dB above adaptive noise floor
+initial_timeout_s = 45       # wait for speech open before timeout (answer windows)
+no_open_retry = true         # re-listen once if gate never opens
+no_open_nudge = true         # TTS then re-listen once more on no-open
 
 # Ambient: when NOT replying to a blocked agent question
 # Local 2–3s snippets scan for activation; cloud STT only after wake.
@@ -425,6 +467,13 @@ snippet_s = 2.5
 timeout_s = 300
 debug = true                 # save wake wav+text under ~/.local/state/hark/debug/wake
 debug_retention_days = 7
+# Post-wake listen after successful activation (B031)
+post_wake_lead_in_ms = 150   # settle after wake before arming cloud listen
+post_wake_arm_cue = true     # record-start beep when listen arms (operator feedback)
+# post_wake_abs_open_db = -50  # optional softer gate for post-wake only
+post_wake_timeout_s = 15     # gate-open wait after wake (faster nudge than answer windows)
+post_wake_no_open_nudge = true
+# post_wake_no_open_tts = "I heard the wake but not your prompt."
 
 [stt]
 provider = "auto"
@@ -510,6 +559,25 @@ def _build_ambient_config(
             )
         ),
         debug_retention_days=float(ambient_raw.get("debug_retention_days", 7)),
+        post_wake_lead_in_ms=int(ambient_raw.get("post_wake_lead_in_ms", 150)),
+        post_wake_arm_cue=bool(ambient_raw.get("post_wake_arm_cue", True)),
+        post_wake_abs_open_db=(
+            float(ambient_raw["post_wake_abs_open_db"])
+            if ambient_raw.get("post_wake_abs_open_db") is not None
+            else None
+        ),
+        post_wake_timeout_s=(
+            float(ambient_raw["post_wake_timeout_s"])
+            if ambient_raw.get("post_wake_timeout_s") is not None
+            else 15.0
+        ),
+        post_wake_no_open_nudge=bool(ambient_raw.get("post_wake_no_open_nudge", True)),
+        post_wake_no_open_tts=str(
+            ambient_raw.get(
+                "post_wake_no_open_tts",
+                "I heard the wake but not your prompt.",
+            )
+        ),
         wake_policy=policy,
     )
 
@@ -837,6 +905,11 @@ def load_config(path: Path | None = None) -> HarkConfig:
             stream_partials=bool(listen_raw.get("stream_partials", True)),
             empty_stt_retry=bool(listen_raw.get("empty_stt_retry", True)),
             empty_stt_nudge=bool(listen_raw.get("empty_stt_nudge", True)),
+            abs_open_db=float(listen_raw.get("abs_open_db", -48.0)),
+            open_margin_db=float(listen_raw.get("open_margin_db", 8.0)),
+            initial_timeout_s=float(listen_raw.get("initial_timeout_s", 45.0)),
+            no_open_retry=bool(listen_raw.get("no_open_retry", True)),
+            no_open_nudge=bool(listen_raw.get("no_open_nudge", True)),
             soft_end_phrases_enabled=soft_end_enabled,
             soft_end_phrases=_as_list_str(
                 listen_raw.get("soft_end_phrases"), list(DEFAULT_SOFT_END_PHRASES)
@@ -963,6 +1036,11 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "stream_partials": cfg.listen.stream_partials,
             "empty_stt_retry": cfg.listen.empty_stt_retry,
             "empty_stt_nudge": cfg.listen.empty_stt_nudge,
+            "abs_open_db": cfg.listen.abs_open_db,
+            "open_margin_db": cfg.listen.open_margin_db,
+            "initial_timeout_s": cfg.listen.initial_timeout_s,
+            "no_open_retry": cfg.listen.no_open_retry,
+            "no_open_nudge": cfg.listen.no_open_nudge,
             "soft_end_phrases_enabled": cfg.listen.soft_end_phrases_enabled,
             "soft_end_phrases": list(cfg.listen.soft_end_phrases),
             "endpoint_strategy": cfg.listen.endpoint_strategy,
@@ -983,6 +1061,12 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "timeout_s": cfg.ambient.timeout_s,
             "debug": cfg.ambient.debug,
             "debug_retention_days": cfg.ambient.debug_retention_days,
+            "post_wake_lead_in_ms": cfg.ambient.post_wake_lead_in_ms,
+            "post_wake_arm_cue": cfg.ambient.post_wake_arm_cue,
+            "post_wake_abs_open_db": cfg.ambient.post_wake_abs_open_db,
+            "post_wake_timeout_s": cfg.ambient.post_wake_timeout_s,
+            "post_wake_no_open_nudge": cfg.ambient.post_wake_no_open_nudge,
+            "post_wake_no_open_tts": cfg.ambient.post_wake_no_open_tts,
         },
         "stt": {"provider": cfg.stt.provider},
         "tts": {

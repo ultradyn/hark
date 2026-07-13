@@ -1,0 +1,24 @@
+---
+complexity: medium
+created_at: "2026-07-13T06:40:31Z"
+depends_on: []
+estimate_hours: 1
+id: B002
+priority: high
+status: pending
+tags:
+    - rust
+    - parity
+title: Rust client parity with Python Mode A
+updated_at: "2026-07-13T06:40:31Z"
+---
+## Problem
+Python is the prototype. Rust client should share fixtures under fixtures/ for ingestion, wake match, radio end, HEP events.
+
+## Acceptance
+- [ ] Core matchers (wake, radio end, fingerprint, risk) pass fixtures/text/*
+- [ ] HEP event ingest for fixtures/events/hep/*
+- [ ] CLI surface parity for watch/tts/listen/ask/answer as needed
+
+## Notes
+See fixtures/README.md and tests/test_fixtures_parity.py.

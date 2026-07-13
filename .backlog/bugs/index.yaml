@@ -1,0 +1,10 @@
+bugs:
+    - file: B001-test-openai-tts-stt-and-minima.todo
+    - file: B002-rust-client-parity-with-python.todo
+    - file: B003-radio-soft-end-phrase-detectio.todo
+    - file: B004-true-overlapping-listen-pre-ar.todo
+    - file: B005-herdr-wire-fixtures-from-real.todo
+    - file: B006-harkd-daemon-not-v1.todo
+    - file: B007-smart-turn-better-endpointing.todo
+    - file: B008-ambient-wake-offline-re-decode.todo
+    - file: B009-multi-session-voice-queue-ux-p.todo

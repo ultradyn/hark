@@ -1,0 +1,20 @@
+---
+complexity: medium
+created_at: "2026-07-13T06:40:31Z"
+depends_on: []
+estimate_hours: 1
+id: B008
+priority: high
+status: pending
+tags:
+    - ambient
+    - fixtures
+title: 'Ambient wake: offline re-decode of fixture WAVs with Vosk'
+updated_at: "2026-07-13T06:40:31Z"
+---
+## Problem
+Parity tests use vosk_text from sidecars. Full offline re-decode of fixtures/voice/wake/live/*.wav would catch model/version drift.
+
+## Acceptance
+- [ ] Optional pytest mark requiring vosk model
+- [ ] Assert match_activation on re-decoded text

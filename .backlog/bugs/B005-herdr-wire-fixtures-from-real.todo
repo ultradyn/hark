@@ -1,0 +1,22 @@
+---
+complexity: medium
+created_at: "2026-07-13T06:40:31Z"
+depends_on: []
+estimate_hours: 1
+id: B005
+priority: high
+status: pending
+tags:
+    - herdr
+    - fixtures
+title: Herdr wire fixtures from real captures
+updated_at: "2026-07-13T06:40:31Z"
+---
+## Problem
+fixtures/herdr/ is a placeholder. Need redacted agent-list / watch stream captures for contract tests.
+
+## Acceptance
+- [ ] Capture blocked + working agent list JSON
+- [ ] Capture watch stream sample
+- [ ] Redact secrets/paths
+- [ ] Python (and later Rust) contract tests

@@ -1,0 +1,21 @@
+---
+complexity: medium
+created_at: "2026-07-13T06:40:31Z"
+depends_on: []
+estimate_hours: 1
+id: B006
+priority: high
+status: pending
+tags:
+    - daemon
+    - roadmap
+title: harkd daemon (not v1)
+updated_at: "2026-07-13T06:40:31Z"
+---
+## Problem
+Optional always-on daemon is out of scope for Mode A v1 but product roadmap mentions harkd.
+
+## Acceptance
+- [ ] Spec for daemon vs Mode A boundary
+- [ ] Shared state with Mode A tools
+- [ ] No silent double-send with Mode A

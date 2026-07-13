@@ -1,0 +1,21 @@
+---
+complexity: medium
+created_at: "2026-07-13T06:40:31Z"
+depends_on: []
+estimate_hours: 1
+id: B003
+priority: high
+status: pending
+tags:
+    - listen
+    - radio
+title: Radio soft end-phrase detection (optional auto-finish)
+updated_at: "2026-07-13T06:40:31Z"
+---
+## Problem
+Agent can hark listen-end from partials. Optionally add conservative local heuristics for informal end phrases without agent intervention.
+
+## Acceptance
+- [ ] Document which soft phrases are safe
+- [ ] Optional config flag; default off or very conservative
+- [ ] No false finish on mid-thought speech

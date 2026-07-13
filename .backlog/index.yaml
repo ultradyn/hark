@@ -1,0 +1,4 @@
+project: "hark"
+description: "Voice bridge for Herdr agents (Mode A Python prototype; Rust client later)"
+timeline_weeks: 12
+phases: []

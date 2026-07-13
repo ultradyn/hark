@@ -1,0 +1,19 @@
+---
+complexity: medium
+created_at: "2026-07-13T06:40:31Z"
+depends_on: []
+estimate_hours: 1
+id: B004
+priority: high
+status: pending
+tags:
+    - audio
+title: True overlapping listen pre-arm during TTS tail
+updated_at: "2026-07-13T06:40:31Z"
+---
+## Problem
+listen_pre_arm_ms signals near-end but capture still starts after TTS exits mute (half-duplex). True overlap would need concurrent capture thread.
+
+## Acceptance
+- [ ] Optional overlap mode without capturing TTS echo
+- [ ] Keep half-duplex default

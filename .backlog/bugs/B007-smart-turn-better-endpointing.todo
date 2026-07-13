@@ -1,0 +1,20 @@
+---
+complexity: medium
+created_at: "2026-07-13T06:40:31Z"
+depends_on: []
+estimate_hours: 1
+id: B007
+priority: high
+status: pending
+tags:
+    - audio
+    - listen
+title: Smart Turn / better endpointing for silence mode
+updated_at: "2026-07-13T06:40:31Z"
+---
+## Problem
+Silence mode uses energy gate + fixed end_silence_s. Smarter turn detection would reduce cutoffs and long waits.
+
+## Acceptance
+- [ ] Evaluate Smart Turn or similar
+- [ ] Configurable; keep current energy gate as fallback

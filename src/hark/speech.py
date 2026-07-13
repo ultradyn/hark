@@ -902,6 +902,9 @@ def run_listen(
             last_provider = getattr(stt, "name", "unknown")
             if guard > 0:
                 time.sleep(guard)
+            # Answer-window arm cue: beep as soon as listen is ready (radio too)
+            if arm_cue:
+                _arm_cue_if_requested()
             while time.monotonic() - started < max_listen:
                 agent_act = poll_listen_action(stream)
                 if agent_act is not None and pieces:
@@ -912,12 +915,25 @@ def run_listen(
                     # Only first segment uses discard (TTS handoff); later segments clean
                     seg_discard = discard_leading_ms if not pieces else 0
                     seg_ok_after = audio_ok_after if not pieces else None
+                    on_open = (
+                        (
+                            lambda: syslog(
+                                "listen.speech_opened",
+                                component="stt",
+                                level="info",
+                                stream_id=stream,
+                                mode=mode.value,
+                            )
+                        )
+                        if arm_cue
+                        else _cue_start_once
+                    )
                     cap = capture_utterance(
                         max_s=min(remaining, max_listen),
                         end_silence_s=end_silence,
                         initial_timeout_s=min(gate_timeout_s, remaining),
                         post_tts_guard_s=0,
-                        on_opened=_cue_start_once,
+                        on_opened=on_open,
                         should_stop=_agent_wants_stop,
                         discard_leading_ms=seg_discard,
                         audio_ok_after=seg_ok_after,
@@ -1191,6 +1207,7 @@ def speak_and_listen(
                 on_partial=on_partial,
                 partial_kind=partial_kind,
                 audio_ok_after=audio_ok_after,
+                arm_cue=bool(getattr(cfg.audio, "answer_arm_cue", True)),
             )
         except BaseException as exc:  # noqa: BLE001 — surface to joiner
             listen_box["error"] = exc
@@ -1261,6 +1278,9 @@ def speak_and_listen(
             already_armed=arm_event.is_set(),
             on_partial=on_partial,
             partial_kind=partial_kind,
+            # Immediate record-start beep when listen is ready (not when speech opens).
+            # Dogfood: post-ask lag felt like a broken handoff when cue waited for gate.
+            arm_cue=bool(getattr(cfg.audio, "answer_arm_cue", True)),
         )
     except BaseException as exc:
         raise _attach_tts(exc) from exc
@@ -1341,6 +1361,7 @@ def run_ask(
                 provider=provider,
                 end_mode="silence",
                 last_tts=readback,
+                arm_cue=bool(getattr(cfg.audio, "answer_arm_cue", True)),
             )
         except TimeoutError:
             return {

@@ -78,6 +78,7 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "cue_volume",
         "cue_start_path",
         "cue_stop_path",
+        "answer_arm_cue",
         # Conference hold (B017): pause full TTS while Zoom/Teams/Meet is active
         "hold_during_conference",
         "conference_chime_only",
@@ -209,6 +210,9 @@ class AudioConfig:
     # Optional custom WAV/MP3 paths (empty = assets/cues defaults)
     cue_start_path: str | None = None
     cue_stop_path: str | None = None
+    # After TTS (ask / tts --listen / confirm): beep when listen arms, not when
+    # speech opens. Avoids a multi-second silent wait that felt like lag.
+    answer_arm_cue: bool = True
     # Hold full TTS while a conference app is active (Zoom/Teams/Meet…); default ON
     hold_during_conference: bool = True
     # Soft chime while held instead of speaking the full question immediately
@@ -443,6 +447,7 @@ sync_hw_unmute = true        # Wave/ALSA unmute button → force OS/Pulse unmute
 cue_volume = 0.22            # generated start/stop beep volume (0–1)
 # cue_start_path = "/path/to/record-start.wav"
 # cue_stop_path  = "/path/to/record-stop.wav"
+answer_arm_cue = true        # after TTS: beep when listen ready (not when speech opens)
 # Hold full TTS during Zoom/Teams/Meet (process list + optional audio streams)
 hold_during_conference = true
 conference_chime_only = true # soft cue while held; full question after call ends
@@ -996,6 +1001,7 @@ def load_config(path: Path | None = None) -> HarkConfig:
                 if audio_raw.get("cue_stop_path")
                 else os.environ.get("HARK_CUE_STOP")
             ),
+            answer_arm_cue=bool(audio_raw.get("answer_arm_cue", True)),
             hold_during_conference=bool(
                 audio_raw.get(
                     "hold_during_conference",
@@ -1226,6 +1232,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "cue_volume": cfg.audio.cue_volume,
             "cue_start_path": cfg.audio.cue_start_path,
             "cue_stop_path": cfg.audio.cue_stop_path,
+            "answer_arm_cue": cfg.audio.answer_arm_cue,
             "hold_during_conference": cfg.audio.hold_during_conference,
             "conference_chime_only": cfg.audio.conference_chime_only,
             "conference_process_names": list(cfg.audio.conference_process_names),

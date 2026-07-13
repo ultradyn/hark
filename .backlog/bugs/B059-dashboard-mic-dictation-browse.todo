@@ -1,0 +1,32 @@
+---
+complexity: high
+created_at: "2026-07-13T14:19:32Z"
+depends_on:
+    - B055
+    - B056
+estimate_hours: 4
+id: B059
+priority: high
+status: pending
+tags:
+    - dashboard
+    - webui
+    - dictation
+    - stt
+    - mic
+title: 'Dashboard: mic dictation (browser + host mic) with safe submit'
+updated_at: "2026-07-13T14:19:32Z"
+---
+## Scope
+Dictation round-trip per docs/plans/I003-dashboard.md.
+
+- Browser mic: MediaRecorder webm/opus upload -> existing STT provider path -> transcript + radio-style partials streamed back; VU meter/waveform while recording
+- Host mic mode: backend drives existing hark listen flow (mic lease, ambient pause)
+- UI states: idle -> recording -> transcribing -> review -> submitted | failed
+- Submit ONLY via safe paths: POST /answer (bound hark.command.v1 expectations; target from selected event, never invented) or POST /prompt (ambient.prompt for Mode A judgment)
+
+## Acceptance
+- [ ] Browser capture -> STT -> review -> bound answer delivers to selected blocked event
+- [ ] /prompt path reaches Mode A monitor as ambient.prompt
+- [ ] Stale target rejected with clear UI feedback
+- [ ] Host-mic mode honors mic lease + ambient pause

@@ -36,3 +36,6 @@ package = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "vosk: optional offline Vosk re-decode tests (needs model + vosk extra)",
+]

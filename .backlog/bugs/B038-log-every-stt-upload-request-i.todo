@@ -1,0 +1,26 @@
+---
+complexity: medium
+created_at: "2026-07-13T12:39:09Z"
+depends_on: []
+estimate_hours: 1
+id: B038
+priority: medium
+status: pending
+tags:
+    - stt
+    - observability
+    - radio
+    - dogfood
+title: Log every STT upload/request in system.jsonl (radio partials included)
+updated_at: "2026-07-13T12:39:09Z"
+---
+## Dogfood
+Operator watching system.jsonl during radio mode: wanted a log line for every STT file/upload request so partial cadence and failures are visible.
+
+## Wanted
+- Each cloud STT call (including interim/partial STT for radio) emits a syslog/system.jsonl event, e.g. stt.request / stt.response with stream_id, seq, bytes/duration, provider, latency, ok/error
+- Correlate with ambient.partial / listen.partial emission
+- Useful for debugging long gaps between partials
+
+## Related
+B037 (shorter radio silence for denser partials)

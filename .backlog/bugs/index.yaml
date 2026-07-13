@@ -36,3 +36,4 @@ bugs:
     - file: B035-validate-smart-turn-v3-onnx-en.todo
     - file: B036-watch-config-toml-and-live-rel.todo
     - file: B037-radio-mode-shorter-silence-for.todo
+    - file: B038-log-every-stt-upload-request-i.todo

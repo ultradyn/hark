@@ -86,3 +86,4 @@ bugs:
     - file: B085-radio-listen-continuous-ring-n.todo
     - file: B086-mic-mute-desync-system-mute-st.todo
     - file: B087-when-webui-is-up-we-are-record.todo
+    - file: B088-add-a-self-update-check-based.todo

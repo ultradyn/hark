@@ -1,17 +1,18 @@
 ---
+claimed_at: "2026-07-13T07:35:49Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T07:35:02Z"
 depends_on: []
 estimate_hours: 1
 id: B010
 priority: high
-status: pending
-tags:
-    - dogfood
-    - audio
-    - ambient
+started_at: "2026-07-13T07:35:49Z"
+status: in_progress
+tags: []
 title: Auto-pause ambient when ask/listen/tts --listen needs the mic
-updated_at: "2026-07-13T07:35:02Z"
+updated_at: "2026-07-13T07:35:49Z"
 ---
 ## Dogfood
 hark ask / listen failed with mic busy while ambient held MicLease. Agents had to manually SIGTERM ambient.

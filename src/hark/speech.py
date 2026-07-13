@@ -45,8 +45,12 @@ def run_tts(
         truncated = True
     if not text.strip():
         raise ProviderError("empty TTS text")
-    tts = resolve_tts(provider or cfg.tts.provider)
-    result = tts.synthesize(text, voice=voice)
+    tts = resolve_tts(
+        provider or cfg.tts.provider,
+        voice=voice or cfg.tts.voice,
+        language=cfg.tts.language,
+    )
+    result = tts.synthesize(text, voice=voice or cfg.tts.voice)
     out_path = None
     if out:
         out_path = str(write_wav(out, result.audio))

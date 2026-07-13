@@ -37,14 +37,26 @@ def resolve_stt(name: str = "auto") -> SttProvider:
     )
 
 
-def resolve_tts(name: str = "auto") -> TtsProvider:
+def resolve_tts(
+    name: str = "auto",
+    *,
+    voice: str | None = None,
+    language: str | None = None,
+) -> TtsProvider:
     name = (name or "auto").lower()
     if name == "anthropic":
         raise ProviderUnsupported(
             "anthropic: no public TTS API for hark; use xai|openai|minimax|google"
         )
+
+    def _xai() -> XaiTts:
+        return XaiTts(
+            voice=voice or "eve",
+            language=language or "en",
+        )
+
     if name == "xai":
-        return XaiTts()
+        return _xai()
     if name == "openai":
         return OpenAITts()
     if name == "minimax":
@@ -54,7 +66,7 @@ def resolve_tts(name: str = "auto") -> TtsProvider:
     if name != "auto":
         raise ProviderError(f"unknown TTS provider: {name}")
     if xai_auth().available:
-        return XaiTts()
+        return _xai()
     if openai_auth().available:
         return OpenAITts()
     if minimax_auth().available:

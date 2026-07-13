@@ -95,6 +95,9 @@ class SttConfig:
 @dataclass
 class TtsConfig:
     provider: str = "auto"
+    # Provider voice id (xAI: eve/ara/leo/rex/sal/… — `hark providers voices`)
+    voice: str | None = None
+    language: str = "en"
     max_chars: int = 500
     allow_espeak_fallback: bool = False
 
@@ -190,6 +193,9 @@ provider = "auto"
 
 [tts]
 provider = "auto"
+voice = "eve"                # xAI: eve ara leo rex sal … — hark providers voices
+language = "en"
+# voice = "ara"
 max_chars = 500
 
 [confirm]
@@ -326,6 +332,16 @@ def load_config(path: Path | None = None) -> HarkConfig:
         stt=SttConfig(provider=stt_provider),
         tts=TtsConfig(
             provider=tts_provider,
+            voice=(
+                str(tts_raw["voice"])
+                if tts_raw.get("voice")
+                else os.environ.get("HARK_TTS_VOICE")
+            ),
+            language=str(
+                tts_raw.get("language")
+                or os.environ.get("HARK_TTS_LANGUAGE")
+                or "en"
+            ),
             max_chars=int(tts_raw.get("max_chars", 500)),
             allow_espeak_fallback=bool(tts_raw.get("allow_espeak_fallback", False)),
         ),
@@ -346,7 +362,8 @@ def resolve_session_socket(session: SessionConfig) -> Path:
         from hark.paths import cache_dir
 
         return cache_dir() / "tunnels" / f"{session.id}.sock"
-    if session.id == "local":
+    # Herdr "default" session uses the main config dir sock (not sessions/default/)
+    if session.id in ("local", "default"):
         return default_herdr_socket()
     named = Path.home() / ".config" / "herdr" / "sessions" / session.id / "herdr.sock"
     if named.exists():
@@ -406,6 +423,8 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
         "stt": {"provider": cfg.stt.provider},
         "tts": {
             "provider": cfg.tts.provider,
+            "voice": cfg.tts.voice,
+            "language": cfg.tts.language,
             "max_chars": cfg.tts.max_chars,
         },
         "confirm": {"mode": cfg.confirm.mode},

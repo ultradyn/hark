@@ -12,7 +12,9 @@ from hark.providers.base import ProviderError, SynthResult, Transcript
 
 STT_URL = "https://api.x.ai/v1/stt"
 TTS_URL = "https://api.x.ai/v1/tts"
+VOICES_URL = "https://api.x.ai/v1/tts/voices"
 DEFAULT_VOICE = "eve"
+DEFAULT_LANGUAGE = "en"
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -76,20 +78,45 @@ class XaiStt:
         return Transcript(text=str(text).strip(), provider=self.name)
 
 
+def list_xai_voices() -> list[dict[str, Any]]:
+    """GET /v1/tts/voices — built-in voice catalog."""
+    token = _token()
+    with httpx.Client(timeout=30.0) as client:
+        r = client.get(VOICES_URL, headers=_headers(token))
+        if r.status_code == 401:
+            raise ProviderError(
+                "xAI voices 401 — run `grok login` or set XAI_API_KEY"
+            )
+        if r.status_code >= 400:
+            raise ProviderError(f"xAI voices HTTP {r.status_code}: {r.text[:300]}")
+        payload = r.json()
+    voices = payload.get("voices") if isinstance(payload, dict) else None
+    if not isinstance(voices, list):
+        raise ProviderError("xAI voices response missing voices[]")
+    return [v for v in voices if isinstance(v, dict)]
+
+
 class XaiTts:
     name = "xai"
 
-    def __init__(self, timeout: float = 120.0, voice: str = DEFAULT_VOICE) -> None:
+    def __init__(
+        self,
+        timeout: float = 120.0,
+        voice: str = DEFAULT_VOICE,
+        language: str = DEFAULT_LANGUAGE,
+    ) -> None:
         self.timeout = timeout
         self.voice = voice
+        self.language = language
 
     def synthesize(self, text: str, *, voice: str | None = None) -> SynthResult:
         token = _token()
-        # Docs: text + language required; voice accepted as "voice" (voice_id also works alone)
+        voice_id = voice or self.voice or DEFAULT_VOICE
+        # Official REST: text, voice_id, language (required)
         body = {
             "text": text,
-            "voice": voice or self.voice,
-            "language": "en",
+            "voice_id": voice_id,
+            "language": self.language or DEFAULT_LANGUAGE,
         }
         with httpx.Client(timeout=self.timeout) as client:
             r = client.post(
@@ -100,6 +127,11 @@ class XaiTts:
             if r.status_code == 401:
                 raise ProviderError(
                     "xAI TTS 401 — run `grok login` or set XAI_API_KEY"
+                )
+            if r.status_code == 404:
+                raise ProviderError(
+                    f"xAI TTS unknown voice_id={voice_id!r} — "
+                    "run: hark providers voices"
                 )
             if r.status_code >= 400:
                 raise ProviderError(f"xAI TTS HTTP {r.status_code}: {r.text[:300]}")
@@ -117,12 +149,12 @@ class XaiTts:
                 return SynthResult(
                     audio=audio,
                     provider=self.name,
-                    content_type="audio/wav",
-                    voice=voice or self.voice,
+                    content_type=str(payload.get("content_type") or "audio/mpeg"),
+                    voice=voice_id,
                 )
             return SynthResult(
                 audio=r.content,
                 provider=self.name,
                 content_type=ctype,
-                voice=voice or self.voice,
+                voice=voice_id,
             )

@@ -111,8 +111,12 @@ def build_parser() -> argparse.ArgumentParser:
     q = sub.add_parser("queue", help="pending bound events")
     q.add_argument("--json", action="store_true")
 
-    prov = sub.add_parser("providers", help="list speech providers")
-    prov.add_argument("test_name", nargs="?")
+    prov = sub.add_parser("providers", help="list speech providers or voices")
+    prov.add_argument(
+        "test_name",
+        nargs="?",
+        help="provider name, or 'voices' to list TTS voices",
+    )
     prov.add_argument("--json", action="store_true")
 
     dev = sub.add_parser("devices", help="list audio devices")
@@ -475,6 +479,26 @@ def cmd_queue(args: argparse.Namespace) -> int:
 def cmd_providers(args: argparse.Namespace) -> int:
     from hark.providers.auth import all_provider_status
 
+    if args.test_name and args.test_name.lower() in ("voices", "voice", "tts-voices"):
+        from hark.providers.xai import list_xai_voices
+
+        voices = list_xai_voices()
+        if args.json:
+            print(json.dumps({"voices": voices}, indent=2))
+        else:
+            print(f"{'voice_id':12}  {'name':12}  gender")
+            for v in voices:
+                print(
+                    f"{str(v.get('voice_id', '')):12}  "
+                    f"{str(v.get('name', '')):12}  "
+                    f"{v.get('gender') or '-'}"
+                )
+            print(
+                "\nSet default: [tts] voice = \"ara\" in ~/.config/hark/config.toml"
+                "\nOr one-shot:  hark tts --voice ara \"hello\""
+            )
+        return OK
+
     rows = [
         {
             "name": a.name,
@@ -489,6 +513,7 @@ def cmd_providers(args: argparse.Namespace) -> int:
         rows = [r for r in rows if r["name"] == name]
         if not rows:
             eprint(f"unknown provider: {args.test_name}")
+            eprint("hint: try `hark providers voices`")
             return USAGE
     if args.json:
         print(json.dumps({"providers": rows}, indent=2))

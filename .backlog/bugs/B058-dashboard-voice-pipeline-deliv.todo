@@ -1,0 +1,30 @@
+---
+complexity: medium
+created_at: "2026-07-13T14:19:10Z"
+depends_on:
+    - B055
+    - B056
+estimate_hours: 3
+id: B058
+priority: medium
+status: pending
+tags:
+    - dashboard
+    - webui
+    - metrics
+title: 'Dashboard: voice pipeline, delivery queue, config/doctor, usage panels'
+updated_at: "2026-07-13T14:19:10Z"
+---
+## Scope
+Remaining read-only surfaces per docs/plans/I003-dashboard.md.
+
+- Voice pipeline: TTS/STT activity, mute ring, ambient wake vs listen, mic lease (mic.lock/ambient.pause/busy.lock), media ducking state
+- Queue/delivery: pending replies, submit status, stale-safe outcomes (deliveries.jsonl)
+- Config snapshot (redacted) + doctor health
+- Usage: empty-STT rate, wake near-miss groups (B019/B032), session activity heat
+
+## Acceptance
+- [ ] Pipeline state updates live (mic lease, recording, TTS)
+- [ ] Delivery outcomes incl. delivery_uncertain surfaced
+- [ ] Config panel provably redacted (uses B054 fixtures)
+- [ ] Usage panel renders rates + near-miss groups

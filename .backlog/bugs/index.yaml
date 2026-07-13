@@ -56,3 +56,4 @@ bugs:
     - file: B055-dashboard-backend-hark-serve-r.todo
     - file: B056-dashboard-webui-scaffold-live.todo
     - file: B057-dashboard-herdr-state-map-pane.todo
+    - file: B058-dashboard-voice-pipeline-deliv.todo

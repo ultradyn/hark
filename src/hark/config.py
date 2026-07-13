@@ -13,6 +13,7 @@ from hark.listen_end import (
     DEFAULT_CANCEL_PHRASES,
     DEFAULT_END_PHRASES,
     DEFAULT_SOFT_END_PHRASES,
+    DEFAULT_SOFT_END_PHRASES_ENABLED,
     EndMode,
     parse_end_mode,
 )
@@ -90,7 +91,7 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "initial_timeout_s",
         "no_open_retry",
         "no_open_nudge",
-        # Optional informal closers (default off) — see listen_end.DEFAULT_SOFT_END_PHRASES
+        # Optional informal closers (default on) — see listen_end.DEFAULT_SOFT_END_PHRASES
         "soft_end_phrases_enabled",
         "soft_end_phrases",
         # Pluggable endpointing (B007) — energy gate default + optional smart turn
@@ -250,8 +251,8 @@ class ListenConfig:
     no_open_retry: bool = True
     # Still no open: TTS nudge then one more listen (text overridable by ambient)
     no_open_nudge: bool = True
-    # Optional informal end phrases (default OFF — conservative; utterance-final only)
-    soft_end_phrases_enabled: bool = False
+    # Soft informal end phrases (default ON for radio dogfood; utterance-final only)
+    soft_end_phrases_enabled: bool = DEFAULT_SOFT_END_PHRASES_ENABLED
     soft_end_phrases: list[str] = field(
         default_factory=lambda: list(DEFAULT_SOFT_END_PHRASES)
     )
@@ -438,13 +439,13 @@ cancel_phrases = [
   "abort hark send",
   "hark abort",
 ]
-# Optional soft (informal) end phrases — DEFAULT OFF.
-# When true, also finalize on utterance-final soft closers after radio silence
-# (e.g. "that's all", "okay send it"). Does NOT match mid-clause
-# ("that's all I know about X"). Prefer agent `hark listen-end` unless you
-# accept residual false-finish risk. Safe list: docs/AUDIO_DESIGN.md
-soft_end_phrases_enabled = false
-# soft_end_phrases = ["that's all", "end of message", "okay send it", "over and out"]
+# Soft (informal) end phrases — DEFAULT ON (B039 radio dogfood).
+# Finalize on utterance-final soft closers after radio silence (e.g. "send it",
+# "that's all", sentence-final "over"). Does NOT match mid-clause
+# ("that's all I know about X", "over the weekend", "turn it over").
+# Set false to require product phrases only. Safe list: docs/AUDIO_DESIGN.md
+soft_end_phrases_enabled = true
+# soft_end_phrases = ["send it", "send that", "that's all", "over and out", "over"]
 strip_phrase = true
 max_listen_s = 300
 empty_stt_retry = true       # re-listen once if STT returns empty transcript
@@ -853,7 +854,9 @@ def load_config(path: Path | None = None) -> HarkConfig:
         warnings.append(str(exc))
         end_mode = EndMode.SILENCE.value
 
-    soft_end_enabled = bool(listen_raw.get("soft_end_phrases_enabled", False))
+    soft_end_enabled = bool(
+        listen_raw.get("soft_end_phrases_enabled", DEFAULT_SOFT_END_PHRASES_ENABLED)
+    )
     env_soft = os.environ.get("HARK_SOFT_END_PHRASES_ENABLED")
     if env_soft is not None:
         soft_end_enabled = env_soft.strip().lower() in ("1", "true", "yes", "on")

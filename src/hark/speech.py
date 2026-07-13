@@ -975,7 +975,7 @@ def run_listen(
                         cfg.listen, "soft_end_phrases", ()
                     ),
                     soft_end_phrases_enabled=bool(
-                        getattr(cfg.listen, "soft_end_phrases_enabled", False)
+                        getattr(cfg.listen, "soft_end_phrases_enabled", True)
                     ),
                 )
                 if hit is None:

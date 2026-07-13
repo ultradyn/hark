@@ -20,6 +20,13 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   silence-mode `end_silence_s`. Legacy `radio_end_silence_s` kept for config BC.
   See `docs/AUDIO_DESIGN.md`.
 - STT request timeline (B038): every cloud STT upload (silence + radio partials) emits `stt.request` / `stt.response` on `system.jsonl` with `stream_id`, `seq`, `provider`, `bytes`/`audio_ms`, `latency_ms`, `ok`/`error`. Radio `listen.partial` / ambient.partial include `stt_seq` for correlation.
+- Radio soft finalize (B039): soft end phrases default **on** for radio dogfood.
+  Bare utterance-final `send it` / `send that` finalize; bare `over` finalizes only
+  when sentence-final (sole utterance or after `.`/`!`/`?`) — not “turn it over” /
+  “over the weekend”. Product phrases (`okay hark send`, `hark over`, …) unchanged.
+  Disable with `listen.soft_end_phrases_enabled = false` or
+  `HARK_SOFT_END_PHRASES_ENABLED=0`. Monitor compact `ambient.partial` lines already
+  include `text_len`. Partial cadence density remains B037.
 - Ambient timeout heartbeat (B033): continuous Mode A still cycles on
   `ambient.timeout_s` (default 300s), but emission of `ambient.timeout` to
   monitor NDJSON/syslog is gated by `ambient.surface_timeouts` (default **on**).

@@ -50,7 +50,7 @@ def run_doctor(
             "end_phrase_count": len(cfg.listen.end_phrases),
             "strip_phrase": cfg.listen.strip_phrase,
             "soft_end_phrases_enabled": bool(
-                getattr(cfg.listen, "soft_end_phrases_enabled", False)
+                getattr(cfg.listen, "soft_end_phrases_enabled", True)
             ),
             "soft_end_phrase_count": len(
                 getattr(cfg.listen, "soft_end_phrases", []) or []

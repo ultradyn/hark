@@ -48,8 +48,9 @@ Each criterion is testable. Implementation is not complete until these pass (or 
 | C11 | Radio mode: cancel phrase → exit 7, nothing delivered |
 | C12 | Radio mode still hits `max_listen_s` → exit 6 |
 | C13 | `HARK_LISTEN_END_MODE` and `--end-mode` override config |
-| C14 | Soft end phrases default **off**; when enabled, terminal soft closer finalizes radio listen |
-| C15 | Soft end does **not** finalize mid-clause text (e.g. “that's all I know about X”) |
+| C14 | Soft end phrases default **on**; terminal soft closer (`send it`, sentence-final `over`, …) finalizes radio listen; can disable via config/env |
+| C15 | Soft end does **not** finalize mid-clause text (e.g. “that's all I know about X”, “over the weekend”, “turn it over”) |
+| C16 | Soft end finalizes bare “send it” / “send that” when utterance-final; bare “over” only when sentence-final or sole utterance |
 
 ## D. Ask / confirm
 

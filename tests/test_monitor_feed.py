@@ -123,3 +123,33 @@ def test_replay_matching_from_files(tmp_path: Path):
     # near-miss came through (the bug class)
     near = next(l for l in lines if l["kind"] == "ambient.wake_near_miss")
     assert near["attempts"] == ["clunker"]
+
+
+def test_compact_ambient_partial_includes_text_len():
+    """B039: monitor compact partials expose text_len so agents see growth."""
+    long = "prefix " + ("x" * 500)
+    c = compact_mode_a_event(
+        {
+            "kind": "ambient.partial",
+            "event_id": "e3",
+            "stream_id": "s1",
+            "seq": 2,
+            "text": long,
+        }
+    )
+    assert c["partial"] is True
+    assert c["final"] is False
+    assert c["text_len"] == len(long)
+    assert c["text"].endswith("…")
+    assert len(c["text"]) <= 401
+    # short text: full text + matching len
+    c2 = compact_mode_a_event(
+        {
+            "kind": "ambient.partial",
+            "stream_id": "s1",
+            "seq": 1,
+            "text": "hello radio",
+        }
+    )
+    assert c2["text"] == "hello radio"
+    assert c2["text_len"] == len("hello radio")

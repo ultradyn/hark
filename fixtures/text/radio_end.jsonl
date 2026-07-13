@@ -5,15 +5,25 @@
 {"id":"end-of-prompt","input":"done for now end of prompt","expect_kind":"end","expect_phrase":"end of prompt"}
 {"id":"cancel-hark-cancel","input":"scratch this whole idea hark cancel","expect_kind":"cancel","expect_phrase":"hark cancel"}
 {"id":"cancel-cancel-hark","input":"never mind cancel hark","expect_kind":"cancel","expect_phrase":"cancel hark"}
-{"id":"no-casual-cancel-that","input":"actually wait cancel that","expect_kind":null}
-{"id":"no-casual-send-it","input":"please just send it to production","expect_kind":null}
-{"id":"no-bare-over","input":"turn it over carefully","expect_kind":null}
-{"id":"still-thinking","input":"I am still thinking about the design","expect_kind":null}
+{"id":"no-casual-cancel-that","input":"actually wait cancel that","expect_kind":null,"soft_end_phrases_enabled":false}
+{"id":"no-casual-send-it-soft-off","input":"please just send it to production","expect_kind":null,"soft_end_phrases_enabled":false}
+{"id":"no-bare-over-soft-off","input":"turn it over carefully","expect_kind":null,"soft_end_phrases_enabled":false}
+{"id":"still-thinking","input":"I am still thinking about the design","expect_kind":null,"soft_end_phrases_enabled":false}
 {"id":"soft-off-thats-all","input":"refactor the module that's all","expect_kind":null,"soft_end_phrases_enabled":false}
 {"id":"soft-on-thats-all","input":"refactor the module that's all","expect_kind":"end","expect_phrase":"that's all","expect_body_contains":"refactor","soft_end_phrases_enabled":true}
 {"id":"soft-on-end-of-message","input":"ship the branch end of message","expect_kind":"end","expect_phrase":"end of message","soft_end_phrases_enabled":true}
 {"id":"soft-on-okay-send-it","input":"please use black formatting okay send it","expect_kind":"end","expect_phrase":"okay send it","soft_end_phrases_enabled":true}
+{"id":"soft-on-bare-send-it","input":"long prompt about the branch. Send it.","expect_kind":"end","expect_phrase":"send it","expect_body_contains":"long prompt","soft_end_phrases_enabled":true}
+{"id":"soft-on-send-it-double","input":"this is over. Send it. Send it.","expect_kind":"end","expect_phrase":"send it","soft_end_phrases_enabled":true}
+{"id":"soft-on-send-that","input":"ship the feature send that","expect_kind":"end","expect_phrase":"send that","expect_body_contains":"ship","soft_end_phrases_enabled":true}
 {"id":"soft-on-over-and-out","input":"that covers the plan over and out","expect_kind":"end","expect_phrase":"over and out","soft_end_phrases_enabled":true}
+{"id":"soft-on-sentence-final-over","input":"and that is what you should please implement. over.","expect_kind":"end","expect_phrase":"over","expect_body_contains":"implement","soft_end_phrases_enabled":true}
+{"id":"soft-on-sole-over","input":"Over.","expect_kind":"end","expect_phrase":"over","expect_body":"","soft_end_phrases_enabled":true}
 {"id":"soft-no-mid-clause-thats-all","input":"that's all I know about the auth bug","expect_kind":null,"soft_end_phrases_enabled":true}
 {"id":"soft-no-mid-send-it-production","input":"please just send it to production","expect_kind":null,"soft_end_phrases_enabled":true}
+{"id":"soft-no-mid-over-weekend","input":"think about over the weekend and continue","expect_kind":null,"soft_end_phrases_enabled":true}
+{"id":"soft-no-turn-it-over","input":"turn it over carefully","expect_kind":null,"soft_end_phrases_enabled":true}
+{"id":"soft-no-word-final-over","input":"turn it over","expect_kind":null,"soft_end_phrases_enabled":true}
+{"id":"soft-no-think-it-over-continue","input":"think it over and continue","expect_kind":null,"soft_end_phrases_enabled":true}
 {"id":"soft-no-when-disabled","input":"end of message","expect_kind":null,"soft_end_phrases_enabled":false}
+{"id":"soft-no-send-it-when-disabled","input":"Send it.","expect_kind":null,"soft_end_phrases_enabled":false}

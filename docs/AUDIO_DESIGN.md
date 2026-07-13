@@ -42,7 +42,7 @@ device
 
 | Role | Default examples | Avoid as defaults |
 |------|------------------|-------------------|
-| End (radio) | `okay hark send`, `end prompt`, `hark over` | `send it`, bare `over`, `stop` |
+| End (radio) | `okay hark send`, `end prompt`, `hark over` | mid-clause bare `over`, `stop` |
 | Cancel | `hark cancel`, `abort hark send` | `cancel that`, `never mind` |
 | Activation | `hey hark`, `hey herald` | bare `hark` mid-sentence |
 
@@ -69,11 +69,12 @@ max_listen_s = 300
 # Quiet before interim STT / ambient.partial (radio only; does not finalize)
 radio_partial_silence_s = 0.6
 stream_partials = true
-# Optional informal closers — DEFAULT OFF (see soft end below)
-soft_end_phrases_enabled = false
+# Soft informal closers — DEFAULT ON (B039 radio dogfood; see soft end below)
+soft_end_phrases_enabled = true
 ```
 
-Env: `HARK_LISTEN_END_MODE=radio`.
+Env: `HARK_LISTEN_END_MODE=radio`. Disable soft end with
+`soft_end_phrases_enabled = false` or `HARK_SOFT_END_PHRASES_ENABLED=0`.
 
 ### Radio partial cadence vs silence end
 
@@ -91,17 +92,17 @@ accumulated audio: if an end/cancel/soft phrase hits, the stream finalizes; othe
 to cut STT cost when pauses are long. Do **not** lower `end_silence_s` to chase radio
 partials — that would change normal silence-mode answer windows.
 
-### Soft end phrases (optional, default off)
+### Soft end phrases (default on)
 
 Mode A agents can always finish a radio capture from partials with
-`hark listen-end`. Optionally, Hark itself can auto-finish on a **small
-conservative set** of informal closers without agent intervention.
+`hark listen-end`. By default, Hark itself also auto-finishes on a **small
+set** of informal closers without agent intervention (radio dogfood).
 
 | Config | Default | Meaning |
 |--------|---------|---------|
-| `soft_end_phrases_enabled` | `false` | Master switch (off by default) |
+| `soft_end_phrases_enabled` | `true` | Master switch (on by default; set `false` for product phrases only) |
 | `soft_end_phrases` | built-in safe list | Override/replace the default soft list |
-| Env `HARK_SOFT_END_PHRASES_ENABLED` | unset | `1`/`true`/`yes`/`on` enables |
+| Env `HARK_SOFT_END_PHRASES_ENABLED` | unset | `1`/`true`/`yes`/`on` enables; `0`/`false`/`no`/`off` disables |
 
 **Matching rules (must all hold):**
 
@@ -111,33 +112,40 @@ conservative set** of informal closers without agent intervention.
    phrase is a word-bounded suffix after normalize + trailing punct strip.
 3. Cancel and product `end_phrases` always win over soft phrases.
 4. Mid-clause text does **not** match — e.g. `"that's all I know about X"`
-   never finishes on `"that's all"`.
+   never finishes on `"that's all"`, and `"please just send it to production"`
+   never finishes on `"send it"`.
+5. Bare **`over`** is **sentence-final** as well as utterance-final: the sole
+   utterance `"over"`, or a suffix after sentence-ending punctuation
+   (`". over"`, `"! over"`, `"? over"`). Word-final but not sentence-final
+   forms such as `"turn it over"` / `"hand it over"` do **not** finish.
+   Mid-clause `"over the weekend"` / `"think it over and continue"` never finish.
 
-**Default soft list (safe when terminal-only):**
+**Default soft list:**
 
 | Phrase | Notes |
 |--------|--------|
+| `send it` / `send that` | Bare radio-style send (B039); terminal only |
+| `okay send it` / `ok send it` / `okay send` / `ok send` | Multi-word send variants |
 | `that's all` / `that is all` / `thats all` | Common closer; apostrophe variants for STT |
 | `end of message` / `end message` | Explicit message terminator |
 | `end of transmission` | Radio-style formal closer |
-| `okay send it` / `ok send it` | Multi-word; not bare `send it` |
-| `okay send` / `ok send` | Shorter multi-word send |
-| `over and out` | Radio closer; not bare `over` |
+| `over and out` | Multi-word radio closer (no sentence-punct required) |
+| bare `over` | **Sentence-final only** (sole utterance or after `.`/`!`/`?`) |
 
 **Not in the default list (unsafe / high false-finish risk):**
 
 | Phrase | Why excluded |
 |--------|----------------|
-| `send it` | Matches `"please just send it"` |
-| bare `over` | `"turn it over"`, `"hand over"` |
 | `done` / `i'm done` | Mid-thought pauses after partial work |
 | `that's it` | `"that's it for the migration"` after a pause |
 | `finished` / `go` / `go ahead` | Too common mid-speech |
 | `cancel that` | Cancel semantics — use product cancel phrases |
 
-Prefer leaving soft end **off** and using product phrases (`hark send`) or
-agent `listen-end` unless you accept residual false-finish risk when the
-operator pauses right after an informal closer mid-thought.
+Residual risk when soft end is on: if the operator pauses *right after* a
+terminal soft closer mid-thought (e.g. says `"please just send it"` then
+stops before `"to production"`), radio may finalize. Use product phrases
+(`okay hark send`) or set `soft_end_phrases_enabled = false` for stricter
+control. Mode A agents may still call `hark listen-end` from partials.
 
 ## Ambient (`[ambient]`)
 

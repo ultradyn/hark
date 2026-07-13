@@ -135,7 +135,7 @@ See [AUDIO_DESIGN.md](AUDIO_DESIGN.md). Event-driven answer windows only in MVP.
 | Mode | Finalize when |
 |------|----------------|
 | `silence` (default) | Energy gate + end-silence; optionally Smart Turn |
-| `radio` | Spoken **product-scoped** end phrase only (e.g. `okay hark send`, `end prompt`, `hark over`); long pauses must not cut off |
+| `radio` | Spoken end phrase (product-scoped defaults + soft closers when enabled; e.g. `okay hark send`, `send it`, sentence-final `over`); long pauses must not cut off |
 
 **Radio partial cadence** (`[listen].radio_partial_silence_s`, default **0.6 s**): in radio mode only, trailing quiet of this length ends a capture **segment** and runs interim STT (emitted as `ambient.partial` when `stream_partials` is true). It does **not** end the turn — end phrases (or agent `listen-end` / cancel / `max_listen_s`) still finalize. Silence mode continues to use `end_silence_s` (default 2.1 s) for answer-window end; do not change that for radio partial frequency. See [AUDIO_DESIGN.md](AUDIO_DESIGN.md).
 
@@ -143,7 +143,7 @@ Cancel phrases abort without delivery (`hark cancel`, not casual “cancel that�
 
 **Endpointing strategy** (`[listen].endpoint_strategy`, default **`energy`**, env `HARK_LISTEN_ENDPOINT_STRATEGY`): silence-mode turn detection is pluggable. `energy` reduces exactly to the fixed `end_silence_s` gate (default; also the fallback). `smart_turn` consults a Smart Turn v3 model (optional `[smart-turn]` extra + `smart_turn_model_path`) to finish early or hold through mid-thought pauses, bounded by `endpoint_max_silence_s`; if it cannot load, capture falls back to the energy gate. Full evaluation + seam: [ENDPOINTING.md](ENDPOINTING.md).
 
-**Soft end phrases** (`[listen].soft_end_phrases_enabled`, default **`false`**): when enabled in radio mode, also finalize on a conservative list of informal closers (`that's all`, `end of message`, `okay send it`, `over and out`, …) **only** when the phrase is utterance-final (word-bounded transcript suffix) after segment silence. Mid-clause speech such as “that's all I know about X” must not finish. Env override: `HARK_SOFT_END_PHRASES_ENABLED`. Agents may still call `hark listen-end` from partials. Full safe/unsafe lists: [AUDIO_DESIGN.md](AUDIO_DESIGN.md).
+**Soft end phrases** (`[listen].soft_end_phrases_enabled`, default **`true`**): in radio mode, also finalize on a conservative list of informal closers (`send it`, `send that`, `that's all`, `end of message`, `over and out`, sentence-final bare `over`, …) **only** when the phrase is utterance-final (word-bounded transcript suffix) after segment silence. Bare `over` additionally requires a sentence boundary (sole utterance or after `.`/`!`/`?`) so “turn it over” / “over the weekend” never finish. Mid-clause “that's all I know about X” and “send it to production” must not finish. Env: `HARK_SOFT_END_PHRASES_ENABLED` (`0`/`false` disables). Agents may still call `hark listen-end` from partials. Full lists: [AUDIO_DESIGN.md](AUDIO_DESIGN.md).
 
 **Ambient** (`[ambient]`): when not in an answer window, optional local 2–3 s snippet wake (`hey hark` / `hey herald`); **no cloud STT until activation**.
 
@@ -191,7 +191,7 @@ endpoint_strategy = "energy"        # energy (default/fallback) | smart_turn
 # smart_turn_model_path = "~/.local/share/hark/models/smart-turn-v3.onnx"
 # endpoint_max_silence_s = 3.0      # smart turn: max wait on "incomplete" (0 = end_silence_s)
 # end_phrases / cancel_phrases — see AUDIO_DESIGN defaults
-# soft_end_phrases_enabled = false  # optional informal closers (default off)
+# soft_end_phrases_enabled = true   # informal closers (default on; set false for product-only)
 strip_phrase = true
 max_listen_s = 300
 

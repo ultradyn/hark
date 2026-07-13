@@ -71,16 +71,19 @@ Operators who think aloud with long pauses need the mic to stay open until an ex
   so ordinary speech does not trigger.  
 See [AUDIO_DESIGN.md](AUDIO_DESIGN.md).
 
-## ADR-014b: Optional soft end phrases (default off)
+## ADR-014b: Soft end phrases (default on for radio dogfood)
 
-Operators sometimes say informal closers (`that's all`, `okay send it`) instead of
-product prosigns. Mode A agents can already call `hark listen-end` from radio
-partials. Local auto-finish is **optional and off by default** because soft
-phrases carry residual false-finish risk if the operator pauses mid-thought.
+Operators often say informal closers (`send it`, `that's all`, sentence-final
+`over`) instead of product prosigns. Mode A agents can already call
+`hark listen-end` from radio partials. Local auto-finish is **on by default**
+(B039 dogfood) so bare “Send it.” and “… implement. over.” finalize without
+agent intervention. Residual false-finish risk remains if the operator pauses
+right after a terminal soft closer mid-thought — disable for product-only.
 
-- Config: `[listen] soft_end_phrases_enabled = false` (default)
-- Env: `HARK_SOFT_END_PHRASES_ENABLED=1` to enable
+- Config: `[listen] soft_end_phrases_enabled = true` (default)
+- Env: `HARK_SOFT_END_PHRASES_ENABLED=0` / `false` to disable
 - Match only **utterance-final** (word-bounded suffix); never mid-clause
+- Bare `over` is **sentence-final** only (after `.`/`!`/`?` or sole utterance)
 - Only evaluated after radio segment silence
 - Product cancel/end phrases take priority
 - Documented safe vs unsafe list in [AUDIO_DESIGN.md](AUDIO_DESIGN.md)

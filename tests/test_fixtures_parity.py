@@ -67,7 +67,10 @@ def test_fixture_wake_match(case: dict) -> None:
     ids=lambda c: c["id"],
 )
 def test_fixture_radio_end(case: dict) -> None:
-    hit = evaluate_radio_transcript(case["input"])
+    hit = evaluate_radio_transcript(
+        case["input"],
+        soft_end_phrases_enabled=bool(case.get("soft_end_phrases_enabled", False)),
+    )
     expect_kind = case.get("expect_kind")
     if expect_kind is None:
         assert hit is None, f"{case['id']}: unexpected {hit}"

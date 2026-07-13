@@ -435,6 +435,12 @@ def run_listen(
                     tr.text,
                     end_phrases=cfg.listen.end_phrases,
                     cancel_phrases=cfg.listen.cancel_phrases,
+                    soft_end_phrases=getattr(
+                        cfg.listen, "soft_end_phrases", ()
+                    ),
+                    soft_end_phrases_enabled=bool(
+                        getattr(cfg.listen, "soft_end_phrases_enabled", False)
+                    ),
                 )
                 if hit is None:
                     body_so_far = (tr.text or "").strip()

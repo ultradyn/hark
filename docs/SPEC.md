@@ -135,6 +135,8 @@ See [AUDIO_DESIGN.md](AUDIO_DESIGN.md). Event-driven answer windows only in MVP.
 
 Cancel phrases abort without delivery (`hark cancel`, not casual “cancel that”). Hard `max_listen_s` always applies.
 
+**Soft end phrases** (`[listen].soft_end_phrases_enabled`, default **`false`**): when enabled in radio mode, also finalize on a conservative list of informal closers (`that's all`, `end of message`, `okay send it`, `over and out`, …) **only** when the phrase is utterance-final (word-bounded transcript suffix) after segment silence. Mid-clause speech such as “that's all I know about X” must not finish. Env override: `HARK_SOFT_END_PHRASES_ENABLED`. Agents may still call `hark listen-end` from partials. Full safe/unsafe lists: [AUDIO_DESIGN.md](AUDIO_DESIGN.md).
+
 **Ambient** (`[ambient]`): when not in an answer window, optional local 2–3 s snippet wake (`hey hark` / `hey herald`); **no cloud STT until activation**.
 
 ## 10. Providers
@@ -171,6 +173,7 @@ post_tts_guard_ms = 350
 # silence | radio — radio = keep listening until end phrase (long pauses OK)
 end_mode = "silence"
 # end_phrases / cancel_phrases — see AUDIO_DESIGN defaults
+# soft_end_phrases_enabled = false  # optional informal closers (default off)
 strip_phrase = true
 max_listen_s = 300
 
@@ -189,7 +192,7 @@ mode = "auto"   # for R0/R1; R2/R3 force always
 deny_patterns = []  # optional hard blocks
 ```
 
-Env: `HARK_CONFIG`, `HARK_LISTEN_END_MODE`, `HARK_STT_PROVIDER`, `XAI_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MINIMAX_API_KEY`, `HERDR_SOCKET_PATH`.
+Env: `HARK_CONFIG`, `HARK_LISTEN_END_MODE`, `HARK_SOFT_END_PHRASES_ENABLED`, `HARK_STT_PROVIDER`, `XAI_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MINIMAX_API_KEY`, `HERDR_SOCKET_PATH`.
 
 ## 13. Performance targets (excluding provider RTT)
 

@@ -2,6 +2,7 @@ from hark.config import load_config
 from hark.listen_end import (
     DEFAULT_CANCEL_PHRASES,
     DEFAULT_END_PHRASES,
+    DEFAULT_SOFT_END_PHRASES,
     EndMode,
     evaluate_radio_transcript,
     find_terminal_phrase,
@@ -85,6 +86,155 @@ def test_radio_ignores_silence_until_phrase():
 
 def test_word_boundary():
     assert find_terminal_phrase("handover", ["over"], kind="end") is None
+
+
+# ---------------------------------------------------------------------------
+# Soft end phrases (optional; default off)
+# ---------------------------------------------------------------------------
+
+
+def test_soft_end_defaults_off():
+    # Without enabling soft end, informal closers must not finish.
+    assert evaluate_radio_transcript("refactor the module that's all") is None
+    assert evaluate_radio_transcript("ship it okay send it") is None
+    assert evaluate_radio_transcript("end of message") is None
+
+
+def test_soft_end_matches_when_enabled_terminal():
+    hit = evaluate_radio_transcript(
+        "refactor the auth module that's all",
+        soft_end_phrases_enabled=True,
+    )
+    assert hit is not None
+    assert hit.kind == "end"
+    assert hit.phrase == "that's all"
+    assert "refactor" in hit.body
+
+
+def test_soft_end_whole_utterance():
+    hit = evaluate_radio_transcript(
+        "okay send it",
+        soft_end_phrases_enabled=True,
+    )
+    assert hit is not None
+    assert hit.phrase in ("okay send it", "ok send it")
+    assert hit.body == ""
+
+
+def test_soft_end_punct_trail():
+    hit = evaluate_radio_transcript(
+        "done for now. End of message!",
+        soft_end_phrases_enabled=True,
+    )
+    assert hit is not None
+    assert hit.phrase == "end of message"
+
+
+def test_soft_end_no_mid_clause():
+    """Mid-thought speech must not false-finish on soft phrases."""
+    mid = [
+        "that's all I know about the auth bug",
+        "that's all I wanted to cover in this pass",
+        "please just send it to production",  # bare send it not in soft list
+        "I think that's all for the first part but wait",
+        "turn it over carefully",
+        "over and out of memory errors",  # soft phrase not terminal
+    ]
+    for text in mid:
+        assert (
+            evaluate_radio_transcript(text, soft_end_phrases_enabled=True) is None
+        ), f"false finish on: {text!r}"
+
+
+def test_soft_end_product_phrases_still_win():
+    # Product cancel/end take priority over soft
+    hit = evaluate_radio_transcript(
+        "scratch this hark cancel",
+        soft_end_phrases_enabled=True,
+    )
+    assert hit is not None and hit.kind == "cancel"
+    hit2 = evaluate_radio_transcript(
+        "please use black formatting okay hark send",
+        soft_end_phrases_enabled=True,
+    )
+    assert hit2 is not None and hit2.phrase == "okay hark send"
+
+
+def test_soft_end_safe_list_documented():
+    # Guard: unsafe singles must never appear in the default soft list
+    unsafe = {
+        "send it",
+        "over",
+        "done",
+        "i'm done",
+        "that's it",
+        "finished",
+        "go",
+        "go ahead",
+        "cancel that",
+    }
+    soft_norm = {p.lower() for p in DEFAULT_SOFT_END_PHRASES}
+    assert soft_norm.isdisjoint(unsafe)
+    # Required safe examples from B003
+    for required in ("that's all", "end of message", "okay send it"):
+        assert required in soft_norm
+
+
+def test_soft_end_should_keep_listening():
+    keep, hit = should_keep_listening(
+        EndMode.RADIO,
+        "long answer that's all",
+        soft_end_phrases_enabled=False,
+        silence_would_end=True,
+    )
+    assert keep is True and hit is None
+    keep2, hit2 = should_keep_listening(
+        EndMode.RADIO,
+        "long answer that's all",
+        soft_end_phrases_enabled=True,
+        silence_would_end=True,
+    )
+    assert keep2 is False
+    assert hit2 is not None and hit2.kind == "end"
+
+
+def test_config_soft_end_default_off(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text('[listen]\nend_mode = "radio"\n', encoding="utf-8")
+    monkeypatch.delenv("HARK_LISTEN_END_MODE", raising=False)
+    monkeypatch.delenv("HARK_SOFT_END_PHRASES_ENABLED", raising=False)
+    cfg = load_config(cfg_file)
+    assert cfg.listen.soft_end_phrases_enabled is False
+    assert "that's all" in cfg.listen.soft_end_phrases
+
+
+def test_config_soft_end_enabled(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        """
+[listen]
+end_mode = "radio"
+soft_end_phrases_enabled = true
+soft_end_phrases = ["that's all", "end of message"]
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("HARK_LISTEN_END_MODE", raising=False)
+    monkeypatch.delenv("HARK_SOFT_END_PHRASES_ENABLED", raising=False)
+    cfg = load_config(cfg_file)
+    assert cfg.listen.soft_end_phrases_enabled is True
+    assert cfg.listen.soft_end_phrases == ["that's all", "end of message"]
+
+
+def test_env_overrides_soft_end(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        '[listen]\nsoft_end_phrases_enabled = false\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HARK_SOFT_END_PHRASES_ENABLED", "true")
+    cfg = load_config(cfg_file)
+    assert cfg.listen.soft_end_phrases_enabled is True
 
 
 def test_config_loads_listen(tmp_path, monkeypatch):

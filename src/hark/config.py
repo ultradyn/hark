@@ -12,6 +12,7 @@ from typing import Any
 from hark.listen_end import (
     DEFAULT_CANCEL_PHRASES,
     DEFAULT_END_PHRASES,
+    DEFAULT_SOFT_END_PHRASES,
     EndMode,
     parse_end_mode,
 )
@@ -57,6 +58,9 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "end_silence_s",
         "radio_end_silence_s",
         "stream_partials",
+        # Optional informal closers (default off) — see listen_end.DEFAULT_SOFT_END_PHRASES
+        "soft_end_phrases_enabled",
+        "soft_end_phrases",
     }),
     "ambient": frozenset({
         "enabled",
@@ -132,6 +136,11 @@ class ListenConfig:
     radio_end_silence_s: float = 2.5
     # Radio mode: emit interim STT to agent with HOLD warnings (before end phrase)
     stream_partials: bool = True
+    # Optional informal end phrases (default OFF — conservative; utterance-final only)
+    soft_end_phrases_enabled: bool = False
+    soft_end_phrases: list[str] = field(
+        default_factory=lambda: list(DEFAULT_SOFT_END_PHRASES)
+    )
 
 
 @dataclass
@@ -249,6 +258,13 @@ cancel_phrases = [
   "abort hark send",
   "hark abort",
 ]
+# Optional soft (informal) end phrases — DEFAULT OFF.
+# When true, also finalize on utterance-final soft closers after radio silence
+# (e.g. "that's all", "okay send it"). Does NOT match mid-clause
+# ("that's all I know about X"). Prefer agent `hark listen-end` unless you
+# accept residual false-finish risk. Safe list: docs/AUDIO_DESIGN.md
+soft_end_phrases_enabled = false
+# soft_end_phrases = ["that's all", "end of message", "okay send it", "over and out"]
 strip_phrase = true
 max_listen_s = 300
 
@@ -462,6 +478,11 @@ def load_config(path: Path | None = None) -> HarkConfig:
         warnings.append(str(exc))
         end_mode = EndMode.SILENCE.value
 
+    soft_end_enabled = bool(listen_raw.get("soft_end_phrases_enabled", False))
+    env_soft = os.environ.get("HARK_SOFT_END_PHRASES_ENABLED")
+    if env_soft is not None:
+        soft_end_enabled = env_soft.strip().lower() in ("1", "true", "yes", "on")
+
     ambient_enabled = bool(ambient_raw.get("enabled", False))
     if os.environ.get("HARK_AMBIENT"):
         ambient_enabled = os.environ["HARK_AMBIENT"].lower() in (
@@ -518,6 +539,10 @@ def load_config(path: Path | None = None) -> HarkConfig:
             end_silence_s=float(listen_raw.get("end_silence_s", 2.1)),
             radio_end_silence_s=float(listen_raw.get("radio_end_silence_s", 2.5)),
             stream_partials=bool(listen_raw.get("stream_partials", True)),
+            soft_end_phrases_enabled=soft_end_enabled,
+            soft_end_phrases=_as_list_str(
+                listen_raw.get("soft_end_phrases"), list(DEFAULT_SOFT_END_PHRASES)
+            ),
         ),
         ambient=AmbientConfig(
             enabled=ambient_enabled,
@@ -636,6 +661,8 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "end_silence_s": cfg.listen.end_silence_s,
             "radio_end_silence_s": cfg.listen.radio_end_silence_s,
             "stream_partials": cfg.listen.stream_partials,
+            "soft_end_phrases_enabled": cfg.listen.soft_end_phrases_enabled,
+            "soft_end_phrases": list(cfg.listen.soft_end_phrases),
         },
         "ambient": {
             "enabled": cfg.ambient.enabled,

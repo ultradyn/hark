@@ -29,14 +29,21 @@ On `ambient.prompt` intent such as:
 - …and tell it / with prompt {…}
 
 Agent steps:
-1. Parse agent, cwd, session, kickoff from speech (ask once if cwd/session ambiguous).
-2. Confirm when creating a **new** session or unclear cwd.
-3. Run `hark session ensure` / `hark agent-start …` (prefer CLI over raw herdr).
-4. TTS short ack with agent + cwd + session + target if known.
-5. Do **not** treat spawn as pane delivery; stay outside Herdr as Mode A.
-6. File dogfood bugs if herdr start fails mid-voice.
+1. Parse agent, cwd, **Herdr session / space**, kickoff from speech.
+2. If **session or space is unclear**, do **not** guess — ask by voice with a
+   **brief** suggested options list (configured / running sessions, recent workspaces).
+   Same for ambiguous cwd.
+3. **One audio question at a time** for the whole flow (session, then cwd, then
+   kickoff, etc.). Never stack multiple questions in one TTS turn.
+4. Confirm when creating a **new** named session.
+5. Run `hark session ensure` / `hark agent-start …` (prefer CLI over raw herdr).
+6. TTS short ack with agent + cwd + session + target if known.
+7. Do **not** treat spawn as pane delivery; stay outside Herdr as Mode A.
+8. File dogfood bugs if herdr start fails mid-voice.
 
 ## Acceptance
 - [ ] Skill section documents phrases, confirm policy, CLI cheatsheet rows
+- [ ] Skill requires clarify (with short option list) when Herdr session/space is ambiguous
+- [ ] Skill requires **one audio question at a time** for spawn/setup questions
 - [ ] handsfree + npm skill packages stay in sync (same content policy as prior releases)
 - [ ] No requirement for library-side NLU (Mode A judgment owns speech parse)

@@ -33,6 +33,8 @@ Add ability to voice control creating herdr sessions and initializing new agents
 
 Precedence for known agents: safe short alias (`cc`/`cx`/`gk`/`cr`) → canonical binary → config override. Reject known collisions. Ad-hoc CLIs pass through without a catalog entry. Spawn stays outside Herdr (Mode A on the host); kickoff uses existing send_text + Enter.
 
+**Audio UX:** if Herdr session or space is unclear, Mode A asks for clarification with a brief suggested-options list (no guessing). **One audio question at a time** for the whole spawn flow.
+
 ## Hierarchy placement
 
 - Repo backlog is **bugs + ideas** only.

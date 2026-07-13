@@ -97,8 +97,25 @@ Examples Mode A should honour (paraphrase OK):
 - “Create a herdr session called lab”
 - “Run opencode in preview-md” (ad-hoc / less-common CLI)
 
-Confirm when:
+### Clarification policy (audio)
 
+When the operator wants a new coding-CLI session but **placement is unclear** — which
+**Herdr session** (e.g. `default` / `swarm` / configured `[[herdr.sessions]]` id) and/or
+which **Herdr space** (workspace / tab / split target) — Mode A **MUST NOT guess**.
+
+1. Ask for clarification by voice (`hark ask` / `hark tts --listen`).
+2. Offer a **brief** list of suggested options (from live `hark session list` /
+   configured sessions / recent workspaces — not an exhaustive dump).
+3. **One audio question at a time.** Never stack multiple questions in one TTS turn
+   (e.g. do not ask session *and* cwd *and* kickoff prompt together). Resolve the
+   highest-priority gap, then the next, until enough to spawn safely.
+
+Same one-at-a-time rule applies to all audio questions in this flow (cwd, agent kind,
+kickoff prompt confirm, etc.), not only session placement.
+
+Confirm / clarify when:
+
+- **Herdr session or space is unspecified or ambiguous** (required clarify + short options)
 - cwd is ambiguous or outside known project roots
 - creating a **new** named session
 - ad-hoc argv the operator did not clearly name
@@ -142,5 +159,6 @@ Exact keys locked in B059.
 
 - [x] Feasibility evaluated against live `herdr` CLI + Mode A path.  
 - [x] Design note at `docs/plans/I005-voice-herdr-agent-control.md`.  
-- [ ] Concrete bugs B055–B059 with AC + dependencies.  
-- [ ] Idea file updated with IDs; marked done after parent merge.
+- [x] Concrete bugs B055–B059 with AC + dependencies.  
+- [x] Idea file updated with created IDs and design summary.  
+- [x] Clarification policy: ambiguous session/space → ask + short options; one audio Q at a time.

@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T16:04:03Z"
 claimed_by: grok-bl-fix
-completed_at: null
+completed_at: "2026-07-13T16:18:51Z"
 complexity: medium
 created_at: "2026-07-13T15:00:03Z"
 depends_on: []
+duration_minutes: 14.805656431466666
 estimate_hours: 8
 id: B070
 priority: high
 started_at: "2026-07-13T16:04:03Z"
-status: in_progress
+status: done
 tags: []
 title: Sherpa-ONNX KWS wake backend (pluggable engine beside Vosk)
-updated_at: "2026-07-13T16:04:03Z"
+updated_at: "2026-07-13T16:18:51Z"
 ---
 ## Problem
 B069 survey: Vosk small en-us mangles product wake names (`hark`→hook/hawk, `herald`→harold). Alias/learning papers over weak open-vocab ASR. **Sherpa-ONNX open-vocab KWS** (English GigaSpeech 3.3M int8) matched all 7 current live wake fixtures correctly at RTF≈0.02 and ~half Vosk RSS.

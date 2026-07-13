@@ -78,6 +78,36 @@ function UsageRow({ kind, agg }: { kind: "tts" | "stt"; agg: UsageAgg | undefine
   );
 }
 
+/** What TTS actually said, newest last (usage stream meta.text_preview). */
+function SpokenAudit() {
+  const rows = useComputed(() =>
+    events.value
+      .filter((e) => e.source === "usage")
+      .map((e) => e.payload as UsagePayload)
+      .filter((p) => p.kind === "tts")
+      .slice(-10),
+  );
+  if (!rows.value.length) return <span class="readout dim">nothing spoken in this window</span>;
+  return (
+    <>
+      {rows.value.map((p, i) => (
+        <div key={i} class="readout">
+          <span class="dim" style="min-width:64px">
+            {new Date(p.ts * 1000).toLocaleTimeString(undefined, { hour12: false })}
+          </span>
+          <span style="color:var(--text-dim);overflow-wrap:anywhere">
+            {String((p.meta as { text_preview?: string })?.text_preview ?? `${p.chars} chars`)}
+          </span>
+          <span class="dim" style="margin-left:auto;white-space:nowrap">
+            {p.voice ?? p.provider} · {((p.audio_ms ?? 0) / 1000).toFixed(1)}s
+            {(p.meta as { from_cache?: boolean })?.from_cache ? " · cached" : ""}
+          </span>
+        </div>
+      ))}
+    </>
+  );
+}
+
 export function VoiceView() {
   usePoll("health", 4000);
   usePoll("usage", 10000);
@@ -111,6 +141,10 @@ export function VoiceView() {
         <h3 class="paneltitle">usage</h3>
         <UsageRow kind="tts" agg={u?.summary.tts} />
         <UsageRow kind="stt" agg={u?.summary.stt} />
+      </section>
+      <section class="section">
+        <h3 class="paneltitle">spoken (tts audit)</h3>
+        <SpokenAudit />
       </section>
       <section class="section">
         <h3 class="paneltitle">wake near-misses</h3>

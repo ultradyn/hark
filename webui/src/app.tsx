@@ -4,6 +4,9 @@ import { api } from "./lib/api";
 import { conferenceHold, deliveries, wireDataRefreshes } from "./lib/data";
 import { connState, connect, events, serverInfo, severityOf } from "./lib/stream";
 import { DictateOverlay } from "./components/Dictate";
+import { Palette } from "./components/Palette";
+import { focusEventId, notifyEnabled, notifySupported, toggleNotifications, wireNotifications } from "./lib/notify";
+import { selectedPane } from "./lib/data";
 import { EventsView } from "./views/EventsView";
 import { HealthView } from "./views/HealthView";
 import { HerdrView } from "./views/HerdrView";
@@ -76,9 +79,27 @@ function AuthGate() {
 export function App() {
   const view = useSignal<ViewId>("events");
   const dictating = useSignal(false);
+  const paletteOpen = useSignal(false);
   useEffect(() => {
     wireDataRefreshes();
+    wireNotifications();
     connect();
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        paletteOpen.value = !paletteOpen.value;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // notification deep-link lands on the events view
+  useEffect(() => {
+    const unsub = focusEventId.subscribe((v) => {
+      if (v) view.value = "events";
+    });
+    return unsub;
   }, []);
 
   const blockedCount = useComputed(
@@ -116,11 +137,38 @@ export function App() {
         >
           ◉ dictate
         </button>
+        <button
+          class="btn small"
+          onClick={() => (paletteOpen.value = true)}
+          title="command palette (ctrl/cmd-K)"
+        >
+          ⌘K
+        </button>
+        {notifySupported && (
+          <button
+            class={`btn small ${notifyEnabled.value ? "primary" : ""}`}
+            onClick={() => void toggleNotifications()}
+            title="notify when an agent blocks (needs HTTPS or localhost)"
+          >
+            {notifyEnabled.value ? "🔔" : "🔕"}
+          </button>
+        )}
         <span style="color:var(--text-faint);font-size:11px">
           {serverInfo.value ? `${serverInfo.value.server} ${serverInfo.value.version}` : ""}
         </span>
       </header>
       {dictating.value && <DictateOverlay onClose={() => (dictating.value = false)} />}
+      {paletteOpen.value && (
+        <Palette
+          onView={(v) => (view.value = v)}
+          onDictate={() => (dictating.value = true)}
+          onPane={(session_id, pane_id) => {
+            selectedPane.value = { session_id, pane_id };
+            view.value = "herdr";
+          }}
+          onClose={() => (paletteOpen.value = false)}
+        />
+      )}
       <div class="main">
         <nav class="sidenav">
           <div class="navlabel">console</div>

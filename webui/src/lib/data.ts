@@ -21,6 +21,8 @@ export const usage = signal<UsageResponse | null>(null);
 export const health = signal<(HealthResponse & { pipeline?: PipelineState }) | null>(null);
 /** true while a conference hold is active (derived from system events). */
 export const conferenceHold = signal(false);
+/** pane selected for drill-in (herdr view / command palette). */
+export const selectedPane = signal<{ session_id: string; pane_id: string } | null>(null);
 
 export interface PipelineState {
   busy_lock?: boolean;

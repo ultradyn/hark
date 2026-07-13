@@ -1,7 +1,9 @@
 import { useSignal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { api } from "../lib/api";
-import { conferenceHold, sessions, usePoll } from "../lib/data";
+import { conferenceHold, selectedPane, sessions, usePoll } from "../lib/data";
+import { sparkline } from "../lib/spark";
+import { events, timeOf } from "../lib/stream";
 import type { AgentEntry, ContextResponse } from "../lib/types";
 
 const STATUS_COLOR: Record<string, string> = {
@@ -157,10 +159,35 @@ function PaneDrawer({
   );
 }
 
+/** events-per-pane over the buffer window, bucketed by time for a sparkline */
+function paneActivity(session_id: string, pane_id: string): string {
+  const times: number[] = [];
+  for (const e of events.value) {
+    const p = e.payload as { session_id?: string; target?: { pane_id?: string }; pane_id?: string };
+    const pane = p.target?.pane_id ?? p.pane_id;
+    if (pane === pane_id && (p.session_id ?? session_id) === session_id) {
+      const t = timeOf(e)?.getTime();
+      if (t) times.push(t);
+    }
+  }
+  if (times.length < 2) return "";
+  const t0 = Math.min(...times);
+  const span = Math.max(Math.max(...times) - t0, 1);
+  const buckets = new Array(16).fill(0);
+  for (const t of times) buckets[Math.min(15, Math.floor(((t - t0) / span) * 16))] += 1;
+  return sparkline(buckets, 16);
+}
+
 export function HerdrView() {
   usePoll("sessions", 5000);
-  const selected = useSignal<AgentEntry | null>(null);
   const data = sessions.value;
+  const selected = data?.sessions
+    .flatMap((s) => s.agents)
+    .find(
+      (a) =>
+        a.session_id === selectedPane.value?.session_id &&
+        a.pane_id === selectedPane.value?.pane_id,
+    );
 
   return (
     <div class="panelwrap">
@@ -169,9 +196,7 @@ export function HerdrView() {
           ⏸ conference hold active — announcements are queued, agents still tracked
         </div>
       )}
-      {selected.value && (
-        <PaneDrawer agent={selected.value} onClose={() => (selected.value = null)} />
-      )}
+      {selected && <PaneDrawer agent={selected} onClose={() => (selectedPane.value = null)} />}
       {!data && <div class="empty">loading sessions…</div>}
       {data?.sessions.map((s) => (
         <section key={s.session_id} class="section">
@@ -199,7 +224,7 @@ export function HerdrView() {
                   key={a.pane_id}
                   class="navitem"
                   style="border:1px solid var(--line-soft)"
-                  onClick={() => (selected.value = a)}
+                  onClick={() => (selectedPane.value = { session_id: a.session_id, pane_id: a.pane_id })}
                 >
                   <span style="min-width:70px">{a.pane_id}</span>
                   <span style="color:var(--text)">{a.agent ?? "?"}</span>
@@ -213,7 +238,12 @@ export function HerdrView() {
                       {a.cwd}
                     </span>
                   )}
-                  <span style="margin-left:auto" />
+                  <span
+                    style="margin-left:auto;color:var(--brand-hi);letter-spacing:-1px;font-size:10px"
+                    title="event activity (buffer window)"
+                  >
+                    {paneActivity(a.session_id, a.pane_id)}
+                  </span>
                   {a.pending_event_id && (
                     <span class="badge warn" title="pending bound question">
                       awaiting answer

@@ -120,8 +120,9 @@ function Body({ e }: { e: Envelope }) {
 
 export function EventCard({ e }: { e: Envelope }) {
   const sev = severityOf(e);
+  const eid = (e.payload as { event_id?: string }).event_id;
   return (
-    <article class="event" style={`--sev:${SEV_COLOR[sev]}`}>
+    <article class="event" style={`--sev:${SEV_COLOR[sev]}`} data-eid={eid} data-cursor={e.cursor}>
       <div class="head">
         <span class="kind">{kindOf(e)}</span>
         <span class="src">{e.source}</span>

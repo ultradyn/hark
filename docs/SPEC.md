@@ -137,7 +137,7 @@ See [AUDIO_DESIGN.md](AUDIO_DESIGN.md). Event-driven answer windows only in MVP.
 
 Cancel phrases abort without delivery (`hark cancel`, not casual “cancel that”). Hard `max_listen_s` always applies.
 
-**Endpointing strategy** (`[listen].endpoint_strategy`, default **`energy`**, env `HARK_LISTEN_ENDPOINT_STRATEGY`): silence-mode turn detection is pluggable. `energy` reduces exactly to the fixed `end_silence_s` gate (default; also the fallback). `smart_turn` consults a Smart Turn v2 model (optional `[smart-turn]` extra + `smart_turn_model_path`) to finish early or hold through mid-thought pauses, bounded by `endpoint_max_silence_s`; if it cannot load, capture falls back to the energy gate. Full evaluation + seam: [ENDPOINTING.md](ENDPOINTING.md).
+**Endpointing strategy** (`[listen].endpoint_strategy`, default **`energy`**, env `HARK_LISTEN_ENDPOINT_STRATEGY`): silence-mode turn detection is pluggable. `energy` reduces exactly to the fixed `end_silence_s` gate (default; also the fallback). `smart_turn` consults a Smart Turn v3 model (optional `[smart-turn]` extra + `smart_turn_model_path`) to finish early or hold through mid-thought pauses, bounded by `endpoint_max_silence_s`; if it cannot load, capture falls back to the energy gate. Full evaluation + seam: [ENDPOINTING.md](ENDPOINTING.md).
 
 **Soft end phrases** (`[listen].soft_end_phrases_enabled`, default **`false`**): when enabled in radio mode, also finalize on a conservative list of informal closers (`that's all`, `end of message`, `okay send it`, `over and out`, …) **only** when the phrase is utterance-final (word-bounded transcript suffix) after segment silence. Mid-clause speech such as “that's all I know about X” must not finish. Env override: `HARK_SOFT_END_PHRASES_ENABLED`. Agents may still call `hark listen-end` from partials. Full safe/unsafe lists: [AUDIO_DESIGN.md](AUDIO_DESIGN.md).
 
@@ -181,7 +181,7 @@ post_tts_guard_ms = 350
 # silence | radio — radio = keep listening until end phrase (long pauses OK)
 end_mode = "silence"
 endpoint_strategy = "energy"        # energy (default/fallback) | smart_turn
-# smart_turn_model_path = "~/.local/share/hark/models/smart-turn-v2.onnx"
+# smart_turn_model_path = "~/.local/share/hark/models/smart-turn-v3.onnx"
 # endpoint_max_silence_s = 3.0      # smart turn: max wait on "incomplete" (0 = end_silence_s)
 # end_phrases / cancel_phrases — see AUDIO_DESIGN defaults
 # soft_end_phrases_enabled = false  # optional informal closers (default off)

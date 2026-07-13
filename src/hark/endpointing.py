@@ -13,12 +13,11 @@ the default and the always-available fallback.
 
 Design goals:
 
-* **Behaviour-preserving default.** With no strategy (``strategy is None``) the
-  :class:`SilenceEndpointer` reproduces the previous fixed-silence rule exactly
-  (``silent_blocks >= end_silence_blocks and speech_blocks >= min_speech``).
+* **Behaviour-preserving default.** With no strategy, ``audio.capture`` keeps
+  its original fixed-silence condition byte-for-byte intact.
 * **No mandatory heavy deps.** The Smart Turn integration is an *optional*
-  import (``onnxruntime`` + a model file). If unavailable, the factory returns
-  ``None`` and capture falls back to the energy gate.
+  import (``onnxruntime`` + ``transformers`` + a model file). If unavailable,
+  the factory returns ``None`` and capture falls back to the energy gate.
 * **Fail safe.** A strategy that raises is disabled for the rest of the capture
   and endpointing defers to the fixed energy-gate silence.
 
@@ -88,7 +87,8 @@ class SilenceEndpointer:
     counters plus a lazy audio provider; it returns whether to finalize. All
     time thresholds are given in seconds and converted to 20 ms blocks.
 
-    With ``strategy is None`` this is exactly the legacy energy gate.
+    ``audio.capture`` uses this only when a non-energy strategy is active; the
+    default keeps the legacy condition inline.
     """
 
     def __init__(
@@ -121,6 +121,13 @@ class SilenceEndpointer:
         self.max_silence_blocks = max(self.end_silence_blocks, _blocks(max_silence_s, block_s))
 
         self._strategy_failed = False
+        self._probed_this_silence = False
+        self._probe_verdict: bool | None = None
+
+    def on_speech(self) -> None:
+        """Start a new silence run after the capture gate sees speech again."""
+        self._probed_this_silence = False
+        self._probe_verdict = None
 
     def _emit(self, event: str, **fields: object) -> None:
         if self.on_event is not None:
@@ -138,9 +145,9 @@ class SilenceEndpointer:
     ) -> bool:
         """Return True if the capture should finalize now.
 
-        ``audio_fn`` builds an :class:`EndpointFrame` lazily; it is only called
-        when an active strategy actually needs the audio, so the common energy
-        gate path stays allocation-free.
+        ``audio_fn`` builds an :class:`EndpointFrame` lazily. A strategy is
+        consulted once per contiguous silence run, after ``probe_silence_s``;
+        repeated 20 ms model inference would otherwise overrun the audio loop.
         """
         if speech_blocks < self.min_speech_blocks:
             return False
@@ -154,6 +161,10 @@ class SilenceEndpointer:
             return True
         # Not enough trailing silence to consult the strategy yet.
         if silent_blocks < self.probe_blocks:
+            return False
+        if self._probed_this_silence:
+            if self._probe_verdict is None:
+                return silent_blocks >= self.end_silence_blocks
             return False
 
         try:
@@ -169,6 +180,8 @@ class SilenceEndpointer:
             # Fall back to fixed silence for the remainder of this capture.
             return silent_blocks >= self.end_silence_blocks
 
+        self._probed_this_silence = True
+        self._probe_verdict = verdict
         if verdict is True:
             self._emit(
                 "endpoint.end",
@@ -183,7 +196,7 @@ class SilenceEndpointer:
 
 
 # ---------------------------------------------------------------------------
-# Smart Turn strategy (optional; requires onnxruntime + a model file)
+# Smart Turn strategy (optional; requires onnxruntime + transformers + a model)
 # ---------------------------------------------------------------------------
 
 # Completion probability predictor: (mono float32 @ sample_rate) -> P(complete).
@@ -195,7 +208,7 @@ class SmartTurnStrategy:
 
     Thin, dependency-free wrapper around an injected ``predict_fn`` that maps a
     mono float32 waveform to a completion probability in ``[0, 1]``. The real
-    model (pipecat Smart Turn v2 ONNX) is loaded lazily by
+    model (pipecat Smart Turn v3 ONNX) is loaded lazily by
     :func:`load_smart_turn_predictor`; tests inject a fake predictor.
 
     A confident *complete* verdict (``p >= threshold``) ends the turn — possibly
@@ -226,23 +239,23 @@ class SmartTurnStrategy:
         if keep > 0 and samples.size > keep:
             samples = samples[-keep:]
         p = float(self.predict_fn(samples, frame.sample_rate))
+        if not np.isfinite(p) or not 0.0 <= p <= 1.0:
+            raise ValueError(f"smart_turn predictor returned invalid probability {p!r}")
         return p >= self.threshold
 
 
 def load_smart_turn_predictor(model_path: str) -> PredictFn:
-    """Build a :data:`PredictFn` backed by a Smart Turn v2 ONNX model.
+    """Build a predictor for the pipecat Smart Turn v3 ONNX export.
 
-    Requires the optional ``smart-turn`` extra (``onnxruntime``). The model is
-    the pipecat-ai ``smart-turn-v2`` export: it takes a raw 16 kHz mono
-    waveform and emits a single completion logit. Raises ``RuntimeError`` /
-    ``ImportError`` on any problem so the factory can fall back to the energy
-    gate.
-
-    Experimental: exact I/O tensor names vary by export; failures are caught by
-    the factory and downgraded to the energy gate. Validate on your own setup.
+    The upstream v3 export takes Whisper input features, rather than raw PCM.
+    This loader follows the upstream preprocessing contract: mono 16 kHz audio,
+    the newest eight seconds, then ``WhisperFeatureExtractor`` padding and
+    normalization. All imports stay behind the ``smart-turn`` extra, and any
+    setup or inference failure is handled by the caller as an energy fallback.
     """
     try:
         import onnxruntime as ort  # type: ignore
+        from transformers import WhisperFeatureExtractor  # type: ignore
     except ImportError as exc:  # pragma: no cover - optional dep
         raise RuntimeError(
             "smart_turn endpoint needs the 'smart-turn' extra: "
@@ -254,23 +267,38 @@ def load_smart_turn_predictor(model_path: str) -> PredictFn:
     if not model_path or not os.path.isfile(os.path.expanduser(model_path)):
         raise RuntimeError(f"smart_turn model not found: {model_path!r}")
 
+    session_options = ort.SessionOptions()
+    session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    session_options.inter_op_num_threads = 1
+    session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     sess = ort.InferenceSession(
         os.path.expanduser(model_path),
+        sess_options=session_options,
         providers=["CPUExecutionProvider"],
     )
     input_name = sess.get_inputs()[0].name
-    output_name = sess.get_outputs()[0].name
-
-    def _sigmoid(x: float) -> float:
-        return 1.0 / (1.0 + float(np.exp(-x)))
+    feature_extractor = WhisperFeatureExtractor(chunk_length=8)
 
     def predict(samples: np.ndarray, sample_rate: int) -> float:  # pragma: no cover - needs model
-        del sample_rate
-        arr = np.asarray(samples, dtype=np.float32).reshape(1, -1)
-        out = sess.run([output_name], {input_name: arr})[0]
+        if sample_rate != 16000:
+            raise RuntimeError(
+                f"smart_turn v3 requires 16 kHz mono audio, got {sample_rate} Hz"
+            )
+        inputs = feature_extractor(
+            np.asarray(samples, dtype=np.float32),
+            sampling_rate=sample_rate,
+            return_tensors="np",
+            padding="max_length",
+            max_length=8 * sample_rate,
+            truncation=True,
+            do_normalize=True,
+        )
+        input_features = np.asarray(inputs.input_features, dtype=np.float32)
+        out = sess.run(None, {input_name: input_features})[0]
         val = float(np.asarray(out).reshape(-1)[0])
-        # Treat as probability if already in [0,1], else squash the logit.
-        return val if 0.0 <= val <= 1.0 else _sigmoid(val)
+        if not np.isfinite(val) or not 0.0 <= val <= 1.0:
+            raise RuntimeError(f"smart_turn v3 returned invalid probability {val!r}")
+        return val
 
     return predict
 
@@ -294,7 +322,11 @@ def build_endpoint_strategy(
         return None
     if name in ("smart_turn", "smart-turn", "smartturn"):
         try:
+            threshold = float(smart_turn_threshold)
+            if not np.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+                raise ValueError("smart_turn_threshold must be between 0 and 1")
             fn = predict_fn or load_smart_turn_predictor(smart_turn_model_path or "")
+            return SmartTurnStrategy(fn, threshold=threshold)
         except Exception as exc:
             if on_warn is not None:
                 on_warn(
@@ -302,7 +334,6 @@ def build_endpoint_strategy(
                     "falling back to energy gate"
                 )
             return None
-        return SmartTurnStrategy(fn, threshold=smart_turn_threshold)
     if on_warn is not None:
         on_warn(
             f"unknown endpoint_strategy {strategy_name!r}; using energy gate"

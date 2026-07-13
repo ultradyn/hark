@@ -230,7 +230,7 @@ class ListenConfig:
     # 0 = same as end_silence_s (energy gate stays the ceiling). Raise it to let
     # smart turn hold longer through mid-thought pauses.
     endpoint_max_silence_s: float = 0.0
-    # Path to the Smart Turn v2 ONNX model (required for endpoint_strategy="smart_turn").
+    # Path to the Smart Turn v3 ONNX model (required for endpoint_strategy="smart_turn").
     smart_turn_model_path: str | None = None
     # Completion probability at/above which smart turn ends the turn.
     smart_turn_threshold: float = 0.5
@@ -354,14 +354,14 @@ end_mode = "silence"         # silence | radio
 end_silence_s = 2.1          # quiet seconds before ending silence-mode capture
 # radio_end_silence_s = 2.5
 # Endpointing strategy (B007): "energy" (default) reduces to the fixed
-# end_silence_s gate. "smart_turn" consults a Smart Turn v2 model to finish
+# end_silence_s gate. "smart_turn" consults a Smart Turn v3 model to finish
 # earlier when you clearly stopped, or wait longer through mid-thought pauses.
 # It needs the optional extra + a model; if it can't load, capture falls back
 # to the energy gate. See docs/ENDPOINTING.md.
 endpoint_strategy = "energy" # energy | smart_turn
 # endpoint_probe_silence_s = 0.4   # smart turn: trailing quiet before first probe (0 = auto)
 # endpoint_max_silence_s = 3.0     # smart turn: max quiet to wait when "incomplete" (0 = end_silence_s)
-# smart_turn_model_path = "~/.local/share/hark/models/smart-turn-v2.onnx"
+# smart_turn_model_path = "~/.local/share/hark/models/smart-turn-v3.onnx"
 # smart_turn_threshold = 0.5
 stream_partials = true       # radio mode: stream interim text to agent (HOLD until final)
 end_phrases = [
@@ -739,10 +739,10 @@ def load_config(path: Path | None = None) -> HarkConfig:
     env_endpoint = os.environ.get("HARK_LISTEN_ENDPOINT_STRATEGY")
     if env_endpoint:
         endpoint_strategy = env_endpoint
-    smart_turn_model_path = (
+    smart_turn_model_path = os.environ.get("HARK_SMART_TURN_MODEL") or (
         str(listen_raw["smart_turn_model_path"])
         if listen_raw.get("smart_turn_model_path")
-        else os.environ.get("HARK_SMART_TURN_MODEL")
+        else None
     )
 
     ambient_enabled = bool(ambient_raw.get("enabled", False))

@@ -29,7 +29,7 @@ done, or wait when they are mid-thought — collapsing the trade-off.
 | **Energy gate + fixed `end_silence_s`** (current) | RMS threshold + adaptive noise floor + fixed silence hang | baseline | none (numpy) | Keep as default + fallback. Robust, zero-dep, offline. |
 | **WebRTC VAD** (`webrtcvad`) | Per-frame voice/no-voice classifier | No — still needs a fixed silence timer on top; only cleaner speech/noise split | C extension | Not worth it. Doesn't answer "is the *turn* over", only "is this frame speech". |
 | **Silero VAD** | Small ONNX speech-activity model | Marginal — better VAD, still not turn-level semantics | `onnxruntime` + ~2 MB model | Better VAD, but same fixed-hang problem. Skip for turn detection. |
-| **pipecat-ai Smart Turn v2** | Open-source (BSD) wav2vec2-based **turn-completion** model; predicts P(turn complete) from a raw 16 kHz waveform | **Yes** — trained specifically to distinguish "finished" vs "pausing" from acoustic + prosodic cues | `onnxruntime` + model (~tens of MB); ~tens of ms CPU inference | **Recommended** as the opt-in smart strategy. Local, no cloud, permissive licence. |
+| **[pipecat-ai Smart Turn v3](https://github.com/pipecat-ai/smart-turn)** | Open-source (BSD) Whisper-Tiny-based **turn-completion** model; its ONNX export consumes Whisper features from the current 16 kHz turn | **Yes** — trained specifically to distinguish "finished" vs "pausing" from acoustic + prosodic cues | `onnxruntime` + `transformers` + model (8 MB CPU / 32 MB GPU); under 100 ms CPU inference | **Recommended** as the opt-in smart strategy. Local, no cloud, permissive licence. |
 | **LLM / cloud "semantic VAD"** (e.g. streaming STT endpointing, OpenAI Realtime turn detection) | Provider decides turn boundaries server-side | Yes, but | network round-trips, provider lock-in, cost, privacy | Rejected for the local answer-window path. Hark deliberately keeps the wake/answer gate local (see `docs/AUDIO_DESIGN.md`). |
 
 ## Recommendation
@@ -39,14 +39,14 @@ done, or wait when they are mid-thought — collapsing the trade-off.
    behave exactly as before when the feature is off.
 2. **Ship a pluggable seam** so a smarter detector is a config switch, not a
    rewrite.
-3. **Offer Smart Turn v2 as an optional extra** (`pip install 'hark[smart-turn]'`
+3. **Offer Smart Turn v3 as an optional extra** (`pip install 'hark[smart-turn]'`
    + a model file). It is the best local, privacy-preserving, permissively
    licensed turn-completion model available. If it can't load, capture
    transparently falls back to the energy gate.
 
-We did **not** make Smart Turn mandatory: `onnxruntime` + a model is heavy for a
-lightweight voice bridge, and the energy gate is good enough for most close-talk
-answer windows.
+We did **not** make Smart Turn mandatory: `onnxruntime` + `transformers` + a
+model is heavy for a lightweight voice bridge, and the energy gate is good
+enough for most close-talk answer windows.
 
 ## Design — the strategy seam
 
@@ -73,9 +73,10 @@ Key properties:
 
 - **Behaviour-preserving.** With `strategy is None` the decision reduces to
   `silent_blocks >= end_silence_blocks and speech_blocks >= min_speech_blocks`
-  using the *same* truncating block maths as before. `audio_fn` is never called
-  on this path (no per-block audio concatenation cost). Covered by
-  `tests/test_endpointing.py::test_default_*`.
+  using the *same* truncating block maths as before. The original capture-loop
+  condition remains byte-for-byte intact, and no per-block audio concatenation
+  occurs on this path. Covered by `tests/test_endpointing.py::test_default_*`
+  and `test_capture_energy_path_keeps_legacy_condition_and_avoids_per_block_concat`.
 - **Fail safe.** A strategy that raises is disabled for the rest of that capture
   and endpointing defers to the fixed silence; an `endpoint.strategy_error`
   event is emitted once.
@@ -83,6 +84,9 @@ Key properties:
   a "keep listening" verdict can stall, so a mis-behaving model can never hang
   the mic. Raise it above `end_silence_s` to let Smart Turn hold longer through
   mid-thought pauses.
+- **Realtime-safe probing.** A strategy runs once after `endpoint_probe_silence_s`
+  for each contiguous quiet run. Further 20 ms blocks reuse an incomplete or
+  undecided result; speech resets the probe for the next pause.
 - **Silence mode only.** Radio mode (end-phrase / `listen-end`) is untouched.
 
 ### `EndpointStrategy` protocol
@@ -112,17 +116,17 @@ endpoint_strategy = "energy"     # "energy" (default) | "smart_turn"
 # Smart turn (only used when endpoint_strategy = "smart_turn"):
 # endpoint_probe_silence_s = 0.4 # trailing quiet before first model probe (0 = auto: min(end_silence_s, 0.6))
 # endpoint_max_silence_s   = 3.0 # max quiet to wait on an "incomplete" verdict (0 = end_silence_s)
-# smart_turn_model_path    = "~/.local/share/hark/models/smart-turn-v2.onnx"
+# smart_turn_model_path    = "~/.local/share/hark/models/smart-turn-v3.onnx"
 # smart_turn_threshold     = 0.5 # P(complete) at/above which the turn ends
 ```
 
 Env overrides: `HARK_LISTEN_ENDPOINT_STRATEGY`, `HARK_SMART_TURN_MODEL`.
 
-Install the extra and fetch a Smart Turn v2 ONNX export:
+Install the extra and fetch a Smart Turn v3 ONNX export:
 
 ```bash
 pip install 'hark[smart-turn]'
-# point smart_turn_model_path at a pipecat-ai smart-turn-v2 .onnx export
+# point smart_turn_model_path at a pipecat-ai smart-turn-v3 .onnx export
 ```
 
 ## Status / caveats
@@ -131,9 +135,10 @@ pip install 'hark[smart-turn]'
   decision logic (early-end / keep-listening / defer / fail-safe), config
   plumbing, and the `SmartTurnStrategy` wrapper — all under
   `tests/test_endpointing.py` and `tests/test_config_endpoint.py` with an
-  injected fake predictor (no model or `onnxruntime` needed for CI).
-- **Experimental:** `load_smart_turn_predictor` (the real ONNX inference path).
-  Exact input/output tensor names and preprocessing vary between Smart Turn
-  exports; it is intentionally defensive and any failure downgrades to the
+  injected fake predictor, plus a fake optional runtime that checks the Smart
+  Turn v3 preprocessing contract (no model or optional dependency needed for
+  CI).
+- **Operational caveat:** Smart Turn requires a 16 kHz mono capture and a v3
+  ONNX export. Any load or inference failure is intentionally downgraded to the
   energy gate. Validate probabilities on your own model/mic before relying on
-  it. This code path is not exercised in CI (needs the optional dep + a model).
+  it.

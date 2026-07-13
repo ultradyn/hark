@@ -13,7 +13,7 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   hatch `HARK_WATCH_INCLUDE_SELF=1` disables exclusion.
 - Pluggable silence-mode endpointing (B007): `listen.endpoint_strategy` selects the
   turn-end detector. Default `"energy"` reduces exactly to the previous fixed
-  `end_silence_s` gate; optional `"smart_turn"` consults a Smart Turn v2 model
+  `end_silence_s` gate; optional `"smart_turn"` consults a Smart Turn v3 model
   (optional `[smart-turn]` extra + model) to finish early or hold through
   mid-thought pauses, with transparent fallback to the energy gate. New
   `endpoint_probe_silence_s`, `endpoint_max_silence_s`, `smart_turn_model_path`,

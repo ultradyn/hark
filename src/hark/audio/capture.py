@@ -211,13 +211,17 @@ def capture_utterance(
     silent_blocks = 0
     end_silence_blocks = max(1, int(end_silence_s / 0.02))
     min_speech_blocks = max(1, int(min_speech_s / 0.02))
-    endpointer = SilenceEndpointer(
-        end_silence_s=end_silence_s,
-        min_speech_s=min_speech_s,
-        strategy=endpoint_strategy,
-        probe_silence_s=endpoint_probe_silence_s,
-        max_silence_s=endpoint_max_silence_s,
-        on_event=on_endpoint_event,
+    endpointer = (
+        SilenceEndpointer(
+            end_silence_s=end_silence_s,
+            min_speech_s=min_speech_s,
+            strategy=endpoint_strategy,
+            probe_silence_s=endpoint_probe_silence_s,
+            max_silence_s=endpoint_max_silence_s,
+            on_event=on_endpoint_event,
+        )
+        if endpoint_strategy is not None
+        else None
     )
     max_blocks = int(max_s / 0.02)
     timeout_blocks = int(initial_timeout_s / 0.02)
@@ -300,24 +304,32 @@ def capture_utterance(
                 if open_thresh is not None and db >= open_thresh - 4:
                     silent_blocks = 0
                     speech_blocks += 1
+                    if endpointer is not None:
+                        endpointer.on_speech()
                 else:
                     silent_blocks += 1
+                    if endpointer is None:
+                        if (
+                            silent_blocks >= end_silence_blocks
+                            and speech_blocks >= min_speech_blocks
+                        ):
+                            break
+                    else:
+                        def _endpoint_frame() -> EndpointFrame:
+                            pcm = pcm16_mono_bytes(np.concatenate(chunks)) if chunks else b""
+                            return EndpointFrame(
+                                pcm16=pcm,
+                                sample_rate=sample_rate,
+                                trailing_silence_s=silent_blocks * 0.02,
+                                speech_s=speech_blocks * 0.02,
+                            )
 
-                    def _endpoint_frame() -> EndpointFrame:
-                        pcm = pcm16_mono_bytes(np.concatenate(chunks)) if chunks else b""
-                        return EndpointFrame(
-                            pcm16=pcm,
-                            sample_rate=sample_rate,
-                            trailing_silence_s=silent_blocks * 0.02,
-                            speech_s=speech_blocks * 0.02,
-                        )
-
-                    if endpointer.should_end(
-                        silent_blocks=silent_blocks,
-                        speech_blocks=speech_blocks,
-                        audio_fn=_endpoint_frame,
-                    ):
-                        break
+                        if endpointer.should_end(
+                            silent_blocks=silent_blocks,
+                            speech_blocks=speech_blocks,
+                            audio_fn=_endpoint_frame,
+                        ):
+                            break
 
             if should_stop is not None:
                 pcm = pcm16_mono_bytes(np.concatenate(chunks)) if chunks else b""

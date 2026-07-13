@@ -40,9 +40,14 @@ smart_turn_threshold = 0.7
 
 
 def test_endpoint_env_override(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[listen]\nendpoint_strategy = "energy"\nsmart_turn_model_path = "/toml/model.onnx"\n',
+        encoding="utf-8",
+    )
     monkeypatch.setenv("HARK_LISTEN_ENDPOINT_STRATEGY", "smart_turn")
     monkeypatch.setenv("HARK_SMART_TURN_MODEL", "/env/model.onnx")
-    cfg = load_config(tmp_path / "missing.toml")
+    cfg = load_config(path)
     assert cfg.listen.endpoint_strategy == "smart_turn"
     assert cfg.listen.smart_turn_model_path == "/env/model.onnx"
 

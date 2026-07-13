@@ -23,6 +23,7 @@ wake = [
 # energy gate needs none of this. See docs/ENDPOINTING.md.
 smart-turn = [
   "onnxruntime>=1.17",
+  "transformers>=4.0",
 ]
 
 [project.scripts]

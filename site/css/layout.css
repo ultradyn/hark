@@ -7,12 +7,27 @@
   align-items: center;
 }
 
+/* Diagram column gets the majority so topology labels stay readable */
 @media (min-width: 900px) {
   .hero {
-    grid-template-columns: 1.15fr 0.85fr;
-    gap: var(--s-8);
+    grid-template-columns: minmax(0, 0.95fr) minmax(28rem, 1.25fr);
+    gap: var(--s-7);
     padding: var(--s-7) 0 var(--s-8);
     min-height: min(78vh, 52rem);
+    align-items: start;
+  }
+}
+
+@media (min-width: 1100px) {
+  .hero {
+    grid-template-columns: minmax(0, 0.9fr) minmax(32rem, 1.35fr);
+    gap: var(--s-8);
+  }
+}
+
+@media (min-width: 1280px) {
+  .hero {
+    grid-template-columns: minmax(0, 0.85fr) minmax(36rem, 1.4fr);
   }
 }
 

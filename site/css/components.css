@@ -606,7 +606,7 @@ a.product-link:hover {
   }
 }
 
-/* --- Architecture diagram (hero RHS) --- */
+/* --- Architecture diagram (hero RHS) — sized for readable topology --- */
 .arch {
   position: relative;
   border-radius: var(--radius-lg);
@@ -617,44 +617,52 @@ a.product-link:hover {
     linear-gradient(180deg, #0c1018 0%, var(--bg-deep) 100%);
   box-shadow: var(--shadow-panel), 0 0 48px rgba(232, 184, 74, 0.1);
   overflow: hidden;
-  padding: var(--s-4) var(--s-3) var(--s-3);
+  padding: var(--s-5) var(--s-4) var(--s-4);
+  /* Prefer a wide diagram; min-width forces readable scale when column allows */
+  width: 100%;
+  max-width: 100%;
 }
 
 .arch__title {
   font-family: var(--font-mono);
-  font-size: var(--fs-micro);
+  font-size: var(--fs-small);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-faint);
   text-align: center;
-  margin: 0 0 var(--s-3);
+  margin: 0 0 var(--s-4);
 }
 
+/*
+  Preserve 440×300 viewBox aspect. Size comes from the wider hero column
+  (layout.css); type is bumped so labels stay legible at that scale.
+*/
 .arch__svg {
   width: 100%;
   height: auto;
   display: block;
+  aspect-ratio: 440 / 300;
 }
 
 .arch__svg .node-stroke {
   stroke: var(--border-strong);
-  stroke-width: 1.4;
+  stroke-width: 1.6;
   fill: none;
 }
 
 .arch__svg .node-stroke--you {
   stroke: rgba(94, 234, 212, 0.55);
-  stroke-width: 1.6;
+  stroke-width: 1.8;
 }
 
 .arch__svg .node-stroke--hark {
   stroke: var(--herald);
-  stroke-width: 1.9;
+  stroke-width: 2.1;
 }
 
 .arch__svg .node-stroke--svc {
   stroke: rgba(238, 241, 247, 0.2);
-  stroke-width: 1.4;
+  stroke-width: 1.6;
 }
 
 .arch__svg .node-fill--herdr {
@@ -663,7 +671,7 @@ a.product-link:hover {
 
 .arch__svg .node-stroke--herdr {
   stroke: rgba(94, 234, 212, 0.22);
-  stroke-width: 1.4;
+  stroke-width: 1.5;
   stroke-dasharray: 4 5;
 }
 
@@ -678,24 +686,24 @@ a.product-link:hover {
 .arch__svg .lbl {
   fill: var(--ink);
   font-family: var(--font-body), system-ui, sans-serif;
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 600;
 }
 
 .arch__svg .lbl--sm {
-  font-size: 12.5px;
+  font-size: 15px;
 }
 
 .arch__svg .lbl-sub {
   fill: var(--ink-muted);
   font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 10px;
+  font-size: 12.5px;
   letter-spacing: 0.03em;
 }
 
 .arch__svg .lbl-sub--faint {
   fill: var(--ink-faint);
-  font-size: 9.5px;
+  font-size: 11.5px;
 }
 
 .arch__svg .lbl-you {
@@ -708,39 +716,39 @@ a.product-link:hover {
 
 .arch__svg .lbl-hark--display {
   font-family: var(--font-display), Georgia, serif;
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
 
 .arch__svg .arrow {
   stroke: rgba(232, 184, 74, 0.75);
-  stroke-width: 1.7;
+  stroke-width: 1.9;
   fill: none;
   marker-end: url(#arch-arrow);
 }
 
 .arch__svg .arrow--signal {
   stroke: rgba(94, 234, 212, 0.75);
-  stroke-width: 1.7;
+  stroke-width: 1.9;
   marker-end: url(#arch-arrow-signal);
 }
 
 .arch__svg .arrow--dim {
   stroke: rgba(238, 241, 247, 0.28);
-  stroke-width: 1.4;
+  stroke-width: 1.6;
   marker-end: url(#arch-arrow-dim);
 }
 
 .arch__svg .fan {
   stroke: rgba(232, 184, 74, 0.45);
-  stroke-width: 1.5;
+  stroke-width: 1.7;
 }
 
 .arch__svg .edge-lbl {
   fill: var(--ink-muted);
   font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 10px;
+  font-size: 12.5px;
   font-weight: 600;
   letter-spacing: 0.04em;
 }
@@ -755,7 +763,7 @@ a.product-link:hover {
 
 /* Agent status chips (match OG card language) */
 .arch__svg .agent .node-stroke {
-  stroke-width: 1.5;
+  stroke-width: 1.7;
 }
 
 .arch__svg .agent--blocked .node-stroke {
@@ -796,14 +804,14 @@ a.product-link:hover {
 
 .arch__svg .status {
   font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 500;
   letter-spacing: 0.02em;
 }
 
 .arch__svg .herdr-cap {
   font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 11px;
+  font-size: 13.5px;
   font-weight: 600;
   letter-spacing: 0.06em;
 }
@@ -821,7 +829,7 @@ a.product-link:hover {
 .arch__svg .herdr-link {
   fill: rgba(94, 234, 212, 0.75);
   font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 10px;
+  font-size: 12.5px;
   font-weight: 600;
   letter-spacing: 0.03em;
 }
@@ -831,9 +839,9 @@ a.product-link:hover {
 }
 
 .arch__caption {
-  margin: var(--s-2) var(--s-2) 0;
+  margin: var(--s-3) var(--s-2) 0;
   font-family: var(--font-mono);
-  font-size: var(--fs-micro);
+  font-size: var(--fs-small);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -843,6 +851,73 @@ a.product-link:hover {
 @media (max-width: 719px) {
   .arch {
     margin-top: var(--s-2);
+    padding: var(--s-4) var(--s-3) var(--s-3);
+  }
+}
+
+@media (min-width: 1100px) {
+  .arch {
+    padding: var(--s-5) var(--s-5) var(--s-4);
+  }
+
+  .arch__svg .lbl {
+    font-size: 18px;
+  }
+
+  .arch__svg .lbl--sm {
+    font-size: 16px;
+  }
+
+  .arch__svg .lbl-sub {
+    font-size: 13.5px;
+  }
+
+  .arch__svg .lbl-hark--display {
+    font-size: 24px;
+  }
+
+  .arch__svg .edge-lbl {
+    font-size: 13.5px;
+  }
+
+  .arch__svg .status {
+    font-size: 14px;
+  }
+
+  .arch__svg .herdr-cap {
+    font-size: 14.5px;
+  }
+
+  .arch__svg .herdr-link {
+    font-size: 13.5px;
+  }
+}
+
+/* Wide desktop: slightly more type weight for the larger canvas */
+@media (min-width: 1280px) {
+  .arch__svg .lbl {
+    font-size: 19px;
+  }
+
+  .arch__svg .lbl--sm {
+    font-size: 17px;
+  }
+
+  .arch__svg .lbl-hark--display {
+    font-size: 26px;
+  }
+
+  .arch__svg .edge-lbl,
+  .arch__svg .lbl-sub {
+    font-size: 14px;
+  }
+
+  .arch__svg .status {
+    font-size: 14.5px;
+  }
+
+  .arch__svg .herdr-cap {
+    font-size: 15px;
   }
 }
 

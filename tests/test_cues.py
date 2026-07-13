@@ -1,4 +1,11 @@
-from hark.audio.cues import build_beep_pair, ensure_cue_files, phrase_slug, tts_cache_path
+from hark.audio.cues import (
+    RECORD_START_LEAD_SILENCE_MS,
+    build_beep_pair,
+    ensure_cue_files,
+    phrase_slug,
+    play_record_start,
+    tts_cache_path,
+)
 
 
 def test_beep_is_wav():
@@ -21,3 +28,22 @@ def test_phrase_slug_and_cache_path():
     p = tts_cache_path("eve", "Okay.")
     assert "eve" in str(p)
     assert p.suffix == ".mp3"
+
+
+def test_record_start_lead_silence_ms_is_searchable_odd():
+    # Dogfood: odd ms so clip/kick-in tuning is easy to find in code/logs.
+    assert RECORD_START_LEAD_SILENCE_MS == 117
+
+
+def test_play_record_start_sleeps_lead_then_plays(monkeypatch):
+    import hark.audio.cues as cues
+
+    sleeps: list[float] = []
+    played: list[str] = []
+
+    monkeypatch.setattr(cues.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(cues, "play_cue", lambda name: played.append(name))
+
+    play_record_start()
+    assert sleeps == [0.117]
+    assert played == ["record_start"]

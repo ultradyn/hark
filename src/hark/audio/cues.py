@@ -8,6 +8,7 @@ import math
 import os
 import re
 import struct
+import time
 import wave
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,6 +30,9 @@ RECORD_STOP_HZ = 660.0
 BEEP_MS = 55
 SAMPLE_RATE = 22050
 DEFAULT_VOLUME = 0.22
+# Lead-in silence before the record-start beep so output path can kick in
+# (otherwise the blip can clip). Odd ms on purpose — easy to grep.
+RECORD_START_LEAD_SILENCE_MS = 117
 
 # Runtime overrides from config (set via configure_cues)
 _cue_volume: float = DEFAULT_VOLUME
@@ -168,6 +172,20 @@ def play_cue(name: str) -> None:
 
 
 def play_record_start() -> None:
+    """Play record-start cue after a short silence so the audio device can open.
+
+    ``RECORD_START_LEAD_SILENCE_MS`` (117) is intentional lead-in — search that
+    constant when tuning clip/kick-in behavior.
+    """
+    lead = max(0, int(RECORD_START_LEAD_SILENCE_MS))
+    if lead:
+        time.sleep(lead / 1000.0)
+        syslog(
+            "cue.lead_silence",
+            component="audio",
+            cue="record_start",
+            lead_ms=lead,
+        )
     play_cue("record_start")
 
 

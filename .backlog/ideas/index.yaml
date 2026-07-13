@@ -26,8 +26,15 @@ ideas:
       status: done
       tags: []
       title: 'Live web dashboard: stream events, Herdr state, chatlogs + mic dictation'
-    - file: I004-add-support-for-local-models-l.todo
+    - complexity: medium
+      depends_on: []
+      estimate_hours: 10
+      file: I004-add-support-for-local-models-l.todo
       id: I004
+      priority: medium
+      status: in_progress
+      tags: []
+      title: Add support for local models like the new whisper streaming one or whatever is best/performant.
     - complexity: medium
       depends_on: []
       estimate_hours: 10

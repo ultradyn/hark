@@ -20,3 +20,5 @@ watch.jsonl often shows socket watch failed Broken pipe / connection reset then 
 ## Wanted
 - Quieter reconnect / less spam
 - Reliable socket subscribe without false watch.error noise
+
+Merged to master via bl-fix-many subagents. Tests: 155 passed.

@@ -96,6 +96,23 @@ def build_parser() -> argparse.ArgumentParser:
     tts.add_argument("--no-play", action="store_true")
     tts.add_argument("--out", type=Path)
     tts.add_argument("--json", action="store_true")
+    tts.add_argument(
+        "--listen",
+        action="store_true",
+        help="after TTS plays, start recording (cue + STT) for a user reply",
+    )
+    tts.add_argument(
+        "--listen-for-user-response",
+        action="store_true",
+        dest="listen",
+        help="alias of --listen",
+    )
+    tts.add_argument(
+        "--end-mode",
+        choices=("silence", "radio"),
+        default=None,
+        help="with --listen: how the reply capture ends (default: config)",
+    )
 
     li = sub.add_parser("listen", help="speech-to-text")
     li.add_argument("--provider")
@@ -592,21 +609,106 @@ def cmd_skip(args: argparse.Namespace) -> int:
 
 
 def cmd_tts(args: argparse.Namespace, cfg) -> int:
-    from hark.speech import run_tts
+    from hark.speech import run_listen, run_tts
 
     text = " ".join(args.text)
-    result = run_tts(
-        cfg,
-        text,
-        provider=args.provider,
-        voice=args.voice,
-        play=not args.no_play,
-        out=args.out,
-    )
-    if args.json or args.no_play or args.out:
-        print(json.dumps(result))
+    want_listen = bool(getattr(args, "listen", False))
+    if want_listen and args.no_play:
+        eprint("hark tts: --listen requires playback (drop --no-play)")
+        return USAGE
+
+    # When listening after speech, reuse ask handoff (near-end pre-arm + tight guard)
+    arm_event = None
+    if want_listen:
+        import threading
+
+        arm_event = threading.Event()
+
+        def _on_near_end() -> None:
+            arm_event.set()
+
+        result = run_tts(
+            cfg,
+            text,
+            provider=args.provider,
+            voice=args.voice,
+            play=True,
+            out=args.out,
+            on_near_end=_on_near_end if cfg.audio.listen_pre_arm_ms > 0 else None,
+            near_end_ms=cfg.audio.listen_pre_arm_ms
+            if cfg.audio.listen_pre_arm_ms > 0
+            else 0,
+        )
     else:
-        print(json.dumps({"ok": True, "provider": result["provider"]}))
+        result = run_tts(
+            cfg,
+            text,
+            provider=args.provider,
+            voice=args.voice,
+            play=not args.no_play,
+            out=args.out,
+        )
+
+    if not want_listen:
+        if args.json or args.no_play or args.out:
+            print(json.dumps(result))
+        else:
+            print(json.dumps({"ok": True, "provider": result["provider"]}))
+        return OK
+
+    # Auto-listen: record-start cue fires when speech opens (run_listen)
+    try:
+        listened = run_listen(
+            cfg,
+            provider=args.provider,
+            end_mode=args.end_mode,
+            last_tts=text,
+            post_tts_guard_s=cfg.audio.post_tts_guard_ms / 1000.0,
+            already_armed=bool(arm_event and arm_event.is_set()),
+        )
+    except Exception as exc:
+        payload = {
+            "ok": False,
+            "tts": result,
+            "error": str(exc),
+            "listen": None,
+        }
+        print(json.dumps(payload, indent=2 if args.json else None))
+        return (
+            TIMEOUT
+            if "timeout" in str(exc).lower() or "empty" in str(exc).lower()
+            else AUDIO
+        )
+
+    if listened.cancelled:
+        eprint(f"cancelled via {listened.end_phrase!r}")
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "cancelled": True,
+                    "text": listened.text,
+                    "tts": result,
+                    "stream_id": listened.stream_id,
+                },
+                indent=2 if args.json else None,
+            )
+        )
+        return ABORT
+
+    out = {
+        "ok": True,
+        "tts": result,
+        "text": listened.text,
+        "listen": {
+            "provider": listened.provider,
+            "duration_ms": listened.duration_ms,
+            "end_mode": listened.end_mode,
+            "end_phrase": listened.end_phrase,
+            "stream_id": listened.stream_id,
+        },
+    }
+    print(json.dumps(out, indent=2 if args.json else None))
     return OK
 
 

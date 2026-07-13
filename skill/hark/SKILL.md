@@ -99,19 +99,24 @@ tail -n0 -F ~/.local/state/hark/system.jsonl ~/.local/state/hark/ambient.jsonl
 ## On skill start (voice bootstrap)
 
 1. `hark doctor` (text OK for tools).  
-2. TTS: “Hark is ready. I'll speak from here.”  
-3. Voice-ask session targets / mode if not already configured.  
-4. Arm Monitor(s).  
-5. TTS brief status; wait for blocked events or ambient prompts.  
+2. `hark status` + `hark queue` — **announce any already-blocked / pending by TTS** (Hark watch also emits on load; still speak a short rollup so the operator hears it).  
+3. TTS: “Hark is ready. I'll speak from here.”  
+4. Voice-ask session targets / mode if not already configured.  
+5. Arm Monitor(s): Herdr `hark watch --for-monitor` **and** ambient/system feeds as needed.  
+6. Prefer `hark tts --listen "…"` or `hark ask` so recording starts after you speak (start cue on speech). Pause ambient if mic busy.  
+7. Wait for blocked events or ambient prompts.  
 
 ## On `agent.blocked` / blocked monitor line
 
 1. Note `event_id`, `session_id`, `pane_id`, `risk` if present.  
 2. `hark context <session>/<pane> --lines 40`.  
 3. Classify: free text vs menu vs permission.  
-4. Speak + listen:
+4. Speak + listen (pick one):
    ```bash
    hark ask --confirm auto "…"   # upgrades to always for R2/R3 when risk known
+   # or TTS then auto-record (start cue when speech opens):
+   hark tts --listen "…"
+   hark tts --listen-for-user-response "…"   # alias
    ```
 5. Deliver:
    - free text: `hark answer <event_id> --text "…"`  
@@ -141,7 +146,7 @@ Handle one target fully before the next. Announce count when >1 (by TTS). Never 
 | `hark watch --for-monitor` | Monitor feed |
 | `hark status` / `hark queue` | Snapshot / pending |
 | `hark context` | Bottom buffer |
-| `hark tts` / `listen` / `ask` | Voice I/O (TTS mode default) |
+| `hark tts` / `tts --listen` / `listen` / `ask` | Voice I/O; `--listen` = speak then auto-record |
 | `hark listen-end` | Agent finish/cancel active radio listen |
 | `hark answer` | Bound send (preferred) |
 | `hark reply` / `hark keys` | Freeform / keys |

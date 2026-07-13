@@ -389,6 +389,11 @@ Next steps:
        /hark
      (alias: /handsfree)
 
+Skills-only install (if you only need agent skills):
+  npx skills add ${GITHUB_REPO} -g -y
+  # or: npm i -g @ultradyn/hark && hark-skill path
+  # (CLI still required for Mode A — use this installer or uv tool install)
+
 Ambient wake (optional, local Vosk model):
   cd "$SRC_DIR" && ./scripts/setup-ambient.sh
 

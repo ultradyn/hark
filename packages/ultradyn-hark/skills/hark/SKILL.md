@@ -58,7 +58,7 @@ Always address **`session_id/pane_id`**. Prefer bound **`event_id`** from watch 
 - **R2/R3** (permissions, destructive): always confirm. **R0/R1**: confirm only when unsure.  
 - **Listen end:** default silence/Smart Turn. If `[listen] end_mode = "radio"`, keep listening through long pauses until a **product-scoped** end phrase (`okay hark send`, `end prompt`, `hark over`). Cancel: `hark cancel` (not casual “cancel that”).  
 - **Partials (radio only):** you may receive `ambient.partial` / `partial=true` with interim text, HOLD warnings, and **`agent_control`**. You **MUST NOT** deliver to a pane until `final=true` / `ambient.prompt` for that `stream_id` — but you **MAY** end capture early (below).  
-- **Ambient:** optional `[ambient]` wake via local short snippets; cloud STT after activation. Defaults include `hey hark` / `hey herald`. Custom wakes: set `trigger_phrases` / `activation_phrases` (replace list) or `extra_trigger_phrases` (append), e.g. `extra_trigger_phrases = ["start prompt"]`. After editing config, **SIGHUP** the ambient process to reload phrases without full restart (`kill -HUP <pid>`); restart also works. See docs/CUSTOM_WAKE.md in the hark repo.  
+- **Ambient:** optional `[ambient]` wake via local short snippets; cloud STT after activation. Defaults include `hey hark` / `hey herald`. Custom wakes: set `trigger_phrases` / `activation_phrases` (replace list) or `extra_trigger_phrases` (append), e.g. `extra_trigger_phrases = ["start prompt"]`. After editing config, **SIGHUP** the ambient process to reload phrases without full restart (`kill -HUP <pid>`); restart also works. See [docs/CUSTOM_WAKE.md](../../docs/CUSTOM_WAKE.md).  
 
 
 ## Dogfooding (always on)
@@ -88,9 +88,12 @@ Operators often forget exact end phrases (“how do I stop this?”, “okay sto
 
 Exact end phrases still work without you. You are the backup interpreter.
 
-## Arm the feed
+## Arm the feed (**required**)
+
+**Hard-require:** before waiting for work, arm a **persistent** Herdr watch Monitor. Without it you will **miss `agent.blocked`** even when `hark watch` is logging elsewhere.
 
 ```text
+# REQUIRED — always arm this first (persistent)
 Monitor({
   description: "hark herdr watch",
   command: "hark watch --for-monitor --statuses blocked,done",
@@ -98,10 +101,13 @@ Monitor({
 })
 ```
 
-If radio partials / ambient prompts are used, also monitor:
+**Ambient alone is insufficient.** A Monitor on `ambient.prompt` / ambient.jsonl / system.jsonl does **not** surface Herdr `agent.blocked` or `done`. Those events only arrive via `hark watch --for-monitor`.
+
+If radio partials / ambient prompts are used, **also** monitor (in addition to the required watch, never instead of it):
 
 ```text
-# ambient.prompt + ambient.partial (and system log mirrors)
+# OPTIONAL add-on only — ambient.prompt + ambient.partial (and system log mirrors)
+# Does NOT replace the Herdr watch Monitor above.
 tail -n0 -F ~/.local/state/hark/system.jsonl ~/.local/state/hark/ambient.jsonl
 ```
 
@@ -114,9 +120,9 @@ tail -n0 -F ~/.local/state/hark/system.jsonl ~/.local/state/hark/ambient.jsonl
 2. `hark status` + `hark queue` — **announce any already-blocked / pending by TTS** (Hark watch also emits on load; still speak a short rollup so the operator hears it).  
 3. TTS: “Hark is ready. I'll speak from here.”  
 4. Voice-ask session targets / mode if not already configured.  
-5. Arm Monitor(s): Herdr `hark watch --for-monitor` **and** ambient/system feeds as needed.  
+5. **Required:** arm the Herdr watch Monitor — `hark watch --for-monitor --statuses blocked,done` with `persistent: true`. Do **not** skip this. Ambient/system tail is optional add-on only; **never** arm ambient alone.  
 6. Prefer `hark tts --listen "…"` or `hark ask` so recording starts after you speak (start cue on speech). **Ambient auto-pauses** for listen/ask (mic lease yield); no manual kill needed.  
-7. Wait for blocked events or ambient prompts.  
+7. Wait for blocked events (from the required watch Monitor) or ambient prompts.  
 
 ## On `agent.blocked` / blocked monitor line
 

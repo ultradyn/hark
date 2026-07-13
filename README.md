@@ -67,7 +67,9 @@ The verse is playful; **routing and confirmation are not.**
 - Confirm ordinary answers only when unsure; **always** confirm permissions/destructive  
 - Recoverable across disconnects (no silent double-send)  
 
-## Install (one-liner)
+## Install
+
+### One-liner (CLI + skills)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh | bash
@@ -97,6 +99,25 @@ hark doctor
 ```
 
 From a local checkout: `./install.sh` (uses that tree; no re-clone).
+
+### Skills only (`npx skills`)
+
+```bash
+npx skills add clankercode/hark -g -y
+# pick agents: -a claude-code -a opencode
+```
+
+You still need the **Python `hark` CLI** on `PATH` for Mode A.
+
+### npm package (`@ultradyn/hark`)
+
+```bash
+npm i -g @ultradyn/hark
+hark-skill path    # absolute skill dirs
+hark-skill list
+```
+
+See [`packages/ultradyn-hark/README.md`](packages/ultradyn-hark/README.md). Maintainers: [`RELEASE.md`](RELEASE.md).
 
 ## Dev / try it
 

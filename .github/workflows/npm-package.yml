@@ -1,0 +1,73 @@
+# Validate @ultradyn/hark package on PRs that touch skills or the package.
+name: Validate @ultradyn/hark package
+
+on:
+  pull_request:
+    paths:
+      - "packages/ultradyn-hark/**"
+      - "skill/**"
+      - "skills/**"
+      - ".github/workflows/npm-package.yml"
+      - ".github/workflows/release.yml"
+  push:
+    branches: [master]
+    paths:
+      - "packages/ultradyn-hark/**"
+      - "skill/**"
+      - "skills/**"
+      - ".github/workflows/npm-package.yml"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/ultradyn-hark
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Sync skills from monorepo
+        env:
+          HARK_SYNC_REQUIRED: "1"
+        run: node ./scripts/sync-skills.mjs
+
+      - name: Skills match monorepo
+        run: |
+          diff -u ../../skill/hark/SKILL.md skills/hark/SKILL.md
+          diff -u ../../skill/handsfree/SKILL.md skills/handsfree/SKILL.md
+
+      - name: hark-skill bin
+        run: |
+          node ./bin/hark-skill.js list
+          node ./bin/hark-skill.js path
+          node ./bin/hark-skill.js help >/dev/null
+
+      - name: npm pack --dry-run
+        run: npm pack --dry-run
+
+      - name: npx skills discovers package skills
+        working-directory: ${{ github.workspace }}
+        run: |
+          out="$(npx --yes skills@1.5.16 add ./packages/ultradyn-hark --list 2>&1)"
+          echo "$out"
+          echo "$out" | grep -q 'Found 2 skills'
+          echo "$out" | grep -qE '^\s+hark\s*$'
+          echo "$out" | grep -qE '^\s+handsfree\s*$'
+
+      - name: npx skills discovers monorepo skills/
+        working-directory: ${{ github.workspace }}
+        run: |
+          out="$(npx --yes skills@1.5.16 add . --list 2>&1)"
+          echo "$out"
+          echo "$out" | grep -q 'Found 2 skills'
+          echo "$out" | grep -qE '^\s+hark\s*$'
+          echo "$out" | grep -qE '^\s+handsfree\s*$'

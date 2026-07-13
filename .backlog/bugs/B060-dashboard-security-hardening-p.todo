@@ -1,4 +1,5 @@
 ---
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T14:19:32Z"
 depends_on:
@@ -8,12 +9,9 @@ depends_on:
 estimate_hours: 2
 id: B060
 priority: medium
+started_at: null
 status: pending
-tags:
-    - dashboard
-    - security
-    - packaging
-    - docs
+tags: []
 title: 'Dashboard: security hardening, packaging, docs/site'
 updated_at: "2026-07-13T14:19:32Z"
 ---
@@ -28,3 +26,7 @@ Ship it per docs/plans/I003-dashboard.md.
 - [ ] pip/uv install ships working hark serve with bundled webui
 - [ ] Doctor flags unsafe binds
 - [ ] Docs cover setup, auth, tailnet, threat notes
+
+## Review fixes (pre-build)
+- Remote (tailnet) access REQUIRES TLS: plain http://100.x.y.z is not a secure context — no PWA install, no Web Notifications, no getUserMedia. Document tailscale serve (recommended) or tailscale cert + native TLS. Doctor: flag non-localhost bind without token AND advise TLS for remote browser features.
+- Token->HttpOnly SameSite=Strict cookie exchange (B054); raw token never in URLs.

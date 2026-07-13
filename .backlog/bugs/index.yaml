@@ -26,3 +26,4 @@ bugs:
     - file: B025-check-for-any-all-references-t.todo
     - file: B026-suggest-my-pi-monitor-and-open.todo
     - file: B027-run-docs-audit-and-fix.todo
+    - file: B028-investigate-recent-ci-runs-and.todo

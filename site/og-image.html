@@ -10,11 +10,18 @@
       --out site/og.png \
       --width 1200 --height 630
 
-  Self-contained except optional system font stacks (no network fonts required).
+  Webfonts match site tokens (Fraunces / Source Sans 3 / JetBrains Mono).
+  Renderer waits for document.fonts.ready before screenshot.
 -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@500;600&family=Source+Sans+3:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
     <style>
       :root {
         --void: #05060a;
@@ -28,12 +35,9 @@
         --herald-dim: #b8892a;
         --herald-glow: rgba(232, 184, 74, 0.35);
         --signal: #5eead4;
-        --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia,
-          "Times New Roman", serif;
-        --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
-          Arial, sans-serif;
-        --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas,
-          monospace;
+        --font-display: "Fraunces", Georgia, serif;
+        --font-body: "Source Sans 3", system-ui, sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, monospace;
       }
       * {
         margin: 0;

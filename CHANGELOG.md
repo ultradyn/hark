@@ -6,6 +6,10 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Site typography (B042): replace generic system stacks with curated webfonts —
+  **Fraunces** (display), **Source Sans 3** (body), **JetBrains Mono** (mono) —
+  loaded with `preconnect` + `display=swap` on the marketing site and OG card.
+  See `site/README.md` and `site/css/tokens.css`.
 - Site OG card (B030 follow-up): social preview is designed as `site/og-image.html`
   and rendered to `site/og.png` via `~/.llm-general/skills/` (`og-social-previews` +
   `headless-browser-screenshots` + visual review). See `site/README.md`.

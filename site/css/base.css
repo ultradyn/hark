@@ -15,11 +15,14 @@ body {
   min-height: 100vh;
   font-family: var(--font-body);
   font-size: var(--fs-body);
+  font-weight: 400;
   line-height: var(--lh-body);
   color: var(--ink);
   background: var(--bg-void);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  font-feature-settings: "kern" 1, "liga" 1;
 }
 
 img,
@@ -45,6 +48,7 @@ h3,
 h4 {
   font-family: var(--font-display);
   font-weight: 500;
+  font-optical-sizing: auto;
   line-height: var(--lh-tight);
   letter-spacing: var(--tracking-display);
   margin: 0 0 var(--s-4);

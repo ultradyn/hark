@@ -19,8 +19,20 @@ Change brand colors or type scale in **tokens only**; components consume `var(--
 `<a class="product-link" href="https://herdr.dev/">Herdr</a>` so they inherit local
 text color and underline cleanly in body, eyebrow, and verse.
 
-**Performance:** system font stacks only (no Google Fonts), static SVG diagram (no
-canvas loop), minimal CSS/JS. Prefer editing tokens over adding dependencies.
+### Typography (B042)
+
+| Role | Family | Use |
+|------|--------|-----|
+| **Display** | [Fraunces](https://fonts.google.com/specimen/Fraunces) | Wordmark, headings — soft optical serif |
+| **Body** | [Source Sans 3](https://fonts.google.com/specimen/Source+Sans+3) | UI, lede, longform |
+| **Mono** | [JetBrains Mono](https://fonts.google.com/specimen/JetBrains+Mono) | Terminal, code, chips, URLs |
+
+Loaded from Google Fonts with `preconnect` + `display=swap` in `index.html` (and
+`og-image.html` for social renders). Tokens keep system fallbacks if the network
+is blocked. Edit stacks in `css/tokens.css`.
+
+**Performance:** static SVG diagram (no canvas loop), minimal CSS/JS; three
+webfont families only. Prefer editing tokens over adding dependencies.
 
 ## Open Graph / Twitter card
 

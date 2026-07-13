@@ -358,7 +358,7 @@ def test_run_tts_defers_play_until_capture_clears(monkeypatch, tmp_path):
             )
 
     @contextmanager
-    def _fake_exclusive(ticket=None):
+    def _fake_exclusive(ticket=None, wait_timeout_s=None, **_kw):
         yield
 
     monkeypatch.setattr(
@@ -435,7 +435,7 @@ def test_run_tts_skips_defer_when_disabled(monkeypatch, tmp_path):
             )
 
     @contextmanager
-    def _fake_exclusive(ticket=None):
+    def _fake_exclusive(ticket=None, wait_timeout_s=None, **_kw):
         yield
 
     monkeypatch.setattr("hark.speech.wait_until_user_capture_idle", fake_wait)

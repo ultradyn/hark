@@ -31,6 +31,7 @@ Once `/hark` or `/handsfree` is invoked, you enter **TTS mode**:
    - Start listening (`hark listen` / `hark ask` already listens)
    - Act on the transcript; speak a short ack when useful
 4. Chat/text is for **tool output, event_ids, and debugging** — not the main operator UI.
+5. **Ambient voice → TTS reply (hard rule).** On every final `ambient.prompt` (and after you act on a finished radio stream), **speak your response with `hark tts`**. Do **not** answer ambient operator speech with chat-only prose. Short acks count; long plans can be summarized by voice with detail in chat if needed. Radio **partials** are HOLD (think privately); when the stream is **final**, reply by TTS.
 
 Mic mutes automatically during TTS (`mute_mic_during_tts`). Recording **waits for speech** before the start cue and before content is kept (leading silence/noise is trimmed).
 
@@ -92,6 +93,13 @@ Operators often forget exact end phrases (“how do I stop this?”, “okay sto
 5. After finish, treat the resulting final transcript like any other operator prompt.
 
 Exact end phrases still work without you. You are the backup interpreter.
+
+## On final `ambient.prompt` (operator voice to you)
+
+1. Treat the `text` as a direct operator instruction to **you** (the Mode A orchestrator), not as pane delivery unless they clearly ask to reply to an agent.
+2. **Immediately** `hark tts "…"` with your answer, status, or next step — same bar as TTS mode rule 5 above.
+3. If still mid-radio (`partial=true`), do not TTS a full answer yet unless they asked to stop early via `listen-end`; wait for `final=true` / matching `stream_id` final event.
+4. File dogfood bugs by voice-ack + `bl bug` when they report friction.
 
 ## Arm the feed (**required**)
 

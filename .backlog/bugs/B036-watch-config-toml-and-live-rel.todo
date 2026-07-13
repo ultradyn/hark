@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T12:46:56Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T12:51:12Z"
 complexity: medium
 created_at: "2026-07-13T12:33:39Z"
 depends_on: []
+duration_minutes: 4.2706278054333335
 estimate_hours: 1
 id: B036
 priority: high
 started_at: "2026-07-13T12:46:56Z"
-status: in_progress
+status: done
 tags: []
 title: Watch config.toml and live-reload ambient/listen settings (not only SIGHUP)
-updated_at: "2026-07-13T12:46:56Z"
+updated_at: "2026-07-13T12:51:12Z"
 ---
 ## Problem
 Config changes today require **SIGHUP** the ambient process (or full Mode A restart). Learning (`wake_learned.json`) already hot-reloads by mtime; `config.toml` does not.

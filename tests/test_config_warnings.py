@@ -23,7 +23,7 @@ snippit_s = 3
     cfg = load_config(path)
 
     assert "unknown config key: herdr.unexpected" in cfg.warnings
-    assert "unknown config key: herdr.sessions.socket_typo" in cfg.warnings
+    assert "unknown config key: herdr.sessions[0].socket_typo" in cfg.warnings
     assert "unknown config key: listen.end_mod" in cfg.warnings
     assert "unknown config key: ambient.snippit_s" in cfg.warnings
 
@@ -34,4 +34,4 @@ def test_cli_emits_config_warnings(tmp_path, capsys):
 
     assert cli.main(["--config", str(path), "config", "show"]) == 0
 
-    assert "hark config: unknown config key: listen.end_mod" in capsys.readouterr().err
+    assert "hark config warning: unknown config key: listen.end_mod" in capsys.readouterr().err

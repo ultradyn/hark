@@ -178,7 +178,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     cfg = load_config(getattr(args, "config_path", None))
     for warning in cfg.warnings:
-        eprint(f"hark config: {warning}")
+        eprint(f"hark config warning: {warning}")
+    try:
+        from hark.audio.cues import configure_cues_from_config
+
+        configure_cues_from_config(cfg)
+    except Exception:
+        pass
     try:
         return dispatch(args, cfg)
     except HerdrError as exc:
@@ -493,6 +499,9 @@ def cmd_answer(args: argparse.Namespace, cfg) -> int:
         return ABORT
     if store.already_delivered(args.event_id):
         eprint("hark answer: already delivered (idempotent refuse)")
+        return ABORT
+    if bound.status != "pending":
+        eprint(f"hark answer: event is no longer pending ({bound.status})")
         return ABORT
 
     fingerprint = (

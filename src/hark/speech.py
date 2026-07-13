@@ -11,6 +11,7 @@ from typing import Any
 
 from hark.audio.capture import MicLease, capture_utterance, write_wav_bytes
 from hark.audio.cues import (
+    configure_cues_from_config,
     lookup_cached_tts,
     play_record_start,
     play_record_stop,
@@ -190,6 +191,7 @@ def run_listen(
     stt = resolve_stt(provider or cfg.stt.provider)
     end_silence = 1.1 if mode is EndMode.SILENCE else 2.5
     store = UsageStore()
+    configure_cues_from_config(cfg)
 
     with MicLease("listen"):
         if mode is EndMode.SILENCE:

@@ -55,6 +55,10 @@ class DeliveryStore:
                         for k in BoundEvent.__dataclass_fields__
                         if k in data
                     })
+        if found is not None:
+            status = self._latest_statuses().get(event_id)
+            if status:
+                found.status = status
         return found
 
     def register_from_hep(self, hep: dict[str, Any]) -> BoundEvent:
@@ -101,12 +105,12 @@ class DeliveryStore:
 
     def invalidate_target(
         self, session_id: str, pane_id: str, *, reason: str
-    ) -> list[str]:
+    ) -> list[BoundEvent]:
         """Mark still-pending bound events for a removed/moved target invalid."""
         if not self.path.is_file():
             return []
         statuses = self._latest_statuses()
-        invalidated: list[str] = []
+        invalidated: list[BoundEvent] = []
         with self.path.open(encoding="utf-8") as fh:
             for line in fh:
                 try:
@@ -121,7 +125,15 @@ class DeliveryStore:
                     and statuses.get(event_id, "pending") == "pending"
                 ):
                     self.mark(event_id, "invalidated", reason=reason)
-                    invalidated.append(event_id)
+                    invalidated.append(
+                        BoundEvent(
+                            **{
+                                key: data[key]
+                                for key in BoundEvent.__dataclass_fields__
+                                if key in data
+                            }
+                        )
+                    )
         return invalidated
 
     def already_delivered(self, event_id: str) -> bool:

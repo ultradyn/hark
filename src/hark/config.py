@@ -37,7 +37,15 @@ KNOWN_TOP_KEYS = frozenset(
 KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
     "herdr": frozenset({"sessions"}),
     "watch": frozenset({"statuses", "debounce_ms", "transport", "poll_ms", "heartbeat_s"}),
-    "audio": frozenset({"half_duplex", "post_tts_guard_ms", "listen_pre_arm_ms", "mute_mic_during_tts"}),
+    "audio": frozenset({
+        "half_duplex",
+        "post_tts_guard_ms",
+        "listen_pre_arm_ms",
+        "mute_mic_during_tts",
+        "cue_volume",
+        "cue_start_path",
+        "cue_stop_path",
+    }),
     "listen": frozenset({"end_mode", "end_phrases", "cancel_phrases", "strip_phrase", "max_listen_s", "nudge_silence_s"}),
     "ambient": frozenset({"enabled", "activation_phrases", "engine", "model_path", "snippet_s", "timeout_s"}),
     "stt": frozenset({"provider"}),
@@ -76,6 +84,11 @@ class AudioConfig:
     listen_pre_arm_ms: int = 300
     # Mute system default capture during TTS (Wave ring white→red via pactl)
     mute_mic_during_tts: bool = True
+    # Record start/stop cue volume for generated blips (0.0–1.0)
+    cue_volume: float = 0.22
+    # Optional custom WAV/MP3 paths (empty = assets/cues defaults)
+    cue_start_path: str | None = None
+    cue_stop_path: str | None = None
 
 
 @dataclass
@@ -174,6 +187,9 @@ half_duplex = true
 post_tts_guard_ms = 100      # after TTS ends → start listen (tight handoff)
 listen_pre_arm_ms = 300      # signal ~0.3s before TTS ends
 mute_mic_during_tts = true   # pactl mute → Elgato Wave ring red while speaking
+cue_volume = 0.22            # generated start/stop beep volume (0–1)
+# cue_start_path = "/path/to/record-start.wav"
+# cue_stop_path  = "/path/to/record-stop.wav"
 
 # Bound answer windows — how spoken replies end
 # Defaults are product-scoped so normal speech does not trigger control.
@@ -286,11 +302,16 @@ def load_config(path: Path | None = None) -> HarkConfig:
     sessions_raw = herdr.get("sessions") if isinstance(herdr, dict) else None
     sessions: list[SessionConfig] = []
     if isinstance(sessions_raw, list):
-        for item in sessions_raw:
+        for index, item in enumerate(sessions_raw):
             if not isinstance(item, dict) or "id" not in item:
                 warnings.append(f"skipping invalid session entry: {item!r}")
                 continue
-            _warn_unknown_keys(item, KNOWN_SESSION_KEYS, "herdr.sessions", warnings)
+            _warn_unknown_keys(
+                item,
+                KNOWN_SESSION_KEYS,
+                f"herdr.sessions[{index}]",
+                warnings,
+            )
             sessions.append(
                 SessionConfig(
                     id=str(item["id"]),
@@ -358,6 +379,22 @@ def load_config(path: Path | None = None) -> HarkConfig:
             post_tts_guard_ms=int(audio_raw.get("post_tts_guard_ms", 100)),
             listen_pre_arm_ms=int(audio_raw.get("listen_pre_arm_ms", 300)),
             mute_mic_during_tts=bool(audio_raw.get("mute_mic_during_tts", True)),
+            cue_volume=float(
+                audio_raw.get(
+                    "cue_volume",
+                    os.environ.get("HARK_CUE_VOLUME", 0.22),
+                )
+            ),
+            cue_start_path=(
+                str(audio_raw["cue_start_path"])
+                if audio_raw.get("cue_start_path")
+                else os.environ.get("HARK_CUE_START")
+            ),
+            cue_stop_path=(
+                str(audio_raw["cue_stop_path"])
+                if audio_raw.get("cue_stop_path")
+                else os.environ.get("HARK_CUE_STOP")
+            ),
         ),
         listen=ListenConfig(
             end_mode=end_mode,
@@ -466,6 +503,9 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "post_tts_guard_ms": cfg.audio.post_tts_guard_ms,
             "listen_pre_arm_ms": cfg.audio.listen_pre_arm_ms,
             "mute_mic_during_tts": cfg.audio.mute_mic_during_tts,
+            "cue_volume": cfg.audio.cue_volume,
+            "cue_start_path": cfg.audio.cue_start_path,
+            "cue_stop_path": cfg.audio.cue_stop_path,
         },
         "listen": {
             "end_mode": cfg.listen.end_mode,

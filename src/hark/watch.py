@@ -300,7 +300,7 @@ def _handle_lifecycle_event(
         )
     if pane_id is None:
         return False
-    event_ids = (
+    invalidated = (
         store.invalidate_target(client.session.id, pane_id, reason=event_type)
         if store is not None
         else []
@@ -310,7 +310,7 @@ def _handle_lifecycle_event(
             client.session.id,
             pane_id,
             reason=event_type,
-            event_ids=event_ids,
+            event_ids=[event.event_id for event in invalidated],
         )
     )
     return True

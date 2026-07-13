@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-07-13T17:59:42Z"
+depends_on: []
+estimate_hours: 1
+id: B093
+priority: high
+status: pending
+tags: []
+title: Radio STT echo filter clears all prior segments when a short answer quotes a word from the TTS question (e.g. BitLocker.) — dogfood Q2 lost Windows + BitLocker answers
+updated_at: "2026-07-13T17:59:42Z"
+---
+
+Radio STT echo filter clears all prior segments when a short answer quotes a word from the TTS question (e.g. BitLocker.) — dogfood Q2 lost Windows + BitLocker answers

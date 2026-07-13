@@ -1,6 +1,6 @@
 {
   "name": "@ultradyn/hark",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Handsfree voice for your coding-agent herd in Herdr — hark & handsfree agent skills. Run the skill; Mode A arms watch, speech, and safe delivery.",
   "license": "MIT",
   "type": "module",

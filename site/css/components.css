@@ -618,9 +618,11 @@ a.product-link:hover {
   box-shadow: var(--shadow-panel), 0 0 48px rgba(232, 184, 74, 0.1);
   overflow: hidden;
   padding: var(--s-5) var(--s-4) var(--s-4);
-  /* Prefer a wide diagram; min-width forces readable scale when column allows */
+  /* Fill the grid track only — never force past the shell (no min-width) */
   width: 100%;
   max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .arch__title {

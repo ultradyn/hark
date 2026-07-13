@@ -42,14 +42,14 @@ def test_five_tickets_play_in_launch_order(tmp_path, monkeypatch):
     monkeypatch.setattr(pb, "tts_play_lock_path", lambda: tmp_path / "tts_play.lock")
     monkeypatch.setattr(pb, "tts_play_queue_path", lambda: tmp_path / "tts_play_queue.json")
     play_order: list[int] = []
-    barrier = threading.Barrier(5)
+    # Claim in launch order (main thread), like sequential process starts
+    tickets = [pb.claim_tts_play_ticket() for _ in range(5)]
+    assert tickets == [0, 1, 2, 3, 4] or tickets == list(range(tickets[0], tickets[0] + 5))
 
     def worker(i: int) -> None:
-        ticket = pb.claim_tts_play_ticket()  # launch-order claim
-        barrier.wait()  # all tickets reserved before any play
         # Higher i "synths" faster — would race ahead without FIFO tickets
         time.sleep(0.05 * (4 - i))
-        with pb.exclusive_playback(ticket=ticket):
+        with pb.exclusive_playback(ticket=tickets[i]):
             play_order.append(i)
             time.sleep(0.02)
 

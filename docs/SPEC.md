@@ -48,8 +48,8 @@ hark status [--session ID]... [--status …] [--read-excerpt] [--json]
 hark queue [--json]                    # pending interactions if tracked
 hark context <target> [--lines N] [--source …]
 hark tts …
-hark listen …
-hark ask … [--confirm auto|always|never]
+hark listen … [--end-mode silence|radio]
+hark ask … [--confirm auto|always|never] [--end-mode silence|radio]
 hark reply <target> …                  # freeform (debug / simple)
 hark keys <target> <key> [key…]
 hark answer <event_id> (--text … | --keys …)   # bound, preferred
@@ -126,6 +126,15 @@ See [SAFETY.md](SAFETY.md).
 
 See [AUDIO_DESIGN.md](AUDIO_DESIGN.md). Event-driven answer windows only in MVP. Adaptive gate; post-TTS guard; no continuous cloud streaming of ambient audio.
 
+**Listen end modes** (`[listen].end_mode` in `~/.config/hark/config.toml`, env `HARK_LISTEN_END_MODE`):
+
+| Mode | Finalize when |
+|------|----------------|
+| `silence` (default) | Smart Turn / end-silence |
+| `radio` | Spoken end phrase only (e.g. “okay send it”, “end prompt”, “over”); long pauses must not cut off |
+
+Cancel phrases abort without delivery. Hard `max_listen_s` always applies.
+
 ## 10. Providers
 
 See [PROVIDERS.md](PROVIDERS.md). xAI via Grok OAuth preferred. No local neural STT/TTS. No Playwright as production STT.
@@ -156,6 +165,13 @@ transport = "auto"
 half_duplex = true
 post_tts_guard_ms = 350
 
+[listen]
+# silence | radio — radio = keep listening until end phrase (long pauses OK)
+end_mode = "silence"
+# end_phrases / cancel_phrases — see AUDIO_DESIGN defaults
+strip_phrase = true
+max_listen_s = 300
+
 [stt]
 provider = "auto"
 # xai oauth via ~/.grok/auth.json
@@ -171,7 +187,7 @@ mode = "auto"   # for R0/R1; R2/R3 force always
 deny_patterns = []  # optional hard blocks
 ```
 
-Env: `HARK_CONFIG`, `HARK_STT_PROVIDER`, `XAI_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MINIMAX_API_KEY`, `HERDR_SOCKET_PATH`.
+Env: `HARK_CONFIG`, `HARK_LISTEN_END_MODE`, `HARK_STT_PROVIDER`, `XAI_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MINIMAX_API_KEY`, `HERDR_SOCKET_PATH`.
 
 ## 13. Performance targets (excluding provider RTT)
 

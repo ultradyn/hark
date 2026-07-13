@@ -9,6 +9,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from hark.listen_end import (
+    DEFAULT_CANCEL_PHRASES,
+    DEFAULT_END_PHRASES,
+    EndMode,
+    parse_end_mode,
+)
 from hark.paths import default_config_path, default_herdr_socket
 
 
@@ -18,6 +24,7 @@ KNOWN_TOP_KEYS = frozenset(
         "herdr",
         "watch",
         "audio",
+        "listen",
         "stt",
         "tts",
         "confirm",
@@ -51,6 +58,30 @@ class AudioConfig:
 
 
 @dataclass
+class ListenConfig:
+    """How a spoken reply ends (global: ~/.config/hark/config.toml).
+
+    end_mode:
+      silence — end on Smart Turn / end-silence (default)
+      radio   — keep listening through long pauses until an end phrase
+                (like radio "over"), e.g. "okay send it" / "end prompt"
+    """
+
+    end_mode: str = EndMode.SILENCE.value
+    end_phrases: list[str] = field(
+        default_factory=lambda: list(DEFAULT_END_PHRASES)
+    )
+    cancel_phrases: list[str] = field(
+        default_factory=lambda: list(DEFAULT_CANCEL_PHRASES)
+    )
+    strip_phrase: bool = True
+    # hard cap even in radio mode (operator safety)
+    max_listen_s: float = 300.0
+    # optional spoken nudge after this much trailing silence (0 = off)
+    nudge_silence_s: float = 0.0
+
+
+@dataclass
 class SttConfig:
     provider: str = "auto"
 
@@ -78,6 +109,7 @@ class HarkConfig:
     sessions: list[SessionConfig] = field(default_factory=list)
     watch: WatchConfig = field(default_factory=WatchConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
+    listen: ListenConfig = field(default_factory=ListenConfig)
     stt: SttConfig = field(default_factory=SttConfig)
     tts: TtsConfig = field(default_factory=TtsConfig)
     confirm: ConfirmConfig = field(default_factory=ConfirmConfig)
@@ -110,6 +142,31 @@ poll_ms = 1000
 [audio]
 half_duplex = true
 post_tts_guard_ms = 350
+
+# How spoken replies end (see docs/AUDIO_DESIGN.md § Radio end)
+# silence = Smart Turn / end-silence (default)
+# radio   = keep listening through long pauses until an end phrase
+[listen]
+end_mode = "silence"
+# end_mode = "radio"
+end_phrases = [
+  "okay send it",
+  "ok send it",
+  "send it",
+  "end prompt",
+  "end of prompt",
+  "end of message",
+  "over",
+]
+cancel_phrases = [
+  "cancel that",
+  "never mind",
+  "scratch that",
+  "abort send",
+]
+strip_phrase = true
+max_listen_s = 300
+# nudge_silence_s = 45   # optional "still listening" after long quiet (0 = off)
 
 [stt]
 provider = "auto"
@@ -180,6 +237,7 @@ def load_config(path: Path | None = None) -> HarkConfig:
 
     watch_raw = raw.get("watch") or {}
     audio_raw = raw.get("audio") or {}
+    listen_raw = raw.get("listen") or {}
     stt_raw = raw.get("stt") or {}
     tts_raw = raw.get("tts") or {}
     confirm_raw = raw.get("confirm") or {}
@@ -191,6 +249,35 @@ def load_config(path: Path | None = None) -> HarkConfig:
     tts_provider = (
         str(tts_raw.get("provider", "auto")) if isinstance(tts_raw, dict) else "auto"
     )
+
+    # listen.end_mode: config, then env HARK_LISTEN_END_MODE
+    end_mode_raw = "silence"
+    if isinstance(listen_raw, dict) and listen_raw.get("end_mode") is not None:
+        end_mode_raw = str(listen_raw.get("end_mode"))
+    if os.environ.get("HARK_LISTEN_END_MODE"):
+        end_mode_raw = os.environ["HARK_LISTEN_END_MODE"]
+    try:
+        end_mode = parse_end_mode(end_mode_raw).value
+    except ValueError as exc:
+        warnings.append(str(exc))
+        end_mode = EndMode.SILENCE.value
+
+    if isinstance(listen_raw, dict):
+        end_phrases = _as_list_str(
+            listen_raw.get("end_phrases"), list(DEFAULT_END_PHRASES)
+        )
+        cancel_phrases = _as_list_str(
+            listen_raw.get("cancel_phrases"), list(DEFAULT_CANCEL_PHRASES)
+        )
+        strip_phrase = bool(listen_raw.get("strip_phrase", True))
+        max_listen_s = float(listen_raw.get("max_listen_s", 300))
+        nudge_silence_s = float(listen_raw.get("nudge_silence_s", 0))
+    else:
+        end_phrases = list(DEFAULT_END_PHRASES)
+        cancel_phrases = list(DEFAULT_CANCEL_PHRASES)
+        strip_phrase = True
+        max_listen_s = 300.0
+        nudge_silence_s = 0.0
 
     return HarkConfig(
         version=int(raw.get("version", 1)) if isinstance(raw.get("version", 1), int) else 1,
@@ -220,6 +307,14 @@ def load_config(path: Path | None = None) -> HarkConfig:
             post_tts_guard_ms=int(audio_raw.get("post_tts_guard_ms", 350))
             if isinstance(audio_raw, dict)
             else 350,
+        ),
+        listen=ListenConfig(
+            end_mode=end_mode,
+            end_phrases=end_phrases,
+            cancel_phrases=cancel_phrases,
+            strip_phrase=strip_phrase,
+            max_listen_s=max_listen_s,
+            nudge_silence_s=nudge_silence_s,
         ),
         stt=SttConfig(provider=stt_provider),
         tts=TtsConfig(
@@ -290,6 +385,14 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "debounce_ms": cfg.watch.debounce_ms,
             "transport": cfg.watch.transport,
             "poll_ms": cfg.watch.poll_ms,
+        },
+        "listen": {
+            "end_mode": cfg.listen.end_mode,
+            "end_phrases": list(cfg.listen.end_phrases),
+            "cancel_phrases": list(cfg.listen.cancel_phrases),
+            "strip_phrase": cfg.listen.strip_phrase,
+            "max_listen_s": cfg.listen.max_listen_s,
+            "nudge_silence_s": cfg.listen.nudge_silence_s,
         },
         "stt": {"provider": cfg.stt.provider},
         "tts": {

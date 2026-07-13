@@ -123,6 +123,16 @@ def build_parser() -> argparse.ArgumentParser:
         if name in ("tts", "listen", "ask"):
             sp.add_argument("text", nargs="*", default=[])
             _add_json_flag(sp)
+        if name in ("listen", "ask"):
+            sp.add_argument(
+                "--end-mode",
+                choices=("silence", "radio"),
+                default=None,
+                help=(
+                    "silence=Smart Turn/end-silence; radio=keep listening until "
+                    "end phrase (e.g. 'okay send it'). Default: config [listen].end_mode"
+                ),
+            )
         if name == "skip":
             sp.add_argument("event_id")
         if name == "queue":
@@ -217,9 +227,12 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
         return ERROR
 
     if cmd in ("tts", "listen", "ask"):
+        end_mode = getattr(args, "end_mode", None) or cfg.listen.end_mode
         eprint(
             f"hark {cmd}: speech I/O not implemented yet "
-            "(Phase 1.6+). Auth: see hark doctor / hark providers."
+            f"(Phase 1.6+). Effective listen end_mode={end_mode!r} "
+            f"(config [listen] / HARK_LISTEN_END_MODE / --end-mode). "
+            "Auth: see hark doctor / hark providers."
         )
         return ERROR
 

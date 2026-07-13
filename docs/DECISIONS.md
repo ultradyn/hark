@@ -52,4 +52,16 @@ API/OAuth only for production speech.
 
 ## ADR-013: Prior art folded, not dual-tracked
 
-hvb / herdr-voice specs are historical; Hark SPEC is authoritative going forward ([PRIOR_ART.md](PRIOR_ART.md)).  
+hvb / herdr-voice specs are historical; Hark SPEC is authoritative going forward ([PRIOR_ART.md](PRIOR_ART.md)).
+
+## ADR-014: Optional radio-style listen end (global config)
+
+Operators who think aloud with long pauses need the mic to stay open until an explicit end phrase (like radio “over”), not until the first silence / Smart Turn.
+
+- Config: `[listen] end_mode = "radio"` in `~/.config/hark/config.toml`  
+- Env: `HARK_LISTEN_END_MODE`  
+- CLI: `hark listen|ask --end-mode radio` (overrides)  
+- Default remains `silence` for short answers.  
+- End phrases are stripped; cancel phrases abort (exit 7).  
+- Hard `max_listen_s` always caps capture.  
+See [AUDIO_DESIGN.md](AUDIO_DESIGN.md).  

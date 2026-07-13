@@ -44,6 +44,12 @@ def run_doctor(
             "grok_auth": str(grok_auth_path()),
             "grok_auth_exists": grok_auth_path().is_file(),
         },
+        "listen": {
+            "end_mode": cfg.listen.end_mode,
+            "max_listen_s": cfg.listen.max_listen_s,
+            "end_phrase_count": len(cfg.listen.end_phrases),
+            "strip_phrase": cfg.listen.strip_phrase,
+        },
         "herdr_bin": shutil.which("herdr"),
         "sessions": [],
         "providers": [],
@@ -122,6 +128,13 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
         mark = "✓" if p["available"] else "·"
         src = f" [{p['source']}]" if p["source"] else ""
         print(f"    {mark} {p['name']}{src}: {p['detail']}", file=out)
+    listen = report.get("listen") or {}
+    print(
+        f"  listen: end_mode={listen.get('end_mode', '?')} "
+        f"max={listen.get('max_listen_s', '?')}s "
+        f"(radio = keep open until end phrase)",
+        file=out,
+    )
     if report.get("speech_ok"):
         print("  speech: ready (xAI or fallback keys)", file=out)
     else:

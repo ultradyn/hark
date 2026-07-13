@@ -12,3 +12,5 @@ ideas:
       id: I002
     - file: I003-live-web-dashboard-stream-even.todo
       id: I003
+    - file: I004-add-support-for-local-models-l.todo
+      id: I004

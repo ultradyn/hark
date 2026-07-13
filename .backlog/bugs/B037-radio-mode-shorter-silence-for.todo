@@ -1,18 +1,18 @@
 ---
+claimed_at: "2026-07-13T12:46:56Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T12:37:35Z"
 depends_on: []
 estimate_hours: 1
 id: B037
 priority: high
-status: pending
-tags:
-    - ambient
-    - radio
-    - stt
-    - dogfood
+started_at: "2026-07-13T12:46:56Z"
+status: in_progress
+tags: []
 title: 'Radio mode: shorter silence for more frequent partial STT updates'
-updated_at: "2026-07-13T12:37:35Z"
+updated_at: "2026-07-13T12:46:56Z"
 ---
 ## Dogfood
 Operator in radio end_mode: partials arrive only after a long quiet (same ~2.1s end_silence style delay). They want **many smaller partials** while speaking, with shorter silence between partial STT updates.

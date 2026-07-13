@@ -93,3 +93,4 @@ bugs:
     - file: B092-tts-has-no-global-playback-que.todo
     - file: B093-radio-stt-echo-filter-clears-a.todo
     - file: B094-on-herdr-agent-state-updates-i.todo
+    - file: B095-print-tts-question-text-to-ter.todo

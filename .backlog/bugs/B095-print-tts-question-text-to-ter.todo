@@ -1,0 +1,29 @@
+---
+complexity: medium
+created_at: "2026-07-13T18:08:00Z"
+depends_on: []
+estimate_hours: 1
+id: B095
+priority: medium
+status: pending
+tags:
+    - tts
+    - ux
+    - mode-a
+title: Print TTS question text to terminal when Mode A / hark ask speaks so operator has a visual quick reference
+updated_at: "2026-07-13T18:08:00Z"
+---
+## Problem
+
+When the Mode A / hark agent asks questions over TTS (`hark ask`, long `hark tts` prompts), the operator only hears the audio. Looking at the hark agent terminal does not show the question list, so mid-answer they lose track of “what were the other questions?”
+
+## Desired
+
+When speaking a multi-part question (or any agent TTS prompt intended as an interview), **print the question text** (or a numbered checklist) to stdout / the agent terminal **as TTS starts** (or immediately after arming), so the operator can glance at the terminal for a quick reference without replaying audio.
+
+## Acceptance
+
+- [ ] `hark ask` / Mode A TTS prompts emit the full question text to the controlling terminal
+- [ ] Prefer readable numbered form if the prompt is multi-item
+- [ ] Does not spam partial radio STT into that same channel
+- [ ] Optional config flag if needed; default on for ask

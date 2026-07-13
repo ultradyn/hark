@@ -1,16 +1,14 @@
 ---
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T16:52:09Z"
 depends_on: []
 estimate_hours: 2
 id: B084
 priority: high
+started_at: null
 status: pending
-tags:
-  - audio
-  - radio
-  - mute
-  - listen
+tags: []
 title: 'Mute during TTS: do not count muted time as user silence / listen timeout; pad ~300ms quiet around mute edges'
 updated_at: "2026-07-13T16:52:30Z"
 ---
@@ -99,3 +97,10 @@ clocks as if the operator were silent:
 - `capture_utterance` discard / `audio_ok_after` / preroll (B079)
 - B074 radio idle end; B078 arm cue; B031 post-wake gate
 - Elgato Wave mute light (red while muted) — visual cue that clocks should freeze
+
+
+## Related (ring continuity)
+
+**B085** continuous radio ring / segment PCM overlap is complementary: B084 freezes
+clocks while muted; B085 keeps the stream open and overlaps STT windows so
+boundary phonemes are not lost to cold re-open.

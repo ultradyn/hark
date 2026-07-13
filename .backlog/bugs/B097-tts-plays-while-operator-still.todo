@@ -1,0 +1,25 @@
+---
+complexity: medium
+created_at: "2026-07-13T18:56:52Z"
+depends_on: []
+estimate_hours: 1
+id: B097
+priority: high
+status: pending
+tags: []
+title: TTS plays while operator still speaking and mutes mic (cuts off radio capture)
+updated_at: "2026-07-13T18:56:52Z"
+---
+## Dogfood (2026-07-13)
+While answering an ambient.prompt, operator started a new wake/radio stream mid-thought. Agent launched `hark tts` for the prior answer; TTS played immediately with `mute_mic_during_tts=true`, cutting off the operator mid-sentence and corrupting the open listen stream.
+
+## Expected
+If the operator is mid-utterance / an active listen or ambient radio stream is capturing user speech, TTS should **defer** (queue until trailing quiet / stream finalizes) rather than interrupt. Optional later: barge-in policy for intentional interrupt.
+
+## Actual
+TTS starts immediately, mutes mic (half-duplex), operator hears cut-off and partial STT is damaged.
+
+## Related
+- half_duplex + mute_mic_during_tts
+- ambient streaming mode feature (live partial replies)
+- B092 playback queue (serializes TTS vs TTS, not TTS vs user speech)

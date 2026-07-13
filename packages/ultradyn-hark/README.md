@@ -1,20 +1,46 @@
 # @ultradyn/hark
 
+![Hark — when your agents need a word](https://hark.xk.io/og.png)
+
 > **When your agents need a word.**
 
 Handsfree voice for your coding-agent **herd** in [Herdr](https://herdr.dev/).
 
-This package ships the **`hark`** and **`handsfree`** agent skills (Mode A). Load the skill in Claude Code, Grok, Pi, OpenCode, Antigravity (`agy`), or any agent with skill + Monitor support — the agent arms Herdr watch, speaks blocked questions, listens via cloud STT, and delivers replies safely.
+**Supervise the whole herd by voice.** When agents in [Herdr](https://herdr.dev/) block, swarm, or wait on you, Hark speaks the ask and takes your answer out loud—so the fleet keeps moving while you’re away from the keyboard.
 
-**Monitor tool:** Claude Code and Grok provide it natively. On **Pi**, install [pi-monitor](https://github.com/clankercode/pi-monitor) (`pi install npm:pi-monitor`); on **OpenCode**, install [opencode-monitor-bg](https://github.com/clankercode/opencode-monitor-bg); on **Antigravity (`agy`)**, use agentapi inject. Plugins / agentapi deliver a background `hark watch --for-monitor` (or `hark monitor --for-monitor`) feed into the session.
+This package ships the **`hark`** and **`handsfree`** agent skills. Run the skill; the agent arms Herdr watch, speech, and safe delivery. You stay on voice.
 
 | | |
 |--|--|
 | **Site** | [hark.xk.io](https://hark.xk.io) |
 | **Skills** | `hark` · alias `handsfree` |
 | **CLI** | Separate Python package (see [Install the CLI](#install-the-cli-hark-binary)) |
-| **Requires** | [Herdr](https://herdr.dev/) ≥ 0.7.1 · `hark` CLI on `PATH` for Mode A |
+| **Requires** | [Herdr](https://herdr.dev/) ≥ 0.7.1 · `hark` CLI on `PATH` · a long-lived **Monitor** |
+| **Supports** | Claude Code · Grok Build · Antigravity · Pi · OpenCode · Codex |
 | **Source** | [github.com/ultradyn/hark](https://github.com/ultradyn/hark) |
+
+---
+
+## Supports
+
+Handsfree voice needs a coding CLI/agent that can run shell tools **and** keep a long-lived **Monitor** (or equivalent) on:
+
+```bash
+hark monitor
+```
+
+Compact Monitor lines are the default (no extra flags required). Without a persistent Monitor, blocks won’t interrupt the session.
+
+| CLI / agent | Support | Notes |
+|-------------|---------|--------|
+| **Claude Code** | Native / Monitor | Skill + Monitor on the watch feed; full handsfree loop |
+| **Grok Build** | Native / Monitor | Same pattern; skill install + persistent monitor |
+| **Antigravity** | Native / AgentAPI | Experimental long-lived feed via agentapi inject |
+| **Pi** | Plugin | Any plugin that keeps a long-lived Monitor on `hark monitor`. Example: [pi-monitor](https://github.com/clankercode/pi-monitor) (`pi install npm:pi-monitor`) |
+| **OpenCode** | Plugin | Same idea. Example: [opencode-monitor-bg](https://github.com/clankercode/opencode-monitor-bg) (`monitor_start` / `monitor_fetch`) |
+| **Codex / others** | If Monitor exists | Any agent with shell + long-lived watch can drive Hark |
+
+Herdr hosts the worker agents. Your orchestrator (outside Herdr) runs the skill and speaks for the fleet.
 
 ---
 
@@ -73,14 +99,14 @@ In a compatible agent:
 /handsfree
 ```
 
-The skill tells the agent to:
+**Run the skill. The agent sets up the rest.**
 
 1. Run `hark doctor` / setup as needed  
-2. Arm **`hark watch --for-monitor`** (required — ambient alone misses `agent.blocked`)  
+2. Arm **`hark monitor`** (required — ambient alone misses `agent.blocked`)  
 3. Speak blocked questions, listen, confirm when needed  
 4. Deliver text or menu keys with stale-safe targeting  
 
-Prefer voice after the skill loads (`hark tts`, `hark ask`, `hark listen`).
+Prefer voice after the skill loads (`hark tts`, `hark ask`, `hark listen`). Ambient wake: say *hey hark*, *hey herald*, or your custom trigger.
 
 ---
 
@@ -110,11 +136,11 @@ hark doctor
 
 From a monorepo checkout: `uv sync && uv run hark doctor`.
 
-Full docs, ambient wake (`hey hark`), and architecture: **[hark.xk.io](https://hark.xk.io)** · **[GitHub](https://github.com/ultradyn/hark)**.
+Full docs, architecture, and safety notes: **[hark.xk.io](https://hark.xk.io)** · **[GitHub](https://github.com/ultradyn/hark)**.
 
 ---
 
-## What Mode A does
+## The loop
 
 ```text
 Agent becomes blocked in Herdr
@@ -131,6 +157,8 @@ Work continues
 ```
 
 Fleet control by voice. Human-in-the-loop without hands on the keyboard.
+
+**Risky actions always confirm.** Pane text is untrusted; fingerprint + revision refuse stale panes. The LLM never invents the delivery target.
 
 ---
 

@@ -1,5 +1,7 @@
 # Hark
 
+![Hark — when your agents need a word](site/og.png)
+
 > **When your agents need a word.**
 
 **Hark, the herald agents sing:  
@@ -7,9 +9,9 @@
 Blocked in Herdr, questions rise;  
 Hark relays your voice replies.**
 
-Hark is a lightweight **voice bridge** for coding agents in [Herdr](https://herdr.dev/) (≥ 0.7.1).
+**Supervise the whole herd by voice.** When agents in [Herdr](https://herdr.dev/) (≥ 0.7.1) block, swarm, or wait on you, Hark speaks the ask and takes your answer out loud—so the fleet keeps moving while you’re away from the keyboard.
 
-When an agent becomes **blocked**, Hark (and/or a supervisory agent using the `hark` skill) can read the question aloud, listen for your spoken answer, transcribe via cloud STT, and deliver text or menu keys to the correct pane—so work continues while you are away from the keyboard.
+Run the **`hark`** (or **`handsfree`**) skill in a capable coding agent; it arms watch, speech, and safe delivery. You stay on voice.
 
 ```text
 Agent becomes blocked
@@ -29,13 +31,14 @@ Work continues
 |--|--|
 | **CLI** | `hark` |
 | **Skill** | `hark` (alias: **`handsfree`**) |
-| **Optional daemon** | `harkd` — **not v1** (Mode A first) |
-| **Mode** | **A only for v1**: local agent outside Herdr + Monitor + tools |
+| **Supports** | Claude Code · Grok Build · Antigravity · Pi · OpenCode · Codex |
+| **Monitor feed** | `hark monitor` (compact by default) |
 | **Herdr** | ≥ 0.7.1 · multi-session (local + SSH) |
 | **Speech** | Cloud only (xAI OAuth, OpenAI, Google, MiniMax TTS, …) |
-| **Status** | Python prototype (`uv run hark`) · Mode A tools + speech |
+| **Optional daemon** | `harkd` — experimental, not required for v1 |
+| **Status** | Python prototype (`uv run hark`) · skill-first handsfree loop |
 
-The verse is playful; **routing and confirmation are not.**
+The verse is playful; **routing and confirmation are not.** Site: **[hark.xk.io](https://hark.xk.io)**.
 
 ## Docs
 
@@ -46,7 +49,7 @@ The verse is playful; **routing and confirmation are not.**
 | [docs/PRODUCT.md](docs/PRODUCT.md) | Goals |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Topology, Mode A, library vs daemon |
 | [docs/HARKD.md](docs/HARKD.md) | **Experimental `harkd`** — Mode A boundary (not required for v1) |
-| [docs/AGY.md](docs/AGY.md) | **Experimental Antigravity (`agy`)** Mode A via agentapi |
+| [docs/AGY.md](docs/AGY.md) | **Experimental Antigravity** Mode A via agentapi |
 | [docs/SPEC.md](docs/SPEC.md) | Normative software spec |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | HEP event protocol |
 | [docs/SAFETY.md](docs/SAFETY.md) | Routing, risk R0–R3, distrust |
@@ -99,7 +102,7 @@ Then:
 
 ```bash
 hark doctor
-# In Claude Code / Grok / Pi / OpenCode / agy / compatible agents:
+# In Claude Code / Grok Build / Antigravity / Pi / OpenCode / Codex:
 #   /hark
 ```
 
@@ -112,13 +115,19 @@ npx skills add ultradyn/hark -g -y
 # pick agents: -a claude-code -a opencode
 ```
 
-You still need the **Python `hark` CLI** on `PATH` for Mode A.
+You still need the **Python `hark` CLI** on `PATH` for the handsfree loop.
 
-**Monitor-capable harness required.** Mode A needs a long-lived wake on `hark monitor --for-monitor` (unified Herdr + ambient). Claude Code and Grok provide a native Monitor; on other harnesses:
+**Monitor-capable harness required.** Arm a long-lived wake on:
+
+```bash
+hark monitor
+```
+
+(Compact HEP lines are the default; use `--full` only when you need uncompacted events.) Claude Code and Grok Build provide a native Monitor; on other harnesses:
 
 - **Pi** — [pi-monitor](https://github.com/clankercode/pi-monitor) (`pi install npm:pi-monitor`): `Monitor` tool that runs a background command and delivers regex-matching stdout into the session
 - **OpenCode** — [opencode-monitor-bg](https://github.com/clankercode/opencode-monitor-bg): `monitor_start` / `monitor_list` / `monitor_fetch` / `monitor_kill` — background output delivered back into the owning session
-- **Antigravity (`agy`)** — experimental **agentapi** inject (no native Monitor): `hark agentapi register` then `hark agentapi deliver --follow-monitor` (or `./scripts/hark-agy-deliver.sh`). See [docs/AGY.md](docs/AGY.md).
+- **Antigravity** — experimental **agentapi** inject (no native Monitor): `hark agentapi register` then `hark agentapi deliver --follow-monitor` (or `./scripts/hark-agy-deliver.sh`). See [docs/AGY.md](docs/AGY.md).
 
 ### npm package (`@ultradyn/hark`)
 
@@ -133,12 +142,12 @@ See [`packages/ultradyn-hark/README.md`](packages/ultradyn-hark/README.md). Main
 ## Dev / try it
 
 ```bash
-cd /home/xertrov/src/grok/hark   # or your clone
+cd /path/to/hark   # or your clone
 uv sync
 uv run hark doctor
 uv run hark config init          # optional ~/.config/hark/config.toml
 uv run hark status
-uv run hark watch --for-monitor  # Mode A feed
+uv run hark monitor              # primary Mode A feed (compact default)
 uv run hark tts "hello"
 uv run hark listen               # speak, then silence ends (or end_mode=radio)
 uv run hark ask "What color?"
@@ -198,6 +207,7 @@ uv run pytest tests/test_fixtures_parity.py -q
 ```text
   install.sh              # one-line installer (CLI + skills)
   RELEASE.md              # npm tag → OIDC trusted publish + GitHub Release
+  site/                   # marketing site (hark.xk.io) + og.png
   fixtures/               # parity goldens + live wake audio
   schemas/                # HEP JSON Schema
   skill/                  # canonical agent skills (hark, handsfree)

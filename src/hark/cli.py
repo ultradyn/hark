@@ -1577,9 +1577,29 @@ def cmd_providers(args: argparse.Namespace) -> int:
         }
         for a in all_provider_status()
     ]
+    # Optional local full-STT readiness (B072)
+    try:
+        from hark.providers.local_stt import local_stt_statuses
+
+        for s in local_stt_statuses():
+            rows.append(
+                {
+                    "name": s.name,
+                    "available": s.available,
+                    "source": "local" if s.available else None,
+                    "detail": s.detail,
+                    "rtf_note": s.rtf_note,
+                }
+            )
+    except Exception:
+        pass
     if args.test_name:
-        name = args.test_name.lower()
-        rows = [r for r in rows if r["name"] == name]
+        name = args.test_name.lower().replace("-", "_")
+        rows = [
+            r
+            for r in rows
+            if r["name"] == name or r["name"].replace("-", "_") == name
+        ]
         if not rows:
             eprint(f"unknown provider: {args.test_name}")
             eprint("hint: try `hark providers voices`")
@@ -1589,7 +1609,9 @@ def cmd_providers(args: argparse.Namespace) -> int:
     else:
         for r in rows:
             mark = "ok" if r["available"] else "no"
-            print(f"{r['name']:10}  {mark:3}  {r['detail']}")
+            print(f"{r['name']:16}  {mark:3}  {r['detail']}")
+            if r.get("rtf_note"):
+                print(f"{'':16}      RTF: {r['rtf_note']}")
     return OK
 
 

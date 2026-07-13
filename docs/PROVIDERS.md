@@ -4,10 +4,12 @@
 
 | Rule | Detail |
 |------|--------|
-| **No local neural STT/TTS** | Do not require Whisper.cpp, Piper, etc. |
+| **Cloud STT/TTS default** | Full dictation stays cloud-first (ADR-004). Local neural STT is **optional** (B072), never required. |
+| **No required local neural STT/TTS** | Do not require Whisper.cpp, Piper, etc. for a working install. |
 | **Max reuse of operator accounts** | Pluggable providers: xAI, OpenAI, Anthropic, Google, MiniMax |
-| **Local allowed** | Mic capture, RMS gate, classic WebRTC VAD, playback, espeak-ng emergency TTS |
+| **Local allowed** | Mic capture, RMS gate, classic WebRTC VAD, playback, espeak-ng emergency TTS; optional post-wake local STT (`faster_whisper`) |
 | **Avoid as primary** | Playwright website “Dictate” (optional last-resort provider only) |
+| **Not for ambient wake** | Do **not** use Whisper / full STT for continuous ambient wake — that path is Vosk / Sherpa KWS (B069–B070). |
 
 ## Capability matrix (honest)
 
@@ -41,6 +43,66 @@
 5. Else espeak-ng emergency only if `tts.allow_espeak_fallback = true`
 
 Operator may pin: `provider = "xai" | "openai" | "google" | "minimax" | "anthropic"`.
+
+Optional local (explicit only — never via `auto`):
+
+`provider = "faster_whisper" | "local" | "moonshine"` — see [Optional local full-STT](#optional-local-full-stt-b072) below.
+
+---
+
+## Optional local full-STT (B072)
+
+For **offline** or **privacy-local** utterance transcription (answer windows / post-wake prompt body). **Cloud remains the product default.** Install is opt-in:
+
+```bash
+pip install 'hark[local-stt]'   # faster-whisper
+# Moonshine stretch (separate package; packaging less stable):
+#   pip install useful-moonshine
+```
+
+### Config / env
+
+```toml
+[stt]
+provider = "faster_whisper"   # or "local" / "whisper" aliases; "moonshine" stretch
+local_model = "tiny.en"       # or base.en (quality vs speed)
+local_device = "cpu"           # GPU optional, never required
+local_compute_type = "int8"
+# local_model_path = "/path/to/ct2-model"  # optional on-disk override
+local_fail_open = true        # if local missing → cloud auto (recommended)
+local_download = true         # allow Hugging Face download on first use
+```
+
+| Env | Maps to |
+|-----|---------|
+| `HARK_STT_PROVIDER` | `stt.provider` |
+| `HARK_STT_LOCAL_MODEL` | `stt.local_model` |
+| `HARK_STT_LOCAL_DEVICE` | `stt.local_device` |
+| `HARK_STT_LOCAL_COMPUTE_TYPE` | `stt.local_compute_type` |
+| `HARK_STT_LOCAL_MODEL_PATH` | `stt.local_model_path` |
+| `HARK_STT_LOCAL_FAIL_OPEN` | `stt.local_fail_open` (`0`/`1`) |
+| `HARK_STT_LOCAL_DOWNLOAD` | `stt.local_download` |
+
+When `local_fail_open = true` (default) and the local engine or model cannot load, resolution falls back to cloud `auto` with a warning log.
+
+### RTF expectations (from B069 survey)
+
+Measured on a mid laptop CPU (Ryzen 7 class, no discrete NVIDIA), int8, short ~2.5 s clips — see `docs/plans/B069-local-stt-survey.md`:
+
+| Engine | RTF / latency notes |
+|--------|---------------------|
+| **faster-whisper `tiny.en` int8 CPU** | **RTF ≈ 0.10–0.14** typical (~250–350 ms decode); cold load ~5.5 s; one outlier ~RTF 0.47 |
+| **faster-whisper `base.en` int8 CPU** | **RTF ≈ 0.19–0.23** (~460–570 ms); cold load ~13.5 s |
+| **Moonshine tiny** (cited) | Edge-focused; short-clip latency often tens–hundreds of ms (better short-audio curve than Whisper’s 30 s pad) |
+
+Target feel for local post-wake: **≲ 1–1.5 s** after speech end on mid hardware when the model is warm.
+
+### What local STT is *not*
+
+- **Not** the ambient wake scanner — open-vocab Whisper still mangles product names (`hark` → hawk/hook); continuous snippet decode is the wrong problem class. Use Vosk / Sherpa KWS for wake.
+- **Not** selected by `provider = "auto"`.
+
+`hark doctor` and `hark providers` report local engine import readiness (soft; missing extra is not a hard fail).
 
 ---
 

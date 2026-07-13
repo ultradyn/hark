@@ -82,7 +82,7 @@ def transcribe_blob(
 
     started = time.monotonic()
     try:
-        stt = resolve_stt(cfg.stt.provider)
+        stt = resolve_stt(cfg.stt.provider, stt_cfg=cfg.stt)
         result = stt.transcribe(wav)
     except ProviderError as exc:
         return 502, _err("stt_failed", str(exc))

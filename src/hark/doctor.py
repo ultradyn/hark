@@ -106,6 +106,26 @@ def run_doctor(
             }
         )
 
+    # Optional local full-STT (B072) — soft readiness only; cloud remains default
+    try:
+        from hark.providers.local_stt import local_stt_statuses
+
+        local_model = getattr(cfg.stt, "local_model", "tiny.en") or "tiny.en"
+        report["local_stt"] = [
+            {
+                "name": s.name,
+                "available": s.available,
+                "detail": s.detail,
+                "rtf_note": s.rtf_note,
+            }
+            for s in local_stt_statuses(model=local_model)
+        ]
+        report["stt_provider"] = cfg.stt.provider
+        report["stt_local_fail_open"] = bool(getattr(cfg.stt, "local_fail_open", True))
+    except Exception as exc:  # pragma: no cover - defensive
+        report["local_stt"] = []
+        report["local_stt_error"] = str(exc)
+
     # Primary speech path
     xai = next((p for p in report["providers"] if p["name"] == "xai"), None)
     if xai and not xai["available"]:
@@ -271,6 +291,20 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
         mark = "✓" if p["available"] else "·"
         src = f" [{p['source']}]" if p["source"] else ""
         print(f"    {mark} {p['name']}{src}: {p['detail']}", file=out)
+    local_stt = report.get("local_stt") or []
+    if local_stt:
+        pinned = report.get("stt_provider") or "auto"
+        fail_open = report.get("stt_local_fail_open", True)
+        print(
+            f"  local STT: config provider={pinned} "
+            f"fail_open={fail_open} (optional; not ambient wake)",
+            file=out,
+        )
+        for p in local_stt:
+            mark = "✓" if p["available"] else "·"
+            print(f"    {mark} {p['name']}: {p['detail']}", file=out)
+            if p.get("rtf_note"):
+                print(f"      RTF: {p['rtf_note']}", file=out)
     listen = report.get("listen") or {}
     print(
         f"  listen: end_mode={listen.get('end_mode', '?')} "

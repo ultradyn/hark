@@ -535,7 +535,7 @@ def run_listen(
         else bool(no_open_nudge)
     )
 
-    stt = resolve_stt(provider or cfg.stt.provider)
+    stt = resolve_stt(provider or cfg.stt.provider, stt_cfg=cfg.stt)
     # Silence mode: end_silence_s finalizes the answer window.
     # Radio mode: radio_partial_silence_s only cuts a segment for interim STT /
     # ambient.partial (B037). The turn still finalizes only on end phrase,

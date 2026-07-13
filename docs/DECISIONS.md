@@ -14,11 +14,18 @@ Supervisory agent outside Herdr is the default operator. **v1 ships Mode A only.
 
 Local + remote Herdr sessions merge into one HEP feed with `session_id`.
 
-## ADR-004: No local neural **dictation**; local wake snippets OK
+## ADR-004: Cloud-first full STT/TTS; local wake snippets OK; optional local dictation
 
-Full STT/TTS remains **cloud**. Exception: a **tiny local model** may scan short
-(2–3 s) ambient snippets **only** to detect activation phrases (`hey hark` /
-`hey herald`). No continuous cloud ambient transcription.
+Full STT/TTS remains **cloud by default** (product quality, Mode A dogfood).
+Exception: a **tiny local model** may scan short (2–3 s) ambient snippets
+**only** to detect activation phrases (`hey hark` / `hey herald`). No continuous
+cloud ambient transcription.
+
+**B072 amendment:** operators may **opt in** to local full-STT for post-wake
+utterances / offline privacy via `stt.provider = "faster_whisper"` (or
+`moonshine` stretch), with `local_fail_open` back to cloud. This does **not**
+change the default (`auto` → cloud) and must **not** be used as continuous
+ambient wake (see B069 survey).
 
 ## ADR-005: Confirm policy split by risk
 

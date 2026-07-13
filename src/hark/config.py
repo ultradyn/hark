@@ -161,7 +161,16 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "config_watch_poll_ms",
         "config_watch_debounce_ms",
     }),
-    "stt": frozenset({"provider"}),
+    "stt": frozenset({
+        "provider",
+        # Optional local full-STT (B072) — cloud remains default under auto
+        "local_model",
+        "local_device",
+        "local_compute_type",
+        "local_model_path",
+        "local_fail_open",
+        "local_download",
+    }),
     "tts": frozenset({"provider", "voice", "language", "max_chars", "allow_espeak_fallback"}),
     "confirm": frozenset({"mode"}),
     "safety": frozenset({"deny_patterns"}),
@@ -374,7 +383,16 @@ class AmbientConfig:
 
 @dataclass
 class SttConfig:
+    # auto | xai | openai | google | faster_whisper | moonshine
+    # (aliases: local / whisper / faster-whisper → faster_whisper)
     provider: str = "auto"
+    # Local full-STT (B072 / optional). Not used for ambient wake.
+    local_model: str = "tiny.en"  # faster-whisper: tiny.en | base.en | …
+    local_device: str = "cpu"  # cpu | cuda (GPU optional, never required)
+    local_compute_type: str = "int8"
+    local_model_path: str | None = None  # CT2 dir override; else HF cache by name
+    local_fail_open: bool = True  # if local missing → cloud auto
+    local_download: bool = True  # allow HF download on first use
 
 
 @dataclass
@@ -609,6 +627,16 @@ config_watch_debounce_ms = 400
 
 [stt]
 provider = "auto"
+# Optional local full-STT for offline / privacy (B072). Cloud stays default.
+# Do NOT use Whisper for continuous ambient wake (see B069 / B070 for KWS).
+# provider = "faster_whisper"   # or "moonshine" (stretch) | "local" alias
+# local_model = "tiny.en"       # or base.en; int8 CPU RTF ~0.1–0.15 (tiny.en, B069)
+# local_device = "cpu"
+# local_compute_type = "int8"
+# local_model_path = ""         # optional on-disk CT2 model dir
+# local_fail_open = true        # fall back to cloud auto if local unavailable
+# local_download = true         # allow Hugging Face model download on first use
+# Env: HARK_STT_PROVIDER, HARK_STT_LOCAL_MODEL, HARK_STT_LOCAL_FAIL_OPEN, …
 
 [tts]
 provider = "auto"
@@ -959,6 +987,42 @@ def load_config(path: Path | None = None) -> HarkConfig:
     stt_provider = os.environ.get("HARK_STT_PROVIDER") or str(
         stt_raw.get("provider", "auto")
     )
+    stt_local_model = os.environ.get("HARK_STT_LOCAL_MODEL") or str(
+        stt_raw.get("local_model", "tiny.en")
+    )
+    stt_local_device = os.environ.get("HARK_STT_LOCAL_DEVICE") or str(
+        stt_raw.get("local_device", "cpu")
+    )
+    stt_local_compute = os.environ.get("HARK_STT_LOCAL_COMPUTE_TYPE") or str(
+        stt_raw.get("local_compute_type", "int8")
+    )
+    stt_local_model_path = os.environ.get("HARK_STT_LOCAL_MODEL_PATH") or (
+        str(stt_raw["local_model_path"])
+        if stt_raw.get("local_model_path")
+        else None
+    )
+    if stt_local_model_path is not None and not str(stt_local_model_path).strip():
+        stt_local_model_path = None
+    env_fail_open = os.environ.get("HARK_STT_LOCAL_FAIL_OPEN")
+    if env_fail_open is not None:
+        stt_local_fail_open = env_fail_open.strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+    else:
+        stt_local_fail_open = _as_bool(stt_raw.get("local_fail_open"), default=True)
+    env_download = os.environ.get("HARK_STT_LOCAL_DOWNLOAD")
+    if env_download is not None:
+        stt_local_download = env_download.strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+    else:
+        stt_local_download = _as_bool(stt_raw.get("local_download"), default=True)
     tts_provider = str(tts_raw.get("provider", "auto"))
 
     end_mode_raw = str(listen_raw.get("end_mode", "silence"))
@@ -1139,7 +1203,15 @@ def load_config(path: Path | None = None) -> HarkConfig:
             ambient_raw if isinstance(ambient_raw, dict) else {},
             ambient_enabled=ambient_enabled,
         ),
-        stt=SttConfig(provider=stt_provider),
+        stt=SttConfig(
+            provider=stt_provider,
+            local_model=stt_local_model,
+            local_device=stt_local_device,
+            local_compute_type=stt_local_compute,
+            local_model_path=stt_local_model_path,
+            local_fail_open=stt_local_fail_open,
+            local_download=stt_local_download,
+        ),
         tts=TtsConfig(
             provider=tts_provider,
             voice=(
@@ -1346,7 +1418,15 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "config_watch_poll_ms": cfg.ambient.config_watch_poll_ms,
             "config_watch_debounce_ms": cfg.ambient.config_watch_debounce_ms,
         },
-        "stt": {"provider": cfg.stt.provider},
+        "stt": {
+            "provider": cfg.stt.provider,
+            "local_model": cfg.stt.local_model,
+            "local_device": cfg.stt.local_device,
+            "local_compute_type": cfg.stt.local_compute_type,
+            "local_model_path": cfg.stt.local_model_path,
+            "local_fail_open": cfg.stt.local_fail_open,
+            "local_download": cfg.stt.local_download,
+        },
         "tts": {
             "provider": cfg.tts.provider,
             "voice": cfg.tts.voice,

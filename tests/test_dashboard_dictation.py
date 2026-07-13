@@ -45,7 +45,10 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     cfg = load_config(tmp_path / "missing.toml")
     fake = FakeStt()
-    monkeypatch.setattr("hark.providers.resolve.resolve_stt", lambda name="auto": fake)
+    monkeypatch.setattr(
+        "hark.providers.resolve.resolve_stt",
+        lambda name="auto", **kw: fake,
+    )
     return cfg, fake
 
 

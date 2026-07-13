@@ -66,3 +66,15 @@ bugs:
     - file: B065-dashboard-mic-dictation-browse.todo
     - file: B066-dashboard-security-hardening-p.todo
     - file: B067-dashboard-beyond-parity-polish.todo
+    - file: B068-radio-end-ux-clearer-end-signa.todo
+    - file: B069-investigate-light-fast-local-s.todo
+    - file: B070-sherpa-onnx-kws-wake-backend-p.todo
+    - file: B071-wake-eval-harness-expand-fixtu.todo
+    - file: B072-optional-local-full-stt-provid.todo
+    - file: B073-docs-helper-optional-larger-vo.todo
+    - file: B074-radio-answer-long-pause-after.todo
+    - file: B075-radio-segments-pad-overlap-sil.todo
+    - file: B076-sources-for-codex-minimax-auth.todo
+    - file: B077-wake-learn-reject-short-common.todo
+    - file: B078-answer-window-record-beep-stil.todo
+    - file: B079-ambient-wake-keep-mic-stream-o.todo

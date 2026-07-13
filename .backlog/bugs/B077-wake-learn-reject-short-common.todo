@@ -1,0 +1,32 @@
+---
+complexity: medium
+created_at: "2026-07-13T15:49:13Z"
+depends_on: []
+estimate_hours: 1
+id: B077
+priority: high
+status: pending
+tags: []
+title: 'Wake learn: reject short/common English tokens (e.g. is→iris from TTS bleed)'
+updated_at: "2026-07-13T15:49:13Z"
+---
+## Problem
+
+`suggest_learn_from_near_miss` allows aliases with `len >= 2`, so function words
+like **`is`** get learned as Iris when ambient hears sample TTS
+(“Hello. This **is** Eve/English Calm…”). Reproduces whenever speakers play
+voice samples near the mic; also risks `he`/`her`/etc.
+
+## Desired
+
+- Reject name aliases that are common English stop/function words.
+- Prefer min length **3** for learned name tokens (keep seeds separate).
+- Never auto-learn single-syllable ultra-common words even if edit-similar to a name.
+- Optional: do not learn while TTS is playing / mic recently muted for TTS (harder).
+
+## Acceptance
+
+- [ ] “hello this is eve…” near-miss does not write `is` → iris
+- [ ] Existing bad aliases can be ignored at load or stripped once
+- [ ] Real mishears (eyris, irys, mercery) still learn
+- [ ] Unit tests on suggest_learn_from_near_miss denylist

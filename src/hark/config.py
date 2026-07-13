@@ -40,11 +40,26 @@ KNOWN_TOP_KEYS = frozenset(
         "confirm",
         "safety",
         "dashboard",
+        "agents",
     }
 )
 
 KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
     "herdr": frozenset({"sessions"}),
+    "agents": frozenset(
+        {
+            "prefer_aliases",
+            "claude",
+            "codex",
+            "grok",
+            "cursor_agent",
+            "cursor-agent",
+            "opencode",
+            "pi",
+            "agy",
+            "cli",
+        }
+    ),
     "watch": frozenset({
         "statuses",
         "debounce_ms",
@@ -64,6 +79,7 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "cue_volume",
         "cue_start_path",
         "cue_stop_path",
+        "answer_arm_cue",
         # Conference hold (B017): pause full TTS while Zoom/Teams/Meet is active
         "hold_during_conference",
         "conference_chime_only",
@@ -203,6 +219,9 @@ class AudioConfig:
     # Optional custom WAV/MP3 paths (empty = assets/cues defaults)
     cue_start_path: str | None = None
     cue_stop_path: str | None = None
+    # After TTS (ask / tts --listen / confirm): beep when listen arms, not when
+    # speech opens. Avoids a multi-second silent wait that felt like lag.
+    answer_arm_cue: bool = True
     # Hold full TTS while a conference app is active (Zoom/Teams/Meet…); default ON
     hold_during_conference: bool = True
     # Soft chime while held instead of speaking the full question immediately
@@ -311,7 +330,9 @@ class AmbientConfig:
     enabled: bool = False
     # names (default) | phrases — see WakePolicy / docs/CUSTOM_WAKE.md
     wake_mode: str = "names"
-    names: list[str] = field(default_factory=lambda: ["hark", "herald"])
+    names: list[str] = field(
+        default_factory=lambda: ["iris", "mercury", "hark", "herald"]
+    )
     # Display / exact extras / phrase-mode list (resolved)
     activation_phrases: list[str] = field(
         default_factory=lambda: list(DEFAULT_ACTIVATION_PHRASES)
@@ -387,6 +408,15 @@ class DashboardConfig:
 
 
 @dataclass
+class AgentsConfig:
+    """Coding CLI overrides for voice spawn (I005 / B055–B059)."""
+
+    prefer_aliases: bool = True
+    # agent key → command string or first PATH token (absolute path OK)
+    cli: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class HarkConfig:
     version: int = 1
     sessions: list[SessionConfig] = field(default_factory=list)
@@ -399,6 +429,7 @@ class HarkConfig:
     confirm: ConfirmConfig = field(default_factory=ConfirmConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    agents: AgentsConfig = field(default_factory=AgentsConfig)
     path: Path | None = None
     warnings: list[str] = field(default_factory=list)
 
@@ -438,6 +469,7 @@ sync_hw_unmute = true        # Wave/ALSA unmute button → force OS/Pulse unmute
 cue_volume = 0.22            # generated start/stop beep volume (0–1)
 # cue_start_path = "/path/to/record-start.wav"
 # cue_stop_path  = "/path/to/record-stop.wav"
+answer_arm_cue = true        # after TTS: beep when listen ready (not when speech opens)
 # Hold full TTS during Zoom/Teams/Meet (process list + optional audio streams)
 hold_during_conference = true
 conference_chime_only = true # soft cue while held; full question after call ends
@@ -519,7 +551,7 @@ no_open_nudge = true         # TTS then re-listen once more on no-open
 # 1) Name-based (default): set product names; greating+name / bare name wake.
 #    Near-misses auto-learn alternate name tokens (no restart).
 #      wake_mode = "names"
-#      names = ["hark", "herald"]
+#      names = ["iris", "mercury", "hark", "herald"]
 #      # extra_names = ["alice"]
 #
 # 2) Full-phrase: entire trigger strings only (no name fuzzy).
@@ -533,8 +565,9 @@ no_open_nudge = true         # TTS then re-listen once more on no-open
 [ambient]
 enabled = false
 wake_mode = "names"
-names = ["hark", "herald"]
+names = ["iris", "mercury", "hark", "herald"]
 # extra_names = ["alice"]
+# Persona TTS pairing (setup): Iris→eve, Mercury→leo
 # wake_mode = "phrases"
 # trigger_phrases = ["start prompt"]
 # extra_trigger_phrases = ["begin dictation"]
@@ -562,6 +595,16 @@ post_wake_no_open_nudge = true
 config_watch = true
 config_watch_poll_ms = 1000
 config_watch_debounce_ms = 400
+
+# Coding CLI resolution for voice spawn (I005 / B055–B059)
+# Prefer short aliases (cc/cx/gk/cr) when they are *safe* PATH binaries — not
+# gcc-as-cc or CodeRabbit-as-cr. Override with absolute path or command token.
+# [agents]
+# prefer_aliases = true
+# claude = "claude"          # or path to a cc shim
+# codex = "codex"
+# grok = "gk"
+# cursor_agent = "cursor-agent"
 # Env override: HARK_CONFIG_WATCH=0 to disable, =1 to force on.
 
 [stt]
@@ -991,6 +1034,7 @@ def load_config(path: Path | None = None) -> HarkConfig:
                 if audio_raw.get("cue_stop_path")
                 else os.environ.get("HARK_CUE_STOP")
             ),
+            answer_arm_cue=bool(audio_raw.get("answer_arm_cue", True)),
             hold_during_conference=bool(
                 audio_raw.get(
                     "hold_during_conference",
@@ -1131,9 +1175,47 @@ def load_config(path: Path | None = None) -> HarkConfig:
             ),
             history_limit=int(dashboard_raw.get("history_limit", 2000)),
         ),
+        agents=_build_agents_config(
+            raw.get("agents") if isinstance(raw.get("agents"), dict) else {}
+        ),
         path=cfg_path if cfg_path.is_file() else None,
         warnings=warnings,
     )
+
+
+def _build_agents_config(agents_raw: dict[str, Any]) -> AgentsConfig:
+    """Parse ``[agents]`` CLI overrides for voice spawn."""
+    prefer = bool(agents_raw.get("prefer_aliases", True))
+    cli: dict[str, str] = {}
+
+    def _store(key: str, value: Any) -> None:
+        if value is None:
+            return
+        val = str(value).strip()
+        if not val:
+            return
+        k = str(key).strip()
+        if k.replace("-", "_") == "cursor_agent":
+            k = "cursor-agent"
+        cli[k] = val
+
+    nested = agents_raw.get("cli")
+    if isinstance(nested, dict):
+        for k, v in nested.items():
+            _store(str(k), v)
+    for flat in (
+        "claude",
+        "codex",
+        "grok",
+        "opencode",
+        "pi",
+        "agy",
+        "cursor_agent",
+        "cursor-agent",
+    ):
+        if flat in agents_raw:
+            _store(flat, agents_raw[flat])
+    return AgentsConfig(prefer_aliases=prefer, cli=cli)
 
 
 def resolve_session_socket(session: SessionConfig) -> Path:
@@ -1199,6 +1281,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "cue_volume": cfg.audio.cue_volume,
             "cue_start_path": cfg.audio.cue_start_path,
             "cue_stop_path": cfg.audio.cue_stop_path,
+            "answer_arm_cue": cfg.audio.answer_arm_cue,
             "hold_during_conference": cfg.audio.hold_during_conference,
             "conference_chime_only": cfg.audio.conference_chime_only,
             "conference_process_names": list(cfg.audio.conference_process_names),
@@ -1279,6 +1362,10 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "require_token": cfg.dashboard.require_token,
             "tls_terminated": cfg.dashboard.tls_terminated,
             "history_limit": cfg.dashboard.history_limit,
+        },
+        "agents": {
+            "prefer_aliases": cfg.agents.prefer_aliases,
+            "cli": dict(cfg.agents.cli),
         },
     }
 

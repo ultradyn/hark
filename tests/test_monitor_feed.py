@@ -125,6 +125,46 @@ def test_replay_matching_from_files(tmp_path: Path):
     assert near["attempts"] == ["clunker"]
 
 
+def test_partial_fragment_delta():
+    from hark.partial import partial_fragment
+
+    assert partial_fragment(None, "hello") == "hello"
+    assert partial_fragment("hello", "hello world") == "world"
+    assert partial_fragment("hello", "goodbye") == "goodbye"
+
+
+def test_compact_ambient_partial_must_listen_end_language():
+    c = compact_mode_a_event(
+        {
+            "kind": "ambient.partial",
+            "event_id": "e-partial-must",
+            "stream_id": "s99",
+            "seq": 1,
+            "text": "ship the plan okay over",
+            "fragment": "okay over",
+        }
+    )
+    assert "MUST" in c["instructions"]
+    assert "listen-end" in c["instructions"]
+    assert "over" in c["instructions"].lower()
+
+
+def test_compact_ambient_partial_includes_fragment():
+    c = compact_mode_a_event(
+        {
+            "kind": "ambient.partial",
+            "event_id": "p1",
+            "stream_id": "s1",
+            "seq": 2,
+            "text": "hello world more",
+            "fragment": "more",
+        }
+    )
+    assert c["fragment"] == "more"
+    assert c["text"] == "hello world more"
+    assert c["text_len"] == len("hello world more")
+
+
 def test_compact_ambient_partial_includes_text_len():
     """B039: monitor compact partials expose text_len so agents see growth."""
     long = "prefix " + ("x" * 500)

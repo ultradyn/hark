@@ -162,6 +162,38 @@ def test_first_sight_done_with_menu() -> None:
     assert any(e["kind"] == "agent.needs_input" for e in events)
 
 
+def test_monitor_profile_tolerates_string_question() -> None:
+    """Legacy watch lines may store question as a bare string — must not crash monitor."""
+    from hark.events import monitor_profile
+
+    compact = monitor_profile(
+        {
+            "kind": "agent.blocked",
+            "event_id": "e1",
+            "session_id": "default",
+            "target": {"pane_id": "w1:p1", "agent": "claude"},
+            "question": "Do you want to proceed?\n> 1. Yes",
+            "state": {"to": "blocked"},
+        }
+    )
+    assert compact["kind"] == "agent.blocked"
+    assert "proceed" in (compact.get("question") or "")
+    assert compact["pane_id"] == "w1:p1"
+
+    # target as "session/pane" string
+    compact2 = monitor_profile(
+        {
+            "kind": "agent.completed",
+            "event_id": "e2",
+            "target": "work/w2:p3",
+            "question": None,
+        }
+    )
+    assert compact2["session_id"] == "work"
+    assert compact2["pane_id"] == "w2:p3"
+    assert "instructions" in compact2
+
+
 def test_question_changed_while_blocked() -> None:
     tracker = EdgeTracker()
     interest = {"blocked", "done"}

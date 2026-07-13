@@ -1,0 +1,70 @@
+---
+complexity: medium
+created_at: "2026-07-13T15:54:10Z"
+depends_on: []
+estimate_hours: 5
+id: B079
+priority: high
+status: pending
+tags: []
+title: 'Ambient wake: keep mic stream open (no per-snippet open/close); continuous ring buffer'
+updated_at: "2026-07-13T15:54:10Z"
+---
+## Problem
+
+During ambient **activation-phrase** listening, Hark repeatedly **opens and closes
+the mic** for short snippets (default ~2–2.5s). On the operator’s desktop this is
+noisy: taskbar / mic indicator / OS privacy UI toggles constantly.
+
+Separately, **snippet boundaries chop the wake phrase**. If the utterance spans
+two snippets (e.g. total window ~2.5–5s and the operator says “hey &lt;name&gt;”
+across the cut), one snippet may score only **“hey”** and miss the name — false
+near-miss / failed wake. Same root: discrete start/stop capture rather than a
+continuous stream.
+
+## Desired behavior
+
+1. **Hold the mic open** for the whole ambient wake wait (or continuous Mode A
+   idle loop), without open→close thrashing between snippets.
+2. Sample from a **continuous PCM stream** (ring buffer / sliding window).
+3. **Cut / score raw windows** out of that stream for the wake backend (Vosk /
+   future Sherpa KWS) — overlapping windows preferred so “hey” and “&lt;name&gt;”
+   land in the same scored span.
+4. Still **yield the mic** cleanly when Mode A answer/ask listen needs it
+   (existing mic lease / ambient pause) — one release for the answer window,
+   not re-open every 2s while idle.
+5. OS mic indicator should stay steady on while ambient is armed and idle.
+
+## Out of scope
+
+- Cloud STT for wake
+- Changing default wake names
+- Full duplex TTS+listen (separate)
+
+## Suggested approach
+
+- Continuous capture thread → ring buffer (e.g. 3–6s of 16 kHz mono).
+- Scorer tick every N ms (or on energy) with **overlapping** windows of
+  `snippet_s`, hop &lt; snippet (e.g. 0.5–1.0s hop) so greating+name rarely
+  splits across non-overlapping cuts.
+- MicLease held for ambient arm duration (or process lifetime of ambient
+  worker), released only for answer capture / shutdown.
+- Preserve energy skip for near-silence windows (CPU) without reopening the
+  device.
+
+## Acceptance
+
+- [ ] Idle ambient: mic indicator does not flicker open/close every snippet
+- [ ] “hey iris” / “hey mercury” across former snippet borders still wakes
+  (fixture or dogfood)
+- [ ] Answer/ask still steals mic via existing lease; ambient resumes after
+- [ ] No regression: false wake rate not wildly higher (overlap OK; tune hop)
+- [ ] Docs: AUDIO_DESIGN / ambient section notes continuous stream model
+- [ ] Tests for ring-buffer windowing / hop (unit; no real hardware required)
+
+## Related
+
+- Ambient snippet loop in `ambient.py` / `record_seconds` per tick
+- Mic lease (`mic_coord.py`); B010 auto-pause ambient for listen
+- B070 Sherpa KWS (streaming-friendly once mic is continuous)
+- B032 bare/near-miss; boundary “hey” only failures

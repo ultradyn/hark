@@ -1,0 +1,50 @@
+---
+complexity: medium
+created_at: "2026-07-13T15:51:42Z"
+depends_on: []
+estimate_hours: 1
+id: B078
+priority: high
+status: pending
+tags: []
+title: Answer-window record beep still waits for speech (stale install / radio arm_cue)
+updated_at: "2026-07-13T15:51:42Z"
+---
+## Symptom (dogfood 2026-07-14)
+
+After a question is asked (`hark ask` / TTS then listen), the **record-start beep
+lags until the operator starts talking**. Feels like the system is waiting for
+speech to open the gate before cuing that recording is ready.
+
+Expected: beep (or other arm cue) **as soon as listen is armed** after TTS ends,
+so the operator knows to speak. Leading silence still trimmed from STT content.
+
+## Context
+
+- Config: `[listen] end_mode = radio`, `[audio] answer_arm_cue = true` (default).
+- Repo already has `arm_cue` / `answer_arm_cue` for silence **and** radio paths
+  (`src/hark/speech.py` ~905–907 radio early cue; commit `900625d`).
+- **Installed** `uv tool` hark at
+  `~/.local/share/uv/tools/hark/.../site-packages/hark/speech.py` still radio-loops
+  with `on_opened=_cue_start_once` **without** early `_arm_cue_if_requested()` —
+  i.e. Mode A CLI likely running **stale package**, not checkout.
+- Skill text still says “start cue when speech opens” in places — update when fixed.
+
+## Desired
+
+1. After TTS for ask/answer, arm cue plays **before** speech is required (radio + silence).
+2. Document/reinstall path: Mode A should use latest checkout or `uv tool install -e .`
+   so dogfood matches master.
+3. Verify with radio: TTS → immediate beep → operator can wait → then speak.
+4. Skill: prefer “beep when listen ready” wording over “cue when speech opens”.
+
+## Acceptance
+
+- [ ] Fresh install or checkout: ask → beep without speaking first
+- [ ] No double-beep when speech later opens (arm_cue already set recording_cued)
+- [ ] Skill wording matches
+- [ ] Either pin dogfood to editable install or release bump so tool matches repo
+
+## Related
+
+- `answer_arm_cue`, `post_wake_arm_cue`, B031 post-wake arm, `900625d`

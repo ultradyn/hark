@@ -10,9 +10,11 @@ utterance-final "over", …) without requiring the Mode A agent to call
 ``hark listen-end``. Soft matches are **utterance-final only** (phrase must end
 the transcript after normalize) and only evaluated after a radio segment
 boundary (trailing silence). Bare ``over`` additionally requires a
-**sentence-final** boundary (sole utterance or after ``.`` / ``!`` / ``?``) so
-mid-clause "turn it over" / "over the weekend" never finishes. See
-docs/AUDIO_DESIGN.md.
+**sentence-final** boundary (sole utterance or after ``.`` / ``!`` / ``?`` /
+``,``) so mid-clause "turn it over" / "over the weekend" never finishes.
+Multi-word ``okay over`` / ``ok over`` cover STT that drops the comma in
+"okay, over". Mode A **must** also call ``hark listen-end`` on partials when
+the operator clearly finished. See docs/AUDIO_DESIGN.md.
 """
 
 from __future__ import annotations
@@ -76,6 +78,7 @@ DEFAULT_SOFT_END_PHRASES: tuple[str, ...] = (
     "end of message",
     "end message",
     "end of transmission",
+    "message done",  # informal closer (Mode A backup also catches this)
     "okay send it",
     "ok send it",
     "okay send",
@@ -83,6 +86,9 @@ DEFAULT_SOFT_END_PHRASES: tuple[str, ...] = (
     "send it",
     "send that",
     "over and out",
+    # STT often drops the comma in "okay, over" → bare "okay over" / "ok over"
+    "okay over",
+    "ok over",
     "over",  # sentence-final only (see SENTENCE_FINAL_SOFT_PHRASES)
 )
 
@@ -98,7 +104,9 @@ DEFAULT_SOFT_END_PHRASES_ENABLED: bool = True
 _PUNCT_TRAIL = re.compile(r"[\s\.\!\?\,\;\:…]+$", re.UNICODE)
 _WS = re.compile(r"\s+")
 # Sentence-ending punct at end of prefix before a sentence-final soft phrase.
-_SENTENCE_END = re.compile(r"[.!?…;:]+$")
+# Comma counts as a soft sentence boundary so "okay, over" / "ready, over"
+# finalize while mid-clause "turn it over" / "this is over" still do not.
+_SENTENCE_END = re.compile(r"[.!?…;:,]+$")
 
 
 def normalize_for_match(text: str) -> str:

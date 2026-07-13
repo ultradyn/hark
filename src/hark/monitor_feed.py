@@ -77,22 +77,29 @@ def compact_mode_a_event(event: dict[str, Any]) -> dict[str, Any]:
         )
     elif kind == "ambient.partial":
         text = event.get("text")
+        full_len = len(text) if isinstance(text, str) else 0
         if isinstance(text, str) and len(text) > 400:
             text = text[:397] + "…"
+        frag = event.get("fragment")
+        if isinstance(frag, str) and len(frag) > 240:
+            frag = frag[:237] + "…"
         compact.update(
             {
                 "stream_id": event.get("stream_id"),
                 "seq": event.get("seq"),
+                # Prefer delta for Mode A / logs; keep full body truncated as text
+                "fragment": frag if frag is not None else text,
                 "text": text,
-                "text_len": len(event.get("text") or "")
-                if isinstance(event.get("text"), str)
-                else None,
+                "text_len": full_len or None,
                 "partial": True,
                 "final": False,
                 "instructions": (
                     "RADIO PARTIAL — HOLD. Do not TTS a full answer. "
-                    "Optional: hark listen-end --stream-id <id> if they clearly finished. "
-                    "Then STOP; wait for next partial or final ambient.prompt."
+                    "Use fragment for the new slice; text is cumulative. "
+                    "MUST: if text clearly ends with a done signal (over, okay hark send, "
+                    "that's all, send it, stop recording, message done, …) and stream "
+                    "still active → hark listen-end --stream-id <id> (finish, not cancel). "
+                    "No mid-clause false finishes. Then STOP; wait for next partial or final."
                 ),
             }
         )
@@ -196,7 +203,27 @@ def emit_line(
     for_monitor: bool,
     out: TextIO,
 ) -> None:
-    payload = compact_mode_a_event(obj) if for_monitor else obj
+    if for_monitor:
+        try:
+            payload = compact_mode_a_event(obj)
+        except Exception as exc:
+            # Never kill the whole feed on one malformed line (dogfood: string
+            # question/target crashed monitor_profile). Fall back to a minimal
+            # compact object the Mode A agent can still see.
+            payload = {
+                "schema": obj.get("schema") or "hark.event.v1",
+                "kind": obj.get("kind") or obj.get("event"),
+                "event_id": obj.get("event_id"),
+                "observed_at": obj.get("observed_at"),
+                "session_id": obj.get("session_id"),
+                "compact_error": str(exc)[:200],
+                "instructions": (
+                    "Monitor compact failed for this event; inspect raw logs. "
+                    "Do not invent an answer."
+                ),
+            }
+    else:
+        payload = obj
     out.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
     out.flush()
 

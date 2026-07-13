@@ -441,6 +441,82 @@ def build_parser() -> argparse.ArgumentParser:
     )
     api_del.add_argument("--json", action="store_true")
 
+    # I005 / B057 — voice-spawn surfaces (Mode A tools)
+    sess = sub.add_parser(
+        "session",
+        help="list or ensure Herdr named sessions (I005)",
+    )
+    sess_sub = sess.add_subparsers(dest="session_cmd", required=True)
+    sess_list = sess_sub.add_parser("list", help="list Herdr sessions")
+    sess_list.add_argument("--json", action="store_true")
+    sess_ens = sess_sub.add_parser(
+        "ensure",
+        help="ensure a named Herdr session is running (start headless if needed)",
+    )
+    sess_ens.add_argument("name", help="Herdr session name (e.g. default, swarm)")
+    sess_ens.add_argument(
+        "--no-start",
+        action="store_true",
+        help="only look up; do not start a missing/stopped session",
+    )
+    sess_ens.add_argument("--json", action="store_true")
+
+    ags = sub.add_parser(
+        "agent-start",
+        help=(
+            "start a coding agent in Herdr (resolves CLI aliases; optional kickoff prompt)"
+        ),
+    )
+    ags.add_argument(
+        "agent",
+        help=(
+            "catalog agent (claude/cc, codex/cx, grok/gk, cursor-agent/cr, …) "
+            "or binary name; with --adhoc treat as free-form command"
+        ),
+    )
+    ags.add_argument(
+        "--session",
+        default=None,
+        help="Hark/Herdr session id (default: first configured session)",
+    )
+    ags.add_argument(
+        "--herdr-session",
+        default=None,
+        dest="herdr_session",
+        help="named Herdr session to ensure/start into (optional)",
+    )
+    ags.add_argument("--cwd", default=None, help="working directory for the agent pane")
+    ags.add_argument(
+        "--name",
+        default=None,
+        dest="pane_name",
+        help="Herdr agent/pane label (default: agent key)",
+    )
+    ags.add_argument("--workspace", default=None, help="Herdr workspace id")
+    ags.add_argument("--tab", default=None, help="Herdr tab id")
+    ags.add_argument("--split", choices=("right", "down"), default=None)
+    ags.add_argument(
+        "--focus",
+        action="store_true",
+        help="focus the new pane (default: --no-focus)",
+    )
+    ags.add_argument(
+        "--prompt",
+        default=None,
+        help="kickoff text to send after start (submits with Enter)",
+    )
+    ags.add_argument(
+        "--adhoc",
+        action="store_true",
+        help="treat AGENT as an ad-hoc command (no catalog alias table)",
+    )
+    ags.add_argument(
+        "extra",
+        nargs="*",
+        help="extra args after the resolved CLI (or full argv tail)",
+    )
+    ags.add_argument("--json", action="store_true")
+
     return p
 
 
@@ -591,7 +667,146 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
         return dispatch_daemon(args)
     if cmd == "agentapi":
         return cmd_agentapi(args)
+    if cmd == "session":
+        return cmd_session(args, cfg)
+    if cmd == "agent-start":
+        return cmd_agent_start(args, cfg)
     return USAGE
+
+
+def cmd_session(args: argparse.Namespace, cfg) -> int:
+    """``hark session list|ensure`` (I005 / B057)."""
+    client = _client_for(cfg, (cfg.sessions[0].id if cfg.sessions else "local"))
+    sub = getattr(args, "session_cmd", None)
+    if sub == "list":
+        rows = client.list_sessions()
+        payload = [
+            {
+                "name": s.name,
+                "running": s.running,
+                "default": s.default,
+                "session_dir": s.session_dir,
+                "socket_path": s.socket_path,
+            }
+            for s in rows
+        ]
+        if args.json:
+            print(json.dumps({"sessions": payload}, indent=2))
+        else:
+            if not payload:
+                print("(no herdr sessions)")
+            for s in payload:
+                mark = "running" if s["running"] else "stopped"
+                dflt = " (default)" if s["default"] else ""
+                print(f"{s['name']}{dflt}: {mark}  sock={s['socket_path'] or '?'}")
+        return OK
+    if sub == "ensure":
+        info = client.ensure_session(
+            str(args.name),
+            start=not bool(getattr(args, "no_start", False)),
+        )
+        payload = {
+            "name": info.name,
+            "running": info.running,
+            "default": info.default,
+            "session_dir": info.session_dir,
+            "socket_path": info.socket_path,
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print(
+                f"session {info.name}: "
+                f"{'running' if info.running else 'stopped'} "
+                f"sock={info.socket_path or '?'}"
+            )
+        return OK
+    return USAGE
+
+
+def cmd_agent_start(args: argparse.Namespace, cfg) -> int:
+    """``hark agent-start`` — resolve CLI, start in Herdr, optional kickoff (B057)."""
+    from hark.agents.resolve import ResolveError, resolve_adhoc_argv, resolve_agent_argv
+
+    session_id = (
+        args.session
+        or (cfg.sessions[0].id if cfg.sessions else None)
+        or "local"
+    )
+    client = _client_for(cfg, session_id)
+
+    herdr_sess = getattr(args, "herdr_session", None)
+    if herdr_sess:
+        client.ensure_session(str(herdr_sess))
+        # Re-bind client to the named herdr session socket when possible
+        client = HerdrClient(SessionConfig(id=str(herdr_sess)))
+        session_id = str(herdr_sess)
+
+    overrides = getattr(cfg, "agents", None)
+    override_map = None
+    prefer = True
+    if overrides is not None:
+        prefer = bool(getattr(overrides, "prefer_aliases", True))
+        override_map = dict(getattr(overrides, "cli", {}) or {})
+
+    extra = list(getattr(args, "extra", None) or [])
+    try:
+        if bool(getattr(args, "adhoc", False)):
+            resolved = resolve_adhoc_argv(str(args.agent), extra_args=extra)
+        else:
+            try:
+                resolved = resolve_agent_argv(
+                    str(args.agent),
+                    extra_args=extra,
+                    overrides=override_map,
+                    prefer_aliases=prefer,
+                )
+            except ResolveError:
+                # Fall back to ad-hoc when token is an unknown PATH binary
+                resolved = resolve_adhoc_argv(str(args.agent), extra_args=extra)
+    except ResolveError as exc:
+        eprint(f"hark agent-start: {exc}")
+        return USAGE
+
+    pane_name = getattr(args, "pane_name", None) or resolved.agent_key
+    agent = client.start_agent(
+        pane_name,
+        resolved.argv,
+        cwd=getattr(args, "cwd", None),
+        workspace_id=getattr(args, "workspace", None),
+        tab_id=getattr(args, "tab", None),
+        split=getattr(args, "split", None),
+        focus=bool(getattr(args, "focus", False)),
+    )
+
+    prompt = getattr(args, "prompt", None)
+    kicked = False
+    if prompt:
+        client.send_text(agent.pane_id, str(prompt), submit=True)
+        kicked = True
+
+    payload = {
+        "session_id": agent.session_id,
+        "pane_id": agent.pane_id,
+        "target": agent.target,
+        "agent": agent.agent,
+        "status": agent.status,
+        "cwd": agent.cwd,
+        "argv": resolved.argv,
+        "source": resolved.source,
+        "agent_key": resolved.agent_key,
+        "kickoff": kicked,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(
+            f"started {resolved.agent_key} → {agent.target} "
+            f"(source={resolved.source}, argv0={resolved.command})"
+        )
+        if kicked:
+            print(f"  kickoff prompt sent to {agent.pane_id}")
+    return OK
 
 
 def cmd_agentapi(args: argparse.Namespace) -> int:

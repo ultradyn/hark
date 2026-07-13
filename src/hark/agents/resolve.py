@@ -1,0 +1,378 @@
+"""Resolve coding-agent CLI argv (aliases + ad-hoc + reject list).
+
+Prefer short aliases when they are safe PATH binaries (``cc``, ``cx``, ``gk``,
+``cr``), else fall back to the canonical command. Never shell out through
+interactive fish/zsh functions — only ``PATH`` executables or config overrides.
+
+Pitfalls (see ``docs/plans/I005-voice-herdr-agent-control.md``):
+
+- ``cc`` often resolves to **gcc** — rejected.
+- ``cr`` may be **CodeRabbit**, not cursor-agent — rejected when detected.
+- Fish functions for ``cc``/``cx`` are invisible to ``herdr agent start``.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+
+class ResolveError(ValueError):
+    """Could not resolve a coding-agent CLI."""
+
+
+@dataclass(frozen=True)
+class ResolvedCli:
+    """Result of argv resolution."""
+
+    agent_key: str
+    argv: list[str]
+    source: str  # alias | canonical | override | adhoc
+    command: str  # first argv token (path or basename)
+
+
+@dataclass(frozen=True)
+class AgentSpec:
+    key: str
+    canonical: str
+    aliases: tuple[str, ...] = ()
+    # Spoken / alternate names that map to this key
+    names: tuple[str, ...] = ()
+
+
+# Built-in catalog: preferred aliases first, then canonical.
+AGENT_CATALOG: tuple[AgentSpec, ...] = (
+    AgentSpec(
+        key="claude",
+        canonical="claude",
+        aliases=("cc",),
+        names=("claude", "claude code", "claude-code"),
+    ),
+    AgentSpec(
+        key="codex",
+        canonical="codex",
+        aliases=("cx",),
+        names=("codex", "openai codex"),
+    ),
+    AgentSpec(
+        key="grok",
+        canonical="grok",
+        aliases=("gk",),
+        names=("grok", "grok build", "grok-build"),
+    ),
+    AgentSpec(
+        key="cursor-agent",
+        canonical="cursor-agent",
+        aliases=("cr",),
+        names=("cursor", "cursor-agent", "cursor agent"),
+    ),
+    AgentSpec(
+        key="opencode",
+        canonical="opencode",
+        aliases=(),
+        names=("opencode", "open code"),
+    ),
+    AgentSpec(
+        key="pi",
+        canonical="pi",
+        aliases=(),
+        names=("pi",),
+    ),
+    AgentSpec(
+        key="agy",
+        canonical="agy",
+        aliases=(),
+        names=("agy", "antigravity"),
+    ),
+)
+
+_KEY_BY_TOKEN: dict[str, str] = {}
+for _spec in AGENT_CATALOG:
+    _KEY_BY_TOKEN[_spec.key.lower()] = _spec.key
+    _KEY_BY_TOKEN[_spec.canonical.lower()] = _spec.key
+    for _a in _spec.aliases:
+        _KEY_BY_TOKEN[_a.lower()] = _spec.key
+    for _n in _spec.names:
+        _KEY_BY_TOKEN[_n.lower()] = _spec.key
+
+
+def _which(cmd: str, path: str | None = None) -> str | None:
+    """Locate ``cmd`` on PATH. Uses env swap so monkeypatched ``which(name)`` still works."""
+    if path is None:
+        return shutil.which(cmd)
+    old = os.environ.get("PATH")
+    try:
+        os.environ["PATH"] = path
+        return shutil.which(cmd)
+    finally:
+        if old is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = old
+
+
+def _is_rejected(cmd: str, resolved_path: str) -> bool:
+    """Return True if this PATH hit must not be used as a coding CLI."""
+    cmd_base = Path(cmd).name.lower()
+    try:
+        real = Path(resolved_path).resolve()
+        real_s = str(real).lower()
+        real_name = real.name.lower()
+    except OSError:
+        real_s = resolved_path.lower()
+        real_name = Path(resolved_path).name.lower()
+
+    # gcc toolchain masquerading as `cc` (common on Linux: /usr/bin/cc → gcc)
+    if cmd_base == "cc":
+        if real_name == "gcc" or real_name.startswith("gcc-"):
+            return True
+        if real_name == "cc" and "claude" not in real_s:
+            # System cc is almost always the C compiler (not a user shim under ~/.local)
+            if real_s.startswith("/usr/bin/") or real_s.startswith("/bin/"):
+                return True
+
+    # CodeRabbit often installs as `cr` — not cursor-agent
+    if cmd_base == "cr":
+        if "coderabbit" in real_s or real_name == "coderabbit":
+            return True
+        # Ambiguous bare `cr` without cursor in path → reject
+        if "cursor" not in real_s:
+            return True
+
+    return False
+
+
+def is_safe_executable(cmd: str, *, path: str | None = None) -> str | None:
+    """Return absolute path if cmd is on PATH and not rejected, else None."""
+    found = _which(cmd, path=path)
+    if not found:
+        return None
+    if _is_rejected(cmd, found):
+        return None
+    return found
+
+
+def _spec_for_key(key: str) -> AgentSpec | None:
+    key_l = key.strip().lower()
+    mapped = _KEY_BY_TOKEN.get(key_l)
+    if not mapped:
+        return None
+    for spec in AGENT_CATALOG:
+        if spec.key == mapped:
+            return spec
+    return None
+
+
+def resolve_agent_argv(
+    name_or_alias: str,
+    *,
+    extra_args: Sequence[str] = (),
+    overrides: Mapping[str, str | Sequence[str]] | None = None,
+    prefer_aliases: bool = True,
+    path: str | None = None,
+) -> ResolvedCli:
+    """Resolve a known agent name/alias to argv.
+
+    ``overrides`` maps agent key (or alias) → command string or argv prefix.
+    When set for this agent, override wins (source=``override``).
+    """
+    token = (name_or_alias or "").strip()
+    if not token:
+        raise ResolveError("empty agent name")
+
+    spec = _spec_for_key(token)
+    if spec is None:
+        raise ResolveError(
+            f"unknown agent {token!r}; use a catalog name "
+            f"({', '.join(s.key for s in AGENT_CATALOG)}) or ad-hoc argv"
+        )
+
+    # Overrides (config or caller)
+    if overrides:
+        ovr = overrides.get(spec.key) or overrides.get(token)
+        if ovr is None:
+            for a in spec.aliases:
+                if a in overrides:
+                    ovr = overrides[a]
+                    break
+        if ovr is not None:
+            if isinstance(ovr, str):
+                prefix = _split_simple(ovr)
+            else:
+                prefix = [str(x) for x in ovr]
+            if not prefix:
+                raise ResolveError(f"empty override for agent {spec.key!r}")
+            # Allow absolute path without PATH
+            first = prefix[0]
+            if not (first.startswith("/") or first.startswith(".")):
+                found = _which(first, path=path)
+                if not found:
+                    raise ResolveError(
+                        f"override command not found on PATH: {first!r}"
+                    )
+                prefix = [found, *prefix[1:]]
+            elif not Path(first).exists() and not _which(first, path=path):
+                raise ResolveError(f"override path not found: {first!r}")
+            argv = [*prefix, *[str(a) for a in extra_args]]
+            return ResolvedCli(
+                agent_key=spec.key,
+                argv=argv,
+                source="override",
+                command=argv[0],
+            )
+
+    candidates: list[tuple[str, str]] = []  # (cmd, source)
+    if prefer_aliases:
+        for alias in spec.aliases:
+            candidates.append((alias, "alias"))
+    candidates.append((spec.canonical, "canonical"))
+    if not prefer_aliases:
+        for alias in spec.aliases:
+            candidates.append((alias, "alias"))
+
+    seen: set[str] = set()
+    for cmd, source in candidates:
+        if cmd in seen:
+            continue
+        seen.add(cmd)
+        found = is_safe_executable(cmd, path=path)
+        if found:
+            argv = [found, *[str(a) for a in extra_args]]
+            return ResolvedCli(
+                agent_key=spec.key,
+                argv=argv,
+                source=source,
+                command=found,
+            )
+
+    tried = ", ".join(c for c, _ in candidates)
+    raise ResolveError(
+        f"no safe executable for agent {spec.key!r} (tried: {tried}). "
+        "Install the CLI, add a PATH shim for the alias, or set [agents] override."
+    )
+
+
+def resolve_adhoc_argv(
+    command: str | Sequence[str],
+    *,
+    extra_args: Sequence[str] = (),
+    path: str | None = None,
+    require_on_path: bool = True,
+) -> ResolvedCli:
+    """Resolve free-form ad-hoc argv (no catalog alias magic)."""
+    if isinstance(command, str):
+        prefix = _split_simple(command)
+    else:
+        prefix = [str(x) for x in command]
+    if not prefix:
+        raise ResolveError("empty ad-hoc command")
+
+    first = prefix[0]
+    if require_on_path and not first.startswith("/") and not first.startswith("."):
+        found = _which(first, path=path)
+        if not found:
+            raise ResolveError(f"ad-hoc command not found on PATH: {first!r}")
+        prefix = [found, *prefix[1:]]
+    elif first.startswith("/") or first.startswith("."):
+        if not Path(first).exists() and require_on_path:
+            # still allow if which finds it
+            found = _which(first, path=path)
+            if not found:
+                raise ResolveError(f"ad-hoc path not found: {first!r}")
+            prefix = [found, *prefix[1:]]
+
+    argv = [*prefix, *[str(a) for a in extra_args]]
+    return ResolvedCli(
+        agent_key="adhoc",
+        argv=argv,
+        source="adhoc",
+        command=argv[0],
+    )
+
+
+def resolve_flexible(
+    name_or_command: str,
+    *,
+    extra_args: Sequence[str] = (),
+    overrides: Mapping[str, str | Sequence[str]] | None = None,
+    prefer_aliases: bool = True,
+    path: str | None = None,
+    adhoc: bool = False,
+) -> ResolvedCli:
+    """Catalog resolve, or ad-hoc when ``adhoc`` or unknown name with path-like cmd."""
+    if adhoc:
+        return resolve_adhoc_argv(
+            name_or_command, extra_args=extra_args, path=path
+        )
+    try:
+        return resolve_agent_argv(
+            name_or_command,
+            extra_args=extra_args,
+            overrides=overrides,
+            prefer_aliases=prefer_aliases,
+            path=path,
+        )
+    except ResolveError:
+        # If it looks like an executable name and exists on PATH, treat as ad-hoc
+        if _which(name_or_command.split()[0], path=path):
+            return resolve_adhoc_argv(
+                name_or_command, extra_args=extra_args, path=path
+            )
+        raise
+
+
+_SPLIT_RE = re.compile(r"""[^\s"']+|"([^"]*)"|'([^']*)'""")
+
+
+def _split_simple(s: str) -> list[str]:
+    """Minimal shell-ish split (no expansions). Empty → []."""
+    s = s.strip()
+    if not s:
+        return []
+    parts: list[str] = []
+    for m in _SPLIT_RE.finditer(s):
+        parts.append(m.group(1) or m.group(2) or m.group(0))
+    return parts
+
+
+def catalog_status(
+    *,
+    overrides: Mapping[str, str | Sequence[str]] | None = None,
+    prefer_aliases: bool = True,
+    path: str | None = None,
+) -> list[dict[str, Any]]:
+    """For doctor: per-catalog agent resolve result (soft)."""
+    rows: list[dict[str, Any]] = []
+    for spec in AGENT_CATALOG:
+        try:
+            resolved = resolve_agent_argv(
+                spec.key,
+                overrides=overrides,
+                prefer_aliases=prefer_aliases,
+                path=path,
+            )
+            rows.append(
+                {
+                    "agent": spec.key,
+                    "ok": True,
+                    "argv0": resolved.command,
+                    "source": resolved.source,
+                    "aliases": list(spec.aliases),
+                    "canonical": spec.canonical,
+                }
+            )
+        except ResolveError as exc:
+            rows.append(
+                {
+                    "agent": spec.key,
+                    "ok": False,
+                    "error": str(exc),
+                    "aliases": list(spec.aliases),
+                    "canonical": spec.canonical,
+                }
+            )
+    return rows

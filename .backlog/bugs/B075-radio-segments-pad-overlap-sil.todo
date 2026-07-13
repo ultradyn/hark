@@ -1,0 +1,55 @@
+---
+complexity: medium
+created_at: "2026-07-13T15:15:07Z"
+depends_on: []
+estimate_hours: 2
+id: B075
+priority: medium
+status: pending
+tags: []
+title: 'Radio segments: pad/overlap silence at boundaries to avoid clipping words'
+updated_at: "2026-07-13T15:15:07Z"
+---
+## Problem
+
+In **radio** mode, interim STT segments are cut as if sliced from one continuous clip: each segment’s end is exactly the next segment’s start (silence boundary only). Edge phonemes can get clipped when the gate closes a bit late/early, so STT drops or mangles the word at the cut.
+
+Segment cuts already require **`radio_partial_silence_s`** quiet (default **~0.6s**). That silence budget makes a small **overlap / pad** safe: re-including a bit of the leading/trailing quiet (or a short tail of the previous segment’s audio) should not invent false words.
+
+## Desired behavior
+
+When building audio for a radio interim segment (and the final tail if applicable):
+
+1. **Do not** abut segment windows hard at the energy-gate cut.
+2. Include a small **overlap / pad** into the surrounding silence (and optionally a short reverse lookback into the prior speech tail), e.g. on the order of **~150–300 ms** each side, capped so total pad stays well under the inter-segment silence (~0.5–0.6 s).
+3. Goal: avoid clipping word onsets/offsets without feeding enough prior speech that STT hallucinates duplicate words or merges partials badly.
+4. Cumulative / fragment partial text path should remain correct (no double-counted full phrases from overlap alone — if lookback includes prior speech, dedupe or prefer pad-into-silence-only first).
+
+## Suggested approach (prefer simple)
+
+**Pad into silence only** (recommended first):
+
+- Extend each segment’s WAV by `radio_segment_pad_ms` (default ~200–250 ms) of **post-cut silence** already buffered, and/or **pre-cut lead-in silence** after the previous cut.
+- Because segments are separated by ≥ `radio_partial_silence_s` (~0.6 s), pad ≪ silence → STT sees trailing/leading hush, not extra words.
+
+Optional later: short speech lookback with transcript dedupe if pad-only is not enough.
+
+## Config sketch
+
+- `listen.radio_segment_pad_ms` (or `radio_segment_overlap_ms`) — default **200–250**, max something like `min(300, radio_partial_silence_s * 1000 * 0.4)`
+- Only applies to **radio** segment uploads (interim + final), not silence-mode single-shot captures
+
+## Acceptance
+
+- [ ] Radio multi-segment answer: words at segment boundaries less often clipped vs hard cut (fixture or manual dogfood)
+- [ ] Pad does not introduce phantom words / junk transcripts on pure silence pad
+- [ ] Partial / soft-end evaluation still works (B039/B068)
+- [ ] Silence `end_mode` unchanged
+- [ ] Config + AUDIO_DESIGN note + CHANGELOG
+- [ ] Unit/integration test with synthetic PCM (silence margins) proving pad expands segment bounds without changing mid-speech samples
+
+## Related
+
+- B037 radio partial cadence; `radio_partial_silence_s`
+- B074 radio long-pause auto-end (orthogonal — finalize vs segment pad)
+- Segment capture path in `speech.py` radio loop

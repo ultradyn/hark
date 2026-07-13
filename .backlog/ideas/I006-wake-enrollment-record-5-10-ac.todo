@@ -1,0 +1,38 @@
+---
+complexity: medium
+created_at: "2026-07-13T15:43:36Z"
+depends_on: []
+estimate_hours: 10
+id: I006
+priority: medium
+status: pending
+tags:
+    - idea
+    - planning
+title: 'Wake enrollment: record 5–10 activation samples for near-miss + optional light adapt'
+updated_at: "2026-07-13T15:43:36Z"
+---
+## Idea
+
+During first setup (or on request), record the operator saying their activation
+phrase **5–10 times** (e.g. “hey iris”, “hey mercury”).
+
+### Uses
+
+1. **Near-miss prepopulation** — run each sample through the active wake backend
+   (Vosk / Sherpa KWS) and seed `wake_learned.json` / alias tables with observed
+   mishears (not unsafe 1–2 letter tokens).
+2. **Optional light adaptation** — if computationally feasible later, use samples
+   for keyword boost / small adapter; only if open-source path is practical on
+   laptop CPU. Survey first; do not block setup.
+
+### Non-goals
+
+- Full speaker ID
+- Cloud upload of enrollment audio without explicit consent
+- Replacing Sherpa/Vosk with a custom trained model in v1
+
+### Related
+
+- B070 setup flow / SETUP.md enrollment step
+- B069 survey; B071 wake eval harness

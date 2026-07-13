@@ -1,0 +1,23 @@
+# Hark
+
+> When your agents need a word — voice bridge for Herdr coding agents. Speak blocked questions, listen for answers, deliver with stale-safe routing.
+
+Hark is open-source software (`hark` CLI + Mode A skill) that lets an operator supervise multiple [Herdr](https://herdr.dev/) coding agents by voice. Cloud STT/TTS only; no local speech models required. Multi-session (local + SSH). Human stays in the loop.
+
+## Docs
+
+- [Product](https://github.com/ultradyn/hark/blob/master/docs/PRODUCT.md): goals and non-goals
+- [Architecture](https://github.com/ultradyn/hark/blob/master/docs/ARCHITECTURE.md): Mode A, library vs daemon
+- [Software spec](https://github.com/ultradyn/hark/blob/master/docs/SPEC.md): normative behaviour
+- [Protocol](https://github.com/ultradyn/hark/blob/master/docs/PROTOCOL.md): HEP event schema
+- [Herdr integration](https://github.com/ultradyn/hark/blob/master/docs/HERDR.md): multi-session contract
+- [Safety](https://github.com/ultradyn/hark/blob/master/docs/SAFETY.md): risk levels, distrust pane text
+- [Audio design](https://github.com/ultradyn/hark/blob/master/docs/AUDIO_DESIGN.md): gate, ducking, half-duplex
+- [Mode A skill](https://github.com/ultradyn/hark/blob/master/skill/hark/SKILL.md): handsfree orchestrator procedure
+
+## Optional
+
+- [Site](https://hark.xk.io/): marketing / install
+- [Install script](https://hark.xk.io/install.sh): one-line CLI + skills install
+- [GitHub](https://github.com/ultradyn/hark): source and issues
+- [npm package](https://www.npmjs.com/package/@ultradyn/hark): skills distribution

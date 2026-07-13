@@ -1,0 +1,29 @@
+---
+complexity: medium
+created_at: "2026-07-13T15:00:03Z"
+depends_on: []
+estimate_hours: 3
+id: B071
+priority: medium
+status: pending
+tags:
+    - wake
+    - eval
+title: 'Wake eval harness: expand fixtures / hit-rate for Vosk vs KWS'
+updated_at: "2026-07-13T15:00:03Z"
+---
+## Problem
+B069 probe used N=7 live WAVs. Before flipping ambient default off Vosk, need a broader hit-rate / false-accept picture (speakers, noise, custom names, bare vs greating).
+
+## Goal
+Expand `fixtures/voice/wake/` (or parallel eval set) + a small offline runner that scores Vosk and Sherpa KWS (when present) on the same cases.
+
+## Scope
+- More positive/negative snips; document capture method
+- Script or pytest mark producing a summary table (hit, miss, FA)
+- Tie into B070 Sherpa backend once available
+
+## Non-goals
+- Full production multi-engine product
+
+See docs/plans/B069-local-stt-survey.md §7.

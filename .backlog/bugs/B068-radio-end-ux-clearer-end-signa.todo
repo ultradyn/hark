@@ -1,0 +1,65 @@
+---
+claimed_at: "2026-07-13T14:54:59Z"
+claimed_by: cli-user
+completed_at: "2026-07-13T15:01:04Z"
+complexity: medium
+created_at: "2026-07-13T14:49:29Z"
+depends_on: []
+duration_minutes: 6.085150666433333
+estimate_hours: 4
+id: B068
+priority: high
+started_at: "2026-07-13T14:54:59Z"
+status: done
+tags: []
+title: 'Radio end UX: clearer end signals + Mode A ends capture on ''over''/done'
+updated_at: "2026-07-13T15:01:04Z"
+---
+## Problem
+Radio-mode capture is hard to end confidently:
+
+1. **Soft end is fragile / surprising.** Bare `over` only finalizes when utterance-final *and* sentence-final (after `.`/`!`/`?`; comma recently added). Phrases like mid-thought then `okay, over` sometimes still need agent `listen-end`. Product end phrases (`okay hark send`, `hark over`) are easy to forget.
+2. **Operator feedback is weak.** After TTS, arm-cue helps, but there is little spoken or cue feedback that *recording is still open* vs *ended*, and no clear “say over / okay hark send to finish” reminder in the common path.
+3. **Mode A does not reliably finish radio.** Skill says agents MAY call `hark listen-end` on partials when the operator is clearly done, but in practice partials are HOLD-only and agents often wait for auto soft-end. When soft-end misses, the operator sits in limbo until max listen or silence segment noise.
+
+Dogfood (2026-07-13): operator said `okay, over` at end of a long radio turn; soft-end returned no match until after more text / agent `listen-end`. Partial logs showed cumulative body only (fragment logging shipped separately).
+
+## Goals
+Make ending radio **obvious for humans** and **reliable via Mode A backup**.
+
+### A. Clearer end signals (product + UX)
+- Document and (if needed) expand a **small, memorable** end set operators can say naturally, e.g.:
+  - product: `okay hark send`, `hark over`, `end prompt`
+  - soft: sentence-final `over`, `over and out`, `send it`, `that's all` (keep mid-clause false-positive rules)
+- Consider **spoken or short cue feedback** when radio capture arms and when it finalizes/cancels (distinct from record-start/stop if needed).
+- Optional one-line TTS or skill bootstrap: “when you’re done, say over or okay hark send.”
+- Config/docs: `docs/AUDIO_DESIGN.md` + skill cheatsheet list the live end phrases.
+
+### B. Mode A must end capture when the user is done
+- On each `ambient.partial` / radio partial, Mode A **MUST** evaluate whether the operator has **clearly finished** (e.g. ends with `over`, `okay hark send`, `that's all`, “stop recording”, “send it”, “message done”).
+- If clearly done and capture is still active → run:
+  ```bash
+  hark listen-end --stream-id <stream_id>
+  ```
+  (or `--cancel` only if they abort).
+- Prefer finish over cancel when the thought is complete.
+- Skill text should make this a **hard rule** (not only MAY), with examples and false-positive guidance (do not end on “over the weekend” / mid-clause “send it to staging”).
+- Still no full TTS answer on partials; only listen-end / HOLD / idle.
+
+## Non-goals
+- Full NLU end detection models.
+- Changing silence-mode end behaviour (this bug is radio-first).
+- Auto-answering Herdr panes.
+
+## Acceptance
+- [ ] Spec/skill: Mode A **must** call `listen-end` when partial clearly ends with a done signal and stream still active
+- [ ] Soft/product end set documented; dogfood phrases (`okay, over`, sentence-final `over`) work without agent help when possible
+- [ ] Tests for soft-end edge cases retained/extended (no mid-clause false finish)
+- [ ] Operator-facing feedback or skill line so users know how to end radio
+- [ ] CHANGELOG note when behaviour ships
+
+## Related
+- Soft end + fragment partials (recent commits)
+- `answer_arm_cue` post-TTS beep (listen ready)
+- B009 meta-commands; radio `agent_control` on partials
+- Skill: Agent-controlled end of recording (radio partials)

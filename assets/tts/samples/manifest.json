@@ -1,0 +1,303 @@
+{
+  "schema": "hark.tts.samples.v1",
+  "phrase_template": "Hello. This is {Voice}. You're listening to {Voice}, a Hark voice sample. I can announce agent questions and listen for your reply.",
+  "phrase_template_sha256_16": "d5b15eae7b735837",
+  "generated_at": "2026-07-13T15:45:05Z",
+  "layout": "samples/{provider}/{gender}/{voice_id}.mp3",
+  "notes": [
+    "Runtime TTS cache: assets/tts/{voice}/ (not samples).",
+    "Each sample speaks the voice display name \u22652 times via {Voice} in phrase.txt.",
+    "Wake name iris \u2260 TTS voice_id iris; default pairing often Iris + eve.",
+    "OpenAI/MiniMax filled after xAI dogfood feedback."
+  ],
+  "samples": [
+    {
+      "provider": "minimax",
+      "voice_id": "English_CalmWoman",
+      "gender": "female",
+      "path": "minimax/female/English_CalmWoman.mp3",
+      "bytes": 175313,
+      "phrase": "Hello. This is English CalmWoman. You're listening to English CalmWoman, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "minimax",
+      "voice_id": "English_Graceful_Lady",
+      "gender": "female",
+      "path": "minimax/female/English_Graceful_Lady.mp3",
+      "bytes": 222593,
+      "phrase": "Hello. This is English Graceful Lady. You're listening to English Graceful Lady, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "minimax",
+      "voice_id": "female-shaonv",
+      "gender": "female",
+      "path": "minimax/female/female-shaonv.mp3",
+      "bytes": 152250,
+      "phrase": "Hello. This is Female Shaonv. You're listening to Female Shaonv, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "minimax",
+      "voice_id": "presenter_female",
+      "gender": "female",
+      "path": "minimax/female/presenter_female.mp3",
+      "bytes": 173584,
+      "phrase": "Hello. This is Presenter Female. You're listening to Presenter Female, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "minimax",
+      "voice_id": "English_Aussie_Bloke",
+      "gender": "male",
+      "path": "minimax/male/English_Aussie_Bloke.mp3",
+      "bytes": 170701,
+      "phrase": "Hello. This is English Aussie Bloke. You're listening to English Aussie Bloke, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "minimax",
+      "voice_id": "English_ManWithDeepVoice",
+      "gender": "male",
+      "path": "minimax/male/English_ManWithDeepVoice.mp3",
+      "bytes": 151097,
+      "phrase": "Hello. This is English ManWithDeepVoice. You're listening to English ManWithDeepVoice, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "minimax",
+      "voice_id": "English_Trustworthy_Man",
+      "gender": "male",
+      "path": "minimax/male/English_Trustworthy_Man.mp3",
+      "bytes": 156286,
+      "phrase": "Hello. This is English Trustworthy Man. You're listening to English Trustworthy Man, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "minimax",
+      "voice_id": "male-qn-qingse",
+      "gender": "male",
+      "path": "minimax/male/male-qn-qingse.mp3",
+      "bytes": 174160,
+      "phrase": "Hello. This is Male Qn Qingse. You're listening to Male Qn Qingse, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "minimax",
+      "voice_id": "presenter_male",
+      "gender": "male",
+      "path": "minimax/male/presenter_male.mp3",
+      "bytes": 156286,
+      "phrase": "Hello. This is Presenter Male. You're listening to Presenter Male, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "minimax",
+      "voice_id": "English_expressive_narrator",
+      "gender": "unknown",
+      "path": "minimax/unknown/English_expressive_narrator.mp3",
+      "bytes": 173007,
+      "phrase": "Hello. This is English Expressive Narrator. You're listening to English Expressive Narrator, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "ara",
+      "gender": "female",
+      "path": "xai/female/ara.mp3",
+      "bytes": 117120,
+      "phrase": "Hello. This is Ara. You're listening to Ara, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "carina",
+      "gender": "female",
+      "path": "xai/female/carina.mp3",
+      "bytes": 115584,
+      "phrase": "Hello. This is Carina. You're listening to Carina, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "celeste",
+      "gender": "female",
+      "path": "xai/female/celeste.mp3",
+      "bytes": 111360,
+      "phrase": "Hello. This is Celeste. You're listening to Celeste, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "eve",
+      "gender": "female",
+      "path": "xai/female/eve.mp3",
+      "bytes": 115200,
+      "phrase": "Hello. This is Eve. You're listening to Eve, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "iris",
+      "gender": "female",
+      "path": "xai/female/iris.mp3",
+      "bytes": 121344,
+      "phrase": "Hello. This is Iris. You're listening to Iris, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "luna",
+      "gender": "female",
+      "path": "xai/female/luna.mp3",
+      "bytes": 121344,
+      "phrase": "Hello. This is Luna. You're listening to Luna, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "ursa",
+      "gender": "female",
+      "path": "xai/female/ursa.mp3",
+      "bytes": 127104,
+      "phrase": "Hello. This is Ursa. You're listening to Ursa, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "altair",
+      "gender": "male",
+      "path": "xai/male/altair.mp3",
+      "bytes": 136320,
+      "phrase": "Hello. This is Altair. You're listening to Altair, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "atlas",
+      "gender": "male",
+      "path": "xai/male/atlas.mp3",
+      "bytes": 131712,
+      "phrase": "Hello. This is Atlas. You're listening to Atlas, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "castor",
+      "gender": "male",
+      "path": "xai/male/castor.mp3",
+      "bytes": 112512,
+      "phrase": "Hello. This is Castor. You're listening to Castor, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "cosmo",
+      "gender": "male",
+      "path": "xai/male/cosmo.mp3",
+      "bytes": 130176,
+      "phrase": "Hello. This is Cosmo. You're listening to Cosmo, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "helios",
+      "gender": "male",
+      "path": "xai/male/helios.mp3",
+      "bytes": 130944,
+      "phrase": "Hello. This is Helios. You're listening to Helios, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "helix",
+      "gender": "male",
+      "path": "xai/male/helix.mp3",
+      "bytes": 120192,
+      "phrase": "Hello. This is Helix. You're listening to Helix, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "kepler",
+      "gender": "male",
+      "path": "xai/male/kepler.mp3",
+      "bytes": 133632,
+      "phrase": "Hello. This is Kepler. You're listening to Kepler, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "leo",
+      "gender": "male",
+      "path": "xai/male/leo.mp3",
+      "bytes": 125184,
+      "phrase": "Hello. This is Leo. You're listening to Leo, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "lumen",
+      "gender": "male",
+      "path": "xai/male/lumen.mp3",
+      "bytes": 115968,
+      "phrase": "Hello. This is Lumen. You're listening to Lumen, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "lux",
+      "gender": "male",
+      "path": "xai/male/lux.mp3",
+      "bytes": 129408,
+      "phrase": "Hello. This is Lux. You're listening to Lux, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "naksh",
+      "gender": "male",
+      "path": "xai/male/naksh.mp3",
+      "bytes": 125952,
+      "phrase": "Hello. This is Naksh. You're listening to Naksh, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "orion",
+      "gender": "male",
+      "path": "xai/male/orion.mp3",
+      "bytes": 129408,
+      "phrase": "Hello. This is Orion. You're listening to Orion, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "perseus",
+      "gender": "male",
+      "path": "xai/male/perseus.mp3",
+      "bytes": 132096,
+      "phrase": "Hello. This is Perseus. You're listening to Perseus, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "rex",
+      "gender": "male",
+      "path": "xai/male/rex.mp3",
+      "bytes": 120192,
+      "phrase": "Hello. This is Rex. You're listening to Rex, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "rigel",
+      "gender": "male",
+      "path": "xai/male/rigel.mp3",
+      "bytes": 125184,
+      "phrase": "Hello. This is Rigel. You're listening to Rigel, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "sal",
+      "gender": "male",
+      "path": "xai/male/sal.mp3",
+      "bytes": 115200,
+      "phrase": "Hello. This is Sal. You're listening to Sal, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "sirius",
+      "gender": "male",
+      "path": "xai/male/sirius.mp3",
+      "bytes": 114816,
+      "phrase": "Hello. This is Sirius. You're listening to Sirius, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "zagan",
+      "gender": "male",
+      "path": "xai/male/zagan.mp3",
+      "bytes": 140160,
+      "phrase": "Hello. This is Zagan. You're listening to Zagan, a Hark voice sample. I can announce agent questions and listen for your reply."
+    },
+    {
+      "provider": "xai",
+      "voice_id": "zenith",
+      "gender": "male",
+      "path": "xai/male/zenith.mp3",
+      "bytes": 108672,
+      "phrase": "Hello. This is Zenith. You're listening to Zenith, a Hark voice sample. I can announce agent questions and listen for your reply."
+    }
+  ]
+}

@@ -67,6 +67,7 @@ def run_tts(
     on_near_end: Any | None = None,
     near_end_ms: int | None = None,
     conference_policy: str | None = None,
+    use_cache: bool = True,
 ) -> dict[str, Any]:
     """Synthesize and optionally play TTS.
 
@@ -75,6 +76,9 @@ def run_tts(
       - ``hold``: wait for Zoom/Teams/Meet etc. to end (soft chime optional)
       - ``skip``: do not speak while conference active (lifecycle cues)
       - ``force``: always speak immediately
+
+    ``use_cache``: when False, skip on-disk TTS phrase cache lookup and store
+    (one-shot announces such as wake-label live-reload).
     """
     limit = max_chars if max_chars is not None else cfg.tts.max_chars
     truncated = False
@@ -117,7 +121,7 @@ def run_tts(
     store = UsageStore()
     t0 = time.monotonic()
     voice_id = voice or cfg.tts.voice or "eve"
-    cached = lookup_cached_tts(voice_id, text)
+    cached = lookup_cached_tts(voice_id, text) if use_cache else None
     from_cache = False
     provider_name = provider or cfg.tts.provider
     content_type = "audio/mpeg"
@@ -152,8 +156,8 @@ def run_tts(
         content_type = result.content_type
         used_voice = result.voice or voice_id
         latency_ms = int(1000 * (time.monotonic() - t0))
-        # Persist common-ish short phrases for reuse
-        if len(text) <= 120:
+        # Persist common-ish short phrases for reuse (skip one-shot announces)
+        if use_cache and len(text) <= 120:
             try:
                 store_cached_tts(used_voice, text, audio_bytes)
             except Exception:
@@ -900,6 +904,9 @@ def run_listen(
             last_provider = getattr(stt, "name", "unknown")
             if guard > 0:
                 time.sleep(guard)
+            # Answer-window arm cue: beep as soon as listen is ready (radio too)
+            if arm_cue:
+                _arm_cue_if_requested()
             while time.monotonic() - started < max_listen:
                 agent_act = poll_listen_action(stream)
                 if agent_act is not None and pieces:
@@ -910,12 +917,25 @@ def run_listen(
                     # Only first segment uses discard (TTS handoff); later segments clean
                     seg_discard = discard_leading_ms if not pieces else 0
                     seg_ok_after = audio_ok_after if not pieces else None
+                    on_open = (
+                        (
+                            lambda: syslog(
+                                "listen.speech_opened",
+                                component="stt",
+                                level="info",
+                                stream_id=stream,
+                                mode=mode.value,
+                            )
+                        )
+                        if arm_cue
+                        else _cue_start_once
+                    )
                     cap = capture_utterance(
                         max_s=min(remaining, max_listen),
                         end_silence_s=end_silence,
                         initial_timeout_s=min(gate_timeout_s, remaining),
                         post_tts_guard_s=0,
-                        on_opened=_cue_start_once,
+                        on_opened=on_open,
                         should_stop=_agent_wants_stop,
                         discard_leading_ms=seg_discard,
                         audio_ok_after=seg_ok_after,
@@ -1016,6 +1036,10 @@ def run_listen(
                         and body_so_far != last_partial_text
                         and on_partial is not None
                     ):
+                        from hark.partial import partial_fragment
+
+                        prev_body = last_partial_text
+                        frag = partial_fragment(prev_body, body_so_far)
                         partial_seq += 1
                         last_partial_text = body_so_far
                         ev = make_partial_event(
@@ -1024,12 +1048,16 @@ def run_listen(
                             text=body_so_far,
                             kind=partial_kind,
                             provider=tr.provider,
+                            fragment=frag,
+                            prev_text=prev_body,
                         )
                         ev["stt_seq"] = stt_seq
                         try:
                             on_partial(ev)
                         except Exception:
                             pass
+                        # Prefer fragment in logs so each radio slice is visible
+                        # (full cumulative body is still on the event as text).
                         syslog(
                             "listen.partial",
                             component="stt",
@@ -1037,7 +1065,11 @@ def run_listen(
                             stream_id=stream,
                             seq=partial_seq,
                             stt_seq=stt_seq,
-                            text=body_so_far[:300],
+                            fragment=(frag or "")[:300],
+                            text_len=len(body_so_far),
+                            text=(body_so_far[:120] + "…")
+                            if len(body_so_far) > 120
+                            else body_so_far,
                             provider=tr.provider,
                             partial=True,
                             final=False,
@@ -1177,6 +1209,7 @@ def speak_and_listen(
                 on_partial=on_partial,
                 partial_kind=partial_kind,
                 audio_ok_after=audio_ok_after,
+                arm_cue=bool(getattr(cfg.audio, "answer_arm_cue", True)),
             )
         except BaseException as exc:  # noqa: BLE001 — surface to joiner
             listen_box["error"] = exc
@@ -1247,6 +1280,9 @@ def speak_and_listen(
             already_armed=arm_event.is_set(),
             on_partial=on_partial,
             partial_kind=partial_kind,
+            # Immediate record-start beep when listen is ready (not when speech opens).
+            # Dogfood: post-ask lag felt like a broken handoff when cue waited for gate.
+            arm_cue=bool(getattr(cfg.audio, "answer_arm_cue", True)),
         )
     except BaseException as exc:
         raise _attach_tts(exc) from exc
@@ -1327,6 +1363,7 @@ def run_ask(
                 provider=provider,
                 end_mode="silence",
                 last_tts=readback,
+                arm_cue=bool(getattr(cfg.audio, "answer_arm_cue", True)),
             )
         except TimeoutError:
             return {

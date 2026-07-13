@@ -8,8 +8,15 @@
   "stream_id": "sfixture01",
   "seq": 1,
   "text": "please open the pull request for the",
+  "fragment": "please open the pull request for the",
+  "text_len": 36,
   "phrase": "hey hark",
   "provider": "xai",
   "warning": "PARTIAL TRANSCRIPT \u2014 not complete. More speech may still be captured. Do NOT send a final answer, do NOT speak to the user yet, and do NOT deliver to a Herdr pane based on this alone. You MAY begin private thinking/planning. Wait for the matching final event (same stream_id, partial=false / final=true).",
-  "instructions": "HOLD RESPONSE. This is an interim radio-mode partial. Await ambient.prompt or answer.final with the same stream_id before acting or speaking to the operator."
+  "instructions": "HOLD RESPONSE. This is an interim radio-mode partial. Do NOT TTS a full answer or deliver to a pane yet. If the cumulative text (or fragment) clearly ends with a done/stop signal and capture is still active, you MUST run agent_control.end_recording (finish) for this stream_id \u2014 e.g. ends with 'over', 'okay over', 'okay hark send', 'that's all', 'send it', 'stop recording', 'message done'. Prefer finish when the thought is complete; use cancel_recording only to abort. Do NOT end on mid-clause false positives ('over the weekend', 'send it to staging', 'that's all I know about X'). Otherwise HOLD and wait for the next partial or ambient.prompt (same stream_id, final=true).",
+  "agent_control": {
+    "end_recording": "hark listen-end --stream-id sfixture01",
+    "cancel_recording": "hark listen-end --stream-id sfixture01 --cancel",
+    "hint": "MUST: if the operator clearly finished (utterance ends with over, okay over, okay hark send, that's all, send it, stop recording, message done, or similar) and this stream is still active, run end_recording (finish, not cancel). Prefer cancel_recording only if they abort. Do NOT end mid-clause: 'over the weekend', 'send it to staging', 'that's all I know about X'."
+  }
 }

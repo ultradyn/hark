@@ -94,6 +94,18 @@ def ambient_boot_tts_text(cfg: HarkConfig) -> str:
     return ambient_boot_line(primary_wake_label(cfg))
 
 
+def wake_label_change_tts_text(old_label: str, new_label: str) -> str:
+    """One-shot TTS when live-reload changes the primary wake name/phrase.
+
+    Not intended for the on-disk phrase cache (ephemeral announce).
+    """
+    old = (old_label or "").strip() or "your previous wake phrase"
+    new = (new_label or "").strip() or DEFAULT_BOOT_WAKE_LABEL
+    if old.lower() == new.lower():
+        return ""
+    return f"Wake phrase updated from {old} to {new}. Say {new} when you need me."
+
+
 @dataclass
 class AmbientResult:
     activated: bool
@@ -613,6 +625,7 @@ def apply_config_reload(
     loaded model. Engine/model_path changes rebuild the backend.
     """
     path = cfg.path
+    prev_wake_label = primary_wake_label(cfg)
     new_cfg = load_config(path)
     # Stay armed while the ambient loop is running
     new_cfg.ambient.enabled = True
@@ -635,6 +648,11 @@ def apply_config_reload(
         cfg.ambient.engine or ""
     ).lower()
     model_changed = new_cfg.ambient.model_path != cfg.ambient.model_path
+    new_wake_label = primary_wake_label(new_cfg)
+    wake_label_changed = (
+        (prev_wake_label or "").strip().lower()
+        != (new_wake_label or "").strip().lower()
+    )
 
     info: dict[str, Any] = {
         "phrases": phrases,
@@ -648,6 +666,9 @@ def apply_config_reload(
         "surface_timeouts": getattr(new_cfg.ambient, "surface_timeouts", None),
         "snippet_s": getattr(new_cfg.ambient, "snippet_s", None),
         "timeout_s": getattr(new_cfg.ambient, "timeout_s", None),
+        "wake_label": new_wake_label,
+        "wake_label_prev": prev_wake_label,
+        "wake_label_changed": wake_label_changed,
     }
 
     if engine_changed or model_changed:
@@ -743,6 +764,9 @@ def _emit_reload_event(
             "path": info.get("path"),
             "end_mode": info.get("end_mode"),
             "surface_timeouts": info.get("surface_timeouts"),
+            "wake_label": info.get("wake_label"),
+            "wake_label_prev": info.get("wake_label_prev"),
+            "wake_label_changed": info.get("wake_label_changed"),
             "source": src,
             "instructions": (
                 "Config reloaded. Activation phrases, listen settings "
@@ -750,6 +774,11 @@ def _emit_reload_event(
                 "File-watch (default mtime poll on config.toml) and "
                 "SIGHUP (kill -HUP <pid>) share this path; full restart "
                 "always works. See docs/CUSTOM_WAKE.md."
+                + (
+                    " Primary wake label changed — ambient spoke the new phrase."
+                    if info.get("wake_label_changed")
+                    else ""
+                )
             ),
         }
     out.write(json.dumps(line, separators=(",", ":")) + "\n")
@@ -916,6 +945,38 @@ def run_ambient_loop(
                     cfg, backend, info = apply_config_reload(cfg, backend)
                     info["source"] = src
                     _emit_reload_event(out, info, source=src)
+                    # Live-reload name/phrase change → one-shot TTS (no cache).
+                    if announce and info.get("wake_label_changed"):
+                        try:
+                            line = wake_label_change_tts_text(
+                                str(info.get("wake_label_prev") or ""),
+                                str(info.get("wake_label") or ""),
+                            )
+                            if line:
+                                run_tts(
+                                    cfg,
+                                    line,
+                                    play=True,
+                                    mute_mic=False,
+                                    conference_policy="force",
+                                    use_cache=False,
+                                )
+                                syslog(
+                                    "ambient.wake_label_changed",
+                                    component="ambient",
+                                    level="info",
+                                    wake_label_prev=info.get("wake_label_prev"),
+                                    wake_label=info.get("wake_label"),
+                                    source=src,
+                                )
+                        except Exception as tts_exc:
+                            syslog(
+                                "ambient.wake_label_tts_error",
+                                component="ambient",
+                                level="warn",
+                                error=str(tts_exc)[:200],
+                                source=src,
+                            )
                 except Exception as exc:
                     _emit_reload_event(out, {}, error=str(exc)[:200], source=src)
                 continue

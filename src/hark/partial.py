@@ -18,17 +18,35 @@ HOLD_WARNING = (
 
 HOLD_INSTRUCTIONS = (
     "HOLD RESPONSE. This is an interim radio-mode partial. "
-    "Await ambient.prompt or answer.final with the same stream_id before "
-    "acting or speaking to the operator — unless the operator clearly wants "
-    "to finish/cancel without an exact end phrase. In that case you MAY run "
-    "the agent_control.end_recording or agent_control.cancel_recording command "
-    "for this stream_id (e.g. they said 'how do I stop?', 'okay stop recording', "
-    "'that's all, send it'). Prefer finish when they completed their thought."
+    "Do NOT TTS a full answer or deliver to a pane yet. "
+    "If the cumulative text (or fragment) clearly ends with a done/stop signal "
+    "and capture is still active, you MUST run agent_control.end_recording "
+    "(finish) for this stream_id — e.g. ends with 'over', 'okay over', "
+    "'okay hark send', 'that's all', 'send it', 'stop recording', 'message done'. "
+    "Prefer finish when the thought is complete; use cancel_recording only to abort. "
+    "Do NOT end on mid-clause false positives ('over the weekend', "
+    "'send it to staging', 'that's all I know about X'). "
+    "Otherwise HOLD and wait for the next partial or ambient.prompt "
+    "(same stream_id, final=true)."
 )
 
 
 def new_stream_id() -> str:
     return f"s{int(time.time() * 1000):x}{secrets.token_hex(3)}"
+
+
+def partial_fragment(prev_text: str | None, full_text: str) -> str:
+    """Delta since last partial; full text if STT replaced the body."""
+    full = (full_text or "").strip()
+    prev = (prev_text or "").strip()
+    if not full:
+        return ""
+    if not prev:
+        return full
+    if full.startswith(prev):
+        return full[len(prev) :].lstrip()
+    # STT rewrote earlier words — surface full body as the fragment
+    return full
 
 
 def make_partial_event(
@@ -40,8 +58,14 @@ def make_partial_event(
     provider: str | None = None,
     phrase: str | None = None,
     event_id: str | None = None,
+    fragment: str | None = None,
+    prev_text: str | None = None,
 ) -> dict[str, Any]:
     from hark.listen_control import agent_control_block
+
+    frag = fragment
+    if frag is None:
+        frag = partial_fragment(prev_text, text)
 
     return {
         "schema": "hark.event.v1",
@@ -53,6 +77,8 @@ def make_partial_event(
         "stream_id": stream_id,
         "seq": seq,
         "text": text,
+        "fragment": frag,
+        "text_len": len(text or ""),
         "phrase": phrase,
         "provider": provider,
         "warning": HOLD_WARNING,

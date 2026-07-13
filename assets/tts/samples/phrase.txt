@@ -1,0 +1,1 @@
+Hello. This is {Voice}. You're listening to {Voice}, a Hark voice sample. I can announce agent questions and listen for your reply.

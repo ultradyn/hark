@@ -18,14 +18,22 @@ from typing import Any, Protocol
 from hark.listen_end import normalize_for_match
 
 DEFAULT_ACTIVATION_PHRASES: tuple[str, ...] = (
+    "hey iris",
+    "hey mercury",
     "hey hark",
     "hey herald",
+    "hello iris",
+    "hello mercury",
     "hello hark",
     "hello herald",
+    "okay iris",
+    "okay mercury",
     "okay hark",
     "ok hark",
 )
-DEFAULT_WAKE_NAMES: tuple[str, ...] = ("hark", "herald")
+# Persona defaults: Iris (f) / Mercury (m) + product aliases hark/herald.
+# TTS pairing (setup / docs): Iris→eve, Mercury→leo — independent of wake names.
+DEFAULT_WAKE_NAMES: tuple[str, ...] = ("iris", "mercury", "hark", "herald")
 DEFAULT_WAKE_MODE = "names"
 
 _WS = re.compile(r"\s+")

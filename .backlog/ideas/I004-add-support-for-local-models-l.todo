@@ -30,8 +30,13 @@ Add support for local models like the new whisper streaming one or whatever is b
 
 ## Created Work Items
 
-- Add created task IDs
-- Add created bug IDs (if any)
+- **B069** — Investigate light/fast local STT (and wake ASR) alternatives — Vosk is weak (**survey done**: `docs/plans/B069-local-stt-survey.md`)
+- **B070** — Sherpa-ONNX KWS wake backend (pluggable engine beside Vosk) — primary implement from survey
+- **B071** — Wake eval harness: expand fixtures / hit-rate for Vosk vs KWS
+- **B072** — Optional local full-STT provider (faster-whisper / Moonshine), cloud remains default
+- **B073** — Docs/helper: optional larger Vosk model_path (0.22-lgraph / 0.22)
+
+Survey recommendation (summary): keep Vosk+cloud as default interim; next wake engine = Sherpa open-vocab KWS; optional local utterance STT via faster-whisper — do not use Whisper for always-on wake.
 
 ## Completion Criteria
 

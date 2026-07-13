@@ -43,10 +43,27 @@ device
 | Role | Default examples | Avoid as defaults |
 |------|------------------|-------------------|
 | End (radio) | `okay hark send`, `end prompt`, `hark over` | mid-clause bare `over`, `stop` |
+| Soft end (radio, default on) | sentence-final `over`, `okay over`, `send it`, `that's all`, `over and out` | mid-clause `over the weekend`, `send it to staging` |
 | Cancel | `hark cancel`, `abort hark send` | `cancel that`, `never mind` |
 | Activation | `hey hark`, `hey herald` | bare `hark` mid-sentence |
 
 Operators may add casual phrases if they accept false triggers.
+
+### How to end radio (operator-facing)
+
+When listen is in **radio** mode, the mic stays open through long pauses.
+Finish a turn with any of:
+
+| Say… | Kind |
+|------|------|
+| **`okay hark send`** / **`hark over`** / **`end prompt`** | Product end (always on) |
+| **`over`** (after a sentence / alone) / **`okay, over`** / **`okay over`** | Soft end (default on) |
+| **`send it`**, **`that's all`**, **`over and out`**, **`message done`** | Soft end (default on) |
+| **`hark cancel`** | Abort without using the transcript |
+
+Mode A agents also **must** run `hark listen-end` when a partial clearly shows
+you are done (backup if soft-end misses). Skill bootstrap reminds operators:
+*“when you’re done, say over or okay hark send.”*
 
 ## End modes (`[listen]`)
 
@@ -94,9 +111,10 @@ partials — that would change normal silence-mode answer windows.
 
 ### Soft end phrases (default on)
 
-Mode A agents can always finish a radio capture from partials with
-`hark listen-end`. By default, Hark itself also auto-finishes on a **small
-set** of informal closers without agent intervention (radio dogfood).
+Mode A agents **must** finish a radio capture from partials with
+`hark listen-end` when the operator clearly ended (done-signal backup).
+By default, Hark itself also auto-finishes on a **small set** of informal
+closers without agent intervention (radio dogfood).
 
 | Config | Default | Meaning |
 |--------|---------|---------|
@@ -116,9 +134,12 @@ set** of informal closers without agent intervention (radio dogfood).
    never finishes on `"send it"`.
 5. Bare **`over`** is **sentence-final** as well as utterance-final: the sole
    utterance `"over"`, or a suffix after sentence-ending punctuation
-   (`". over"`, `"! over"`, `"? over"`). Word-final but not sentence-final
-   forms such as `"turn it over"` / `"hand it over"` do **not** finish.
-   Mid-clause `"over the weekend"` / `"think it over and continue"` never finish.
+   (`". over"`, `"! over"`, `"? over"`, `", over"` — comma is a soft boundary
+   so `"okay, over"` works). Word-final but not sentence-final forms such as
+   `"turn it over"` / `"hand it over"` do **not** finish. Mid-clause
+   `"over the weekend"` / `"think it over and continue"` never finish.
+6. Multi-word **`okay over`** / **`ok over`** match without sentence punct
+   (STT often drops the comma in “okay, over”).
 
 **Default soft list:**
 
@@ -129,8 +150,10 @@ set** of informal closers without agent intervention (radio dogfood).
 | `that's all` / `that is all` / `thats all` | Common closer; apostrophe variants for STT |
 | `end of message` / `end message` | Explicit message terminator |
 | `end of transmission` | Radio-style formal closer |
+| `message done` | Informal “I'm finished dictating” closer |
 | `over and out` | Multi-word radio closer (no sentence-punct required) |
-| bare `over` | **Sentence-final only** (sole utterance or after `.`/`!`/`?`) |
+| `okay over` / `ok over` | STT of “okay, over” when comma is dropped |
+| bare `over` | **Sentence-final only** (sole utterance or after `.`/`!`/`?`/`,`) |
 
 **Not in the default list (unsafe / high false-finish risk):**
 
@@ -145,7 +168,8 @@ Residual risk when soft end is on: if the operator pauses *right after* a
 terminal soft closer mid-thought (e.g. says `"please just send it"` then
 stops before `"to production"`), radio may finalize. Use product phrases
 (`okay hark send`) or set `soft_end_phrases_enabled = false` for stricter
-control. Mode A agents may still call `hark listen-end` from partials.
+control. Mode A agents **must** call `hark listen-end` from partials when a
+done signal is clear and soft-end did not already finalize.
 
 ## Ambient (`[ambient]`)
 

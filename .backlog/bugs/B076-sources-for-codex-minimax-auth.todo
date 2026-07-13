@@ -1,0 +1,31 @@
+---
+completed_at: null
+complexity: medium
+created_at: "2026-07-13T15:42:22Z"
+depends_on: []
+estimate_hours: 1
+id: B076
+priority: high
+started_at: null
+status: pending
+tags: []
+title: sources for codex/minimax auth should include the codex cli auth, opencode auth, pi agent auth, minimax cli auth
+updated_at: "2026-07-13T15:42:22Z"
+---
+
+sources for codex/minimax auth should include the codex cli auth, opencode auth, pi agent auth, minimax cli auth
+
+
+## CLI name note
+
+MiniMax CLI is **`mmx`** (not only a vague “minimax cli”). Discover tokens from
+wherever `mmx` stores login/config (plus existing Pi/OpenCode minimax keys
+already observed under `~/.pi/agent/auth.json` and OpenCode auth).
+
+
+## mmx credential location
+
+Auth for MiniMax CLI (`mmx`) will likely live **near** `~/.mmx/config.json`
+(same directory: `~/.mmx/`). Prefer reading whatever `mmx auth status` / config
+export uses; do not invent paths beyond that tree without verifying on a real
+login. Also check legacy `~/.minimax` if present.

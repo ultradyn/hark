@@ -167,9 +167,11 @@ def agent_control_block(stream_id: str) -> dict[str, str]:
         "end_recording": f"hark listen-end --stream-id {stream_id}",
         "cancel_recording": f"hark listen-end --stream-id {stream_id} --cancel",
         "hint": (
-            "If the operator clearly wants to finish without an exact end phrase "
-            "(e.g. 'how do I stop this?', 'okay stop recording', 'that's all, send it', "
-            "'I'm done'), run end_recording. Prefer cancel_recording only if they abort. "
-            "Do not end on ordinary mid-thought speech."
+            "MUST: if the operator clearly finished (utterance ends with over, "
+            "okay over, okay hark send, that's all, send it, stop recording, "
+            "message done, or similar) and this stream is still active, run "
+            "end_recording (finish, not cancel). Prefer cancel_recording only "
+            "if they abort. Do NOT end mid-clause: 'over the weekend', "
+            "'send it to staging', 'that's all I know about X'."
         ),
     }

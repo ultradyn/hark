@@ -77,23 +77,24 @@ When `[listen] end_mode = "radio"` and `stream_partials = true`, interim transcr
   "seq": 1,
   "text": "please open the pull request for…",
   "warning": "PARTIAL TRANSCRIPT — not complete. … HOLD …",
-  "instructions": "HOLD RESPONSE. … You MAY run agent_control.end_recording if they clearly want to finish without an exact end phrase …",
+  "instructions": "HOLD RESPONSE. … If text clearly ends with a done signal you MUST run agent_control.end_recording …",
   "agent_control": {
     "end_recording": "hark listen-end --stream-id s…",
     "cancel_recording": "hark listen-end --stream-id s… --cancel",
-    "hint": "If the operator clearly wants to finish …"
+    "hint": "MUST: if the operator clearly finished … run end_recording …"
   }
 }
 ```
 
-Mode A agents may finalize a stuck radio capture with `hark listen-end` (or `--cancel`) when the operator’s wording is an informal stop/send, not an exact product end phrase. By default (`[listen].soft_end_phrases_enabled = true`), Hark itself also auto-finishes on conservative utterance-final soft closers (`send it`, sentence-final `over`, …) without agent intervention — see [AUDIO_DESIGN.md](AUDIO_DESIGN.md). Set `soft_end_phrases_enabled = false` for product phrases only.
+Mode A agents **must** finalize a stuck radio capture with `hark listen-end` (finish) when the partial clearly ends with a done signal (`over`, `okay hark send`, `that's all`, `send it`, `stop recording`, `message done`, …) and the stream is still active. Prefer finish over cancel when the thought is complete; use `--cancel` only to abort. Do **not** end mid-clause (`over the weekend`, `send it to staging`). By default (`[listen].soft_end_phrases_enabled = true`), Hark itself also auto-finishes on conservative utterance-final soft closers (`send it`, sentence-final `over`, `okay over`, …) without agent intervention — see [AUDIO_DESIGN.md](AUDIO_DESIGN.md). Set `soft_end_phrases_enabled = false` for product phrases only.
 
 Consumers **MUST**:
 
-1. Treat `partial=true` as **non-authoritative**.  
-2. **Not** speak to the operator or deliver to a pane based on partials alone.  
+1. Treat `partial=true` as **non-authoritative** for full answers / pane delivery.  
+2. **Not** speak a full answer to the operator or deliver to a pane based on partials alone.  
 3. **May** begin private thinking/planning.  
-4. On `ambient.prompt` / final with the same `stream_id`: use that text; discard prior partials.
+4. **Must** run `hark listen-end` when a done signal is clear and capture is still active (backup to soft/product end).  
+5. On `ambient.prompt` / final with the same `stream_id`: use that text; discard prior partials.
 
 ## Monitor profile (`hark watch --for-monitor`)
 

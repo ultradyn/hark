@@ -1,6 +1,6 @@
 # I005 — Voice control for Herdr sessions + coding-agent start
 
-**Status:** planned (decomposition only; implementation in B055–B059).  
+**Status:** implemented (B055–B059).  
 **Idea:** Voice-create Herdr sessions, start coding agents (claude/codex/grok/cursor-agent + ad-hoc CLIs), and kick them off with an initial prompt. Prefer short aliases when present (`cc`, `cx`, `gk`, `cr`).
 
 ## Problem

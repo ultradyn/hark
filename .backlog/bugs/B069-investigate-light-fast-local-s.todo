@@ -1,0 +1,80 @@
+---
+claimed_at: "2026-07-13T14:54:59Z"
+claimed_by: cli-user
+completed_at: "2026-07-13T15:01:04Z"
+complexity: medium
+created_at: "2026-07-13T14:51:46Z"
+depends_on: []
+duration_minutes: 6.085168799433333
+estimate_hours: 6
+id: B069
+priority: high
+started_at: "2026-07-13T14:54:59Z"
+status: done
+tags: []
+title: Investigate light/fast local STT (and wake ASR) alternatives — Vosk is weak
+updated_at: "2026-07-13T15:01:04Z"
+---
+## Problem
+Dogfood quality for speech recognition is not good enough:
+
+- **Wake (local Vosk):** frequent near-misses and name mangling (e.g. “hey evie” → “hey amy” / “hey avi”; “hello avi”). Operators fight aliases instead of reliable activation.
+- **Overall STT path:** product wants options that are **light and fast enough** for always-on / ambient use (not only huge GPU Whisper). Current local wake engine is the weak link; full prompt STT is cloud-first (xAI etc.) but local alternatives matter for offline, latency, and privacy.
+
+Related planning idea: **I004** (local models / streaming Whisper) — this bug is the **investigation slice**, not full product support.
+
+## Goal
+Research and recommend **1–3** local STT / wake-ASR candidates that could replace or sit beside Vosk for Hark’s constraints.
+
+## Constraints (Hark-shaped)
+- **Wake path:** continuous or near-continuous short snippets (~2–3s), low CPU/RSS when idle, laptop-class CPU OK, optional small GPU.
+- **Optional full-utterance STT:** answer windows / post-wake prompts — can be heavier but should still feel snappy (&lt; ~1–1.5s after speech end on mid hardware if local).
+- Prefer open models + Python-friendly or subprocess CLI.
+- Fail-open / pluggable: keep cloud STT; do not hard-require GPU.
+- Compare to **current Vosk small en-us** baseline (fixtures under `fixtures/voice/wake/` where useful).
+
+## Candidates to evaluate (starting set; not exhaustive)
+| Area | Examples to probe |
+|------|-------------------|
+| Wake / streaming | faster-whisper / whisper.cpp tiny-en or base.en streaming; Moonshine; Sherpa-ONNX (Zipformer / Paraformer); Vosk larger models; Picovoice/Porcupine-class wake (wake-only) |
+| Full STT local | faster-whisper small/distil; whisper.cpp; NeMo CTC light; ONNX Runtime pipelines |
+| Streaming STT | whisper streaming variants, sherpa online models |
+
+For each serious candidate, record: license, model size, CPU/GPU needs, RTF latency, English quality (names / short wake phrases), integration sketch (Python API vs binary), and risk.
+
+## Deliverables
+1. Short write-up (e.g. `docs/plans/B0xx-local-stt-survey.md` or append under I004 plan).
+2. Table: candidate × size × RTF × wake-quality notes × integration effort.
+3. **Recommendation:** primary wake engine + optional local full-STT, or “keep Vosk + cloud for now” with reasons.
+4. Follow-up bugs filed for any chosen implement path (or note “no change”).
+
+## Acceptance
+- [ ] Survey run against stated constraints (not just marketing pages)
+- [ ] At least one offline/local probe or cited numbers for top pick(s) vs Vosk baseline
+- [ ] Written recommendation + follow-up IDs or explicit “defer”
+- [ ] Links from I004 / CHANGELOG Unreleased if work lands in-repo docs
+
+## Non-goals
+- Shipping multi-engine product UI in this bug
+- Training custom models
+- Dropping cloud STT
+
+
+## Completion notes (2026-07-14)
+
+Survey delivered (investigation only; no multi-engine UI):
+
+- **Write-up:** `docs/plans/B069-local-stt-survey.md`
+- **Probes (this machine, Ryzen 7 255, no NVIDIA):**
+  - Vosk small: RTF ≈ 0.11–0.15 on 2.5 s fixtures; RSS ~158 MiB; classic name mangling
+  - faster-whisper tiny.en int8: similar RTF; still Hawk/Hulk for “hark”
+  - Sherpa-ONNX English KWS 3.3M int8: RTF ≈ 0.02; RSS ~63 MiB; clean hit/miss on 7 live fixtures
+- **Recommendation:** primary next wake = Sherpa open-vocab KWS (B070); keep Vosk+cloud default interim; optional local full-STT later (B072); not Whisper-for-wake
+- **Follow-ups filed:** B070 (KWS backend), B071 (wake eval harness), B072 (optional local STT), B073 (larger Vosk docs)
+- **Cross-links:** I004 Created Work Items; CHANGELOG Unreleased
+
+Acceptance:
+- [x] Survey vs Hark constraints
+- [x] Offline/local probe + cited numbers
+- [x] Recommendation + follow-up IDs
+- [x] I004 / CHANGELOG links

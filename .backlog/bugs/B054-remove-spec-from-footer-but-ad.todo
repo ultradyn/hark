@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T14:29:10Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T14:34:32Z"
 complexity: medium
 created_at: "2026-07-13T14:25:34Z"
 depends_on: []
+duration_minutes: 5.367834105316667
 estimate_hours: 1
 id: B054
 priority: high
 started_at: "2026-07-13T14:29:10Z"
-status: in_progress
+status: done
 tags: []
 title: Remove 'SPEC' from footer but add a link to llms.txt for hark (search web for llms.txt spec and write llms.txt if we need to)
-updated_at: "2026-07-13T14:29:10Z"
+updated_at: "2026-07-13T14:34:32Z"
 ---
 
 Remove 'SPEC' from footer but add a link to llms.txt for hark (search web for llms.txt spec and write llms.txt if we need to)

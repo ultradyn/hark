@@ -6,6 +6,8 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+## 0.1.6
+
 - Docs (B053): align root and npm READMEs with the marketing site — OG hero image,
   outsider-friendly framing, Supports list (Claude Code / Grok Build / Antigravity /
   Pi / OpenCode / Codex), and bare `hark monitor` as the primary Mode A feed.

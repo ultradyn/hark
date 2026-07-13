@@ -57,3 +57,23 @@ For each serious candidate, record: license, model size, CPU/GPU needs, RTF late
 - Shipping multi-engine product UI in this bug
 - Training custom models
 - Dropping cloud STT
+
+
+## Completion notes (2026-07-14)
+
+Survey delivered (investigation only; no multi-engine UI):
+
+- **Write-up:** `docs/plans/B069-local-stt-survey.md`
+- **Probes (this machine, Ryzen 7 255, no NVIDIA):**
+  - Vosk small: RTF ≈ 0.11–0.15 on 2.5 s fixtures; RSS ~158 MiB; classic name mangling
+  - faster-whisper tiny.en int8: similar RTF; still Hawk/Hulk for “hark”
+  - Sherpa-ONNX English KWS 3.3M int8: RTF ≈ 0.02; RSS ~63 MiB; clean hit/miss on 7 live fixtures
+- **Recommendation:** primary next wake = Sherpa open-vocab KWS (B070); keep Vosk+cloud default interim; optional local full-STT later (B072); not Whisper-for-wake
+- **Follow-ups filed:** B070 (KWS backend), B071 (wake eval harness), B072 (optional local STT), B073 (larger Vosk docs)
+- **Cross-links:** I004 Created Work Items; CHANGELOG Unreleased
+
+Acceptance:
+- [x] Survey vs Hark constraints
+- [x] Offline/local probe + cited numbers
+- [x] Recommendation + follow-up IDs
+- [x] I004 / CHANGELOG links

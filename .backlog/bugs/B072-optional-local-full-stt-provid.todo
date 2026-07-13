@@ -1,0 +1,31 @@
+---
+complexity: medium
+created_at: "2026-07-13T15:00:03Z"
+depends_on: []
+estimate_hours: 4
+id: B072
+priority: medium
+status: pending
+tags:
+    - stt
+    - local
+    - offline
+title: Optional local full-STT provider (faster-whisper / Moonshine), cloud remains default
+updated_at: "2026-07-13T15:00:03Z"
+---
+## Problem
+I004 / B069: operators want offline or privacy-local utterance STT for post-wake prompts / answer windows. Cloud stays product default (ADR-004).
+
+## Goal
+Pluggable **optional** local STT provider (prefer faster-whisper tiny.en/base.en int8 CPU; Moonshine as stretch) behind existing STT interface. GPU optional, never required.
+
+## Scope
+- Provider selection via config/env; fail-open to cloud when local model missing if so configured
+- Document RTF expectations from B069 survey (tiny.en ~0.1–0.15 on short clips on mid laptop CPU)
+- Do **not** use Whisper as continuous ambient wake (see B069)
+
+## Non-goals
+- Dropping xAI/cloud STT
+- Wake-path replacement (that is Sherpa KWS / B070)
+
+See docs/plans/B069-local-stt-survey.md.

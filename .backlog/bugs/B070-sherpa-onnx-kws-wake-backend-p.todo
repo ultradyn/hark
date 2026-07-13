@@ -1,0 +1,42 @@
+---
+complexity: medium
+created_at: "2026-07-13T15:00:03Z"
+depends_on: []
+estimate_hours: 5
+id: B070
+priority: high
+status: pending
+tags:
+    - wake
+    - stt
+    - local
+title: Sherpa-ONNX KWS wake backend (pluggable engine beside Vosk)
+updated_at: "2026-07-13T15:00:03Z"
+---
+## Problem
+B069 survey: Vosk small en-us mangles product wake names (`hark`→hook/hawk, `herald`→harold). Alias/learning papers over weak open-vocab ASR. **Sherpa-ONNX open-vocab KWS** (English GigaSpeech 3.3M int8) matched all 7 current live wake fixtures correctly at RTF≈0.02 and ~half Vosk RSS.
+
+See `docs/plans/B069-local-stt-survey.md`.
+
+## Goal
+Ship optional ambient wake engine `sherpa_kws` implementing `WakeBackend`, without flipping the default off Vosk until dogfood.
+
+## Scope
+- Optional dependency / download script for `sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01` (int8)
+- Build keywords file from `WakePolicy` (names×prefixes + exact phrases); rebuild on config watch / SIGHUP
+- `engine = "sherpa_kws"` in `[ambient]`; doctor readiness when selected
+- Fixture tests (optional mark if model missing), keep text-path tests engine-agnostic
+- Preserve fail-open: missing model → clear error / fall back path documented
+
+## Non-goals
+- Multi-engine UI
+- Replacing cloud STT
+- Training custom models
+
+## Acceptance
+- [ ] Can enable Sherpa KWS via config and wake on hey hark / hey herald live
+- [ ] Keyword set follows configured names/phrases without process restart (or with existing reload)
+- [ ] Vosk remains default; docs updated (AUDIO_DESIGN / CUSTOM_WAKE brief note)
+- [ ] Tests + survey cross-link
+
+Depends on: B069 survey (docs landed).

@@ -1,0 +1,25 @@
+---
+complexity: low
+created_at: "2026-07-13T15:00:11Z"
+depends_on: []
+estimate_hours: 1
+id: B073
+priority: low
+status: pending
+tags:
+    - wake
+    - docs
+title: 'Docs/helper: optional larger Vosk model_path (0.22-lgraph / 0.22)'
+updated_at: "2026-07-13T15:00:11Z"
+---
+## Problem
+B069: larger Vosk models are a low-effort operator experiment but not the long-term wake architecture. Document how to point `ambient.model_path` at vosk-model-en-us-0.22-lgraph (128M) or 0.22 (1.8G) and trade-offs (RAM, still needs aliases).
+
+## Goal
+Short docs note + optional download helper or script comment extension of `scripts/download-vosk-model.sh`.
+
+## Non-goals
+- Changing default model
+- Replacing KWS work (B070)
+
+See docs/plans/B069-local-stt-survey.md.

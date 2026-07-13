@@ -101,11 +101,19 @@ hark setup --force   # re-run full flow
 
 ---
 
-## Enrollment samples (I006) — optional hook
+## Enrollment samples (I006) — optional
 
-After wake backend choice / confirm wake test, **optionally** offer enrollment when
-I006 lands: beep-paced `hark wake-enroll` (`[ready] → phrase → [captured] → …`).  
-Does **not** block Sherpa ship. Link here when the enroll script is available.
+After wake backend choice / confirm wake test, **optionally** run:
+
+```bash
+hark wake-enroll --phrase "hey iris" --count 7
+# dry-run beeps only:
+hark wake-enroll --dry-run --count 3
+```
+
+Beep loop: **ready** → say phrase once → **accept** (or **reject** + retry) → … → **end**.
+Writes `~/.local/state/hark/wake_enroll/<phrase-slug>/<timestamp>/` (`01.wav`… + `manifest.json`).
+Optional wake-backend scoring seeds `wake_learned.json` (B077 denylist). Local only — no cloud upload.
 Beeps via `audio.cues`.
 
 ---

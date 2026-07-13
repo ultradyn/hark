@@ -272,6 +272,49 @@ def build_parser() -> argparse.ArgumentParser:
     amb.add_argument("--no-announce", action="store_true")
     amb.add_argument("--json", action="store_true")
 
+    we = sub.add_parser(
+        "wake-enroll",
+        help="beep-paced wake enrollment samples (I006)",
+    )
+    we.add_argument(
+        "--phrase",
+        default=None,
+        help='activation phrase to practice (default: first configured, e.g. "hey iris")',
+    )
+    we.add_argument(
+        "--count",
+        type=int,
+        default=7,
+        help="number of good samples to keep (default 7, range 5–10)",
+    )
+    we.add_argument(
+        "--min",
+        dest="min_count",
+        type=int,
+        default=5,
+        help="minimum accepted samples for success exit (default 5)",
+    )
+    we.add_argument(
+        "--no-learn",
+        action="store_true",
+        help="do not seed wake_learned aliases from scores",
+    )
+    we.add_argument(
+        "--no-score",
+        action="store_true",
+        help="skip wake-backend scoring of samples",
+    )
+    we.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="play beeps / print loop without mic or files",
+    )
+    we.add_argument(
+        "--no-beep",
+        action="store_true",
+        help="suppress enrollment beeps (print-only pacing)",
+    )
+
     q = sub.add_parser("queue", help="pending bound events")
     q.add_argument("--json", action="store_true")
     q.add_argument(
@@ -698,6 +741,10 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
         return cmd_ask(args, cfg)
     if cmd == "ambient":
         return cmd_ambient(args, cfg)
+    if cmd == "wake-enroll":
+        from hark.wake_enroll import cmd_wake_enroll
+
+        return cmd_wake_enroll(args, cfg)
     if cmd == "queue":
         return cmd_queue(args, cfg)
     if cmd == "providers":

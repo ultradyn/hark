@@ -249,3 +249,50 @@ def store_cached_tts(voice: str | None, text: str, audio: bytes) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(audio)
     return path
+
+
+# --- Wake enrollment cues (I006) ---
+# Distinct tones so operators can run the loop without spoken prompts.
+ENROLL_READY_HZ = 920.0
+ENROLL_ACCEPT_HZ = 1200.0
+ENROLL_REJECT_HZ = 320.0
+ENROLL_END_HZ = (660.0, 520.0)
+
+
+def play_enroll_ready() -> None:
+    """Ready / speak-now beep (slightly longer than record-start)."""
+    try:
+        play_audio(build_beep(ENROLL_READY_HZ, ms=70, vol=_cue_volume))
+        syslog("cue.play", component="audio", cue="enroll_ready", source="generated")
+    except Exception as exc:
+        syslog("cue.error", component="audio", level="warn", cue="enroll_ready", error=str(exc)[:120])
+
+
+def play_enroll_accept() -> None:
+    """Sample accepted — short higher chirp."""
+    try:
+        play_audio(build_beep(ENROLL_ACCEPT_HZ, ms=45, vol=_cue_volume * 0.95))
+        syslog("cue.play", component="audio", cue="enroll_accept", source="generated")
+    except Exception as exc:
+        syslog("cue.error", component="audio", level="warn", cue="enroll_accept", error=str(exc)[:120])
+
+
+def play_enroll_reject() -> None:
+    """Sample rejected (too quiet / empty) — low tone."""
+    try:
+        play_audio(build_beep(ENROLL_REJECT_HZ, ms=90, vol=_cue_volume * 0.9))
+        syslog("cue.play", component="audio", cue="enroll_reject", source="generated")
+    except Exception as exc:
+        syslog("cue.error", component="audio", level="warn", cue="enroll_reject", error=str(exc)[:120])
+
+
+def play_enroll_end() -> None:
+    """Session complete — two-tone end cue."""
+    try:
+        f1, f2 = ENROLL_END_HZ
+        pcm = _sine_pcm(f1, 70, vol=_cue_volume) + _sine_pcm(f2, 90, vol=_cue_volume * 0.9)
+        play_audio(_pcm_to_wav(pcm))
+        syslog("cue.play", component="audio", cue="enroll_end", source="generated")
+    except Exception as exc:
+        syslog("cue.error", component="audio", level="warn", cue="enroll_end", error=str(exc)[:120])
+

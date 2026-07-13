@@ -132,6 +132,7 @@ Full contract: [docs/HERDR.md](../../docs/HERDR.md).
   1. **Name-based** (default): `[ambient] wake_mode = "names"`, `names = ["iris", "mercury", "hark", "herald"]`, optional `extra_names`. Greating+name and bare name; seed mishears for hark/herald (Vosk).
   2. **Full-phrase:** `wake_mode = "phrases"`, `trigger_phrases = ["start prompt", …]` (no name fuzzy).
   - **Learning:** failed wake near-misses auto-expand alternates into `~/.local/state/hark/wake_learned.json` **without restart** (`ambient.wake_learned`). Names mode learns name tokens; phrases mode learns full phrases. Disable with `learn_from_near_misses = false`.
+  - **Enrollment (I006):** `hark wake-enroll` — beep-paced 5–10 samples to seed aliases / eval fixtures. See [SETUP.md](SETUP.md).
   - After **config.toml** edits: ambient **file-watch** (default) live-reloads the same path as SIGHUP — no HUP required (keyword graph rebuilds for Sherpa). Optional: `kill -HUP <pid>` for immediate reload, or restart Mode A. Learning needs neither. Disable with `[ambient] config_watch = false` or `HARK_CONFIG_WATCH=0`.
   - When the operator asks you to reconfigure wake: choose names vs phrases, edit the right keys, wait for `ambient.reloaded` (or SIGHUP), confirm with a spoken test wake.
 

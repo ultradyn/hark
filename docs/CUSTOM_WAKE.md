@@ -170,3 +170,15 @@ Long-term wake direction is KWS (B070), not bigger ASR alone.
 - `src/hark/config_watch.py` — mtime poll + debounce → `request_reload`
 - Skill: `skill/hark/SKILL.md` (Ambient + wake config)
 - `scripts/download-vosk-model.sh` — default small model + optional `--model lgraph|0.22`
+
+## Wake enrollment samples (I006)
+
+Record 5–10 practice activations with paced beeps (no spoken “again” each time):
+
+```bash
+hark wake-enroll                  # default phrase = first configured activation
+hark wake-enroll --phrase "hey mercury" --count 7
+```
+
+WAV + manifest under `~/.local/state/hark/wake_enroll/`. Optional scoring can seed
+learned name aliases from ASR mishears (never short stopwords — B077).

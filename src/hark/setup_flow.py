@@ -503,7 +503,7 @@ def run_setup(
     )
     out.write(
         "Next: confirm wake (say hey iris / hey mercury), then arm Mode A "
-        "(see skill/hark/SETUP.md). Optional enroll: I006 wake-enroll when available.\n"
+        "(see skill/hark/SETUP.md). Optional enroll: `hark wake-enroll` (beep-paced samples; I006).\n"
     )
     return OK
 

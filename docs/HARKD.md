@@ -1,7 +1,7 @@
 # harkd — optional always-on daemon (experimental)
 
 > **Status:** experimental scaffold / **not required for handsfree v1**.  
-> Handsfree (`hark` CLI + skill + Monitor + `./scripts/run-mode-a.sh`) is the supported product path.  
+> Handsfree (`hark` CLI + skill + Monitor + `hark start` / `./scripts/run-mode-a.sh`) is the supported product path.  
 > Python v0 of `harkd` defines process ownership, shared state, and **no silent double-send** with the skill path.
 
 Related: [ARCHITECTURE.md](ARCHITECTURE.md) · [SPEC.md](SPEC.md) §3 · [NAMING.md](NAMING.md) · [IMPLEMENTATION.md](IMPLEMENTATION.md)
@@ -18,7 +18,8 @@ Related: [ARCHITECTURE.md](ARCHITECTURE.md) · [SPEC.md](SPEC.md) §3 · [NAMING
 | `hark ambient` | Optional local wake (`hey hark` / …) → cloud STT prompt path |
 | `hark context` / `ask` / `answer` / `keys` / `tts` / `listen` | Tools the orchestrator (or human) invokes |
 | Skill `hark` / `handsfree` | Judgment: false done, menus, summaries, when to dig in |
-| `./scripts/run-mode-a.sh` | Convenience: start/stop watch + ambient, pidfile, graceful stop |
+| `hark start` / `stop` / `restart` | Preferred: start/stop watch + ambient, pidfile, graceful stop |
+| `./scripts/run-mode-a.sh` | Shell equivalent of `hark start` / `hark stop` |
 
 **Delivery owner in handsfree:** the orchestrator (or human) calls `hark answer` / `keys` / `reply`. The library (`DeliveryStore`, fingerprints, pane revision) enforces race-safe sends. The agent **MUST NOT** invent target IDs.
 
@@ -101,7 +102,7 @@ Both modes **MUST** use the same XDG layout (overridable via `XDG_*`):
 | | Handsfree | harkd |
 |--|--------|-------|
 | **v1 required?** | Yes | No |
-| **Worker start** | `run-mode-a.sh` or manual `hark ambient` / `watch` | `hark daemon start [--workers]` |
+| **Worker start** | `hark start` (or `run-mode-a.sh` / manual ambient+watch) | `hark daemon start [--workers]` |
 | **Judgment** | Orchestrator / skill | Future FSM in-process |
 | **Delivery** | Explicit `hark answer` | Future auto; same `DeliveryStore` |
 | **Single-instance** | `mode-a.pids` + script restart policy | `harkd.pid` |
@@ -157,6 +158,11 @@ uv run hark daemon start --workers --session default
 Handsfree remains:
 
 ```bash
+uv run hark start                 # ambient + watch --for-monitor (idempotent)
+uv run hark stop                  # SIGTERM then SIGKILL after grace
+uv run hark restart
+uv run hark start --status        # running state only
+# shell equivalent:
 ./scripts/run-mode-a.sh
 ./scripts/run-mode-a.sh --stop
 uv run hark watch --for-monitor
@@ -182,7 +188,7 @@ uv run hark ambient
 | Spec (this doc) | `docs/HARKD.md` |
 | Daemon logic | `src/hark/daemon.py` |
 | CLI | `hark daemon …` / console script `harkd` |
-| Handsfree launcher | `scripts/run-mode-a.sh` (refuses live harkd) |
+| Handsfree workers | `hark start` / `stop` / `restart` (`src/hark/workers.py`); `scripts/run-mode-a.sh` |
 | Shared paths | `src/hark/paths.py` → `state_dir()` |
 | Delivery | `src/hark/delivery.py` |
 | Mic / busy | `src/hark/audio/capture.py`, `lifecycle.py`, `mic_coord.py` |

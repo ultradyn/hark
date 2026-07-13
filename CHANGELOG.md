@@ -6,6 +6,10 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- **Handsfree workers (B089):** `hark start` / `stop` / `restart` for ambient +
+  `watch --for-monitor` (idempotent start, SIGTERM then SIGKILL, `mode-a.pids`);
+  preferred over `./scripts/run-mode-a.sh`. `hark start --status` for running state.
+
 ## 0.1.7
 
 - Radio STT assemble (B083): per-segment cloud STT + `join_radio_stt_segments`

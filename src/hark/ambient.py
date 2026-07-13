@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, TextIO
 
-from hark.audio.capture import MicLease, record_seconds
+from hark.audio.capture import MicBusyError, MicLease, record_seconds
 from hark.config import HarkConfig
 from hark.debug_snips import purge_old_debug_snips, save_wake_snippet
 from hark.events import new_event_id, utc_now_iso
@@ -19,6 +19,7 @@ from hark.lifecycle import (
     shutdown_phrase,
     shutdown_requested,
 )
+from hark.mic_coord import ambient_pause_requested
 from hark.partial import make_final_event, new_stream_id
 from hark.speech import run_listen, run_tts
 from hark.syslog import log as syslog
@@ -49,15 +50,31 @@ def _wait_for_wake(
     debug_save: bool = False,
     debug_retention_days: float = 7.0,
 ) -> WakeHit | None:
-    """Record short windows until activation or deadline. Reuses backend (no reload)."""
+    """Record short windows until activation or deadline. Reuses backend (no reload).
+
+    Mic lease is held **per snippet only**, and ambient yields while
+    ``ambient.pause`` is set so listen/ask can take the mic.
+    """
     snippet = max(0.8, min(snippet_s, 2.5))
     last_debug = 0.0
     snips_since_purge = 0
     while time.monotonic() < deadline:
         if shutdown_requested():
             return None
+        # Bound listen/ask requested the mic — yield until they clear pause
+        if ambient_pause_requested():
+            time.sleep(0.05)
+            continue
         try:
-            pcm = record_seconds(snippet, sample_rate=16000)
+            # Short exclusive hold so Mode A listen can interleave between snippets
+            with MicLease("ambient"):
+                if ambient_pause_requested() or shutdown_requested():
+                    continue
+                pcm = record_seconds(snippet, sample_rate=16000)
+        except MicBusyError:
+            # Another process holds mic — wait and retry
+            time.sleep(0.1)
+            continue
         except Exception as exc:
             if out is not None:
                 err = {
@@ -258,15 +275,15 @@ def run_ambient(
 
     deadline = time.monotonic() + (timeout_s or amb.timeout_s or 300.0)
 
-    with MicLease("ambient"):
-        hit = _wait_for_wake(
-            backend,
-            snippet_s=amb.snippet_s,
-            deadline=deadline,
-            out=out,
-            debug_save=bool(amb.debug),
-            debug_retention_days=float(amb.debug_retention_days),
-        )
+    # Lease is taken per snippet inside _wait_for_wake (not for the whole wait)
+    hit = _wait_for_wake(
+        backend,
+        snippet_s=amb.snippet_s,
+        deadline=deadline,
+        out=out,
+        debug_save=bool(amb.debug),
+        debug_retention_days=float(amb.debug_retention_days),
+    )
 
     if hit is None:
         return AmbientResult(

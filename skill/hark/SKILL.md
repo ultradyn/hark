@@ -114,7 +114,7 @@ tail -n0 -F ~/.local/state/hark/system.jsonl ~/.local/state/hark/ambient.jsonl
 3. TTS: “Hark is ready. I'll speak from here.”  
 4. Voice-ask session targets / mode if not already configured.  
 5. Arm Monitor(s): Herdr `hark watch --for-monitor` **and** ambient/system feeds as needed.  
-6. Prefer `hark tts --listen "…"` or `hark ask` so recording starts after you speak (start cue on speech). Pause ambient if mic busy.  
+6. Prefer `hark tts --listen "…"` or `hark ask` so recording starts after you speak (start cue on speech). **Ambient auto-pauses** for listen/ask (mic lease yield); no manual kill needed.  
 7. Wait for blocked events or ambient prompts.  
 
 ## On `agent.blocked` / blocked monitor line

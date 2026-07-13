@@ -30,6 +30,7 @@ from hark.listen_control import (
     register_active_listen,
 )
 from hark.listen_end import EndMode, evaluate_radio_transcript, parse_end_mode
+from hark.mic_coord import pause_ambient_for_mic
 from hark.partial import make_partial_event, new_stream_id
 from hark.providers.base import ProviderError
 from hark.providers.resolve import resolve_stt, resolve_tts
@@ -239,7 +240,12 @@ def run_listen(
     def _agent_wants_stop(_pcm: bytes, _elapsed: float) -> bool:
         return poll_listen_action(stream) is not None
 
-    with MicLease("listen"), BusySection("listen"):
+    # Pause ambient wake scanning so we get the mic (dogfood B010)
+    with (
+        pause_ambient_for_mic(reason="listen"),
+        MicLease("listen"),
+        BusySection("listen"),
+    ):
         register_active_listen(stream, mode=mode.value)
         try:
             if mode is EndMode.SILENCE:

@@ -85,6 +85,7 @@ def test_ambient_event_line_timeout_kind():
 
 def _loop_with_timeout_then_stop(
     monkeypatch,
+    tmp_path,
     *,
     surface_timeouts: bool,
     timeout_s: float = 0.05,
@@ -126,6 +127,8 @@ def _loop_with_timeout_then_stop(
     monkeypatch.setattr(ambient, "run_tts", lambda *a, **k: None)
     monkeypatch.setattr(ambient, "build_wake_backend", lambda *a, **k: Backend())
     monkeypatch.setattr(ambient, "install_signal_handlers", lambda: None)
+    # B104 dual-write: isolate ambient.jsonl under tmp_path
+    monkeypatch.setattr("hark.paths.state_dir", lambda: tmp_path)
 
     out = io.StringIO()
     rc = ambient.run_ambient_loop(cfg, out=out, announce=False, idle_log_s=999)
@@ -138,18 +141,18 @@ def _loop_with_timeout_then_stop(
     return kinds, syslog_kinds, events
 
 
-def test_loop_default_surfaces_timeout(monkeypatch):
+def test_loop_default_surfaces_timeout(monkeypatch, tmp_path):
     kinds, syslog_kinds, _ = _loop_with_timeout_then_stop(
-        monkeypatch, surface_timeouts=True
+        monkeypatch, tmp_path, surface_timeouts=True
     )
     assert "ambient.armed" in kinds
     assert "ambient.timeout" in kinds
     assert "ambient.timeout" in syslog_kinds
 
 
-def test_loop_surface_timeouts_off_suppresses(monkeypatch):
+def test_loop_surface_timeouts_off_suppresses(monkeypatch, tmp_path):
     kinds, syslog_kinds, _ = _loop_with_timeout_then_stop(
-        monkeypatch, surface_timeouts=False
+        monkeypatch, tmp_path, surface_timeouts=False
     )
     assert "ambient.armed" in kinds
     assert "ambient.timeout" not in kinds
@@ -179,3 +182,82 @@ def test_timeout_s_zero_no_deadline_in_run_ambient(monkeypatch):
     result = ambient.run_ambient(cfg, once=True, timeout_s=0, announce=False)
     assert result.activated is False
     assert seen["deadline"] == float("inf")
+
+
+def test_loop_dual_writes_prompt_when_stdout_is_restart_log(monkeypatch, tmp_path):
+    """B104: ambient.prompt lands in ambient.jsonl even if out → restart log."""
+    restart = tmp_path / "ambient-restart.log"
+    feed = tmp_path / "ambient.jsonl"
+    monkeypatch.setattr("hark.paths.state_dir", lambda: tmp_path)
+
+    cfg = HarkConfig()
+    cfg.ambient.enabled = True
+    cfg.ambient.engine = "text_probe"
+    cfg.ambient.timeout_s = 0.05
+    cfg.ambient.surface_timeouts = False
+    cfg.ambient.model_path = None
+
+    lc._shutdown = False
+    clear_reload_request()
+    calls = {"n": 0}
+
+    def fake_run_ambient(cfg, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return AmbientResult(
+                activated=True,
+                phrase="hey hark",
+                text="ship the dual-write fix over",
+                wake_backend="text_probe",
+                event_id="b104-loop-prompt",
+                stream_id="s-b104",
+                final=True,
+                partial=False,
+                listen={"provider": "mock", "duration_ms": 10},
+            )
+        request_shutdown(reason="stop")
+        return AmbientResult(activated=False, phrase=None, text=None)
+
+    class Backend:
+        def score_snippet(self, *a, **k):
+            return None
+
+    monkeypatch.setattr(ambient, "run_ambient", fake_run_ambient)
+    monkeypatch.setattr(ambient, "syslog", lambda *a, **k: None)
+    monkeypatch.setattr(ambient, "run_tts", lambda *a, **k: None)
+    monkeypatch.setattr(ambient, "build_wake_backend", lambda *a, **k: Backend())
+    monkeypatch.setattr(ambient, "install_signal_handlers", lambda: None)
+
+    with restart.open("a", encoding="utf-8") as out:
+        rc = ambient.run_ambient_loop(cfg, out=out, announce=False, idle_log_s=999)
+    assert rc == 0
+
+    restart_text = restart.read_text(encoding="utf-8")
+    feed_text = feed.read_text(encoding="utf-8")
+    assert "b104-loop-prompt" in restart_text
+    assert "b104-loop-prompt" in feed_text
+    assert '"kind":"ambient.prompt"' in feed_text or '"kind": "ambient.prompt"' in feed_text
+
+    feed_events = [
+        json.loads(line) for line in feed_text.splitlines() if line.strip()
+    ]
+    prompts = [e for e in feed_events if e.get("kind") == "ambient.prompt"]
+    assert len(prompts) == 1
+    assert prompts[0]["text"] == "ship the dual-write fix over"
+    assert prompts[0]["event_id"] == "b104-loop-prompt"
+
+    # monitor compact path still sees it
+    from hark.monitor_feed import MODE_A_WAKE_KINDS, replay_matching
+
+    out_mon = io.StringIO()
+    n = replay_matching(
+        [feed], kinds=MODE_A_WAKE_KINDS, limit=20, for_monitor=True, out=out_mon
+    )
+    assert n >= 1
+    mon_kinds = [
+        json.loads(l).get("kind") for l in out_mon.getvalue().splitlines() if l.strip()
+    ]
+    assert "ambient.prompt" in mon_kinds
+
+    lc._shutdown = False
+    clear_reload_request()

@@ -328,6 +328,7 @@ def test_ambient_loop_reloads_then_wakes(tmp_path, monkeypatch):
     cfg = load_config(cfg_path)
 
     monkeypatch.setattr("hark.audio.capture.state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr("hark.paths.state_dir", lambda: tmp_path / "state")
     monkeypatch.setattr(ambient, "ambient_pause_requested", lambda: False)
     monkeypatch.setattr(lc, "state_dir", lambda: tmp_path / "state")
     lc._shutdown = False

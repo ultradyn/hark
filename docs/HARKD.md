@@ -75,7 +75,7 @@ Both modes **MUST** use the same XDG layout (overridable via `XDG_*`):
 | `events.jsonl` | Bound events (`DeliveryStore`) |
 | `deliveries.jsonl` | Delivery outcomes / idempotency |
 | `system.jsonl` | Unified syslog |
-| `watch.jsonl` / `ambient.jsonl` | Worker logs when redirected |
+| `watch.jsonl` / `ambient.jsonl` | Worker logs when redirected; ambient also dual-writes HEP wake events to `ambient.jsonl` even if stdout is elsewhere (B104) |
 | `shutdown_reason` | stop \| restart (spoken cue) |
 
 **Invariant:** library code reads/writes these paths via `hark.paths.state_dir()` so CLI tools, handsfree scripts, and `harkd` share one namespace.

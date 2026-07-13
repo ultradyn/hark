@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 import time
 from dataclasses import dataclass
@@ -27,6 +26,7 @@ from hark.lifecycle import (
     shutdown_phrase,
     shutdown_requested,
 )
+from hark.monitor_feed import emit_hep
 from hark.paths import default_config_path
 from hark.mic_coord import ambient_pause_requested
 from hark.partial import make_final_event, new_stream_id
@@ -161,8 +161,7 @@ def _maybe_learn_from_miss(
                 total_name_aliases=len(state.name_aliases),
                 total_phrase_aliases=len(state.phrase_aliases),
             )
-            out.write(json.dumps(ev, separators=(",", ":")) + "\n")
-            out.flush()
+            emit_hep(ev, out)
         syslog(
             "ambient.wake_learned",
             component="ambient",
@@ -185,8 +184,7 @@ def _maybe_learn_from_miss(
                 total_name_aliases=len(state.name_aliases),
                 total_phrase_aliases=len(state.phrase_aliases),
             )
-            out.write(json.dumps(ev, separators=(",", ":")) + "\n")
-            out.flush()
+            emit_hep(ev, out)
         syslog(
             "ambient.wake_learned",
             component="ambient",
@@ -295,8 +293,7 @@ def _wait_for_wake(
                             "observed_at": utc_now_iso(),
                             "error": f"record: {exc}",
                         }
-                        out.write(json.dumps(err, separators=(",", ":")) + "\n")
-                        out.flush()
+                        emit_hep(err, out)
                     time.sleep(0.5)
                     continue
 
@@ -312,8 +309,7 @@ def _wait_for_wake(
                         "observed_at": utc_now_iso(),
                         "error": f"record: {exc}",
                     }
-                    out.write(json.dumps(err, separators=(",", ":")) + "\n")
-                    out.flush()
+                    emit_hep(err, out)
                 time.sleep(0.5)
                 continue
 
@@ -410,8 +406,7 @@ def _wait_for_wake(
                             phrases=phrase_list,
                         )
                         if out is not None:
-                            out.write(json.dumps(ev, separators=(",", ":")) + "\n")
-                            out.flush()
+                            emit_hep(ev, out)
                         syslog(
                             "ambient.wake_near_miss",
                             component="ambient",
@@ -439,8 +434,8 @@ def _wait_for_wake(
                     "ring_s": round(stream.available_s, 3),
                 }
                 if out is not None:
-                    out.write(json.dumps(dbg, separators=(",", ":")) + "\n")
-                    out.flush()
+                    # Debug heartbeats: stdout only — do not dual-write (noisy).
+                    emit_hep(dbg, out, dual_write=False)
                 syslog(
                     "ambient.debug",
                     component="ambient",
@@ -480,9 +475,10 @@ def complete_after_wake(
 
     def _emit_partial(ev: dict[str, Any]) -> None:
         ev = {**ev, "phrase": hit.phrase}
+        # Dual-write partials to ambient.jsonl so radio stream reaches
+        # hark monitor even when ambient stdout is redirected (B104).
         if out is not None:
-            out.write(json.dumps(ev, separators=(",", ":")) + "\n")
-            out.flush()
+            emit_hep(ev, out)
         if on_partial is not None:
             on_partial(ev)
         syslog(
@@ -889,8 +885,7 @@ def _emit_reload_event(
                 )
             ),
         }
-    out.write(json.dumps(line, separators=(",", ":")) + "\n")
-    out.flush()
+    emit_hep(line, out)
     syslog(
         "ambient.reloaded" if not error else "ambient.reload_error",
         component="ambient",
@@ -942,8 +937,7 @@ def run_ambient_loop(
             "observed_at": utc_now_iso(),
             "error": "no vosk model_path — run ./scripts/setup-ambient.sh",
         }
-        out.write(json.dumps(err, separators=(",", ":")) + "\n")
-        out.flush()
+        emit_hep(err, out)
         return 1
     if not cfg.ambient.model_path and eng0 in ("sherpa_kws", "sherpa", "kws"):
         err = {
@@ -956,8 +950,7 @@ def run_ambient_loop(
                 "run ./scripts/download-sherpa-kws-model.sh"
             ),
         }
-        out.write(json.dumps(err, separators=(",", ":")) + "\n")
-        out.flush()
+        emit_hep(err, out)
         return 1
 
     policy = cfg.ambient.wake_policy or default_wake_policy()
@@ -1015,8 +1008,7 @@ def run_ambient_loop(
             "TTS. Energy-gated vosk (quiet frames skipped)."
         ),
     }
-    out.write(json.dumps(boot, separators=(",", ":")) + "\n")
-    out.flush()
+    emit_hep(boot, out)
     syslog(
         "ambient.armed",
         component="ambient",
@@ -1068,8 +1060,7 @@ def run_ambient_loop(
                 "observed_at": utc_now_iso(),
                 "error": f"boot tts: {exc}",
             }
-            out.write(json.dumps(err, separators=(",", ":")) + "\n")
-            out.flush()
+            emit_hep(err, out)
             try:
                 syslog(
                     "ambient.boot_tts_error",
@@ -1160,8 +1151,9 @@ def run_ambient_loop(
                     pass
                 else:
                     line = {k: v for k, v in line.items() if v is not None}
-                    out.write(json.dumps(line, separators=(",", ":")) + "\n")
-                    out.flush()
+                    # Dual-write ambient.prompt / timeout / cancelled / error so
+                    # Mode A monitors see finals even when stdout → restart log (B104).
+                    emit_hep(line, out)
                     syslog(
                         kind,
                         component="ambient",
@@ -1221,8 +1213,7 @@ def run_ambient_loop(
         "reason": reason,
         "phrase": phrase,
     }
-    out.write(json.dumps(stop, separators=(",", ":")) + "\n")
-    out.flush()
+    emit_hep(stop, out)
     syslog(
         "ambient.stopped",
         component="ambient",

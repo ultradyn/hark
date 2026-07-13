@@ -213,10 +213,8 @@ def surface_tts_event(kind: str, **fields: Any) -> None:
     except Exception:
         pass
     try:
-        import json
-
         from hark.events import new_event_id, utc_now_iso
-        from hark.paths import state_dir
+        from hark.monitor_feed import append_ambient_jsonl
 
         event = {
             "schema": "hark.event.v1",
@@ -225,10 +223,7 @@ def surface_tts_event(kind: str, **fields: Any) -> None:
             "observed_at": utc_now_iso(),
             **fields,
         }
-        path = state_dir() / "ambient.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+        append_ambient_jsonl(event)
     except Exception:
         pass
 

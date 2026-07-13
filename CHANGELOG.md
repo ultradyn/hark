@@ -6,6 +6,7 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- fix(ambient, B104): dual-write HEP wake events to ambient.jsonl even when ambient stdout is redirected (e.g. restart log), so Mode A `hark monitor` always sees ambient.prompt/partials.
 - fix(monitor, B102): singleflight lock on `hark monitor` (`monitor.pid` + flock)
   so a second consumer refuses instead of duplicating HEP wakes; skill documents
   arm-once; `hark start --status` reports monitor holder; `--allow-multiple` debug only.

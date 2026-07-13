@@ -14,6 +14,7 @@ Singleflight: only one feed consumer should run (B102). A second
 from __future__ import annotations
 
 import fcntl
+import io
 import json
 import os
 import sys
@@ -24,6 +25,7 @@ from typing import Any, Iterable, TextIO
 from hark.events import monitor_profile
 from hark.exitcodes import ERROR
 from hark.paths import state_dir
+from hark import paths as hark_paths
 
 # Exclusive consumer lock under XDG state (flock + pid for diagnostics).
 MONITOR_PID_NAME = "monitor.pid"
@@ -55,6 +57,93 @@ MODE_A_WAKE_KINDS: frozenset[str] = frozenset(
 
 # Default files written by workers (run-mode-a.sh / harkd --workers)
 DEFAULT_FEED_FILES: tuple[str, ...] = ("watch.jsonl", "ambient.jsonl")
+
+
+def ambient_feed_path(root: Path | None = None) -> Path:
+    """Canonical ambient HEP feed path (`hark monitor` / dashboard tail).
+
+    Uses ``hark.paths.state_dir`` via the module so tests that monkeypatch
+    ``hark.paths.state_dir`` still isolate the feed path.
+    """
+    return (root or hark_paths.state_dir()) / "ambient.jsonl"
+
+
+def io_targets_path(out: TextIO | None, path: Path) -> bool:
+    """True when *out* is already the open file at *path* (same resolved path).
+
+    Used to skip dual-write when workers redirect ambient stdout → ambient.jsonl
+    so each HEP line is not appended twice.
+    """
+    if out is None:
+        return False
+    try:
+        name = getattr(out, "name", None)
+        if not name or not isinstance(name, (str, Path)):
+            return False
+        name_s = str(name)
+        # StringIO / TTY / pipe names are not real paths
+        if name_s.startswith("<") or name_s in ("stdout", "stderr"):
+            return False
+        return Path(name_s).resolve() == path.resolve()
+    except Exception:
+        return False
+
+
+def append_ambient_jsonl(
+    event: dict[str, Any],
+    *,
+    root: Path | None = None,
+    line: str | None = None,
+) -> bool:
+    """Best-effort append of one HEP object to state ``ambient.jsonl``.
+
+    Shared side-channel for TTS lifecycle (``surface_tts_event``) and ambient
+    dual-write when process stdout is redirected elsewhere (B104).
+    Returns True if a line was written.
+    """
+    try:
+        path = ambient_feed_path(root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = line
+        if payload is None:
+            payload = json.dumps(event, separators=(",", ":"), ensure_ascii=False) + "\n"
+        elif not payload.endswith("\n"):
+            payload = payload + "\n"
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(payload)
+        return True
+    except Exception:
+        return False
+
+
+def emit_hep(
+    event: dict[str, Any],
+    out: TextIO | None = None,
+    *,
+    root: Path | None = None,
+    dual_write: bool = True,
+) -> None:
+    """Write one HEP NDJSON line to *out* and dual-write to ambient.jsonl (B104).
+
+    Dual-write is skipped when *out* is already ambient.jsonl (workers redirect),
+    so redirect-to-restart-log still feeds ``hark monitor`` without duplicating
+    the normal path.
+    """
+    line = json.dumps(event, separators=(",", ":"), ensure_ascii=False) + "\n"
+    if out is not None:
+        try:
+            out.write(line)
+            out.flush()
+        except Exception:
+            pass
+    if not dual_write or out is None:
+        # No stream → nothing to dual-write (callers that only want the feed
+        # should use append_ambient_jsonl directly, e.g. TTS lifecycle).
+        return
+    feed = ambient_feed_path(root)
+    if io_targets_path(out, feed):
+        return
+    append_ambient_jsonl(event, root=root, line=line)
 
 
 class MonitorBusyError(RuntimeError):

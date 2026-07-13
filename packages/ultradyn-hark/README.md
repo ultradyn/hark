@@ -154,6 +154,13 @@ Skills are synced from the monorepo on pack (`npm pack` / publish).
 
 ---
 
+## Releasing
+
+Maintainers: see monorepo [`RELEASE.md`](../../RELEASE.md). Pushing tag `vX.Y.Z`
+(matching this package’s version) runs GitHub Actions `release.yml` — OIDC
+trusted publish to npm + GitHub Release. After push, agents run
+`/watch-gh-populate-release`.
+
 ## License
 
 MIT

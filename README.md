@@ -145,14 +145,29 @@ uv run pytest tests/test_fixtures_parity.py -q
 ./scripts/export-fixtures.sh --with-wake  # also copy today's debug wake snips
 ```
 
+## npm skills package
+
+Agent skills also ship as **`@ultradyn/hark`** on npm:
+
+```bash
+npx skills add clankercode/hark -g -y
+# or
+npm i -g @ultradyn/hark && hark-skill path
+```
+
+Maintainers: cut releases with [`RELEASE.md`](RELEASE.md) /
+`./scripts/release-npm.sh` (OIDC trusted publish via `.github/workflows/release.yml`).
+
 ## Repo
 
 ```text
 /home/xertrov/src/grok/hark
   install.sh         # one-line installer (CLI + skills)
+  RELEASE.md         # npm tag → trusted publish + GitHub Release
   fixtures/          # parity goldens + live wake audio
   schemas/           # HEP JSON Schema
   skill/             # agent skills (hark, handsfree)
+  packages/ultradyn-hark/  # @ultradyn/hark on npm
   src/hark/          # Python Mode A bridge
   tests/
 ```

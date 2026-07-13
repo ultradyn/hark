@@ -1,0 +1,100 @@
+name: Release
+
+# Publishes @ultradyn/hark to npm and cuts a GitHub Release when a version tag
+# is pushed. Cut a release per RELEASE.md (bump packages/ultradyn-hark, tag
+# vX.Y.Z, push tag). Trusted publisher on npm must list workflow filename
+# release.yml (OIDC — no NPM_TOKEN secret).
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to re-run release for (e.g. v0.1.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write # create the GitHub Release
+  id-token: write # OIDC: npm trusted publishing (no NPM_TOKEN)
+
+defaults:
+  run:
+    working-directory: packages/ultradyn-hark
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # workflow_dispatch may pass a tag; default ref is the pushed tag
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Sync skills from monorepo
+        run: node ./scripts/sync-skills.mjs
+
+      # Guard: the tag must match packages/ultradyn-hark package.json version.
+      - name: Verify tag matches package version
+        working-directory: .
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.tag }}" ]; then
+            tag_name="${{ inputs.tag }}"
+          else
+            tag_name="${GITHUB_REF_NAME}"
+          fi
+          tag="${tag_name#v}"
+          pkg="$(node -p "require('./packages/ultradyn-hark/package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag does not match packages/ultradyn-hark package.json version $pkg"
+            exit 1
+          fi
+          echo "Releasing @ultradyn/hark@$pkg (tag $tag_name)"
+          echo "TAG_NAME=$tag_name" >> "$GITHUB_ENV"
+          echo "PKG_VERSION=$pkg" >> "$GITHUB_ENV"
+
+      # Optional gate: Python package tests (skills ship with monorepo CLI).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python deps + pytest
+        working-directory: .
+        run: |
+          pip install -e ".[dev]"
+          pytest -q --tb=line
+        continue-on-error: false
+
+      # Trusted publishing requires npm >= 11.5.1; Node 22 ships older npm.
+      - name: Upgrade npm (for OIDC trusted publishing)
+        run: npm install -g npm@latest
+
+      # No NODE_AUTH_TOKEN: npm exchanges the GitHub OIDC token for a
+      # short-lived publish token and attaches build provenance automatically
+      # (public repo). Configure once at:
+      # https://www.npmjs.com/package/@ultradyn/hark/access
+      # → Trusted Publisher → GitHub Actions → workflow: release.yml
+      - name: Publish @ultradyn/hark to npm
+        run: npm publish --access public --provenance
+
+      - name: Create GitHub Release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${TAG_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists — leaving notes for agent to refresh"
+            exit 0
+          fi
+          gh release create "$tag" \
+            --title "@ultradyn/hark ${PKG_VERSION}" \
+            --generate-notes

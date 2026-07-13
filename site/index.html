@@ -6,21 +6,16 @@
     <title>Hark — when your agents need a word</title>
     <meta
       name="description"
-      content="Voice bridge for Herdr coding agents. Blocked agents speak. You answer by voice. Work continues."
+      content="Handsfree voice control for your coding-agent fleet in Herdr. Run the hark skill—your agent sets up watch, speech, and safe delivery. Speak when the herd needs you."
     />
-    <meta property="og:title" content="Hark — when your agents need a word" />
+    <meta property="og:title" content="Hark — handsfree voice for your agent herd" />
     <meta
       property="og:description"
-      content="The voice bridge for blocked Herdr agents. Human-in-the-loop without hands on the keyboard."
+      content="Fleet control without the keyboard. Blocked agents speak; you answer by voice. Skill-first setup for Claude, Grok, Pi, OpenCode, and more."
     />
     <meta property="og:type" content="website" />
     <meta name="theme-color" content="#05060a" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Sans+3:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
+    <!-- System fonts only — no webfont network load -->
     <link rel="stylesheet" href="css/tokens.css" />
     <link rel="stylesheet" href="css/base.css" />
     <link rel="stylesheet" href="css/components.css" />
@@ -29,7 +24,6 @@
   <body>
     <div class="atmosphere" aria-hidden="true">
       <div class="atmosphere__grid"></div>
-      <div class="atmosphere__noise"></div>
     </div>
 
     <header class="shell">
@@ -40,7 +34,8 @@
         </a>
         <ul class="nav__links">
           <li><a href="#why">Why</a></li>
-          <li><a href="#loop">Loop</a></li>
+          <li><a href="#use">Use</a></li>
+          <li><a href="#supports">Supports</a></li>
           <li><a href="#safety">Safety</a></li>
           <li><a href="#install">Install</a></li>
           <li><a href="https://github.com/clankercode/hark">GitHub</a></li>
@@ -53,26 +48,27 @@
       <!-- HERO -->
       <section class="shell hero">
         <div>
-          <p class="eyebrow"><span class="eyebrow__dot" aria-hidden="true"></span> Voice bridge · <a class="product-link" href="https://herdr.dev/">Herdr</a> ≥ 0.7.1</p>
+          <p class="eyebrow"><span class="eyebrow__dot" aria-hidden="true"></span> Handsfree · fleet control · <a class="product-link" href="https://herdr.dev/">Herdr</a> ≥ 0.7.1</p>
           <h1 class="hero__title">Hark</h1>
           <p class="hero__tag">When your agents need a word.</p>
           <p class="hero__lede">
-            Blocked coding agents stop the fleet. Hark turns those freezes into short voice
-            conversations—so you can ship from the shop floor, the couch, or a Teams call.
+            <strong style="color: var(--ink); font-weight: 600">Handsfree supervision for the whole herd.</strong>
+            When agents in <a class="product-link" href="https://herdr.dev/">Herdr</a> block, swarm, or wait on you,
+            Hark speaks the ask and takes your answer by voice—so the fleet keeps moving while you’re away from the keyboard.
           </p>
           <div class="btn-row">
-            <a class="btn btn--primary" href="https://github.com/clankercode/hark">Open the repo</a>
-            <a class="btn btn--ghost" href="#install">Get started</a>
+            <a class="btn btn--primary" href="#use">Run the skill</a>
+            <a class="btn btn--ghost" href="https://github.com/clankercode/hark">Open the repo</a>
           </div>
           <div class="hero__meta">
-            <span class="pill pill--live">Mode A ready</span>
-            <span class="pill">CLI · skill · cloud STT/TTS</span>
+            <span class="pill pill--live">Handsfree Mode A</span>
+            <span class="pill">Herd · fleet · multi-session</span>
             <span class="pill pill--risk">R2/R3 always confirm</span>
           </div>
         </div>
         <div>
           <figure class="arch" aria-label="Architecture: You, Hark handsfree agent, cloud services, and agents inside Herdr">
-            <p class="arch__title">Mode A topology</p>
+            <p class="arch__title">Handsfree · herd topology</p>
             <svg
               class="arch__svg"
               viewBox="0 0 440 360"
@@ -197,30 +193,140 @@
       <!-- WHY -->
       <section class="shell section" id="why">
         <div class="section__head">
-          <p class="eyebrow">The problem</p>
-          <h2>Agents freeze. You’re not at the keyboard.</h2>
+          <p class="eyebrow">Handsfree · herd control</p>
+          <h2>One voice. Many agents. No keyboard required.</h2>
           <p>
-            <a class="product-link" href="https://herdr.dev/">Herdr</a> sessions wait on lockfiles, menus, and permissions while you’re mid-build or
-            mid-call. Polling panes doesn’t scale. Voice does.
+            A swarm in <a class="product-link" href="https://herdr.dev/">Herdr</a> will pause on lockfiles, menus, and permissions.
+            You can’t babysit every pane. Hark is the handsfree control plane: listen when the fleet needs you, speak once, deliver to the right target.
           </p>
         </div>
         <div class="grid-3">
           <article class="card">
             <div class="card__icon">01</div>
-            <h3>Hear the block</h3>
-            <p>Watch emits when an agent needs you. Hark speaks the question—tagged to the right pane.</p>
+            <h3>Fleet awareness</h3>
+            <p>One watch feed across local and remote sessions. Blocked, done, and ambient prompts—tagged by pane and risk.</p>
           </article>
           <article class="card">
             <div class="card__icon">02</div>
-            <h3>Answer out loud</h3>
-            <p>Cloud STT captures a bounded reply. Radio mode streams partials with HOLD until you’re done.</p>
+            <h3>Handsfree dialogue</h3>
+            <p>TTS asks, STT answers, radio partials with HOLD. Mic mutes while speaking; record starts when you talk.</p>
           </article>
           <article class="card">
             <div class="card__icon">03</div>
-            <h3>Deliver safely</h3>
-            <p>Fingerprint + revision checks refuse stale targets. Destructive asks always confirm.</p>
+            <h3>Safe herd routing</h3>
+            <p>Fingerprint + revision refuse stale panes. R2/R3 always confirm. The LLM never invents the delivery target.</p>
           </article>
         </div>
+      </section>
+
+      <hr class="divider shell" />
+
+      <!-- USE / SKILL -->
+      <section class="shell section" id="use">
+        <div class="grid-2">
+          <div>
+            <p class="eyebrow">Usage</p>
+            <h2>Run the skill. The agent sets up the rest.</h2>
+            <p>
+              You don’t need to wire Mode A by hand. Point a capable coding agent at this repo,
+              invoke the <strong style="color: var(--ink)">hark</strong> (or <strong style="color: var(--ink)">handsfree</strong>) skill,
+              and let it arm watch, speech, and safety. You stay on voice.
+            </p>
+            <ol class="use-steps">
+              <li>
+                <strong>Install / open the repo</strong>
+                <span>Clone or point the agent at <code>clankercode/hark</code>.</span>
+              </li>
+              <li>
+                <strong>Run the skill</strong>
+                <span><code>/hark</code> or <code>/handsfree</code> (or load <code>skill/hark/SKILL.md</code>).</span>
+              </li>
+              <li>
+                <strong>Agent bootstraps</strong>
+                <span>Doctor, Herdr sessions, watch Monitor, ambient wake, TTS status of any already-blocked panes.</span>
+              </li>
+              <li>
+                <strong>You supervise by voice</strong>
+                <span>When the herd blocks, it asks; you answer; it delivers. Multi-session queue, one target at a time.</span>
+              </li>
+            </ol>
+          </div>
+          <div class="term" aria-label="Skill-first usage">
+            <div class="term__bar">
+              <span class="term__dot"></span>
+              <span class="term__dot"></span>
+              <span class="term__dot"></span>
+              <span class="term__title">you · one shot</span>
+            </div>
+            <div class="term__body">
+              <div class="dim"># In Claude / Grok / Pi / OpenCode (with Monitor)…</div>
+              <div><span class="prompt">›</span> <span class="cmd">/hark</span></div>
+              <div class="dim"># or: use the hark skill · handsfree alias</div>
+              <div class="out">agent: running hark doctor…</div>
+              <div class="out">agent: arming watch --for-monitor…</div>
+              <div class="out">agent: ambient listening · say hey hark</div>
+              <div class="err">agent.blocked  work/w3:p2  R2</div>
+              <div class="dim">▸ speaks the question · listens · answers</div>
+              <div class="out">delivered · fleet continues</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <hr class="divider shell" />
+
+      <!-- SUPPORTS -->
+      <section class="shell section" id="supports">
+        <div class="section__head">
+          <p class="eyebrow">Orchestrators</p>
+          <h2>Needs a Monitor tool. Works with the herd you already run.</h2>
+          <p>
+            Mode A expects a coding CLI/agent that can run shell tools <em>and</em> keep a long-lived
+            <strong style="color: var(--ink)">Monitor</strong> (or equivalent) on
+            <code>hark watch --for-monitor</code>. Without that, blocks won’t interrupt the session.
+          </p>
+        </div>
+        <div class="card" style="padding: 0; overflow: hidden">
+          <table class="risk-table supports-table">
+            <thead>
+              <tr>
+                <th>CLI / agent</th>
+                <th>Monitor</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Claude Code</td>
+                <td class="ok">Native</td>
+                <td>Skill + Monitor on watch feed; full Mode A loop</td>
+              </tr>
+              <tr>
+                <td>Grok Build / Grok CLI</td>
+                <td class="ok">Native</td>
+                <td>Same pattern; skill install + persistent monitor</td>
+              </tr>
+              <tr>
+                <td>Pi</td>
+                <td class="ok">Plugin</td>
+                <td>Requires a Monitor-capable plugin / hook path</td>
+              </tr>
+              <tr>
+                <td>OpenCode</td>
+                <td class="ok">Plugin</td>
+                <td>Requires a Monitor-capable plugin / extension</td>
+              </tr>
+              <tr>
+                <td>Codex / others</td>
+                <td class="maybe">If Monitor exists</td>
+                <td>Any agent with shell + long-lived watch can drive Hark</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="supports-footnote">
+          Herdr hosts the worker agents. Your orchestrator (outside Herdr) runs the skill and speaks for the fleet.
+        </p>
       </section>
 
       <hr class="divider shell" />
@@ -342,10 +448,11 @@
         <div class="grid-2">
           <div>
             <p class="eyebrow">Install</p>
-            <h2>Prototype today. Spec for the long haul.</h2>
+            <h2>Optional CLI. The skill is the product path.</h2>
             <p>
-              Python Mode A is dogfooding now. Fixtures and HEP schemas are ready for a Rust
-              client. Read the docs, arm the skill, say <em>hey hark</em>.
+              Prefer letting the agent run doctor + Mode A after <code>/hark</code>.
+              Manual quickstart is for power users and CI. Ambient wake: say
+              <em>hey hark</em>, <em>hey herald</em>, or your custom trigger.
             </p>
             <div class="btn-row">
               <a class="btn btn--primary" href="https://github.com/clankercode/hark">Star &amp; clone</a>
@@ -357,25 +464,25 @@
               <span class="term__dot"></span>
               <span class="term__dot"></span>
               <span class="term__dot"></span>
-              <span class="term__title">quickstart</span>
+              <span class="term__title">manual · optional</span>
             </div>
             <div class="term__body">
               <div><span class="prompt">$</span> <span class="cmd">git clone git@github.com:clankercode/hark.git</span></div>
               <div><span class="prompt">$</span> <span class="cmd">cd hark &amp;&amp; uv sync</span></div>
               <div><span class="prompt">$</span> <span class="cmd">uv run hark doctor</span></div>
               <div><span class="prompt">$</span> <span class="cmd">./scripts/run-mode-a.sh</span></div>
-              <div class="dim"># say: hey hark · hey herald · start prompt</div>
+              <div class="dim"># preferred: open skill → agent does the above</div>
             </div>
           </div>
         </div>
       </section>
 
       <section class="shell cta">
-        <p class="eyebrow" style="justify-content: center"><span class="eyebrow__dot"></span> Ready when they are</p>
+        <p class="eyebrow" style="justify-content: center"><span class="eyebrow__dot"></span> Handsfree when the herd calls</p>
         <h2>Blocked agents call.<br />Hark answers.</h2>
-        <p>Human-in-the-loop, without hands on the keyboard.</p>
+        <p>Fleet control by voice. Human-in-the-loop, without hands on the keyboard.</p>
         <div class="btn-row">
-          <a class="btn btn--primary" href="https://github.com/clankercode/hark">Get Hark</a>
+          <a class="btn btn--primary" href="#use">Run the skill</a>
           <a class="btn btn--ghost" href="https://herdr.dev/">Herdr</a>
         </div>
       </section>

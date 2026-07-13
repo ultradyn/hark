@@ -19,6 +19,9 @@ Change brand colors or type scale in **tokens only**; components consume `var(--
 `<a class="product-link" href="https://herdr.dev/">Herdr</a>` so they inherit local
 text color and underline cleanly in body, eyebrow, and verse.
 
+**Performance:** system font stacks only (no Google Fonts), static SVG diagram (no
+canvas loop), minimal CSS/JS. Prefer editing tokens over adding dependencies.
+
 ## Local preview
 
 ```bash

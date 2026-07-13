@@ -29,8 +29,21 @@ def test_activation_anywhere_in_snippet():
 def test_no_false_wake_on_normal_speech():
     assert match_activation("please hark back to the earlier design") is None
     assert match_activation("the herald of spring arrived") is None
-    # without anywhere, mid-phrase start-only fails
+    # without anywhere, mid-phrase start-only fails exact match
     assert match_activation("noise hey hark") is None
+
+
+def test_fuzzy_hey_hook_is_hark():
+    # vosk often hears "hark" as "hook"
+    hit = match_activation("hey hook", anywhere=True)
+    assert hit is not None
+    assert "hark" in hit.phrase
+
+
+def test_fuzzy_hey_harold_is_herald():
+    hit = match_activation("hey harold please", anywhere=True)
+    assert hit is not None
+    assert "herald" in hit.phrase
 
 
 def test_text_probe_backend():

@@ -37,13 +37,43 @@ class WakeHit:
     backend: str = "text"
 
 
+# Common small-model mishears for product wake words
+_HARK_ALIASES = frozenset(
+    {
+        "hark",
+        "hook",
+        "hawk",
+        "heart",
+        "hard",
+        "hork",
+        "harkh",
+        "ark",
+        "mark",  # sometimes
+    }
+)
+_HERALD_ALIASES = frozenset(
+    {
+        "herald",
+        "harold",
+        "herold",
+        "arrow",
+        "erald",
+        "herrold",
+    }
+)
+_PREFIXES = ("hey", "okay", "ok", "hi")
+
+
 def match_activation(
     text: str,
     phrases: list[str] | tuple[str, ...] = DEFAULT_ACTIVATION_PHRASES,
     *,
     anywhere: bool = False,
 ) -> WakeHit | None:
-    """Match activation at start of text, or anywhere in a short wake snippet."""
+    """Match activation at start of text, or anywhere in a short wake snippet.
+
+    Also accepts common vosk mishears: \"hey hook\" → hey hark, \"hey harold\" → hey herald.
+    """
     raw = text or ""
     norm = normalize_for_match(raw)
     norm = _PUNCT.sub(" ", norm)
@@ -66,17 +96,51 @@ def match_activation(
                 phrase=p, remainder=norm[len(p) :].strip(), raw=raw, backend="text"
             )
         if anywhere:
-            # whole-word contain: "noise hey hark please"
             padded = f" {norm} "
             needle = f" {p} "
             idx = padded.find(needle)
             if idx >= 0:
                 after = padded[idx + len(needle) :].strip()
                 return WakeHit(phrase=p, remainder=after, raw=raw, backend="text")
-            if norm.endswith(" " + p) or norm.endswith(p):
-                # ends with phrase
-                if norm == p or norm.endswith(" " + p):
-                    return WakeHit(phrase=p, remainder="", raw=raw, backend="text")
+            if norm.endswith(" " + p):
+                return WakeHit(phrase=p, remainder="", raw=raw, backend="text")
+
+    # Fuzzy: hey/okay + hark-like / herald-like token
+    fuzzy = _match_fuzzy_wake(norm)
+    if fuzzy is not None:
+        return fuzzy
+    return None
+
+
+def _match_fuzzy_wake(norm: str) -> WakeHit | None:
+    words = norm.split()
+    for i, w in enumerate(words):
+        if w not in _PREFIXES:
+            continue
+        if i + 1 >= len(words):
+            continue
+        nxt = words[i + 1]
+        # strip trailing punctuation already done
+        if nxt in _HARK_ALIASES or nxt.startswith("har") and len(nxt) <= 6:
+            # avoid matching "hard drive" alone without hey — we require prefix
+            if nxt in _HARK_ALIASES or nxt in ("hark", "hook", "hawk", "hork"):
+                rem = " ".join(words[i + 2 :])
+                return WakeHit(
+                    phrase="hey hark" if w == "hey" else f"{w} hark",
+                    remainder=rem,
+                    raw=norm,
+                    confidence=0.7,
+                    backend="text-fuzzy",
+                )
+        if nxt in _HERALD_ALIASES:
+            rem = " ".join(words[i + 2 :])
+            return WakeHit(
+                phrase="hey herald" if w == "hey" else f"{w} herald",
+                remainder=rem,
+                raw=norm,
+                confidence=0.7,
+                backend="text-fuzzy",
+            )
     return None
 
 

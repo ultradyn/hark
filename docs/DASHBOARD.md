@@ -110,7 +110,7 @@ First message on every stream connect:
 | `system` | LogEvent: `ts` (float s), `seq`, `level` (`debug\|info\|warn\|error`), `component`, `event`, `message`, `data{}`, `pid` | `system.jsonl` |
 | `usage` | UsageEvent: `kind` (`tts\|stt`), `ts`, `provider?`, `voice?`, `ok`, `chars`, `words`, `audio_ms`, `latency_ms`, `error?`, `meta{}` | `usage.jsonl` |
 | `delivery` | `{type:"bound", …BoundEvent}` or `{type:"outcome", event_id, status, ts, …}` | `events.jsonl`, `deliveries.jsonl` |
-| `serve` | `{kind:"serve.*", …}` server meta: hello, dictation state, degradations | in-process |
+| `serve` | `{kind:"serve.*", …}` server meta: hello, dictation state, live spectrum, degradations | in-process |
 
 Note: HEP payloads are validated structurally (envelope + required HEP core
 fields), **not** against `event-v1.schema.json`'s closed kind enum —
@@ -215,6 +215,42 @@ orchestrator picks it up with its normal judgment. Response includes the new
   when the mic lease is held.
 - Submission of a transcript is a separate, explicit `/answer` or `/prompt`
   call after operator review. Dictation endpoints never deliver.
+
+### Live voice spectrum (B087)
+
+While the host mic is capturing (listen / ask / ambient / host dictation), the
+capture path computes short-window FFT band magnitudes and publishes the
+**latest frame only** to `spectrum.latest` under the state dir (no JSONL
+history, no disk growth). `hark serve` coalesces that frame onto the existing
+SSE stream as:
+
+```json
+{
+  "schema": "hark.dashboard.v1",
+  "type": "event",
+  "source": "serve",
+  "cursor": "<unchanged composite>",
+  "payload": {
+    "kind": "serve.spectrum",
+    "bands": [0.0, 0.12, 0.4, "…"],
+    "ts": 1710000000.123,
+    "recording": true,
+    "sample_rate": 16000,
+    "max_hz": 6000,
+    "source": "listen"
+  }
+}
+```
+
+- `recording: true` during STT-bound capture (listen / answer); ambient idle
+  feed uses `recording: false` so the panel can stay live without looking hot.
+- Spectrum frames **do not** advance the composite cursor and **must not** be
+  appended to the events timeline (webui treats them as a dedicated signal).
+- Target cadence is ~60 fps on the SSE loop (latest-frame coalesce; slow
+  clients drop intermediate frames).
+- Webui: collapsible spectrum strip under the topbar; auto-expands while
+  `recording` unless the operator collapsed it during a recording period
+  (preference in `localStorage`).
 
 ## Config (`[dashboard]` in `config.toml`)
 

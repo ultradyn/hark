@@ -39,12 +39,19 @@ LOCALHOST_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
 class Hub:
-    """Fan-out of stream envelopes to SSE subscribers."""
+    """Fan-out of stream envelopes to SSE subscribers.
+
+    Spectrum frames (B087) are coalesced: only the latest payload is held and
+    polled by each SSE loop — they never enqueue into event queues (would
+    starve real events at ~60 fps).
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._subs: list[queue.Queue] = []
         self.serve_seq = 0
+        self._spectrum: dict[str, Any] | None = None
+        self._spectrum_seq = 0
 
     def subscribe(self) -> queue.Queue:
         q: queue.Queue = queue.Queue(maxsize=1000)
@@ -66,6 +73,16 @@ class Hub:
             except queue.Full:
                 # slow consumer: drop for them, never block the pump
                 pass
+
+    def set_spectrum(self, payload: dict[str, Any]) -> None:
+        """Overwrite the latest live spectrum frame (coalesced)."""
+        with self._lock:
+            self._spectrum = payload
+            self._spectrum_seq += 1
+
+    def get_spectrum(self) -> tuple[int, dict[str, Any] | None]:
+        with self._lock:
+            return self._spectrum_seq, self._spectrum
 
 
 class TailPump(threading.Thread):
@@ -121,6 +138,45 @@ class TailPump(threading.Thread):
         self._stop.set()
 
 
+class SpectrumPump(threading.Thread):
+    """Poll shared ``spectrum.latest`` written by capture processes (B087).
+
+    In-process publishers (host dictation inside serve) also feed the hub via
+    ``set_local_publisher``; this pump covers ambient / CLI listen in other
+    processes. Latest-frame only — never appends to JSONL.
+    """
+
+    def __init__(self, hub: Hub, state: Path, *, poll_s: float = 0.016) -> None:
+        super().__init__(name="hark-serve-spectrum", daemon=True)
+        self.hub = hub
+        self.state = state
+        self.poll_s = poll_s
+        self._stop = threading.Event()
+        self._last_ts: float | None = None
+        self._last_recording: bool | None = None
+
+    def run(self) -> None:
+        from hark.audio.spectrum import read_latest_spectrum
+
+        while not self._stop.is_set():
+            try:
+                frame = read_latest_spectrum(self.state)
+            except Exception:
+                frame = None
+            if frame is not None:
+                ts = frame.get("ts")
+                rec = bool(frame.get("recording"))
+                # Only push when frame changes (ts) or recording edge flips
+                if ts != self._last_ts or rec != self._last_recording:
+                    self._last_ts = float(ts) if isinstance(ts, (int, float)) else None
+                    self._last_recording = rec
+                    self.hub.set_spectrum(frame)
+            self._stop.wait(self.poll_s)
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
 class DashboardServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -140,15 +196,21 @@ class DashboardServer(ThreadingHTTPServer):
         self.hub = Hub()
         self.state = state_dir()
         self.pump = TailPump(self.hub, self.state)
+        self.spectrum_pump = SpectrumPump(self.hub, self.state)
         from hark.dashboard.dictation import HostDictation
 
         self.host_dictation = HostDictation()
         self.started_at = utc_now_iso()
         self.static_root = resolve_static_root()
+        # In-process spectrum from host dictation / same-process capture (B087)
+        from hark.audio.spectrum import set_local_publisher
+
+        set_local_publisher(self.hub.set_spectrum)
         super().__init__((host, port), DashboardHandler)
 
     def serve_forever(self, poll_interval: float = 0.5) -> None:  # type: ignore[override]
         self.pump.start()
+        self.spectrum_pump.start()
         log(
             "serve.started",
             component="dashboard",
@@ -159,6 +221,26 @@ class DashboardServer(ThreadingHTTPServer):
             super().serve_forever(poll_interval)
         finally:
             self.pump.stop()
+            self.spectrum_pump.stop()
+            try:
+                from hark.audio.spectrum import set_local_publisher
+
+                set_local_publisher(None)
+            except Exception:
+                pass
+
+    def server_close(self) -> None:  # type: ignore[override]
+        try:
+            self.spectrum_pump.stop()
+        except Exception:
+            pass
+        try:
+            from hark.audio.spectrum import set_local_publisher
+
+            set_local_publisher(None)
+        except Exception:
+            pass
+        super().server_close()
 
     def server_meta(self) -> dict[str, Any]:
         import shutil
@@ -462,15 +544,35 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         }
                     )
             last_ping = time.monotonic()
+            last_spec_seq = 0
+            # Short timeout so spectrum can refresh near 60 fps without a
+            # dedicated connection (coalesced latest frame only).
             while True:
                 try:
-                    envelope = q.get(timeout=1.0)
+                    envelope = q.get(timeout=0.016)
                 except queue.Empty:
                     envelope = None
                 if envelope is not None:
                     if wanted is None or envelope["source"] in wanted or envelope["type"] == "hello":
                         self._sse_write(envelope)
-                elif time.monotonic() - last_ping >= 15.0:
+                    last_ping = time.monotonic()
+                # Live mic spectrum (B087): not stored in history; cursor unchanged
+                allow_spec = wanted is None or "serve" in wanted
+                if allow_spec:
+                    seq, spec = self.server.hub.get_spectrum()
+                    if seq != last_spec_seq and spec is not None:
+                        last_spec_seq = seq
+                        self._sse_write(
+                            {
+                                "schema": SCHEMA,
+                                "type": "event",
+                                "source": "serve",
+                                "cursor": pump.composite_cursor(),
+                                "payload": spec,
+                            }
+                        )
+                        last_ping = time.monotonic()
+                if envelope is None and time.monotonic() - last_ping >= 15.0:
                     self.wfile.write(b": ping\n\n")
                     self.wfile.flush()
                     last_ping = time.monotonic()

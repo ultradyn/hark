@@ -96,6 +96,17 @@ export interface ServePayload {
   [k: string]: unknown;
 }
 
+/** Live FFT bands from host mic capture (B087). Not stored in event history. */
+export interface SpectrumPayload {
+  kind: "serve.spectrum";
+  bands: number[];
+  ts: number;
+  recording: boolean;
+  sample_rate?: number;
+  max_hz?: number;
+  source?: string;
+}
+
 export type Payload = HepPayload | LogPayload | UsagePayload | DeliveryPayload | ServePayload;
 
 // ---- snapshots ----

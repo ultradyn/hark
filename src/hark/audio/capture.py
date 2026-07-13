@@ -435,12 +435,29 @@ class ContinuousMicStream:
         if duration_s <= 0:
             return True
         deadline = time.monotonic() + duration_s
+        # Ambient spectrum: non-recording feed so the webui can stay live (B087)
+        last_spec = 0.0
         while time.monotonic() < deadline:
             if should_stop is not None and should_stop():
                 return False
             data, overflowed = self._stream.read(self._block)
             del overflowed
-            self.ring.write_float32(data.reshape(-1))
+            samples = data.reshape(-1)
+            self.ring.write_float32(samples)
+            now = time.monotonic()
+            if now - last_spec >= 0.032:  # ~30 fps ambient (cheaper than listen)
+                last_spec = now
+                try:
+                    from hark.audio.spectrum import publish_spectrum
+
+                    publish_spectrum(
+                        samples,
+                        sample_rate=self.sample_rate,
+                        recording=False,
+                        source="ambient",
+                    )
+                except Exception:
+                    pass
         return True
 
     def window_pcm16(self, duration_s: float, *, end_offset_s: float = 0.0) -> bytes:
@@ -578,166 +595,205 @@ def capture_utterance(
     wait_speech_ms = 0
     # Safety cap for discard phase (TTS tail + residual + long mute)
     discard_max_s = max(30.0, initial_timeout_s)
+    # Spectrum window: ~40 ms of recent blocks for FFT (B087 live webui)
+    spec_blocks = max(1, int(0.04 / 0.02))
+    spec_ring: deque[np.ndarray] = deque(maxlen=spec_blocks)
+    # Throttle file writes a bit when local publisher is absent (still ~50 fps)
+    last_spec_pub = 0.0
+    spec_interval_s = 0.016
 
-    with sd.InputStream(
-        samplerate=sample_rate,
-        channels=1,
-        dtype="float32",
-        blocksize=block,
-        device=device,
-    ) as stream:
-        open_mono = time.monotonic()
-        # Phase 0: drop leading audio (overlap pre-arm / fixed discard window)
-        if discard_leading_ms > 0 or audio_ok_after is not None:
-            while _still_discarding(
-                open_mono=open_mono,
-                discard_leading_ms=discard_leading_ms,
-                audio_ok_after=audio_ok_after,
-            ):
-                if time.monotonic() - open_mono > discard_max_s:
-                    raise TimeoutError(
-                        "overlap discard window exceeded before audio became usable"
-                    )
+    def _publish_spec(samples_block: np.ndarray) -> None:
+        nonlocal last_spec_pub
+        now = time.monotonic()
+        if now - last_spec_pub < spec_interval_s:
+            return
+        last_spec_pub = now
+        try:
+            from hark.audio.spectrum import publish_spectrum
+
+            spec_ring.append(samples_block)
+            window = (
+                np.concatenate(list(spec_ring))
+                if len(spec_ring) > 1
+                else samples_block
+            )
+            publish_spectrum(
+                window,
+                sample_rate=sample_rate,
+                recording=True,
+                source="listen",
+            )
+        except Exception:
+            pass
+
+    try:
+        with sd.InputStream(
+            samplerate=sample_rate,
+            channels=1,
+            dtype="float32",
+            blocksize=block,
+            device=device,
+        ) as stream:
+            open_mono = time.monotonic()
+            # Phase 0: drop leading audio (overlap pre-arm / fixed discard window)
+            if discard_leading_ms > 0 or audio_ok_after is not None:
+                while _still_discarding(
+                    open_mono=open_mono,
+                    discard_leading_ms=discard_leading_ms,
+                    audio_ok_after=audio_ok_after,
+                ):
+                    if time.monotonic() - open_mono > discard_max_s:
+                        raise TimeoutError(
+                            "overlap discard window exceeded before audio became usable"
+                        )
+                    data, overflowed = stream.read(block)
+                    del overflowed, data
+
+            # Gate clock starts only after discard so TTS tail does not burn timeout
+            start = time.monotonic()
+            wait_blocks = 0  # only counts when not muted (B084)
+            blocks_used = 0  # non-mute blocks against max_s (B084 freezes max too)
+            mute_pad_blocks = 0
+            was_tts_muted = False
+            edge_pad_blocks = max(0, int(float(mute_edge_pad_ms) / 20.0))
+
+            def _tts_muted() -> bool:
+                try:
+                    from hark.audio.mic_mute import tts_mute_depth
+
+                    return tts_mute_depth() > 0
+                except Exception:
+                    return False
+
+            # While-loop so TTS mute / edge-pad do not burn max_s or initial_timeout
+            while blocks_used < max_blocks:
                 data, overflowed = stream.read(block)
-                del overflowed, data
+                del overflowed
+                samples = data.reshape(-1)
+                _publish_spec(samples)
 
-        # Gate clock starts only after discard so TTS tail does not burn timeout
-        start = time.monotonic()
-        wait_blocks = 0  # only counts when not muted (B084)
-        blocks_used = 0  # non-mute blocks against max_s (B084 freezes max too)
-        mute_pad_blocks = 0
-        was_tts_muted = False
-        edge_pad_blocks = max(0, int(float(mute_edge_pad_ms) / 20.0))
-
-        def _tts_muted() -> bool:
-            try:
-                from hark.audio.mic_mute import tts_mute_depth
-
-                return tts_mute_depth() > 0
-            except Exception:
-                return False
-
-        # While-loop so TTS mute / edge-pad do not burn max_s or initial_timeout
-        while blocks_used < max_blocks:
-            data, overflowed = stream.read(block)
-            del overflowed
-            samples = data.reshape(-1)
-
-            # B084: while Hark holds TTS mute, freeze open/silence/max clocks
-            muted_now = _tts_muted()
-            if muted_now:
-                was_tts_muted = True
-                if opened:
-                    silent_blocks = 0
-                continue
-            if was_tts_muted:
-                was_tts_muted = False
-                mute_pad_blocks = edge_pad_blocks
-                if opened:
-                    silent_blocks = 0
-            if mute_pad_blocks > 0:
-                mute_pad_blocks -= 1
-                if opened:
-                    silent_blocks = 0
-                # Still seed preroll while waiting so post-pad open has history
-                if not opened and preroll_blocks > 0:
-                    preroll.append(samples.copy())
-                continue
-
-            blocks_used += 1
-            rms = float(np.sqrt(np.mean(samples**2)) + 1e-12)
-            db = 20.0 * np.log10(rms)
-            if db > peak_db:
-                peak_db = db
-                peak_rms = rms
-
-            if not opened:
-                if preroll_blocks > 0:
-                    preroll.append(samples.copy())
-                # adapt noise floor while closed (slow attack)
-                noise_floor = 0.98 * noise_floor + 0.02 * rms
-                rel_thresh = 20.0 * np.log10(noise_floor + 1e-12) + open_margin_db
-                open_thresh = max(rel_thresh, abs_open_db)
-                if db >= open_thresh:
-                    speech_blocks += 1
-                    if speech_blocks >= open_confirm_blocks:
-                        opened = True
+                # B084: while Hark holds TTS mute, freeze open/silence/max clocks
+                muted_now = _tts_muted()
+                if muted_now:
+                    was_tts_muted = True
+                    if opened:
                         silent_blocks = 0
-                        # Seed buffer with short pre-roll only (not full leading silence)
-                        if preroll_blocks > 0:
-                            chunks.extend(preroll)
-                            preroll.clear()
-                        wait_speech_ms = int(1000 * (time.monotonic() - start))
-                        if on_opened is not None:
-                            try:
-                                on_opened()
-                            except Exception:
-                                pass
-                else:
-                    speech_blocks = max(0, speech_blocks - 1)
-                wait_blocks += 1
-                if wait_blocks >= timeout_blocks and not opened:
-                    raise TimeoutError(
-                        f"no speech detected "
-                        f"(peak_db={peak_db:.1f} peak_rms={peak_rms:.5f} "
-                        f"open_thresh≈{open_thresh:.1f}dB — try speaking louder "
-                        f"or set a different input device)"
-                    )
-            else:
-                chunks.append(samples.copy())
-                if open_thresh is not None and db >= open_thresh - 4:
-                    silent_blocks = 0
-                    speech_blocks += 1
-                    if endpointer is not None:
-                        endpointer.on_speech()
-                else:
-                    silent_blocks += 1
-                    if endpointer is None:
-                        if (
-                            silent_blocks >= end_silence_blocks
-                            and speech_blocks >= min_speech_blocks
-                        ):
-                            break
+                    continue
+                if was_tts_muted:
+                    was_tts_muted = False
+                    mute_pad_blocks = edge_pad_blocks
+                    if opened:
+                        silent_blocks = 0
+                if mute_pad_blocks > 0:
+                    mute_pad_blocks -= 1
+                    if opened:
+                        silent_blocks = 0
+                    # Still seed preroll while waiting so post-pad open has history
+                    if not opened and preroll_blocks > 0:
+                        preroll.append(samples.copy())
+                    continue
+
+                blocks_used += 1
+                rms = float(np.sqrt(np.mean(samples**2)) + 1e-12)
+                db = 20.0 * np.log10(rms)
+                if db > peak_db:
+                    peak_db = db
+                    peak_rms = rms
+
+                if not opened:
+                    if preroll_blocks > 0:
+                        preroll.append(samples.copy())
+                    # adapt noise floor while closed (slow attack)
+                    noise_floor = 0.98 * noise_floor + 0.02 * rms
+                    rel_thresh = 20.0 * np.log10(noise_floor + 1e-12) + open_margin_db
+                    open_thresh = max(rel_thresh, abs_open_db)
+                    if db >= open_thresh:
+                        speech_blocks += 1
+                        if speech_blocks >= open_confirm_blocks:
+                            opened = True
+                            silent_blocks = 0
+                            # Seed buffer with short pre-roll only (not full leading silence)
+                            if preroll_blocks > 0:
+                                chunks.extend(preroll)
+                                preroll.clear()
+                            wait_speech_ms = int(1000 * (time.monotonic() - start))
+                            if on_opened is not None:
+                                try:
+                                    on_opened()
+                                except Exception:
+                                    pass
                     else:
-                        def _endpoint_frame() -> EndpointFrame:
-                            pcm = pcm16_mono_bytes(np.concatenate(chunks)) if chunks else b""
-                            return EndpointFrame(
-                                pcm16=pcm,
-                                sample_rate=sample_rate,
-                                trailing_silence_s=silent_blocks * 0.02,
-                                speech_s=speech_blocks * 0.02,
-                            )
+                        speech_blocks = max(0, speech_blocks - 1)
+                    wait_blocks += 1
+                    if wait_blocks >= timeout_blocks and not opened:
+                        raise TimeoutError(
+                            f"no speech detected "
+                            f"(peak_db={peak_db:.1f} peak_rms={peak_rms:.5f} "
+                            f"open_thresh≈{open_thresh:.1f}dB — try speaking louder "
+                            f"or set a different input device)"
+                        )
+                else:
+                    chunks.append(samples.copy())
+                    if open_thresh is not None and db >= open_thresh - 4:
+                        silent_blocks = 0
+                        speech_blocks += 1
+                        if endpointer is not None:
+                            endpointer.on_speech()
+                    else:
+                        silent_blocks += 1
+                        if endpointer is None:
+                            if (
+                                silent_blocks >= end_silence_blocks
+                                and speech_blocks >= min_speech_blocks
+                            ):
+                                break
+                        else:
+                            def _endpoint_frame() -> EndpointFrame:
+                                pcm = pcm16_mono_bytes(np.concatenate(chunks)) if chunks else b""
+                                return EndpointFrame(
+                                    pcm16=pcm,
+                                    sample_rate=sample_rate,
+                                    trailing_silence_s=silent_blocks * 0.02,
+                                    speech_s=speech_blocks * 0.02,
+                                )
 
-                        if endpointer.should_end(
-                            silent_blocks=silent_blocks,
-                            speech_blocks=speech_blocks,
-                            audio_fn=_endpoint_frame,
-                        ):
-                            break
+                            if endpointer.should_end(
+                                silent_blocks=silent_blocks,
+                                speech_blocks=speech_blocks,
+                                audio_fn=_endpoint_frame,
+                            ):
+                                break
 
-            if should_stop is not None:
-                pcm = pcm16_mono_bytes(np.concatenate(chunks)) if chunks else b""
-                if should_stop(pcm, time.monotonic() - start):
-                    break
+                if should_stop is not None:
+                    pcm = pcm16_mono_bytes(np.concatenate(chunks)) if chunks else b""
+                    if should_stop(pcm, time.monotonic() - start):
+                        break
 
-    if not chunks:
-        raise TimeoutError(
-            f"no speech captured (peak_db={peak_db:.1f} peak_rms={peak_rms:.5f})"
+        if not chunks:
+            raise TimeoutError(
+                f"no speech captured (peak_db={peak_db:.1f} peak_rms={peak_rms:.5f})"
+            )
+
+        all_s = np.concatenate(chunks)
+        pcm = pcm16_mono_bytes(all_s)
+        dur_ms = int(1000 * len(all_s) / sample_rate)
+        speech_ms = int(1000 * speech_blocks * 0.02)
+        return CaptureResult(
+            pcm16=pcm,
+            sample_rate=sample_rate,
+            duration_ms=dur_ms,
+            speech_ms=speech_ms,
+            wait_speech_ms=wait_speech_ms,
+            peak_rms=float(peak_rms),
+            peak_db=float(peak_db),
         )
+    finally:
+        try:
+            from hark.audio.spectrum import clear_spectrum
 
-    all_s = np.concatenate(chunks)
-    pcm = pcm16_mono_bytes(all_s)
-    dur_ms = int(1000 * len(all_s) / sample_rate)
-    speech_ms = int(1000 * speech_blocks * 0.02)
-    return CaptureResult(
-        pcm16=pcm,
-        sample_rate=sample_rate,
-        duration_ms=dur_ms,
-        speech_ms=speech_ms,
-        wait_speech_ms=wait_speech_ms,
-        peak_rms=float(peak_rms),
-        peak_db=float(peak_db),
-    )
+            clear_spectrum(source="listen")
+        except Exception:
+            pass
 
 
 def list_input_devices() -> list[dict]:

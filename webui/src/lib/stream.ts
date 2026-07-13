@@ -6,6 +6,7 @@
 
 import { computed, signal } from "@preact/signals";
 import { api, ApiRequestError } from "./api";
+import { applySpectrumPayload } from "./spectrum";
 import type { Envelope, HepPayload, LogPayload } from "./types";
 
 export type ConnState = "connecting" | "live" | "retrying" | "fixtures" | "auth";
@@ -38,6 +39,15 @@ function ingest(envelope: Envelope): void {
     const p = envelope.payload as { server?: string; version?: string };
     if (p.server) serverInfo.value = { server: p.server, version: p.version ?? "" };
     return;
+  }
+  // Live mic spectrum (B087): high-rate, coalesced — never flood the timeline
+  if (envelope.source === "serve") {
+    const p = envelope.payload as { kind?: string };
+    if (p.kind === "serve.spectrum") {
+      applySpectrumPayload(envelope.payload as { kind?: string });
+      for (const fn of listeners) fn(envelope);
+      return;
+    }
   }
   for (const fn of listeners) fn(envelope);
   if (paused.value) {

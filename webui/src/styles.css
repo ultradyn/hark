@@ -92,7 +92,8 @@ textarea {
 
 .shell {
   display: grid;
-  grid-template-rows: auto 1fr;
+  /* topbar + optional spectrum strip + main */
+  grid-template-rows: auto auto 1fr;
   height: 100vh;
   height: 100dvh;
 }
@@ -579,6 +580,88 @@ textarea {
   color: transparent;
   display: block;
   margin-bottom: 10px;
+}
+
+/* live host-mic spectrum (B087) — always available, expands while recording */
+.spectrum-panel {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #0d1220 0%, #0b0f19 100%);
+}
+
+.spectrum-panel.recording {
+  border-bottom-color: #6366f166;
+  box-shadow: inset 0 -1px 0 #a855f722;
+}
+
+.spectrum-head {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 10px;
+  padding: 6px var(--pad);
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.spectrum-head:hover {
+  background: #ffffff06;
+  color: var(--text);
+}
+
+.spectrum-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.spectrum-meta {
+  color: var(--text-faint);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.spectrum-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  display: inline-block;
+}
+
+.spectrum-dot.on {
+  background: var(--brand-hi);
+  box-shadow: 0 0 8px #a5b4fc88;
+}
+
+.spectrum-chevron {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.spectrum-canvas {
+  display: block;
+  width: 100%;
+  height: 72px;
+  background: #05070d;
+  border-top: 1px solid var(--line-soft);
+}
+
+.spectrum-panel.recording .spectrum-canvas {
+  height: 88px;
+  background:
+    radial-gradient(ellipse 80% 120% at 50% 100%, #312e8144 0%, transparent 55%),
+    #05070d;
 }
 
 /* panel scaffolding shared by later views — flat + dense, not card grids */

@@ -191,6 +191,63 @@ def test_stream_hello_and_live_event(state, tmp_path):
         server.shutdown()
 
 
+def test_stream_spectrum_coalesced(state, tmp_path):
+    """B087: serve.spectrum frames appear on SSE without advancing history."""
+    from hark.audio.spectrum import make_spectrum_payload
+
+    server = _server(tmp_path)
+    c = _conn(server)
+    try:
+        c.request("GET", "/api/v1/stream")
+        r = c.getresponse()
+        assert r.status == 200
+
+        def read_event(timeout_s=10.0):
+            deadline = time.monotonic() + timeout_s
+            data = None
+            while time.monotonic() < deadline:
+                line = r.fp.readline().decode()
+                if line.startswith("data: "):
+                    data = json.loads(line[6:])
+                elif line == "\n" and data is not None:
+                    return data
+            raise AssertionError("no SSE event within timeout")
+
+        hello = read_event()
+        assert hello["type"] == "hello"
+        cursor_before = hello["cursor"]
+
+        server.hub.set_spectrum(
+            make_spectrum_payload([0.1, 0.5, 0.9], recording=True, source="listen")
+        )
+        # may need a couple of frames if coalescing races; wait for spectrum
+        deadline = time.monotonic() + 5.0
+        spec = None
+        while time.monotonic() < deadline:
+            ev = read_event(timeout_s=2.0)
+            if ev.get("payload", {}).get("kind") == "serve.spectrum":
+                spec = ev
+                break
+        assert spec is not None
+        p = spec["payload"]
+        assert p["kind"] == "serve.spectrum"
+        assert p["recording"] is True
+        assert p["bands"] == [0.1, 0.5, 0.9]
+        assert p["source"] == "listen"
+        # cursor is composite but must not invent a new serve-seq-only event stream
+        assert isinstance(spec["cursor"], str)
+        # spectrum must not pollute JSONL event pages
+        status, body = _get_json(server, "/api/v1/events")
+        assert status == 200
+        assert not any(
+            (e.get("payload") or {}).get("kind") == "serve.spectrum" for e in body["events"]
+        )
+        del cursor_before
+    finally:
+        c.close()
+        server.shutdown()
+
+
 class FakeHerdrClient:
     def __init__(self, live: AgentInfo, pane_text: str) -> None:
         self.live = live
@@ -328,7 +385,7 @@ def test_placeholder_index_when_no_bundle(state, tmp_path):
         c.request("GET", "/")
         r = c.getresponse()
         assert r.status == 200
-        assert b"hark serve is running" in r.read()
+        assert b"hark webui is running" in r.read()
         c.close()
     finally:
         server.shutdown()

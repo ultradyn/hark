@@ -28,5 +28,12 @@ ideas:
       title: 'Live web dashboard: stream events, Herdr state, chatlogs + mic dictation'
     - file: I004-add-support-for-local-models-l.todo
       id: I004
-    - file: I005-add-ability-to-voice-control-c.todo
+    - complexity: medium
+      depends_on: []
+      estimate_hours: 10
+      file: I005-add-ability-to-voice-control-c.todo
       id: I005
+      priority: medium
+      status: in_progress
+      tags: []
+      title: 'Add ability to voice control creating herdr sessions and initializing new agents and kicking them off etc. should support claude code, codex, grok, `cursor-agent`, and other coding clis (must be able to be done ad-hoc). For the supported ones, we should see if we have aliases for them: cc for claude, cx for codex, gk for grok. cr for cursor-agent. If we have the 2 letter alias present, we should use that, otherwise we should use the normal cli command to start a session.'

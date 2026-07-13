@@ -176,9 +176,10 @@ NEAR_MISS_INSTRUCTIONS = (
     "or adjust a phrase/alias: [ambient] extra_trigger_phrases (append) or "
     "activation_phrases / trigger_phrases (replace list). Fuzzy product "
     "mishears may also warrant a code/config alias. "
-    "After updating config, reload ambient: restart Mode A ambient "
-    "(e.g. restart the ambient/hark process); SIGHUP config reload is not "
-    "supported yet. Diagnostic only — do not invent answers or treat as a prompt."
+    "After updating config, reload ambient: send SIGHUP to the ambient process "
+    "(kill -HUP <pid>) so phrases reload without full restart; or restart Mode A "
+    "ambient if needed. See docs/CUSTOM_WAKE.md. Diagnostic only — do not invent "
+    "answers or treat as a prompt."
 )
 
 

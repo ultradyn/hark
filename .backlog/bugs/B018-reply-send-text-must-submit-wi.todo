@@ -1,16 +1,18 @@
 ---
+claimed_at: "2026-07-13T07:48:17Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T07:48:13Z"
 depends_on: []
 estimate_hours: 1
 id: B018
 priority: high
-status: pending
-tags:
-    - dogfood
-    - delivery
+started_at: "2026-07-13T07:48:17Z"
+status: in_progress
+tags: []
 title: reply/send_text must submit with Enter by default
-updated_at: "2026-07-13T07:48:13Z"
+updated_at: "2026-07-13T07:48:17Z"
 ---
 ## Dogfood
 hark reply injected text but did not press Enter; operator had to submit manually.

@@ -55,6 +55,7 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "nudge_silence_s",
         "end_silence_s",
         "radio_end_silence_s",
+        "stream_partials",
     }),
     "ambient": frozenset({
         "enabled",
@@ -123,6 +124,8 @@ class ListenConfig:
     end_silence_s: float = 2.1
     # Longer hang for radio mode segment boundaries
     radio_end_silence_s: float = 2.5
+    # Radio mode: emit interim STT to agent with HOLD warnings (before end phrase)
+    stream_partials: bool = True
 
 
 @dataclass
@@ -223,6 +226,7 @@ end_mode = "silence"         # silence | radio
 # end_mode = "radio"         # keep listening until end phrase (long pauses OK)
 end_silence_s = 2.1          # quiet seconds before ending silence-mode capture
 # radio_end_silence_s = 2.5
+stream_partials = true       # radio mode: stream interim text to agent (HOLD until final)
 end_phrases = [
   "okay hark send",
   "ok hark send",
@@ -445,6 +449,7 @@ def load_config(path: Path | None = None) -> HarkConfig:
             nudge_silence_s=float(listen_raw.get("nudge_silence_s", 0)),
             end_silence_s=float(listen_raw.get("end_silence_s", 2.1)),
             radio_end_silence_s=float(listen_raw.get("radio_end_silence_s", 2.5)),
+            stream_partials=bool(listen_raw.get("stream_partials", True)),
         ),
         ambient=AmbientConfig(
             enabled=ambient_enabled,
@@ -562,6 +567,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "nudge_silence_s": cfg.listen.nudge_silence_s,
             "end_silence_s": cfg.listen.end_silence_s,
             "radio_end_silence_s": cfg.listen.radio_end_silence_s,
+            "stream_partials": cfg.listen.stream_partials,
         },
         "ambient": {
             "enabled": cfg.ambient.enabled,

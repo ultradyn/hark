@@ -40,6 +40,7 @@ Always address **`session_id/pane_id`**. Prefer bound **`event_id`** from watch 
 - No local Whisper.  
 - **R2/R3** (permissions, destructive): always confirm. **R0/R1**: confirm only when unsure.  
 - **Listen end:** default silence/Smart Turn. If `[listen] end_mode = "radio"`, keep listening through long pauses until a **product-scoped** end phrase (`okay hark send`, `end prompt`, `hark over`). Cancel: `hark cancel` (not casual “cancel that”).  
+- **Partials (radio only):** you may receive `ambient.partial` / `partial=true` events with interim text and a **HOLD** warning. You **MUST NOT** reply to the user or deliver to a pane until `ambient.prompt` / `final=true` with the same `stream_id`. You **MAY** start private thinking early.  
 - **Ambient:** when not answering a blocked agent, optional `[ambient]` wake (`hey hark` / `hey herald`) via **local** short snippets only; cloud STT after activation.  
 
 ## Arm the feed

@@ -13,6 +13,7 @@ from hark.config import HarkConfig
 from hark.debug_snips import purge_old_debug_snips, save_wake_snippet
 from hark.events import new_event_id, utc_now_iso
 from hark.lifecycle import install_signal_handlers, shutdown_requested
+from hark.partial import make_final_event, new_stream_id
 from hark.speech import run_listen, run_tts
 from hark.syslog import log as syslog
 from hark.wake import WakeBackend, WakeHit, build_wake_backend
@@ -26,6 +27,10 @@ class AmbientResult:
     wake_backend: str | None = None
     listen: dict[str, Any] | None = None
     event_id: str | None = None
+    stream_id: str | None = None
+    partials_emitted: int = 0
+    final: bool = True
+    partial: bool = False
 
 
 def _wait_for_wake(
@@ -130,18 +135,45 @@ def complete_after_wake(
     hit: WakeHit,
     *,
     announce: bool = True,
+    on_partial: Any | None = None,
+    out: TextIO | None = None,
 ) -> AmbientResult:
     """After wake: beep→record→beep (no spoken 'okay' / 'listening').
 
-    Non-verbal cues live in run_listen (record_start / record_stop).
+    In radio end_mode, interim STT is streamed as ambient.partial (HOLD) via
+    on_partial / out until the end phrase yields ambient.prompt (final).
     """
     del announce
     event_id = new_event_id()
-    # Discard wake-window remainder: local vosk is only for activation.
-    # Prompt body always comes from cloud STT after record beeps.
+    stream_id = new_stream_id()
+
+    def _emit_partial(ev: dict[str, Any]) -> None:
+        ev = {**ev, "phrase": hit.phrase}
+        if out is not None:
+            out.write(json.dumps(ev, separators=(",", ":")) + "\n")
+            out.flush()
+        if on_partial is not None:
+            on_partial(ev)
+        syslog(
+            "ambient.partial",
+            component="ambient",
+            level="info",
+            stream_id=ev.get("stream_id"),
+            seq=ev.get("seq"),
+            text=(ev.get("text") or "")[:300],
+            partial=True,
+            final=False,
+            warning=ev.get("warning"),
+        )
 
     try:
-        listened = run_listen(cfg, end_mode=cfg.listen.end_mode)
+        listened = run_listen(
+            cfg,
+            end_mode=cfg.listen.end_mode,
+            on_partial=_emit_partial if cfg.listen.end_mode == "radio" else None,
+            stream_id=stream_id,
+            partial_kind="ambient.partial",
+        )
     except Exception as exc:
         return AmbientResult(
             activated=True,
@@ -150,6 +182,9 @@ def complete_after_wake(
             wake_backend=hit.backend,
             listen={"error": str(exc)},
             event_id=event_id,
+            stream_id=stream_id,
+            final=True,
+            partial=False,
         )
 
     if listened.cancelled:
@@ -165,6 +200,10 @@ def complete_after_wake(
                 "cancelled": True,
             },
             event_id=event_id,
+            stream_id=listened.stream_id or stream_id,
+            partials_emitted=listened.partials_emitted,
+            final=True,
+            partial=False,
         )
 
     return AmbientResult(
@@ -179,6 +218,10 @@ def complete_after_wake(
             "cancelled": listened.cancelled,
         },
         event_id=event_id,
+        stream_id=listened.stream_id or stream_id,
+        partials_emitted=listened.partials_emitted,
+        final=True,
+        partial=False,
     )
 
 
@@ -228,7 +271,7 @@ def run_ambient(
         )
 
     # Mic lease released — cloud listen / TTS may take the mic
-    return complete_after_wake(cfg, hit, announce=announce)
+    return complete_after_wake(cfg, hit, announce=announce, out=out)
 
 
 def ambient_event_line(result: AmbientResult) -> dict[str, Any]:
@@ -245,7 +288,7 @@ def ambient_event_line(result: AmbientResult) -> dict[str, Any]:
     else:
         kind = "ambient.error"
 
-    return {
+    base = {
         "schema": "hark.event.v1",
         "kind": kind,
         "event_id": result.event_id or new_event_id(),
@@ -254,14 +297,23 @@ def ambient_event_line(result: AmbientResult) -> dict[str, Any]:
         "text": result.text,
         "wake_backend": result.wake_backend,
         "listen": result.listen,
-        "instructions": (
-            "Ambient operator prompt (not bound to a pane). "
-            "Use judgment; do not invent answers. "
-            "If it targets an agent, use hark status / context / reply."
-            if kind == "ambient.prompt"
-            else None
-        ),
+        "partial": False,
+        "final": True,
+        "stream_id": result.stream_id,
+        "partials_emitted": result.partials_emitted,
     }
+    if kind == "ambient.prompt":
+        base["instructions"] = (
+            "FINAL operator prompt for this stream_id (supersedes all ambient.partial "
+            "events with the same stream_id). You may now respond/act. "
+            "Not bound to a pane — use judgment; do not invent answers."
+        )
+        base["warning"] = None
+    elif kind == "ambient.cancelled":
+        base["instructions"] = (
+            "Cancelled — ignore prior partials for this stream_id."
+        )
+    return base
 
 
 def run_ambient_loop(

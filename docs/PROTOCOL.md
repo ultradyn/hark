@@ -58,6 +58,34 @@ Consumers **MUST ignore unknown fields**.
 | `answer.delivery_uncertain` | Write may have landed; reconcile |
 | `answer.rejected` | Stale / policy / user cancel |
 | `bridge.degraded` / `bridge.recovered` | Herdr/provider issues |
+| `ambient.partial` | **Radio mode only** — interim STT while waiting for end phrase |
+| `ambient.prompt` | Final ambient operator prompt (`final=true`) |
+| `ambient.cancelled` | Operator cancelled mid-capture |
+
+### Partial streaming (radio end mode)
+
+When `[listen] end_mode = "radio"` and `stream_partials = true`, interim transcripts are emitted as:
+
+```json
+{
+  "schema": "hark.event.v1",
+  "kind": "ambient.partial",
+  "partial": true,
+  "final": false,
+  "stream_id": "s…",
+  "seq": 1,
+  "text": "please open the pull request for…",
+  "warning": "PARTIAL TRANSCRIPT — not complete. … HOLD …",
+  "instructions": "HOLD RESPONSE. … Await ambient.prompt with the same stream_id …"
+}
+```
+
+Consumers **MUST**:
+
+1. Treat `partial=true` as **non-authoritative**.  
+2. **Not** speak to the operator or deliver to a pane based on partials alone.  
+3. **May** begin private thinking/planning.  
+4. On `ambient.prompt` / final with the same `stream_id`: use that text; discard prior partials.
 
 ## Monitor profile (`hark watch --for-monitor`)
 

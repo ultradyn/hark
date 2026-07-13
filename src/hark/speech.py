@@ -24,9 +24,11 @@ from hark.confirm_lexicon import classify_confirm_reply
 from hark.exitcodes import ABORT, OK, PROVIDER, TIMEOUT
 from hark.lifecycle import BusySection
 from hark.listen_end import EndMode, evaluate_radio_transcript, parse_end_mode
+from hark.partial import make_partial_event, new_stream_id
 from hark.providers.base import ProviderError
 from hark.providers.resolve import resolve_stt, resolve_tts
 from hark.risk import classify_question, confirm_required
+from hark.syslog import log as syslog
 from hark.usage import UsageStore
 
 
@@ -38,6 +40,8 @@ class ListenResult:
     end_mode: str
     end_phrase: str | None = None
     cancelled: bool = False
+    stream_id: str | None = None
+    partials_emitted: int = 0
 
 
 def run_tts(
@@ -178,7 +182,15 @@ def run_listen(
     last_tts: str | None = None,
     post_tts_guard_s: float | None = None,
     already_armed: bool = False,
+    on_partial: Any | None = None,
+    stream_id: str | None = None,
+    partial_kind: str = "ambient.partial",
 ) -> ListenResult:
+    """Capture speech. Radio mode streams partials via on_partial when enabled.
+
+    on_partial(event_dict) is called for each non-final radio transcript so Mode A
+    agents can start thinking early. Events always set partial=true and HOLD warnings.
+    """
     mode = parse_end_mode(end_mode or cfg.listen.end_mode)
     max_listen = float(max_s if max_s is not None else cfg.listen.max_listen_s)
     if already_armed:
@@ -197,6 +209,11 @@ def run_listen(
     )
     store = UsageStore()
     configure_cues_from_config(cfg)
+    stream = stream_id or new_stream_id()
+    # Partials only meaningful when waiting for an end phrase
+    stream_partials = mode is EndMode.RADIO and getattr(
+        cfg.listen, "stream_partials", True
+    )
 
     with MicLease("listen"), BusySection("listen"):
         if mode is EndMode.SILENCE:
@@ -257,11 +274,14 @@ def run_listen(
                 provider=tr.provider,
                 duration_ms=cap.duration_ms,
                 end_mode=mode.value,
+                stream_id=stream,
             )
 
-        # Radio mode
+        # Radio mode — segment until end phrase; stream partials between segments
         pieces: list[bytes] = []
         started = time.monotonic()
+        partial_seq = 0
+        last_partial_text = ""
         if guard > 0:
             time.sleep(guard)
         play_record_start()
@@ -299,6 +319,38 @@ def run_listen(
                 cancel_phrases=cfg.listen.cancel_phrases,
             )
             if hit is None:
+                # Interim: emit partial if text grew
+                body_so_far = (tr.text or "").strip()
+                if (
+                    stream_partials
+                    and body_so_far
+                    and body_so_far != last_partial_text
+                    and on_partial is not None
+                ):
+                    partial_seq += 1
+                    last_partial_text = body_so_far
+                    ev = make_partial_event(
+                        stream_id=stream,
+                        seq=partial_seq,
+                        text=body_so_far,
+                        kind=partial_kind,
+                        provider=tr.provider,
+                    )
+                    try:
+                        on_partial(ev)
+                    except Exception:
+                        pass
+                    syslog(
+                        "listen.partial",
+                        component="stt",
+                        level="info",
+                        stream_id=stream,
+                        seq=partial_seq,
+                        text=body_so_far[:300],
+                        provider=tr.provider,
+                        partial=True,
+                        final=False,
+                    )
                 continue
             play_record_stop()
             body = hit.body if cfg.listen.strip_phrase else tr.text
@@ -318,6 +370,8 @@ def run_listen(
                     end_mode=mode.value,
                     end_phrase=hit.phrase,
                     cancelled=True,
+                    stream_id=stream,
+                    partials_emitted=partial_seq,
                 )
             return ListenResult(
                 text=body,
@@ -325,6 +379,8 @@ def run_listen(
                 duration_ms=int(1000 * (time.monotonic() - started)),
                 end_mode=mode.value,
                 end_phrase=hit.phrase,
+                stream_id=stream,
+                partials_emitted=partial_seq,
             )
         play_record_stop()
         raise TimeoutError(f"radio listen exceeded max_listen_s={max_listen}")

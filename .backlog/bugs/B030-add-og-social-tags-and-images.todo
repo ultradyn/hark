@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T12:46:55Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T12:48:01Z"
 complexity: medium
 created_at: "2026-07-13T11:10:22Z"
 depends_on: []
+duration_minutes: 1.11042190565
 estimate_hours: 1
 id: B030
 priority: high
 started_at: "2026-07-13T12:46:55Z"
-status: in_progress
+status: done
 tags: []
 title: add og social tags and images
-updated_at: "2026-07-13T12:46:55Z"
+updated_at: "2026-07-13T12:48:01Z"
 ---
 
 add og social tags and images

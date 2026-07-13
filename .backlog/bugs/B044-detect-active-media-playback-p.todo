@@ -1,0 +1,35 @@
+---
+complexity: medium
+created_at: "2026-07-13T13:11:17Z"
+depends_on: []
+estimate_hours: 2
+id: B044
+priority: medium
+status: pending
+tags:
+    - audio
+    - ducking
+title: Detect active media playback (Pulse/PipeWire sink-inputs + optional MPRIS)
+updated_at: "2026-07-13T13:11:17Z"
+---
+## Problem
+When music/podcasts play, TTS competes at full volume and STT captures bleed. We need a reliable **media-active** signal (distinct from conference hold B017).
+
+## Scope
+Foundation for I002 ducking — detection only, no volume changes yet.
+
+## Design notes
+- Reuse patterns from `src/hark/conference.py` (`list_audio_stream_blobs`, pactl/pw-cli).
+- Prefer **Pulse/PipeWire sink-inputs** with RUNNING/Corked=no state; parse `pactl list sink-inputs` for index, volume, mute, application.name, corked.
+- Optionally probe **MPRIS** (`playerctl status` / D-Bus) for PlaybackStatus=Playing when available.
+- **Exclude**: Hark's own TTS/cue streams (ffplay/paplay/python sounddevice if attributable), pure system sounds when possible.
+- **Do not treat conference apps as "media"** for ducking decisions when B017 hold applies — conference remains hold-first. Media detector may still *see* those streams but callers should prefer conference hold.
+- Fail-open: missing pactl/pw → media inactive (TTS/STT behave as today).
+- Suggested surface: `hark.audio.media` (or `hark.media`) with `MediaMatch` + `is_media_active(cfg) -> MediaMatch` and helpers to list duckable sink-input indices + prior volumes.
+
+## Acceptance
+- [ ] Public detection API with structured match (sources, indices, app names)
+- [ ] Unit tests with fixture blobs of `pactl list sink-inputs` (playing / corked / empty)
+- [ ] Optional MPRIS path is best-effort and test-mocked
+- [ ] Fail-open when tools missing
+- [ ] Document how conference streams interact (hold wins over duck)

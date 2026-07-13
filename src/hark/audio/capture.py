@@ -107,9 +107,12 @@ def capture_utterance(
     sample_rate: int = 16000,
     max_s: float = 120.0,
     end_silence_s: float = 1.1,
-    min_speech_s: float = 0.3,
-    open_margin_db: float = 12.0,
-    initial_timeout_s: float = 30.0,
+    min_speech_s: float = 0.25,
+    open_margin_db: float = 8.0,
+    # Absolute floor: speech louder than this opens even if relative margin fails
+    abs_open_db: float = -38.0,
+    open_confirm_blocks: int = 4,  # ~80 ms
+    initial_timeout_s: float = 45.0,
     device: int | str | None = None,
     should_stop: Callable[[bytes, float], bool] | None = None,
     post_tts_guard_s: float = 0.0,
@@ -133,6 +136,8 @@ def capture_utterance(
     min_speech_blocks = max(1, int(min_speech_s / 0.02))
     max_blocks = int(max_s / 0.02)
     timeout_blocks = int(initial_timeout_s / 0.02)
+    peak_db = -120.0
+    peak_rms = 0.0
 
     chunks: list[np.ndarray] = []
     start = time.monotonic()
@@ -150,23 +155,33 @@ def capture_utterance(
             samples = data.reshape(-1)
             rms = float(np.sqrt(np.mean(samples**2)) + 1e-12)
             db = 20.0 * np.log10(rms)
+            if db > peak_db:
+                peak_db = db
+                peak_rms = rms
 
             if not opened:
-                # adapt noise floor while closed
-                noise_floor = 0.95 * noise_floor + 0.05 * rms
-                open_thresh = 20.0 * np.log10(noise_floor + 1e-12) + open_margin_db
+                # adapt noise floor while closed (slow attack)
+                noise_floor = 0.98 * noise_floor + 0.02 * rms
+                rel_thresh = 20.0 * np.log10(noise_floor + 1e-12) + open_margin_db
+                open_thresh = max(rel_thresh, abs_open_db)
                 if db >= open_thresh:
                     speech_blocks += 1
-                    if speech_blocks >= 8:  # ~160 ms confirm
+                    if speech_blocks >= open_confirm_blocks:
                         opened = True
                         silent_blocks = 0
+                        # keep a bit of pre-roll from last few speech frames
                 else:
                     speech_blocks = max(0, speech_blocks - 1)
                 if i >= timeout_blocks and not opened:
-                    raise TimeoutError("no speech detected")
+                    raise TimeoutError(
+                        f"no speech detected "
+                        f"(peak_db={peak_db:.1f} peak_rms={peak_rms:.5f} "
+                        f"open_thresh≈{open_thresh:.1f}dB — try speaking louder "
+                        f"or set a different input device)"
+                    )
             else:
                 chunks.append(samples.copy())
-                if open_thresh is not None and db >= open_thresh - 3:
+                if open_thresh is not None and db >= open_thresh - 4:
                     silent_blocks = 0
                     speech_blocks += 1
                 else:
@@ -183,7 +198,9 @@ def capture_utterance(
                     break
 
     if not chunks:
-        raise TimeoutError("no speech captured")
+        raise TimeoutError(
+            f"no speech captured (peak_db={peak_db:.1f} peak_rms={peak_rms:.5f})"
+        )
 
     all_s = np.concatenate(chunks)
     pcm = pcm16_mono_bytes(all_s)

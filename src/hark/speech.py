@@ -98,7 +98,7 @@ def run_listen(
     guard = (
         post_tts_guard_s
         if post_tts_guard_s is not None
-        else cfg.audio.post_tts_guard_ms / 1000.0
+        else max(0.5, cfg.audio.post_tts_guard_ms / 1000.0)
     )
     stt = resolve_stt(provider or cfg.stt.provider)
     end_silence = 1.1 if mode is EndMode.SILENCE else 2.5
@@ -114,6 +114,11 @@ def run_listen(
             except TimeoutError as exc:
                 raise TimeoutError(str(exc)) from exc
             tr = stt.transcribe(cap.wav)
+            if not (tr.text or "").strip():
+                raise TimeoutError(
+                    "heard audio but STT returned empty text "
+                    "(try speaking clearer, or check mic device)"
+                )
             if _echo_overlap(tr.text, last_tts):
                 raise ProviderError("transcript rejected as TTS echo", code=ABORT)
             return ListenResult(

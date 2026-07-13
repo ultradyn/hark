@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T11:27:03Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T11:28:22Z"
 complexity: medium
 created_at: "2026-07-13T11:26:11Z"
 depends_on: []
+duration_minutes: 1.3313938218666665
 estimate_hours: 1
 id: B034
 priority: high
 started_at: "2026-07-13T11:27:03Z"
-status: in_progress
+status: done
 tags: []
 title: the startup TTS should be cached, keyed on the primary (first) name or the custom phrase.
-updated_at: "2026-07-13T11:27:03Z"
+updated_at: "2026-07-13T11:28:22Z"
 ---
 
 the startup TTS should be cached, keyed on the primary (first) name or the custom phrase.

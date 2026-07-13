@@ -48,14 +48,16 @@ conference active + hold_during_conference?
 
 Fail-open everywhere: missing `pactl` / parse errors → behave as today.
 
-### Detection (B044)
+### Detection (B044) — shipped foundation
 
-New helper module (suggested `src/hark/audio/media.py`):
+Module: `src/hark/audio/media.py` (`hark.audio.media`):
 
 - Parse `pactl list sink-inputs` for index, volume, mute, corked, application.name / media.name.
-- Duckable = RUNNING (or not corked), not muted, not Hark-owned (ffplay/paplay/hark/python when attributable).
-- Optional: `playerctl status` / MPRIS PlaybackStatus=Playing as a secondary signal.
-- Conference app names stay in B017; ducking callers skip when conference hold would apply.
+- Duckable = RUNNING (or not corked), not muted, not Hark-owned (ffplay/paplay/hark/sounddevice when attributable).
+- Optional: `playerctl` / MPRIS PlaybackStatus=Playing as a secondary signal.
+- Conference app names stay in B017; ducking callers skip when conference hold would apply
+  (`filter_duckable(..., exclude_conference=True)` / precedence in AUDIO_DESIGN).
+- Public: `MediaMatch`, `is_media_active(cfg) -> MediaMatch`, `duckable_indices_and_volumes`.
 
 ### Duck during TTS (B045)
 

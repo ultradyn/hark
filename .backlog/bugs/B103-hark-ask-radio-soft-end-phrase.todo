@@ -1,0 +1,25 @@
+---
+complexity: medium
+created_at: "2026-07-13T19:58:09Z"
+depends_on: []
+estimate_hours: 1
+id: B103
+priority: high
+status: pending
+tags: []
+title: 'hark ask / radio: soft end phrase ''over'' sometimes treated as cancel'
+updated_at: "2026-07-13T19:58:09Z"
+---
+## Dogfood note (2026-07-14 carry-forward)
+Operator radio end with “over” occasionally aborted the ask/listen window
+instead of finalizing the prompt (cancel-on-over quirk). Soft-end list includes
+sentence-final `over`; product end phrases include `hark over`.
+
+## Expected
+Terminal “over” / “okay over” finalizes the transcript as a complete prompt.
+
+## Actual
+Intermittent cancel / lost answer window (needs repro).
+
+## Related
+B068 radio end UX; listen end_mode=radio soft phrases.

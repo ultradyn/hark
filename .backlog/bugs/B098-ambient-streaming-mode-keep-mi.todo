@@ -1,14 +1,18 @@
 ---
+claimed_at: "2026-07-13T19:08:28Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T18:56:52Z"
 depends_on: []
 estimate_hours: 1
 id: B098
 priority: high
-status: pending
+started_at: "2026-07-13T19:08:28Z"
+status: in_progress
 tags: []
 title: 'Ambient streaming mode: keep mic open, respond live to partials'
-updated_at: "2026-07-13T18:56:52Z"
+updated_at: "2026-07-13T19:08:28Z"
 ---
 ## Request (dogfood 2026-07-13)
 Add an ambient **streaming** mode: operator turns streaming on; mic stays open; agent may respond live as partials arrive (not only on ambient.prompt final). Everything stays partial-like; agent can reply as they go.

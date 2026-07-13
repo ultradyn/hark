@@ -20,3 +20,5 @@ Multiple ambient processes and stale pidfile entries after partial restarts duri
 ## Wanted
 - run-mode-a.sh single-instance ambient
 - Clean pidfile rewrite on start/stop
+
+Merged to master via bl-fix-many subagents. Tests: 155 passed.

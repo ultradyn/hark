@@ -67,10 +67,41 @@ The verse is playful; **routing and confirmation are not.**
 - Confirm ordinary answers only when unsure; **always** confirm permissions/destructive  
 - Recoverable across disconnects (no silent double-send)  
 
+## Install (one-liner)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh | bash
+```
+
+Safer (inspect, then run):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh -o /tmp/hark-install.sh
+less /tmp/hark-install.sh
+bash /tmp/hark-install.sh
+```
+
+The installer is **idempotent** and HTTPS-only. It:
+
+- Clones or updates the repo under `~/.local/share/hark/src` (override with `HARK_HOME` / `--dir`)
+- Installs the `hark` CLI via **uv** (`uv tool install`) or **pip** (`--method pip`)
+- Copies agent skills to `~/.claude/skills/{hark,handsfree}` (override with `HARK_SKILLS_DIR`)
+- Supports `PREFIX` / `DESTDIR`, `HARK_REF` (branch/tag/commit), `--with-wake`, `--no-skills`, `--no-cli`
+
+Then:
+
+```bash
+hark doctor
+# In Claude Code / compatible agents:
+#   /hark
+```
+
+From a local checkout: `./install.sh` (uses that tree; no re-clone).
+
 ## Dev / try it
 
 ```bash
-cd /home/xertrov/src/grok/hark
+cd /home/xertrov/src/grok/hark   # or your clone
 uv sync
 uv run hark doctor
 uv run hark config init          # optional ~/.config/hark/config.toml
@@ -83,7 +114,7 @@ uv run hark ask "What color?"
 # uv run hark ambient
 ```
 
-Always run from **latest checkout** (`uv run hark`).
+Dev tip: run from **latest checkout** (`uv run hark`). After `./install.sh`, the global `hark` on `PATH` is fine for day-to-day use.
 
 ### Ambient wake (`hey hark`)
 
@@ -118,8 +149,10 @@ uv run pytest tests/test_fixtures_parity.py -q
 
 ```text
 /home/xertrov/src/grok/hark
+  install.sh         # one-line installer (CLI + skills)
   fixtures/          # parity goldens + live wake audio
   schemas/           # HEP JSON Schema
+  skill/             # agent skills (hark, handsfree)
   src/hark/          # Python Mode A bridge
   tests/
 ```

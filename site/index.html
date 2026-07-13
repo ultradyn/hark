@@ -456,11 +456,11 @@
         <div class="grid-2">
           <div>
             <p class="eyebrow">Install</p>
-            <h2>Optional CLI. The skill is the product path.</h2>
+            <h2>One-line install. Then run <code>/hark</code>.</h2>
             <p>
-              Prefer letting the agent run doctor + Mode A after <code>/hark</code>.
-              Manual quickstart is for power users and CI. Ambient wake: say
-              <em>hey hark</em>, <em>hey herald</em>, or your custom trigger.
+              The installer puts the <code>hark</code> CLI on your PATH and copies skills to
+              <code>~/.claude/skills</code>. Prefer letting the agent run doctor + Mode A after
+              <code>/hark</code>. Ambient wake: say <em>hey hark</em>, <em>hey herald</em>, or your custom trigger.
             </p>
             <div class="btn-row">
               <a class="btn btn--primary" href="https://github.com/clankercode/hark">Star &amp; clone</a>
@@ -475,11 +475,10 @@
               <span class="term__title">manual · optional</span>
             </div>
             <div class="term__body">
-              <div><span class="prompt">$</span> <span class="cmd">git clone git@github.com:clankercode/hark.git</span></div>
-              <div><span class="prompt">$</span> <span class="cmd">cd hark &amp;&amp; uv sync</span></div>
-              <div><span class="prompt">$</span> <span class="cmd">uv run hark doctor</span></div>
-              <div><span class="prompt">$</span> <span class="cmd">./scripts/run-mode-a.sh</span></div>
-              <div class="dim"># preferred: open skill → agent does the above</div>
+              <div><span class="prompt">$</span> <span class="cmd">curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh | bash</span></div>
+              <div><span class="prompt">$</span> <span class="cmd">hark doctor</span></div>
+              <div class="dim"># then in agent: /hark</div>
+              <div class="dim"># manual: git clone + uv sync + uv run hark</div>
             </div>
           </div>
         </div>

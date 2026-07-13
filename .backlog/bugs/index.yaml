@@ -41,3 +41,4 @@ bugs:
     - file: B040-mode-a-monitors-miss-ambient-w.todo
     - file: B041-the-main-binary-should-have-a.todo
     - file: B042-some-of-the-fonts-on-the-stati.todo
+    - file: B043-static-site-homepage-navbar-do.todo

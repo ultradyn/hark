@@ -6,6 +6,9 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+## 0.1.5
+
+- Site Supports notes: document bare `hark monitor` (compact/`--for-monitor` is default on).
 - Media duck/pause during STT capture (B046 / I002): answer-window and post-wake
   listen lower non-Hark sink-input volumes (and optionally pause MPRIS players)
   so background music does not bleed into the mic / energy gate / cloud STT.
@@ -34,7 +37,7 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   **Antigravity** only (no “agy”), **Grok Build** only, Support column with
   **Native / Monitor** (Claude Code, Grok Build) and **Native / AgentAPI**
   (Antigravity); Pi/OpenCode notes frame plugins as examples of any Monitor
-  on `hark monitor --for-monitor`. No backlog IDs in marketing copy.
+  on `hark monitor`. No backlog IDs in marketing copy.
 - Media detection (B044 / I002 foundation): `hark.audio.media` detects active
   non-Hark playback via Pulse/PipeWire sink-inputs (index, volume, mute, corked,
   application.name) plus optional MPRIS (`playerctl`). Public API:

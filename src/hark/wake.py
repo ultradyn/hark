@@ -134,7 +134,8 @@ class VoskWakeBackend:
         model_path: str,
         phrases: list[str] | tuple[str, ...] | None = None,
         *,
-        energy_floor: float = 0.008,
+        # ~0.003 catches soft close-talk; quiet room often sits ~0.001
+        energy_floor: float = 0.003,
     ) -> None:
         self.model_path = model_path
         self.phrases = list(phrases or DEFAULT_ACTIVATION_PHRASES)

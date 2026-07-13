@@ -140,6 +140,108 @@ def looks_like_pending_question(text: str | None) -> PendingQuestionHit:
     )
 
 
+# ---------------------------------------------------------------------------
+# Active subagent / background Task strip (false done while Herdr says idle)
+# ---------------------------------------------------------------------------
+#
+# Grok Build keeps a task strip near the top of the pane while subagents run:
+#   ▾ Tasks 1
+#   ⁙ Task Install rclone on Windows…   (21+) 33m14s [↗][✗]
+#   ▾ Watchers 1          ← watchers alone do NOT mean still working
+# Live status while the main turn is busy also shows:
+#   "⠧ Waiting on subagent… 2.8s … [stop]"
+# Herdr may still report done/idle once the main spinner clears even though
+# Tasks N (N≥1) remains — Mode A must not treat that as agent.completed.
+
+@dataclass(frozen=True)
+class ActiveSubagentsHit:
+    """Result of pane heuristics for running subagent/background tasks."""
+
+    matched: bool
+    count: int = 0
+    reasons: tuple[str, ...] = ()
+    labels: tuple[str, ...] = ()
+
+    def __bool__(self) -> bool:
+        return self.matched
+
+
+# Header: "▾ Tasks 1" / "▸ Tasks 2" / plain "Tasks 3" on its own line.
+_TASKS_HEADER = re.compile(
+    r"(?m)^[ \t]*(?:[▾▸▼▶▽▷▿▹]|[+\*])?[ \t]*Tasks[ \t]+(\d+)[ \t]*$"
+)
+# Row under the strip: special bullet + "Task <label>…" (not Watchers/Monitor).
+_TASK_ROW = re.compile(
+    r"(?m)^[ \t]*(?:[⸬⁙‧∙•●○◉◆▪\*\-]|[\u2022\u25cf\u25e6\u2b24\u2e2c\u205b])"
+    r"[ \t]+Task[ \t]+(\S[^\n]{0,180})$"
+)
+# Explicit subagent wait / running phrases (Grok and others).
+_SUBAGENT_ACTIVE_PHRASE = re.compile(
+    r"(?i)\b("
+    r"waiting\s+on\s+sub-?agents?|"
+    r"sub-?agents?\s+(?:still\s+)?(?:running|active|in\s*progress)|"
+    r"(?:running|active)\s+sub-?agents?|"
+    r"\d+\s+sub-?agents?\s+(?:running|active|in\s*progress)|"
+    r"background\s+tasks?\s+(?:running|active|in\s*progress)"
+    r")\b"
+)
+
+
+def detect_active_subagents(text: str | None) -> ActiveSubagentsHit:
+    """Heuristic: does pane text show active subagent/tasks still in flight?
+
+    Inspects the full pane body (task strip is often near the **top** of the
+    Herdr/Grok UI, not the trailing ask block used for menus). Watchers-only
+    chrome does not count as busy.
+    """
+    raw = strip_ansi(text or "")
+    if not raw.strip():
+        return ActiveSubagentsHit(matched=False, count=0, reasons=())
+
+    reasons: list[str] = []
+    count = 0
+    labels: list[str] = []
+
+    header_n = 0
+    for m in _TASKS_HEADER.finditer(raw):
+        n = int(m.group(1))
+        if n > header_n:
+            header_n = n
+    if header_n >= 1:
+        reasons.append("tasks_header")
+        count = max(count, header_n)
+
+    for m in _TASK_ROW.finditer(raw):
+        label = m.group(1).strip()
+        # Drop trailing chrome like duration / action chips when present.
+        label = re.split(r"[ \t]{2,}|\s+\(\d", label, maxsplit=1)[0].strip()
+        if not label or len(label) > 160:
+            continue
+        labels.append(label[:120])
+    if labels:
+        reasons.append("task_rows")
+        count = max(count, len(labels))
+
+    if _SUBAGENT_ACTIVE_PHRASE.search(raw):
+        reasons.append("subagent_phrase")
+        count = max(count, 1)
+
+    if not reasons or count < 1:
+        return ActiveSubagentsHit(
+            matched=False,
+            count=0,
+            reasons=tuple(reasons),
+            labels=tuple(labels[:12]),
+        )
+
+    return ActiveSubagentsHit(
+        matched=True,
+        count=count,
+        reasons=tuple(reasons),
+        labels=tuple(labels[:12]),
+    )
+
+
 def make_watch_armed(
     sessions: list[str],
     *,
@@ -459,6 +561,59 @@ def make_agent_needs_input(
     return event
 
 
+def make_agent_busy_subagent(
+    agent: AgentInfo,
+    *,
+    from_status: str | None,
+    herdr_status: str,
+    hit: ActiveSubagentsHit,
+    pane_capture: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Herdr reports done/idle but the pane still shows active Tasks/subagents.
+
+    Reclassifies to ``working`` so Mode A does not treat the turn as finished.
+    ``state.herdr`` retains the wire status from Herdr for diagnostics.
+    """
+    has_cap = bool(pane_capture and pane_capture.get("text"))
+    n = max(1, int(hit.count or 1))
+    reasons = list(hit.reasons) if hit.reasons else ["active_subagents"]
+    target = f"{agent.session_id}/{agent.pane_id}"
+    event: dict[str, Any] = {
+        "schema": __schema__,
+        "event_id": new_event_id(),
+        "observed_at": utc_now_iso(),
+        "kind": "agent.state_changed",
+        "priority": 35,
+        "session_id": agent.session_id,
+        "target": agent_to_target(agent),
+        "state": {
+            "from": from_status,
+            "to": "working",
+            "blocked_epoch": None,
+            "herdr": herdr_status,
+        },
+        "disposition": "info",
+        "false_done": True,
+        "busy_subagent": True,
+        "subagents_running": n,
+        "pending_reasons": reasons,
+        "instructions": (
+            "False done: pane still has active subagent/tasks "
+            f"({n} running). Treat as working until tasks settle; "
+            "do not announce completion or act as if the turn finished."
+            + (
+                " Pane capture attached (pane_capture.text)."
+                if has_cap
+                else f" Optional live re-read: hark context {target}"
+            )
+        ),
+    }
+    if hit.labels:
+        event["subagent_labels"] = list(hit.labels)
+    _attach_pane_capture(event, pane_capture)
+    return event
+
+
 def make_agent_question_changed(
     agent: AgentInfo,
     *,
@@ -565,6 +720,12 @@ def monitor_profile(event: dict[str, Any]) -> dict[str, Any]:
         compact["false_done"] = True
     if event.get("pending_reasons"):
         compact["pending_reasons"] = event["pending_reasons"]
+    if event.get("busy_subagent"):
+        compact["busy_subagent"] = True
+    if event.get("subagents_running") is not None:
+        compact["subagents_running"] = event["subagents_running"]
+    if event.get("subagent_labels"):
+        compact["subagent_labels"] = event["subagent_labels"]
 
     # Full pane text capture (B094) — prefer event body over a second context fetch.
     raw_cap = event.get("pane_capture")
@@ -621,17 +782,28 @@ def monitor_profile(event: dict[str, Any]) -> dict[str, Any]:
                 str(pane_id),
                 has_capture=has_capture,
             )
+    elif kind == "agent.state_changed" and event.get("busy_subagent"):
+        if isinstance(event.get("instructions"), str) and event["instructions"].strip():
+            compact["instructions"] = event["instructions"]
+        else:
+            n = event.get("subagents_running") or 1
+            compact["instructions"] = (
+                f"Busy subagent: {n} task(s) still running; treat as working, not done. "
+                f"Optional: hark context {session_id}/{pane_id}"
+            )
     elif kind == "agent.completed":
         if has_capture:
             compact["instructions"] = (
                 "Done event: judge if finished; do not auto-announce. "
-                "Pane capture attached — if it still shows a menu, treat as needs-input. "
+                "Pane capture attached — if it still shows a menu, treat as needs-input; "
+                "if it still shows active Tasks/subagents, treat as working. "
                 f"Optional live re-read: hark context {session_id}/{pane_id}"
             )
         else:
             compact["instructions"] = (
                 "Done event: judge if finished; do not auto-announce. "
-                "If pane still shows a menu, treat as needs-input. "
+                "If pane still shows a menu, treat as needs-input; "
+                "if active Tasks/subagents remain, treat as working. "
                 f"Optional: hark context {session_id}/{pane_id}"
             )
     elif kind == "watch.armed":

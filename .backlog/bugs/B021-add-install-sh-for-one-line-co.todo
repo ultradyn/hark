@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T08:53:33Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T08:57:19Z"
 complexity: medium
 created_at: "2026-07-13T08:47:05Z"
 depends_on: []
+duration_minutes: 3.7794035910666666
 estimate_hours: 1
 id: B021
 priority: high
 started_at: "2026-07-13T08:53:33Z"
-status: in_progress
+status: done
 tags: []
 title: Add install.sh for one-line copy-paste install
-updated_at: "2026-07-13T08:53:33Z"
+updated_at: "2026-07-13T08:57:19Z"
 ---
 ## Goal
 One-line install people can copy-paste, following common OSS patterns (curl|bash / raw GitHub).

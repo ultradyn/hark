@@ -13,7 +13,7 @@
     <meta property="og:title" content="Hark — handsfree voice for your agent herd" />
     <meta
       property="og:description"
-      content="Fleet control without the keyboard. Blocked agents speak; you answer by voice. Skill-first setup for Claude, Grok, Pi, OpenCode, Antigravity (agy), and more."
+      content="Fleet control without the keyboard. Blocked agents speak; you answer by voice. Skill-first setup for Claude, Grok, Antigravity, Pi, OpenCode, and more."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://hark.xk.io/" />
@@ -32,7 +32,7 @@
     <meta name="twitter:title" content="Hark — handsfree voice for your agent herd" />
     <meta
       name="twitter:description"
-      content="Fleet control without the keyboard. Blocked agents speak; you answer by voice. Skill-first setup for Claude, Grok, Pi, OpenCode, Antigravity (agy), and more."
+      content="Fleet control without the keyboard. Blocked agents speak; you answer by voice. Skill-first setup for Claude, Grok, Antigravity, Pi, OpenCode, and more."
     />
     <meta name="twitter:image" content="https://hark.xk.io/og.png" />
     <meta
@@ -329,7 +329,7 @@
               <span class="term__title">you · one shot</span>
             </div>
             <div class="term__body">
-              <div class="dim"># In Claude / Grok / Pi / OpenCode / agy (with Monitor)…</div>
+              <div class="dim"># In Claude / Grok / Antigravity / Pi / OpenCode (with Monitor)…</div>
               <div><span class="prompt">›</span> <span class="cmd">/hark</span></div>
               <div class="dim"># or: use the hark skill · handsfree alias</div>
               <div class="out">agent: running hark doctor…</div>
@@ -375,11 +375,23 @@
               src="assets/logos/grok.svg"
               width="28"
               height="28"
-              alt="Grok logo"
+              alt="Grok Build logo"
               loading="lazy"
               decoding="async"
             />
-            <span class="logo-strip__label">Grok</span>
+            <span class="logo-strip__label">Grok Build</span>
+          </li>
+          <li class="logo-strip__item">
+            <img
+              class="logo-strip__logo"
+              src="assets/logos/antigravity.svg"
+              width="28"
+              height="28"
+              alt="Antigravity logo"
+              loading="lazy"
+              decoding="async"
+            />
+            <span class="logo-strip__label">Antigravity</span>
           </li>
           <li class="logo-strip__item">
             <img
@@ -408,19 +420,6 @@
           <li class="logo-strip__item">
             <img
               class="logo-strip__logo"
-              src="assets/logos/antigravity.svg"
-              width="28"
-              height="28"
-              alt="Antigravity logo"
-              loading="lazy"
-              decoding="async"
-            />
-            <span class="logo-strip__label">Antigravity</span>
-            <span class="logo-strip__hint">agy</span>
-          </li>
-          <li class="logo-strip__item">
-            <img
-              class="logo-strip__logo"
               src="assets/logos/codex.svg"
               width="28"
               height="28"
@@ -438,7 +437,7 @@
               <thead>
                 <tr>
                   <th>CLI / agent</th>
-                  <th>Monitor</th>
+                  <th>Support</th>
                   <th>Notes</th>
                 </tr>
               </thead>
@@ -459,7 +458,7 @@
                       <span>Claude Code</span>
                     </span>
                   </td>
-                  <td class="ok">Native</td>
+                  <td class="ok">Native / Monitor</td>
                   <td>Skill + Monitor on watch feed; full handsfree loop</td>
                 </tr>
                 <tr>
@@ -475,11 +474,30 @@
                         loading="lazy"
                         decoding="async"
                       />
-                      <span>Grok Build / Grok CLI</span>
+                      <span>Grok Build</span>
                     </span>
                   </td>
-                  <td class="ok">Native</td>
+                  <td class="ok">Native / Monitor</td>
                   <td>Same pattern; skill install + persistent monitor</td>
+                </tr>
+                <tr>
+                  <td>
+                    <span class="agent-cell">
+                      <img
+                        class="agent-cell__logo"
+                        src="assets/logos/antigravity.svg"
+                        width="20"
+                        height="20"
+                        alt=""
+                        aria-hidden="true"
+                        loading="lazy"
+                        decoding="async"
+                      />
+                      <span>Antigravity</span>
+                    </span>
+                  </td>
+                  <td class="ok">Native / AgentAPI</td>
+                  <td>Google Antigravity CLI; long-lived feed via agentapi inject</td>
                 </tr>
                 <tr>
                   <td>
@@ -499,7 +517,8 @@
                   </td>
                   <td class="ok">Plugin</td>
                   <td>
-                    Use
+                    Any plugin that keeps a long-lived Monitor on
+                    <code>hark monitor --for-monitor</code> works. Example:
                     <a class="product-link" href="https://github.com/clankercode/pi-monitor">pi-monitor</a>
                     (<code>pi install npm:pi-monitor</code>) — watches background
                     processes and delivers matching output into the session.
@@ -523,31 +542,13 @@
                   </td>
                   <td class="ok">Plugin</td>
                   <td>
-                    Use
+                    Any plugin that keeps a long-lived Monitor on
+                    <code>hark monitor --for-monitor</code> works. Example:
                     <a class="product-link" href="https://github.com/clankercode/opencode-monitor-bg">opencode-monitor-bg</a>
                     (<code>monitor_start</code> / <code>monitor_fetch</code>) —
                     runs background processes and delivers their output back into
                     the owning session.
                   </td>
-                </tr>
-                <tr>
-                  <td>
-                    <span class="agent-cell">
-                      <img
-                        class="agent-cell__logo"
-                        src="assets/logos/antigravity.svg"
-                        width="20"
-                        height="20"
-                        alt=""
-                        aria-hidden="true"
-                        loading="lazy"
-                        decoding="async"
-                      />
-                      <span>Antigravity <span class="agent-cell__aka">agy</span></span>
-                    </span>
-                  </td>
-                  <td class="ok">agentapi</td>
-                  <td>Google Antigravity CLI; long-lived feed via agentapi inject (see B049 / docs)</td>
                 </tr>
                 <tr>
                   <td>

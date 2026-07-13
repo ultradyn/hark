@@ -1,11 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <!-- Simple lift mark — placeholder for Antigravity (agy) -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" role="img" aria-label="Antigravity">
+  <!-- Official Antigravity mark (Google Antigravity); monochrome for dark bg -->
   <path
     fill="#eef1f7"
-    d="M16 4.25c.4 0 .78.2 1 .54l8.1 12.2a1.2 1.2 0 0 1-1 1.86h-3.35v4.9a1.2 1.2 0 0 1-1.2 1.2h-7.1a1.2 1.2 0 0 1-1.2-1.2v-4.9H7.9a1.2 1.2 0 0 1-1-1.86l8.1-12.2c.22-.34.6-.54 1-.54Zm0 3.4L10.7 16.05h2.85a1.2 1.2 0 0 1 1.2 1.2v4.9h2.5v-4.9a1.2 1.2 0 0 1 1.2-1.2h2.85L16 7.65Z"
-  />
-  <path
-    fill="#a4adc0"
-    d="M9.5 27.25h13a1.25 1.25 0 1 0 0-2.5h-13a1.25 1.25 0 1 0 0 2.5Z"
+    d="M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z"
   />
 </svg>

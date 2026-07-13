@@ -4,7 +4,7 @@ Canonical **question order** for agent-driven and CLI setup.
 CLI: `hark setup` (flags: `--yes`, `--persona`, `--wake-engine`, `--voice`, …).  
 Flag file: `~/.local/state/hark/setup-complete.json` (includes **`hark_version`**).
 
-Related: [WAKE_STT.md](WAKE_STT.md) (local wake engines), [SKILL.md](SKILL.md),
+Related: [WAKE_STT.md](WAKE_STT.md) (local wake; **prefer Sherpa KWS** for product names), [SKILL.md](SKILL.md),
 `docs/CUSTOM_WAKE.md`, `docs/plans/B069-local-stt-survey.md`.
 
 ---
@@ -37,7 +37,7 @@ Schema version lives in code as `SETUP_SCHEMA_VERSION` (`hark.setup_flow`).
    **B076** multi-provider auth: if OpenAI/MiniMax keys missing, **gracefully degrade**
    (list bundled samples only; still accept a typed voice id). Do not hard-fail setup.
 5. **Wake backend** — **Vosk** vs **Sherpa KWS** (extensible later):  
-   - Recommend **Sherpa KWS** when download/install OK (better on product names; see B069).  
+   - Recommend **Sherpa KWS** when download/install OK (keyword spotting ≫ Vosk ASR for iris/hark; see [WAKE_STT.md](WAKE_STT.md)).  
    - Prefer **Vosk** if constrained (already installed, no download, tiny deps).  
    - **Defer** → leave `engine = "vosk"` (product default until dogfood).  
    Config: `[ambient] engine = "vosk" | "sherpa_kws"`.

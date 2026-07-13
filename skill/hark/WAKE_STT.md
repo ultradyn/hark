@@ -1,4 +1,4 @@
-# Local wake engines & STT (operator guide)
+# Local wake engines & STT (operator + Mode A guide)
 
 Hark ambient **wake** uses a **local** short-snippet model only. After activation,
 prompt body / radio STT stays **cloud-first** (xAI etc.). Full survey:
@@ -8,15 +8,44 @@ Setup chooser: [SETUP.md](SETUP.md) · `hark setup --wake-engine …`
 
 ---
 
+## Why Sherpa is better for wake (vs Vosk)
+
+**Short version:** Vosk is *open speech recognition* (transcribe whatever was said).
+Sherpa KWS is *keyword spotting* (listen for the activation phrases we configure).
+Wake is a keyword problem, so KWS fits much better.
+
+| | **Vosk** (open-vocab ASR) | **Sherpa KWS** (keyword spotting) |
+|--|---------------------------|-----------------------------------|
+| **Job** | Turn audio → arbitrary English text | Score configured keyword phrases |
+| **Product names** | Often mangles short/rare names (`hark`→hook/hawk, `iris`→irish/iraq) | Matches phrase graph (`hey iris`, `hey hark`, …) |
+| **Near-misses** | Needs alias tables + learning to paper over ASR errors | Still useful, but less “luck” for first-try wake |
+| **Cost** | Higher RSS / RTF on continuous ambient | ~half Vosk RSS; RTF ≈ 0.02 on short snips (B069) |
+| **When it fails** | Wrong *words* in the transcript | Keyword below threshold / not in keyword set |
+
+**Dogfood takeaway:** With Vosk, activation can feel random on **iris** / **mercury**.
+With Sherpa, the same “hey iris” (even slightly mangled as *irris* at the KWS layer)
+tends to fire first try because the engine is hunting for that keyword, not guessing
+a general sentence.
+
+**What wake is not:** Full conversation STT. After wake, utterance STT still goes
+to cloud (or optional local Whisper — not for always-on wake).
+
+**Recommend for most operators:** `engine = "sherpa_kws"` once the model +
+`wake-sherpa` extra are installed. Keep **Vosk** only if you need the smaller
+dep set or are debugging without ONNX.
+
+---
+
 ## Engines
 
 | Engine | Config | When to pick | Size / cost (approx) |
 |--------|--------|--------------|----------------------|
-| **Vosk** (default) | `engine = "vosk"` | Already set up; constrained disk/deps; fine with alias learning | ~40 M zip / ~68 M installed; RSS ~150 MiB |
-| **Sherpa KWS** | `engine = "sherpa_kws"` | Better product names (`hark`/`herald`/`iris`…); low RTF | ~20 M tree; RSS ~half Vosk; RTF ≈ 0.02 |
+| **Sherpa KWS** | `engine = "sherpa_kws"` | **Preferred** for product names + reliability | ~20 M tree; RSS ~half Vosk; RTF ≈ 0.02 |
+| **Vosk** (stock default) | `engine = "vosk"` | Constrained disk/deps; already set up; alias learning OK | ~40 M zip / ~68 M installed; RSS ~150 MiB |
 | **text_probe** | `engine = "text_probe"` | Tests only | — |
 
-**Default stays Vosk** until dogfood says otherwise (B070 does not flip the default).
+Config default in the package remains **Vosk** for backward compatibility; Mode A
+setup / dogfood should **recommend Sherpa** when download is OK.
 
 ---
 
@@ -27,18 +56,21 @@ Setup chooser: [SETUP.md](SETUP.md) · `hark setup --wake-engine …`
 - Python: `uv sync --extra wake`
 - Path (auto): `~/.local/share/hark/models/vosk-model-small-en-us-0.15`
 - Matching: open-vocab ASR → text → `match_activation` (seed aliases + near-miss learning)
-- Larger models: optional `model_path` (see B073); still ASR, not true KWS
+- Larger models: optional `model_path` (0.22-lgraph / 0.22; see docs); still ASR, not true KWS
 
 ---
 
 ## Sherpa-ONNX open-vocab KWS
 
 - Model: `sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01` (English, prefer **int8**)
-- Install: `./scripts/download-sherpa-kws-model.sh`
-- Python: `uv sync --extra wake-sherpa` (`sherpa-onnx` + `sentencepiece`)
+- Install model: `./scripts/download-sherpa-kws-model.sh`
+- Python: `uv sync --extra wake-sherpa`  
+  (`sherpa-onnx` + `sentencepiece` + **`onnxruntime`** — provides `libonnxruntime.so`)
 - Path (auto): `~/.local/share/hark/models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01`
 - Keywords built from `WakePolicy` (names×prefixes + exact phrases); **rebuild on config reload / SIGHUP**
 - Doctor: `hark doctor` reports `status=ready|missing_model|package_missing` for `engine=sherpa_kws`
+- Mode A launcher (`scripts/run-mode-a.sh`) puts onnxruntime’s `capi/` on `LD_LIBRARY_PATH`
+  so `import sherpa_onnx` can resolve the shared library (Hark also re-execs once if needed)
 
 ```toml
 [ambient]
@@ -46,13 +78,24 @@ engine = "sherpa_kws"
 # model_path = "~/.local/share/hark/models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01"
 ```
 
-**Fail-open:** missing model → clear error / doctor MISSING; leave `engine = "vosk"` or install the model. Ambient does not silently use cloud for wake.
+```bash
+./scripts/download-sherpa-kws-model.sh
+uv sync --extra wake-sherpa
+# or: hark setup --yes --wake-engine sherpa_kws
+./scripts/run-mode-a.sh   # restart ambient after engine change
+```
+
+**Fail-open:** missing model → clear error / doctor MISSING; leave `engine = "vosk"` or install
+the model. Ambient does **not** silently use cloud for wake.
+
+If logs say `sherpa-onnx not installed` but the package is present, the usual cause is
+**missing `libonnxruntime.so`** (install `onnxruntime` via `wake-sherpa`, restart Mode A).
 
 ---
 
 ## Optional local full-STT (post-wake / offline) — not default
 
-**B072 landed** — optional utterance STT behind the existing provider interface.
+**B072** — optional utterance STT behind the existing provider interface.
 Cloud remains product default (`stt.provider = "auto"`, ADR-004). **Do not** use
 Whisper-family models for continuous ambient wake (name mangling + always-on cost).
 
@@ -78,20 +121,22 @@ Details and B069 RTF notes: [docs/PROVIDERS.md](../../docs/PROVIDERS.md).
 
 ---
 
-## Comparison snapshot (B069 probe)
+## Eval & enrollment
 
-On early live wake fixtures: Vosk/Whisper mangle `hark`→hook/hawk; **Sherpa KWS**
-hit/miss-separated product phrases without alias tables. Expand eval with
-`scripts/eval-wake-fixtures.py` (B071).
+- Hit/miss/FA table: `scripts/eval-wake-fixtures.py` (B071)
+- Beep-paced practice samples: `hark wake-enroll` (I006) — local WAVs under
+  `~/.local/state/hark/wake_enroll/`; optional scoring can seed learned aliases
+  (B077 denylist blocks junk like `is` / place-name confusables)
 
 ---
 
-## Related tasks
+## Related
 
 | ID | Topic |
 |----|--------|
-| B069 | Survey (done) |
+| B069 | Local STT survey (done) |
 | B070 | Sherpa backend + setup (done) |
 | B071 | Wake eval harness (done) |
 | B072 | Optional local full-STT (done) |
 | B073 | Larger Vosk model docs (done) |
+| I006 | Wake enrollment samples (done) |

@@ -36,6 +36,10 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   (Vosk, faster-whisper, whisper.cpp, Sherpa-ONNX KWS, Moonshine, Porcupine-class),
   machine probes vs Vosk baseline, recommendation (Sherpa KWS next; keep Vosk+cloud
   interim). See `docs/plans/B069-local-stt-survey.md`. Follow-ups B070–B073.
+- Docs/helper (B073): optional larger Vosk via `ambient.model_path`
+  (`vosk-model-en-us-0.22-lgraph` ~128M / `0.22` ~1.8G) — RAM/alias trade-offs in
+  `docs/AUDIO_DESIGN.md` + `docs/CUSTOM_WAKE.md`;
+  `scripts/download-vosk-model.sh --model lgraph|0.22` (default small unchanged).
 - Ambient live-reload: when the primary wake name/phrase changes (config.toml
   file-watch or SIGHUP), speak a one-shot TTS announce
   (“Wake phrase updated from … to …”) without using the phrase cache

@@ -192,10 +192,52 @@ surface_timeouts = true
 
 | Key | Default | Notes |
 |-----|---------|--------|
+| `engine` | `vosk` | Local wake ASR. `text_probe` for tests. Future optional KWS engines (B070) do not change this default. |
+| `model_path` | auto / setup | Directory of an unpacked Vosk model. `./scripts/setup-ambient.sh` installs the **small** default. |
 | `timeout_s` | `300` | One-shot: max wait for a wake before `ambient.timeout`. Continuous Mode A: idle cycle length before re-entering the wake wait (and optionally emitting `ambient.timeout`). `0` = no deadline / no timeout event. |
 | `surface_timeouts` | `true` | When **on**, continuous ambient surfaces `ambient.timeout` each idle cycle (monitor NDJSON + syslog) as a heartbeat. When **off**, continuous idle cycles stay quiet (no timeout event) — turn off for noisy long-running Mode A; leave on if you want cache-warmup / liveness visibility. Alias: `emit_timeout_events`. One-shot `hark ambient --once` always emits timeout when nothing is heard. |
 
 CLI: `hark ambient` (forces a wake+listen cycle). Continuous: `hark ambient` without `--once`.
+
+### Larger Vosk models (optional `model_path`)
+
+**Default stays small.** Shipping / `setup-ambient.sh` use
+`vosk-model-small-en-us-0.15` (~40 M zip / ~68 M installed, RSS ~150 MiB on a
+laptop probe). Operators can point `ambient.model_path` at a larger official
+English model for a **config-only quality experiment** — not the long-term wake
+architecture (see B069 survey; dedicated KWS is B070).
+
+| Model | Zip (approx) | Role | Trade-offs |
+|-------|--------------|------|------------|
+| `vosk-model-small-en-us-0.15` | ~40 M | **Default** always-on wake | Lowest disk/RAM; weak on rare product names → **aliases + learning** |
+| `vosk-model-en-us-0.22-lgraph` | ~128 M | Middle ground (dynamic graph) | Better generic WER; higher RSS/CPU than small; still open-vocab ASR |
+| `vosk-model-en-us-0.22` | ~1.8 G | Server-class English | Best Vosk WER of the three; multi‑GB download + multi‑GB RAM; slowest to fetch |
+
+**Still needs aliases.** Larger models improve generic English; they do **not**
+reliably invent tokens like `hark` / `herald`. Keep seed mishears and
+`learn_from_near_misses` (see [`CUSTOM_WAKE.md`](CUSTOM_WAKE.md)). Do not expect
+big Vosk alone to replace keyword spotting.
+
+Download (optional helper; default model unchanged):
+
+```bash
+# middle ground (~128M)
+./scripts/download-vosk-model.sh --model lgraph
+# server-class (~1.8G) — large download
+./scripts/download-vosk-model.sh --model 0.22 --method curl
+```
+
+Then set config (file-watch / SIGHUP reloads `model_path` and rebuilds the backend):
+
+```toml
+[ambient]
+engine = "vosk"
+# after: ./scripts/download-vosk-model.sh --model lgraph
+model_path = "~/.local/share/hark/models/vosk-model-en-us-0.22-lgraph"
+```
+
+Sources: [Vosk models table](https://alphacephei.com/vosk/models), survey
+[`docs/plans/B069-local-stt-survey.md`](plans/B069-local-stt-survey.md).
 
 ## Half-duplex sequence (answer)
 

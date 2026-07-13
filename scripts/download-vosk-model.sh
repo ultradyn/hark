@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Download vosk-model-small-en-us-0.15 for Hark ambient wake.
+# Download a Vosk English model for Hark ambient wake.
+#
+# Default (product default): vosk-model-small-en-us-0.15 (~40M zip / ~68M on disk).
+# Optional larger models (operator experiment — still open-vocab ASR; aliases remain
+# needed for rare product names). See docs/AUDIO_DESIGN.md § Larger Vosk models
+# and docs/plans/B069-local-stt-survey.md.
 #
 # Methods (in order, skip with --method):
 #   1. hf          — Hugging Face CLI (`hf download`)
@@ -11,11 +16,73 @@
 #   ./scripts/download-vosk-model.sh
 #   ./scripts/download-vosk-model.sh --dir ~/.local/share/hark/models
 #   ./scripts/download-vosk-model.sh --method curl
+#   ./scripts/download-vosk-model.sh --model lgraph   # ~128M, middle ground
+#   ./scripts/download-vosk-model.sh --model 0.22     # ~1.8G, server-class
+#   ./scripts/download-vosk-model.sh --model vosk-model-en-us-0.22-lgraph
 #   HARK_VOSK_MODEL_DIR=... ./scripts/download-vosk-model.sh
+#
+# After download, point config at the printed MODEL_PATH:
+#   [ambient]
+#   model_path = "~/.local/share/hark/models/vosk-model-en-us-0.22-lgraph"
+# Then reload ambient (config file-watch / SIGHUP) or restart.
 
 set -euo pipefail
 
-MODEL_NAME="vosk-model-small-en-us-0.15"
+# Canonical directory names (zip = name.zip on alphacephei)
+DEFAULT_MODEL="vosk-model-small-en-us-0.15"
+MODEL_NAME="$DEFAULT_MODEL"
+METHOD="auto" # auto | hf | curl | wget | browser
+FORCE=0
+
+DEFAULT_DIR="${HARK_VOSK_MODEL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/hark/models}"
+OUT_DIR="$DEFAULT_DIR"
+
+usage() {
+  # Print leading comment block (stop at first non-# line)
+  awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"
+  echo ""
+  echo "Model aliases for --model:"
+  echo "  small | 0.15          → vosk-model-small-en-us-0.15  (default, ~40M zip)"
+  echo "  lgraph | 0.22-lgraph  → vosk-model-en-us-0.22-lgraph (~128M zip)"
+  echo "  0.22 | big | large    → vosk-model-en-us-0.22        (~1.8G zip)"
+  echo "  <full-name>           → used as-is (must match alphacephei zip stem)"
+  exit "${1:-0}"
+}
+
+resolve_model_name() {
+  local raw="$1"
+  case "$raw" in
+    small|0.15|vosk-model-small-en-us-0.15)
+      echo "vosk-model-small-en-us-0.15"
+      ;;
+    lgraph|0.22-lgraph|vosk-model-en-us-0.22-lgraph)
+      echo "vosk-model-en-us-0.22-lgraph"
+      ;;
+    0.22|big|large|vosk-model-en-us-0.22)
+      echo "vosk-model-en-us-0.22"
+      ;;
+    *)
+      # Allow full alphacephei stem or path-looking values that are still stems
+      if [[ "$raw" == */* ]] || [[ "$raw" == *.zip ]]; then
+        echo "error: --model expects a model stem or alias, not a path/zip: $raw" >&2
+        return 1
+      fi
+      echo "$raw"
+      ;;
+  esac
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dir) OUT_DIR="$2"; shift 2 ;;
+    --method) METHOD="$2"; shift 2 ;;
+    --model) MODEL_NAME="$(resolve_model_name "$2")" || exit 1; shift 2 ;;
+    --force) FORCE=1; shift ;;
+    -h|--help) usage 0 ;;
+    *) echo "unknown arg: $1" >&2; usage 1 ;;
+  esac
+done
+
 ZIP_NAME="${MODEL_NAME}.zip"
 
 # Official + mirrors (first success wins within each method)
@@ -26,26 +93,6 @@ HF_URL_GRIMSO="https://huggingface.co/grimso/vosk-models/resolve/main/${ZIP_NAME
 HF_REPO_RHASSPY="rhasspy/vosk-models"
 HF_FILE_RHASSPY="en/${ZIP_NAME}"
 HF_URL_RHASSPY="https://huggingface.co/rhasspy/vosk-models/resolve/main/en/${ZIP_NAME}"
-
-DEFAULT_DIR="${HARK_VOSK_MODEL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/hark/models}"
-OUT_DIR="$DEFAULT_DIR"
-METHOD="auto" # auto | hf | curl | wget | browser
-FORCE=0
-
-usage() {
-  sed -n '2,18p' "$0" | sed 's/^# \?//'
-  exit "${1:-0}"
-}
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --dir) OUT_DIR="$2"; shift 2 ;;
-    --method) METHOD="$2"; shift 2 ;;
-    --force) FORCE=1; shift ;;
-    -h|--help) usage 0 ;;
-    *) echo "unknown arg: $1" >&2; usage 1 ;;
-  esac
-done
 
 MODEL_DIR="${OUT_DIR%/}/${MODEL_NAME}"
 ZIP_PATH="${OUT_DIR%/}/${ZIP_NAME}"
@@ -139,7 +186,7 @@ try_hf() {
   elif "$cli" download "$HF_REPO_RHASSPY" "$HF_FILE_RHASSPY" --local-dir "$TMP_DIR" 2>/dev/null; then
     :
   else
-    echo "hf: download failed" >&2
+    echo "hf: download failed (mirrors may lack $MODEL_NAME — try --method curl)" >&2
     return 1
   fi
 
@@ -219,8 +266,24 @@ fi
 mkdir -p "$OUT_DIR"
 echo "installing $MODEL_NAME → $MODEL_DIR"
 echo "method=$METHOD"
+if [[ "$MODEL_NAME" != "$DEFAULT_MODEL" ]]; then
+  echo "note: non-default Vosk model — still needs wake aliases for rare names (docs/CUSTOM_WAKE.md)"
+  case "$MODEL_NAME" in
+    vosk-model-en-us-0.22)
+      echo "note: ~1.8G download; multi-GB RAM at runtime — laptop OK, not a light always-on default"
+      ;;
+    vosk-model-en-us-0.22-lgraph)
+      echo "note: ~128M download; higher RSS than small; middle-ground quality knob"
+      ;;
+  esac
+fi
 
-URLS=("$ALPHACEPHEI_URL" "$HF_URL_GRIMSO" "$HF_URL_RHASSPY")
+# Prefer alphacephei for large models (reliable Content-Length); HF mirrors as backup
+if [[ "$MODEL_NAME" == "$DEFAULT_MODEL" ]]; then
+  URLS=("$ALPHACEPHEI_URL" "$HF_URL_GRIMSO" "$HF_URL_RHASSPY")
+else
+  URLS=("$ALPHACEPHEI_URL" "$HF_URL_RHASSPY" "$HF_URL_GRIMSO")
+fi
 
 ok=0
 case "$METHOD" in
@@ -242,10 +305,16 @@ if [[ "$ok" -ne 1 ]] || ! is_valid_model "$MODEL_DIR"; then
   echo "Manual:" >&2
   echo "  1. Download $ALPHACEPHEI_URL" >&2
   echo "  2. unzip into $OUT_DIR so you have $MODEL_DIR" >&2
+  echo "  3. Set ambient.model_path = \"$MODEL_DIR\" in config.toml" >&2
   exit 1
 fi
 
 echo "OK: $MODEL_DIR"
 echo "MODEL_PATH=$MODEL_DIR"
+echo ""
+echo "Point ambient at this model (edit ~/.config/hark/config.toml):"
+echo "  [ambient]"
+echo "  model_path = \"$MODEL_DIR\""
+echo "Then wait for config file-watch, or: kill -HUP <ambient-pid>"
 # size hint
 du -sh "$MODEL_DIR" 2>/dev/null || true

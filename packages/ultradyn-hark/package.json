@@ -1,7 +1,7 @@
 {
   "name": "@ultradyn/hark",
   "version": "0.1.3",
-  "description": "Handsfree voice for your coding-agent herd in Herdr — hark & handsfree agent skills. Run the skill; Mode A arms watch, speech, and safe delivery.",
+  "description": "Handsfree voice for your coding-agent herd in Herdr \u2014 hark & handsfree agent skills. Run the skill; Mode A arms watch, speech, and safe delivery.",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -22,11 +22,11 @@
   "homepage": "https://hark.xk.io",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ultradyn/hark.git",
+    "url": "git+https://github.com/clankercode/hark.git",
     "directory": "packages/ultradyn-hark"
   },
   "bugs": {
-    "url": "https://github.com/ultradyn/hark/issues"
+    "url": "https://github.com/clankercode/hark/issues"
   },
   "files": [
     "skills",

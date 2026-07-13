@@ -73,6 +73,21 @@ jobs:
           test -f bin/hark-skill.js
           npm pack --dry-run
 
+      # npm OIDC requires package.json repository.url to match the repo that
+      # runs this workflow (see npm trusted-publishers docs). Marketing URLs
+      # (ultradyn/hark) must NOT overwrite this until the GitHub transfer is live.
+      - name: Verify package repository matches Actions repo
+        run: |
+          set -euo pipefail
+          expected="github.com/${GITHUB_REPOSITORY}"
+          repo_url="$(node -p "require('./package.json').repository?.url || ''")"
+          echo "GITHUB_REPOSITORY=${GITHUB_REPOSITORY}"
+          echo "package.json repository.url=${repo_url}"
+          if ! echo "$repo_url" | grep -F "$expected" >/dev/null; then
+            echo "::error::package.json repository.url must contain ${expected} for npm trusted publishing (got: ${repo_url}). Revert marketing-only URL rewrites until the GitHub transfer completes."
+            exit 1
+          fi
+
       # Trusted publishing needs npm >= 11.5.1 (Node 22 ships older npm).
       - name: Upgrade npm (for OIDC trusted publishing)
         run: npm install -g npm@latest
@@ -93,9 +108,9 @@ jobs:
             --title "@ultradyn/hark ${PKG_VERSION}" \
             --generate-notes
 
-      # No NODE_AUTH_TOKEN secret: OIDC trusted publishing.
-      # A 404 here usually means Trusted Publisher org/repo/workflow mismatch
-      # (must match the actual GitHub remote running this workflow + release.yml;
-      # org may still be "clankercode" until transfer — not just docs URLs).
+      # No long-lived NPM_TOKEN: OIDC trusted publishing.
+      # 404 = trusted publisher mismatch OR repository.url ≠ GITHUB_REPOSITORY.
+      # Trusted publisher on npm must be: org/user=clankercode, repo=hark,
+      # workflow=release.yml (until transfer to ultradyn).
       - name: Publish @ultradyn/hark to npm
         run: npm publish --access public

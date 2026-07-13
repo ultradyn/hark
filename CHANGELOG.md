@@ -10,6 +10,12 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   capture near TTS end while discarding audio until TTS ends + residual (B004). Half-duplex
   remains the default.
 
+## 0.1.4
+
+- Fix npm OIDC publish: `package.json` `repository.url` must match live GitHub remote (`clankercode/hark` until transfer).
+- release.yml verifies repository ↔ Actions repo before publish.
+- Install picker: skills | bash | npm | pnpm | bun (default skills).
+
 ## 0.1.3
 
 - Skills discovery: monorepo `skills/` symlinks for `npx skills`; internal skill shim.

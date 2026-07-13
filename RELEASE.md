@@ -101,12 +101,30 @@ repo’s **release** workflow (no long-lived token):
 2. Add a **GitHub Actions** publisher:
    - Organization / user: **must match the actual GitHub remote that runs this
      workflow** — still `clankercode` until the org transfer completes; switch
-     (or add) `ultradyn` after `ultradyn/hark` is the live remote. Public
+     to `ultradyn` after `ultradyn/hark` is the live remote. Public
      install/docs URLs may already say `ultradyn/hark`; OIDC does **not**
      follow those links — it binds to the repo that executed Actions.
    - Repository: `hark`
    - Workflow filename: **`release.yml`** (must match exactly)
    - Environment: *(leave blank unless you add a GitHub Environment)*
+   - Allowed actions: **`npm publish`** (required)
+
+### Why publishes fail with `404 Not Found` (PUT @ultradyn/hark)
+
+Two common causes (npm masks auth failures as 404):
+
+1. **`package.json` `repository.url` must exactly match the GitHub repo that
+   runs Actions.** Until the org transfer, that is
+   `git+https://github.com/clankercode/hark.git` (with
+   `"directory": "packages/ultradyn-hark"`). Do **not** rewrite this field to
+   `ultradyn/hark` while the remote is still `clankercode/hark` — npm trusted
+   publishing validates this match.
+2. **Trusted Publisher form** must list `clankercode` / `hark` /
+   `release.yml` (case-sensitive, filename only). Wrong org (e.g. `ultradyn`
+   before the transfer) → same 404.
+
+`release.yml` fails early if `repository.url` does not contain
+`${GITHUB_REPOSITORY}`.
 
 Operator status: trusted publisher for `@ultradyn/hark` via `release.yml` is
 expected to be configured against the **current** GitHub owner. If publish

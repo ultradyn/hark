@@ -37,7 +37,6 @@ Target globs (relative to repo root):
   install.sh
   site/README.md
   site/index.html
-  packages/ultradyn-hark/package.json
   packages/ultradyn-hark/README.md
   packages/ultradyn-hark/bin/hark-skill.js
   packages/ultradyn-hark/skills/**/SKILL.md   (if present)
@@ -45,6 +44,8 @@ Target globs (relative to repo root):
   docs/**/*.md
   .github/workflows/*.yml
   SESSION_NOTE.md
+
+Excluded: package.json repository.url (npm OIDC; flip only after GH transfer)
 EOF
   exit "${1:-0}"
 }
@@ -68,6 +69,8 @@ fi
 # Intentionally excluded:
 #   docs/REPO_TRANSFER.md  — historical checklist must keep both old and new paths
 #   scripts/rewrite-github-urls.sh — must keep default --from value
+#   packages/ultradyn-hark/package.json — repository.url MUST match the live
+#     GitHub remote for npm OIDC trusted publishing (do not flip until transfer)
 mapfile -t TARGETS < <(
   cd "$ROOT" || exit 1
   # shellcheck disable=SC2086
@@ -76,7 +79,6 @@ mapfile -t TARGETS < <(
     install.sh \
     site/README.md \
     site/index.html \
-    packages/ultradyn-hark/package.json \
     packages/ultradyn-hark/README.md \
     packages/ultradyn-hark/bin/hark-skill.js \
     packages/ultradyn-hark/skills/*/SKILL.md \
@@ -91,6 +93,7 @@ mapfile -t TARGETS < <(
       [[ -f "$f" ]] || continue
       case "$f" in
         docs/REPO_TRANSFER.md) continue ;;
+        packages/ultradyn-hark/package.json) continue ;;
       esac
       printf '%s\n' "$f"
     done

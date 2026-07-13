@@ -18,6 +18,14 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   `duck_exclude_apps`, `media_check_mpris`. Meta: `media_ducked` / `media_duck` on
   `run_tts` result. STT-window duck is B046 (same primitive). See
   `docs/AUDIO_DESIGN.md` and `docs/plans/I002-media-ducking.md`.
+- Site Supports section (B052): replace placeholder monochrome marks with
+  recognizable official logos (Claude aster, Grok singularity, Pi block mark,
+  OpenCode O, Codex, Antigravity arch) under `site/assets/logos/`; Antigravity
+  raised among primary orchestrators (after Grok Build); strip/table copy —
+  **Antigravity** only (no “agy”), **Grok Build** only, Support column with
+  **Native / Monitor** (Claude Code, Grok Build) and **Native / AgentAPI**
+  (Antigravity); Pi/OpenCode notes frame plugins as examples of any Monitor
+  on `hark monitor --for-monitor`. No backlog IDs in marketing copy.
 - Media detection (B044 / I002 foundation): `hark.audio.media` detects active
   non-Hark playback via Pulse/PipeWire sink-inputs (index, volume, mute, corked,
   application.name) plus optional MPRIS (`playerctl`). Public API:

@@ -1,11 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <!-- Angle-bracket code mark — OpenCode -->
-  <path
-    fill="#eef1f7"
-    d="M11.2 7.4a1.35 1.35 0 0 1 .1 1.9L6.85 14.4a2.2 2.2 0 0 0 0 3.2l4.45 5.1a1.35 1.35 0 1 1-2.05 1.75l-4.45-5.1a4.9 4.9 0 0 1 0-6.7l4.45-5.1a1.35 1.35 0 0 1 1.95-.15Zm9.6 0a1.35 1.35 0 0 1 1.95.15l4.45 5.1a4.9 4.9 0 0 1 0 6.7l-4.45 5.1a1.35 1.35 0 1 1-2.05-1.75l4.45-5.1a2.2 2.2 0 0 0 0-3.2l-4.45-5.1a1.35 1.35 0 0 1 .1-1.9Z"
-  />
-  <path
-    fill="#5eead4"
-    d="M18.35 8.1a1.25 1.25 0 0 1 .55 1.68l-4.2 9.4a1.25 1.25 0 1 1-2.3-1.03l4.2-9.4a1.25 1.25 0 0 1 1.75-.65Z"
-  />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" fill="none" role="img" aria-label="OpenCode">
+  <!-- Official OpenCode O mark (opencode.ai/brand); monochrome for dark bg -->
+  <path fill="#a4adc0" d="M18 30H6V18H18V30Z"/>
+  <path fill="#eef1f7" fill-rule="evenodd" d="M24 36H0V6H24V36ZM18 12H6V30H18V12Z"/>
 </svg>

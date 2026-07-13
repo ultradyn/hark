@@ -34,28 +34,32 @@ is blocked. Edit stacks in `css/tokens.css`.
 **Performance:** static SVG diagram (no canvas loop), minimal CSS/JS; three
 webfont families only. Prefer editing tokens over adding dependencies.
 
-### Compatible-agent logos (B048)
+### Compatible-agent logos (B048 / B052)
 
-Local monochrome SVGs live in **`assets/logos/`** (dark-bg fills, no CDN):
+Local monochrome SVGs live in **`assets/logos/`** (dark-bg fills, no CDN).
+Marks are simplified official brand glyphs (not generic placeholders):
 
-| File | Agent |
-|------|--------|
-| `claude.svg` | Claude Code |
-| `grok.svg` | Grok Build / Grok CLI |
-| `pi.svg` | Pi |
-| `opencode.svg` | OpenCode |
-| `codex.svg` | Codex / others |
-| `antigravity.svg` | Antigravity (agy) — placeholder mark |
+| File | Agent | Source |
+|------|--------|--------|
+| `claude.svg` | Claude Code | Anthropic Claude aster |
+| `grok.svg` | Grok Build | grok.com singularity mark |
+| `antigravity.svg` | Antigravity | Google Antigravity arch |
+| `pi.svg` | Pi | pi.dev block P+i mark |
+| `opencode.svg` | OpenCode | opencode.ai/brand O mark |
+| `codex.svg` | Codex / others | OpenAI Codex mark |
 
-Homepage `#supports` shows a **logo strip** plus logos in the compatibility table
-(`.logo-strip`, `.agent-cell` in `css/components.css`).
+Homepage `#supports` strip order matches the primary table rows:
+**Claude Code → Grok Build → Antigravity → Pi → OpenCode → Codex**.
+Marketing UI uses product names only (no CLI binary aliases).
 
 **Adding a logo**
 
-1. Drop a square SVG in `assets/logos/` (32×32 viewBox recommended). Use light
-   fills (`#eef1f7` / brand accents) so marks read on `--bg-void`.
+1. Drop a square SVG in `assets/logos/` (viewBox as provided by brand; 24×24
+   common). Use light fills (`#eef1f7` / muted accents) so marks read on
+   `--bg-void`.
 2. Wire it in `index.html` — strip item + table row (`alt` on strip images;
-   decorative `alt=""` + adjacent name in the table).
+   decorative `alt=""` + adjacent name in the table). Keep strip order aligned
+   with the table.
 3. Prefer local files over hotlinked brand CDNs (broken/offline-proof).
 4. Keep names short for mobile; the table wraps in `.supports-table-wrap` for
    horizontal scroll when needed.

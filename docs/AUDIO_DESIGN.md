@@ -129,10 +129,22 @@ activation_phrases = ["hey hark", "hey herald", "okay hark"]
 engine = "vosk"          # or text_probe for tests
 # model_path = "/path/to/vosk-model-small-en-us"
 snippet_s = 2.5
+# One-shot wake wait / continuous idle cycle length (seconds).
+# 0 = wait indefinitely (no ambient.timeout cycle).
 timeout_s = 300
+# Emit ambient.timeout on continuous idle cycles (NDJSON + syslog).
+# Default on — useful as a heartbeat when watching provider cache / dogfood.
+# Set false to quiet long-running Mode A (still re-enters the wake wait).
+surface_timeouts = true
+# emit_timeout_events = true  # alias of surface_timeouts
 ```
 
-CLI: `hark ambient` (forces a wake+listen cycle).
+| Key | Default | Notes |
+|-----|---------|--------|
+| `timeout_s` | `300` | One-shot: max wait for a wake before `ambient.timeout`. Continuous Mode A: idle cycle length before re-entering the wake wait (and optionally emitting `ambient.timeout`). `0` = no deadline / no timeout event. |
+| `surface_timeouts` | `true` | When **on**, continuous ambient surfaces `ambient.timeout` each idle cycle (monitor NDJSON + syslog) as a heartbeat. When **off**, continuous idle cycles stay quiet (no timeout event) — turn off for noisy long-running Mode A; leave on if you want cache-warmup / liveness visibility. Alias: `emit_timeout_events`. One-shot `hark ambient --once` always emits timeout when nothing is heard. |
+
+CLI: `hark ambient` (forces a wake+listen cycle). Continuous: `hark ambient` without `--once`.
 
 ## Half-duplex sequence (answer)
 

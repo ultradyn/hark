@@ -6,6 +6,14 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Ambient timeout heartbeat (B033): continuous Mode A still cycles on
+  `ambient.timeout_s` (default 300s), but emission of `ambient.timeout` to
+  monitor NDJSON/syslog is gated by `ambient.surface_timeouts` (default **on**).
+  Set `surface_timeouts = false` (alias `emit_timeout_events`) to quiet long-running
+  idle cycles; leave on as a heartbeat when watching provider cache / dogfood.
+  `timeout_s = 0` means wait indefinitely (no timeout cycle). See
+  `docs/AUDIO_DESIGN.md`.
+
 - Self-detection (B029): when `hark watch` runs inside a herdr pane it now
   detects its own pane (via `HERDR_ENV`/`HERDR_PANE_ID`/`HERDR_SOCKET_PATH`) and
   excludes it from watch — no self events, no self pane reads (prevents feedback

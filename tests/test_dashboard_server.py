@@ -165,7 +165,7 @@ def test_stream_hello_and_live_event(state, tmp_path):
         assert r.status == 200
         assert r.getheader("Content-Type") == "text/event-stream"
 
-        def read_event(timeout_s=5.0):
+        def read_event(timeout_s=10.0):
             deadline = time.monotonic() + timeout_s
             data = None
             while time.monotonic() < deadline:

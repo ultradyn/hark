@@ -1,0 +1,45 @@
+---
+complexity: medium
+created_at: "2026-07-13T15:12:14Z"
+depends_on: []
+estimate_hours: 3
+id: B074
+priority: high
+status: pending
+tags: []
+title: 'Radio answer: long pause after speech opens should auto-end (~3× end_silence)'
+updated_at: "2026-07-13T15:12:14Z"
+---
+## Problem
+
+When answering a question with **`end_mode = radio`**, the mic stays open through long pauses until an explicit end phrase (`over`, `okay over`, product phrases) or agent `listen-end` / max_listen. Users who forget the radio closer can leave the capture open indefinitely after they are done speaking.
+
+## Desired behavior
+
+For **answer / ask windows** (post-prompt recording — not idle ambient wake):
+
+1. User **starts talking** (speech gate has opened at least once for this stream).
+2. Then a **continuous quiet** lasts longer than **~3× the normal silence end** (default `end_silence_s` ≈ 2.1s → **~6.3s**).
+3. Treat that as an automatic **finish**, same path as soft-end / `over` (finalize STT + close stream; do not cancel).
+
+Before speech has opened, do **not** apply this long-pause auto-end (initial wait still uses existing timeouts / nudges).
+
+## Config sketch (suggested)
+
+- `listen.radio_idle_end_silence_s` (or `radio_post_speech_end_silence_s`) default **`3 * end_silence_s`** (~6.3s), overridable.
+- Only when `end_mode == radio` and speech has opened.
+- Soft end phrases + product end phrases remain; this is a **silence fallback after speech**, not a return to silence-mode endpointing for short pauses.
+
+## Acceptance
+
+- [ ] Radio answer: speak, pause ~6.3s+ after open → capture finishes without saying over
+- [ ] Radio answer: speak, pause only ~2s (normal thinking) → still recording
+- [ ] Radio answer: no speech yet, long quiet → existing initial timeout / nudge behavior (not this auto-end)
+- [ ] Soft/product end phrases still work and finish sooner when said
+- [ ] Silence end_mode unchanged (still uses `end_silence_s` as today)
+- [ ] Docs (AUDIO_DESIGN / SPEC) + CHANGELOG note
+
+## Related
+
+- B003 / B039 soft end phrases; B068 radio end UX; `radio_partial_silence_s` (partial cadence only — must not finalize)
+- Explicitly: partial silence (~0.6s) must remain non-terminal; only the long post-speech idle ends the stream

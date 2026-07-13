@@ -6,6 +6,15 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Media duck/pause during STT capture (B046 / I002): answer-window and post-wake
+  listen lower non-Hark sink-input volumes (and optionally pause MPRIS players)
+  so background music does not bleed into the mic / energy gate / cloud STT.
+  Wired once in `run_listen` via the same nestable `duck_media` primitive as TTS,
+  with **explicit** STT flags (not TTS defaults). Continuous idle ambient wake
+  (local Vosk) is **not** ducked. Config: `duck_media_during_stt` (default on),
+  `pause_media_during_stt` (default **on** for dogfood), reuses `duck_level` /
+  `duck_exclude_apps` / `media_check_mpris`. Fail-open + always restore.
+  See `docs/AUDIO_DESIGN.md`.
 - Media ducking during TTS (B045 / I002): when music/podcasts play, TTS no longer
   has to fight full volume. `duck_media` / `duck_media_during` snapshots non-Hark
   sink-input volumes, lowers each to `prior * duck_level` (default **0.15**) via

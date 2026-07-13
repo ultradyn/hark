@@ -70,11 +70,13 @@ with duck_media(level=cfg.audio.duck_level):
 - Default **on**: `duck_media_during_tts = true`, `duck_level ≈ 0.2`.
 - Log `media.ducked` / restore counts to syslog for dogfood.
 
-### Duck during STT (B046)
+### Duck during STT (B046) — shipped
 
-- Arm duck when capture window opens; restore on end/cancel/timeout/exception.
-- Default **on** for answer/post-wake listen; **not** for continuous idle Vosk wake by default.
-- Optional `pause_media_during_stt` (MPRIS Pause/Play), default **off**.
+- Arm duck in `run_listen` for the full answer-window / post-wake capture; restore
+  on end/cancel/timeout/exception.
+- Default **on** for answer/post-wake listen; **not** for continuous idle Vosk wake.
+- `pause_media_during_stt` (MPRIS Pause/Play), default **on** (user refinement / dogfood).
+- Callers pass `enabled` / `pause_players` explicitly (do not inherit TTS defaults).
 
 ### Config / docs (B047)
 
@@ -82,8 +84,8 @@ with duck_media(level=cfg.audio.duck_level):
 [audio]
 duck_media_during_tts = true
 duck_media_during_stt = true
-duck_level = 0.2
-pause_media_during_stt = false
+duck_level = 0.15
+pause_media_during_stt = true   # dogfood default on (plan originally said false)
 # duck_exclude_apps = ["easyeffects"]  # optional
 ```
 

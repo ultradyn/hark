@@ -1,4 +1,4 @@
-"""Active media detection + ducking (B044/B045) — fixture pactl blobs, no live audio."""
+"""Active media detection + ducking (B044–B046) — fixture pactl blobs, no live audio."""
 
 from __future__ import annotations
 
@@ -653,6 +653,8 @@ def test_config_duck_keys_load(tmp_path):
 [audio]
 duck_media_during_tts = false
 pause_media_during_tts = true
+duck_media_during_stt = false
+pause_media_during_stt = false
 duck_level = 0.2
 duck_exclude_apps = ["easyeffects", "helvum"]
 media_check_mpris = false
@@ -662,6 +664,8 @@ media_check_mpris = false
     cfg = load_config(path)
     assert cfg.audio.duck_media_during_tts is False
     assert cfg.audio.pause_media_during_tts is True
+    assert cfg.audio.duck_media_during_stt is False
+    assert cfg.audio.pause_media_during_stt is False
     assert cfg.audio.duck_level == 0.2
     assert cfg.audio.duck_exclude_apps == ["easyeffects", "helvum"]
     assert cfg.audio.media_check_mpris is False
@@ -675,6 +679,9 @@ def test_config_duck_defaults(tmp_path):
     cfg = load_config(path)
     assert cfg.audio.duck_media_during_tts is True
     assert cfg.audio.pause_media_during_tts is False
+    # B046: STT duck on; pause_media_during_stt dogfood default true
+    assert cfg.audio.duck_media_during_stt is True
+    assert cfg.audio.pause_media_during_stt is True
     assert cfg.audio.duck_level == 0.15
     assert cfg.audio.duck_exclude_apps == []
     assert cfg.audio.media_check_mpris is True
@@ -790,3 +797,281 @@ def test_run_tts_conference_skip_does_not_duck(monkeypatch):
     )
     assert out.get("skipped") is True
     assert duck_entered["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# B046 — STT capture-window duck / pause
+# ---------------------------------------------------------------------------
+
+
+def test_duck_media_pause_media_during_stt():
+    """pause_players=True (STT default) pauses MPRIS Playing + ducks sink-inputs."""
+    cmds: list[list[str]] = []
+
+    def run_cmd(args: list[str]) -> bool:
+        cmds.append(list(args))
+        return True
+
+    def run_capture(args: list[str]) -> str:
+        if "metadata" in args:
+            return "spotify|Playing\n"
+        return ""
+
+    with duck_media(
+        enabled=True,
+        level=0.15,
+        pause_players=True,
+        check_mpris=True,
+        sink_input_blob=SPOTIFY_PLAYING,
+        run_cmd=run_cmd,
+        run_capture=run_capture,
+        which_fn=lambda _: "/usr/bin/playerctl",
+    ) as state:
+        assert "spotify" in state.paused_players
+        assert state.applied is True
+        assert 42 in state.indices
+
+    assert ["playerctl", "-p", "spotify", "pause"] in cmds
+    assert ["playerctl", "-p", "spotify", "play"] in cmds
+    assert any(
+        c == ["pactl", "set-sink-input-volume", "42", "12%"] for c in cmds
+    )
+
+
+def test_duck_media_stt_pause_off_still_ducks_volume():
+    """pause_media_during_stt=false → no MPRIS pause, volumes still ducked."""
+    cmds: list[list[str]] = []
+
+    def run_cmd(args: list[str]) -> bool:
+        cmds.append(list(args))
+        return True
+
+    def run_capture(args: list[str]) -> str:
+        if "metadata" in args:
+            return "spotify|Playing\n"
+        return "should not be used for pause when pause_players=False"
+
+    with duck_media(
+        enabled=True,
+        level=0.15,
+        pause_players=False,
+        check_mpris=True,
+        sink_input_blob=SPOTIFY_PLAYING,
+        run_cmd=run_cmd,
+        run_capture=run_capture,
+        which_fn=lambda _: "/usr/bin/playerctl",
+    ) as state:
+        assert state.paused_players == []
+        assert state.applied is True
+        assert 42 in state.indices
+
+    assert not any("playerctl" in c for c in cmds)
+    assert any(
+        c == ["pactl", "set-sink-input-volume", "42", "12%"] for c in cmds
+    )
+    assert any(
+        c == ["pactl", "set-sink-input-volume", "42", "52428"] for c in cmds
+    )
+
+
+def test_run_listen_wires_stt_duck_explicit_flags(monkeypatch, tmp_path):
+    """run_listen passes duck_media_during_stt / pause_media_during_stt explicitly."""
+    from contextlib import contextmanager
+    from dataclasses import dataclass
+
+    from hark.audio.capture import CaptureResult
+    from hark.audio.media import DuckState
+    from hark.config import AudioConfig, HarkConfig, ListenConfig
+    from hark.providers.base import Transcript
+    from hark.speech import run_listen
+    from hark.usage import UsageStore
+
+    duck_calls: list[dict] = []
+
+    @contextmanager
+    def fake_duck(cfg, **kwargs):
+        duck_calls.append(kwargs)
+        en = kwargs.get("enabled", False)
+        yield DuckState(
+            enabled=bool(en),
+            applied=bool(en),
+            level=0.15,
+            indices=(42,) if en else (),
+            paused_players=["spotify"] if kwargs.get("pause_players") else [],
+        )
+
+    @dataclass
+    class FakeStt:
+        name: str = "fake"
+
+        def transcribe(self, wav_bytes, *, language=None):
+            del wav_bytes, language
+            return Transcript(text="hello world", provider=self.name)
+
+    pcm = b"\x00\x00" * 1600
+
+    def fake_capture(**kwargs):
+        del kwargs
+        return CaptureResult(
+            pcm16=pcm,
+            sample_rate=16000,
+            duration_ms=500,
+            speech_ms=400,
+            wait_speech_ms=50,
+            peak_rms=0.02,
+            peak_db=-34.0,
+        )
+
+    class _NullCtx:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("hark.speech.duck_media", fake_duck)
+    monkeypatch.setattr("hark.speech.resolve_stt", lambda *a, **k: FakeStt())
+    monkeypatch.setattr("hark.speech.capture_utterance", fake_capture)
+    monkeypatch.setattr("hark.speech.pause_ambient_for_mic", lambda **k: _NullCtx())
+    monkeypatch.setattr("hark.speech.MicLease", lambda *a, **k: _NullCtx())
+    monkeypatch.setattr("hark.speech.BusySection", lambda *a, **k: _NullCtx())
+    monkeypatch.setattr("hark.speech.register_active_listen", lambda *a, **k: None)
+    monkeypatch.setattr("hark.speech.clear_active_listen", lambda *a, **k: None)
+    monkeypatch.setattr("hark.speech.consume_listen_action", lambda *a, **k: None)
+    monkeypatch.setattr("hark.speech.poll_listen_action", lambda *a, **k: None)
+    monkeypatch.setattr("hark.speech.play_record_start", lambda: None)
+    monkeypatch.setattr("hark.speech.play_record_stop", lambda: None)
+    monkeypatch.setattr("hark.speech.configure_cues_from_config", lambda cfg: None)
+    monkeypatch.setattr("hark.speech.time.sleep", lambda s: None)
+    monkeypatch.setattr(
+        "hark.speech.UsageStore",
+        lambda: UsageStore(tmp_path / "usage.jsonl"),
+    )
+
+    # Defaults: duck on, pause on for STT
+    cfg = HarkConfig(
+        audio=AudioConfig(
+            duck_media_during_stt=True,
+            pause_media_during_stt=True,
+        ),
+        listen=ListenConfig(empty_stt_retry=False, empty_stt_nudge=False),
+    )
+    result = run_listen(cfg, post_tts_guard_s=0)
+    assert result.text == "hello world"
+    assert len(duck_calls) == 1
+    assert duck_calls[0].get("enabled") is True
+    assert duck_calls[0].get("pause_players") is True
+    assert duck_calls[0].get("exclude_conference") is True
+
+    # Kill-switch + pause off — still enter duck_media with explicit False flags
+    duck_calls.clear()
+    cfg2 = HarkConfig(
+        audio=AudioConfig(
+            duck_media_during_stt=False,
+            pause_media_during_stt=False,
+        ),
+        listen=ListenConfig(empty_stt_retry=False, empty_stt_nudge=False),
+    )
+    result2 = run_listen(cfg2, post_tts_guard_s=0)
+    assert result2.text == "hello world"
+    assert len(duck_calls) == 1
+    assert duck_calls[0].get("enabled") is False
+    assert duck_calls[0].get("pause_players") is False
+
+
+def test_run_listen_restores_duck_on_exception(monkeypatch, tmp_path):
+    """duck_media finally restores even when capture/STT raises."""
+    from hark.config import AudioConfig, HarkConfig, ListenConfig
+    from hark.speech import run_listen
+    from hark.usage import UsageStore
+
+    cmds: list[list[str]] = []
+    inside = {"n": 0}
+
+    def run_cmd(args: list[str]) -> bool:
+        cmds.append(list(args))
+        return True
+
+    def real_duck(*a, **k):
+        # Force fixture blob so we do not call live pactl
+        k = dict(k)
+        k.setdefault("sink_input_blob", SPOTIFY_PLAYING)
+        k.setdefault("run_cmd", run_cmd)
+        k.setdefault("check_mpris", False)
+        return duck_media(*a, **k)
+
+    def boom_capture(**kwargs):
+        del kwargs
+        inside["n"] += 1
+        raise RuntimeError("capture boom")
+
+    class _NullCtx:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("hark.speech.duck_media", real_duck)
+    monkeypatch.setattr(
+        "hark.speech.resolve_stt",
+        lambda *a, **k: type("S", (), {"name": "fake"})(),
+    )
+    monkeypatch.setattr("hark.speech.capture_utterance", boom_capture)
+    monkeypatch.setattr("hark.speech.pause_ambient_for_mic", lambda **k: _NullCtx())
+    monkeypatch.setattr("hark.speech.MicLease", lambda *a, **k: _NullCtx())
+    monkeypatch.setattr("hark.speech.BusySection", lambda *a, **k: _NullCtx())
+    monkeypatch.setattr("hark.speech.register_active_listen", lambda *a, **k: None)
+    monkeypatch.setattr("hark.speech.clear_active_listen", lambda *a, **k: None)
+    monkeypatch.setattr("hark.speech.consume_listen_action", lambda *a, **k: None)
+    monkeypatch.setattr("hark.speech.poll_listen_action", lambda *a, **k: None)
+    monkeypatch.setattr("hark.speech.play_record_start", lambda: None)
+    monkeypatch.setattr("hark.speech.play_record_stop", lambda: None)
+    monkeypatch.setattr("hark.speech.configure_cues_from_config", lambda cfg: None)
+    monkeypatch.setattr("hark.speech.time.sleep", lambda s: None)
+    monkeypatch.setattr(
+        "hark.speech.UsageStore",
+        lambda: UsageStore(tmp_path / "usage.jsonl"),
+    )
+
+    cfg = HarkConfig(
+        audio=AudioConfig(
+            duck_media_during_stt=True,
+            pause_media_during_stt=False,
+        ),
+        listen=ListenConfig(
+            empty_stt_retry=False,
+            empty_stt_nudge=False,
+            no_open_retry=False,
+            no_open_nudge=False,
+        ),
+    )
+    raised = False
+    try:
+        run_listen(cfg, post_tts_guard_s=0)
+    except RuntimeError as exc:
+        raised = True
+        assert "capture boom" in str(exc)
+    assert raised
+    assert inside["n"] == 1
+    # Duck set then restore
+    volume_cmds = [
+        c for c in cmds if c[:2] == ["pactl", "set-sink-input-volume"]
+    ]
+    assert any(c[-1] == "12%" for c in volume_cmds)
+    assert any(c[-1] == "52428" for c in volume_cmds)
+    assert volume_cmds[-1][-1] == "52428"
+
+
+def test_ambient_wake_idle_does_not_import_run_listen_duck():
+    """Idle ambient wake path uses record_seconds, not run_listen (no STT duck)."""
+    import inspect
+
+    import hark.ambient as ambient
+
+    src = inspect.getsource(ambient._wait_for_wake)
+    assert "duck_media" not in src
+    assert "record_seconds" in src
+    # Post-wake STT is separate and goes through run_listen
+    complete_src = inspect.getsource(ambient.complete_after_wake)
+    assert "run_listen" in complete_src

@@ -881,20 +881,23 @@ def duck_media(
 
     Config (``AudioConfig`` / ``cfg.audio``):
 
-    - ``duck_media_during_tts`` / kill-switch via ``enabled``
+    - ``duck_media_during_tts`` when ``enabled`` is omitted (TTS default)
     - ``duck_level`` (0.0–1.0 of prior volume; default 0.15)
-    - ``pause_media_during_tts`` → MPRIS Pause for Playing players + duck rest
+    - ``pause_media_during_tts`` when ``pause_players`` is omitted
     - ``duck_exclude_apps`` extra app filters
 
-    Fail-open: set failures still allow TTS; restore runs in ``finally``.
+    Fail-open: set failures still allow TTS/STT; restore runs in ``finally``.
     Nestable: only the outermost context applies and restores.
 
-    Same API is intended for B046 STT windows (pass ``enabled`` from
-    ``duck_media_during_stt`` etc.).
+    For STT capture windows (B046), callers **must** pass ``enabled`` /
+    ``pause_players`` explicitly from ``duck_media_during_stt`` /
+    ``pause_media_during_stt`` — do not rely on TTS defaults
+    (``pause_media_during_tts`` defaults off; STT pause defaults on).
     """
     audio = _audio_cfg(cfg)
     if enabled is None:
         # Default on when no cfg (B045 product default); cfg kill-switch wins.
+        # STT callers must pass enabled= from duck_media_during_stt explicitly.
         if audio is not None:
             enabled = bool(getattr(audio, "duck_media_during_tts", True))
         else:
@@ -907,6 +910,7 @@ def duck_media(
         )
     level = _clamp_level(level)
     if pause_players is None:
+        # TTS default only; STT must pass pause_players from pause_media_during_stt.
         pause_players = bool(
             getattr(audio, "pause_media_during_tts", False) if audio else False
         )

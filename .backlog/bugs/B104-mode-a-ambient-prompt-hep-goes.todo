@@ -1,0 +1,73 @@
+---
+complexity: medium
+created_at: "2026-07-13T22:07:54Z"
+depends_on: []
+estimate_hours: 2
+id: B104
+priority: high
+status: pending
+tags:
+    - mode-a
+    - monitor
+    - ambient
+    - delivery
+    - dogfood
+title: 'Mode A: ambient.prompt HEP goes to ambient-restart.log; hark monitor only tails ambient.jsonl so STT finals never wake orchestrator'
+updated_at: "2026-07-13T22:07:54Z"
+---
+## Summary
+
+Final ambient STT prompts are successfully transcribed and emitted as `hark.event.v1` / `ambient.prompt`, but Mode A orchestrator Monitors often never receive them. Operator has to re-speak or discover prompts only via `hark logs` / `system.jsonl`.
+
+## Dogfood evidence (2026-07-14 ~08:03–08:04 AEST / 22:03–22:04 UTC)
+
+| event_id | phrase | outcome |
+|----------|--------|---------|
+| `19f5d80271efb888a56378eca2c` | hey irris | long py-subagents job prompt — **not** delivered to Grok Mode A session |
+| `19f5d826ac4a236e1ca3049d965` | irris | meta: "messages don't come through the monitors" — **not** delivered |
+
+### Where they appear
+
+- **Present** as full HEP NDJSON in `~/.local/state/hark/ambient-restart.log` (stdout of `hark ambient`)
+- **Present** as syslog rows in `system.jsonl` / `ambient-prompts.jsonl` (`event=ambient.prompt`, no `schema`/`kind`)
+- **Absent** from `ambient.jsonl` (last HEP `ambient.prompt` there: `19f5cd76…` at `2026-07-13T18:57:44Z`; file mtime stuck ~`19:18Z`)
+- **Absent** from `events.jsonl` / `deliveries.jsonl` (expected — unbound ambient prompts)
+- `hark monitor --for-monitor` only follows `DEFAULT_FEED_FILES = ("watch.jsonl", "ambient.jsonl")` (`monitor_feed.py`)
+
+### Live process proof (same host)
+
+```
+pid 34174 hark ambient
+  fd 1 -> .../ambient-restart.log
+  fd 2 -> .../ambient-restart.log
+```
+
+Workers were started such that ambient **stdout is the restart log**, not `ambient.jsonl`. HEP wake kinds (`ambient.prompt`, `ambient.partial`, …) therefore never append to the feed `hark monitor` tails.
+
+Related: dual `hark monitor --for-monitor` (B102) was also armed — secondary; even a single healthy monitor cannot wake if the feed file is stale.
+
+## Expected
+
+1. Every final `ambient.prompt` (and partials if radio) is appended as HEP to the same path `hark monitor` follows (`ambient.jsonl` under state dir), regardless of restart/logging redirects.
+2. Optionally: `hark doctor` / `hark status` flags when ambient.jsonl mtime lags live ambient / when ambient stdout is not ambient.jsonl.
+3. Optionally: monitor also follows ambient-restart.log **or** workers always tee HEP to ambient.jsonl.
+
+## Acceptance
+
+- [ ] After wake+STT final, a line with `schema=hark.event.v1` `kind=ambient.prompt` appears in `ambient.jsonl` within ~1s
+- [ ] Concurrent `hark monitor --for-monitor --replay 0` prints a compact line for that event_id
+- [ ] Restart ambient via whatever path mode-a / workers / `hark restart` uses; still writes HEP to ambient.jsonl
+- [ ] Regression test: ambient stdout redirected elsewhere still dual-writes HEP wake events to ambient.jsonl (or monitor follows actual stdout path)
+- [ ] Document operator check: `ls -l --time-style=full-iso ambient.jsonl ambient-restart.log` + `rg ambient.prompt`
+
+## Workarounds (operator)
+
+- `rg '"kind":"ambient.prompt"' ~/.local/state/hark/ambient-restart.log | tail`
+- Or `hark logs` / ambient-prompts.jsonl
+- Fix workers launch so ambient stdout → ambient.jsonl (and stderr → restart log)
+
+## Related
+
+- B102 dual monitor arm (amplifies confusion; not root cause here)
+- B101 stale delivery queue (separate; Herdr-bound events)
+- B011 historical "must arm monitor" — this is feed wiring, not skill forgetfulness

@@ -75,13 +75,18 @@ jobs:
       - name: Upgrade npm (for OIDC trusted publishing)
         run: npm install -g npm@latest
 
-      # No NODE_AUTH_TOKEN: npm exchanges the GitHub OIDC token for a
-      # short-lived publish token and attaches build provenance automatically
-      # (public repo). Configure once at:
-      # https://www.npmjs.com/package/@ultradyn/hark/access
-      # → Trusted Publisher → GitHub Actions → workflow: release.yml
+      # Trusted publishing: npm exchanges the GitHub OIDC token for a
+      # short-lived publish token and attaches build provenance automatically.
+      # setup-node with registry-url injects a dummy NODE_AUTH_TOKEN that
+      # breaks OIDC (404) — must clear it. No NPM_TOKEN secret.
+      # Configure once: https://www.npmjs.com/package/@ultradyn/hark/access
+      # → Trusted Publisher → GitHub Actions
+      #    org/user: clankercode  repo: hark  workflow: release.yml
       - name: Publish @ultradyn/hark to npm
-        run: npm publish --access public --provenance
+        env:
+          # Empty string clears the placeholder from actions/setup-node
+          NODE_AUTH_TOKEN: ""
+        run: npm publish --access public
 
       - name: Create GitHub Release
         working-directory: .

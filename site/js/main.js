@@ -11,7 +11,7 @@
 })();
 
 /**
- * Install picker — segmented control (bash | npm | pnpm | bun).
+ * Install picker — segmented control (skills | bash | npm | pnpm | bun).
  * Configurable via data attributes on [data-install-picker]:
  *   data-install-url (bash one-liner source; default https://hark.xk.io/install.sh)
  *   data-repo-owner, data-repo-name, data-npm-package, data-skills-repo
@@ -30,6 +30,11 @@
 
   /** @type {Record<string, { cmd: string, hint: string, title: string }>} */
   const commands = {
+    skills: {
+      cmd: `npx skills add ${skillsRepo} -g -y`,
+      hint: "# agent skills only · still need hark CLI (bash install or uv) for Mode A",
+      title: "skills · npx",
+    },
     bash: {
       cmd: `curl -fsSL ${installUrl} | bash`,
       hint: "# installs CLI + skills to ~/.claude/skills · script from hark.xk.io",
@@ -37,17 +42,17 @@
     },
     npm: {
       cmd: `npm i -g ${npmPackage}`,
-      hint: `# skills: npx skills add ${skillsRepo} -g -y  ·  or: hark-skill path`,
+      hint: `# package skills · or: npx skills add ${skillsRepo} -g -y`,
       title: "npm · global",
     },
     pnpm: {
       cmd: `pnpm add -g ${npmPackage}`,
-      hint: `# skills: npx skills add ${skillsRepo} -g -y  ·  or: hark-skill path`,
+      hint: `# package skills · or: npx skills add ${skillsRepo} -g -y`,
       title: "pnpm · global",
     },
     bun: {
       cmd: `bun add -g ${npmPackage}`,
-      hint: `# skills: npx skills add ${skillsRepo} -g -y  ·  or: hark-skill path`,
+      hint: `# package skills · or: npx skills add ${skillsRepo} -g -y`,
       title: "bun · global",
     },
   };
@@ -58,10 +63,10 @@
   const copyBtn = root.querySelector("[data-install-copy]");
   const radios = root.querySelectorAll('input[type="radio"][name="install-method"]');
 
-  let currentCmd = commands.bash.cmd;
+  let currentCmd = commands.skills.cmd;
 
   function select(method) {
-    const entry = commands[method] || commands.bash;
+    const entry = commands[method] || commands.skills;
     currentCmd = entry.cmd;
     if (cmdEl) cmdEl.textContent = entry.cmd;
     if (hintEl) hintEl.textContent = entry.hint;
@@ -81,7 +86,7 @@
 
   // Sync UI if a non-default radio is already checked (e.g. restored form state)
   const checked = root.querySelector('input[type="radio"][name="install-method"]:checked');
-  if (checked && checked.value !== "bash") {
+  if (checked && checked.value !== "skills") {
     select(checked.value);
   }
 

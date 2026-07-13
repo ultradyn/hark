@@ -482,7 +482,11 @@
               <legend class="sr-only">Install method</legend>
               <div class="segmented-control" role="presentation">
                 <label class="segmented-control__opt">
-                  <input type="radio" name="install-method" value="bash" checked />
+                  <input type="radio" name="install-method" value="skills" checked />
+                  <span class="segmented-control__label">skills</span>
+                </label>
+                <label class="segmented-control__opt">
+                  <input type="radio" name="install-method" value="bash" />
                   <span class="segmented-control__label">bash</span>
                 </label>
                 <label class="segmented-control__opt">
@@ -505,7 +509,7 @@
                 <span class="term__dot"></span>
                 <span class="term__dot"></span>
                 <span class="term__dot"></span>
-                <span class="term__title" data-install-title>bash · hark.xk.io</span>
+                <span class="term__title" data-install-title>skills · npx</span>
                 <button
                   type="button"
                   class="install-picker__copy"
@@ -518,10 +522,9 @@
               <div class="term__body">
                 <div class="install-picker__line">
                   <span class="prompt">$</span>
-                  <span class="cmd" data-install-cmd>curl -fsSL https://hark.xk.io/install.sh | bash</span>
+                  <span class="cmd" data-install-cmd>npx skills add ultradyn/hark -g -y</span>
                 </div>
-                <div class="dim" data-install-hint># installs CLI + skills to ~/.claude/skills · script from hark.xk.io</div>
-                <div><span class="prompt">$</span> <span class="cmd">hark doctor</span></div>
+                <div class="dim" data-install-hint># agent skills only · still need hark CLI (bash install or uv) for Mode A</div>
                 <div class="dim"># then in agent: /hark</div>
               </div>
             </div>

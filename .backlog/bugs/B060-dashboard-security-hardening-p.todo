@@ -1,0 +1,30 @@
+---
+complexity: medium
+created_at: "2026-07-13T14:19:32Z"
+depends_on:
+    - B057
+    - B058
+    - B059
+estimate_hours: 2
+id: B060
+priority: medium
+status: pending
+tags:
+    - dashboard
+    - security
+    - packaging
+    - docs
+title: 'Dashboard: security hardening, packaging, docs/site'
+updated_at: "2026-07-13T14:19:32Z"
+---
+## Scope
+Ship it per docs/plans/I003-dashboard.md.
+
+- Embed webui dist in Python package (hatch include); note Rust rust-embed path
+- Redaction audit across all endpoints; doctor check: non-localhost bind w/o token = fail
+- docs: DASHBOARD.md usage section, README + site mention, security notes (local bind, tailnet + token, no cloud dependency)
+
+## Acceptance
+- [ ] pip/uv install ships working hark serve with bundled webui
+- [ ] Doctor flags unsafe binds
+- [ ] Docs cover setup, auth, tailnet, threat notes

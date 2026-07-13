@@ -58,3 +58,4 @@ bugs:
     - file: B057-dashboard-herdr-state-map-pane.todo
     - file: B058-dashboard-voice-pipeline-deliv.todo
     - file: B059-dashboard-mic-dictation-browse.todo
+    - file: B060-dashboard-security-hardening-p.todo

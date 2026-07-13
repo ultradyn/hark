@@ -1,15 +1,14 @@
 ---
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T07:35:03Z"
 depends_on: []
 estimate_hours: 1
 id: B013
 priority: high
+started_at: null
 status: pending
-tags:
-    - dogfood
-    - audio
-    - wave
+tags: []
 title: Wave hardware mute vs pactl mute desync
 updated_at: "2026-07-13T07:35:03Z"
 ---
@@ -20,3 +19,5 @@ Operator: unmuted Wave hardware but behavior still felt dual-controlled; pactl m
 - Document expected Wave ring vs button
 - Prefer one mute path; restore correctly after TTS
 - Optional: detect hardware mute and avoid double-mute confusion
+
+Implemented: mute-sync watcher + ensure_unmuted cascade (Pulse+ALSA), hardware unmute edge, hark unmute full cascade, ambient starts watcher when sync_hw_unmute=true

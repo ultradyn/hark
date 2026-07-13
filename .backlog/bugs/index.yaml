@@ -18,3 +18,4 @@ bugs:
     - file: B017-hold-announcements-when-video.todo
     - file: B018-reply-send-text-must-submit-wi.todo
     - file: B019-surface-plausible-failed-wake.todo
+    - file: B020-test-custom-activation-phrase.todo

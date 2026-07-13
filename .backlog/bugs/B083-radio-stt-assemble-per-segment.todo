@@ -13,7 +13,36 @@ started_at: "2026-07-13T16:41:21Z"
 status: done
 tags: []
 title: 'Radio STT: assemble per-segment transcripts instead of cumulative re-STT (word loss)'
-updated_at: "2026-07-13T16:41:21Z"
+updated_at: "2026-07-13T16:53:00Z"
 ---
 
-Radio STT: assemble per-segment transcripts instead of cumulative re-STT (word loss)
+## Problem (operator)
+
+When radio mode chunked audio to the cloud STT, **earlier words disappeared** from
+later partials / final text: re-transcribing the *growing* WAV often rewrote the
+whole body shorter or differently (“reassembly” failure).
+
+## What landed
+
+1. **Per-segment STT** — each radio slice is transcribed alone (`purpose=radio`).
+2. **`join_radio_stt_segments`** — append segment texts with overlap trim.
+3. **Partials** — `text` is the joined cumulative body; `fragment` is the delta.
+4. **Final** — prefer join; full-audio re-STT is a *candidate only* via
+   `prefer_complete_transcript` (never replace a longer joined body).
+5. **`monotonic_partial_text`** — published partial `text` must not shrink across
+   slices (belt-and-suspenders).
+
+## Residual word loss (out of B083 scope — other tickets)
+
+| Cause | Ticket / note |
+|-------|----------------|
+| Energy-gate clips phonemes at segment edges | B075 pad (silence only); B079 pre-roll for answer open |
+| TTS mute eats timeout / silence clocks | **B084** |
+| Cloud STT omits words *inside* one segment | Provider quality; not assembly |
+| Echo reject clears buffer | Intentional (`text_segments.clear`) |
+
+## Acceptance (met)
+
+- [x] Multi-segment radio does not re-STT only-as-replacement for prior text
+- [x] Partial `text` is monotonic non-decreasing completeness vs prior partial
+- [x] Unit tests for join / prefer / monotonic

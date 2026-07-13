@@ -457,7 +457,8 @@ def join_radio_stt_segments(segments: list[str]) -> str:
     """Join per-segment STT without cumulative re-STT (avoids long-audio word loss).
 
     Each radio segment is transcribed alone; we assemble text with light overlap
-    trim so repeated phrase tails do not double.
+    trim so repeated phrase tails do not double. Empty segments are skipped so a
+    failed mid-slice STT does not erase prior text.
     """
     out: list[str] = []
     for raw in segments:
@@ -482,6 +483,42 @@ def join_radio_stt_segments(segments: list[str]) -> str:
         if part_toks:
             out.append(" ".join(part_toks))
     return " ".join(out).strip()
+
+
+def prefer_complete_transcript(a: str, b: str) -> str:
+    """Pick the more complete of two transcripts without inventing words.
+
+    Used so a full-audio re-STT cannot *replace* a longer joined partial body
+    with a shorter rewrite (the original word-loss symptom).
+    """
+    aa = " ".join((a or "").split()).strip()
+    bb = " ".join((b or "").split()).strip()
+    if not aa:
+        return bb
+    if not bb:
+        return aa
+    if aa == bb:
+        return aa
+    # One properly extends the other
+    if bb.startswith(aa) or aa in bb:
+        return bb
+    if aa.startswith(bb) or bb in aa:
+        return aa
+    # Prefer more tokens (conservative: do not merge incompatible rewrites)
+    if len(bb.split()) > len(aa.split()):
+        return bb
+    return aa
+
+
+def monotonic_partial_text(prev: str, candidate: str) -> str:
+    """Never shrink the published partial body across radio slices."""
+    p = " ".join((prev or "").split()).strip()
+    c = " ".join((candidate or "").split()).strip()
+    if not p:
+        return c
+    if not c:
+        return p
+    return prefer_complete_transcript(p, c)
 
 
 def run_listen(
@@ -1231,7 +1268,11 @@ def run_listen(
                     ),
                 )
                 if hit is None:
-                    body_so_far = (tr.text or "").strip()
+                    # Joined segment STT is append-only; still refuse shrink so a
+                    # flaky mid-slice rewrite cannot drop words Mode A already saw.
+                    body_so_far = monotonic_partial_text(
+                        last_partial_text, (tr.text or "").strip()
+                    )
                     if (
                         stream_partials
                         and body_so_far
@@ -1314,29 +1355,35 @@ def run_listen(
             if recording_cued:
                 play_record_stop()
             if pieces and agent_act in ("finish", None):
-                # Prefer assembled per-segment STT (stable); optional full re-STT only
-                # if assembly empty.
+                # Primary: per-segment join (B083). Optional full-audio re-STT is a
+                # *candidate only* — never replace a longer joined body (word loss).
                 if agent_act == "finish" or agent_act is None:
-                    body = join_radio_stt_segments(text_segments)
+                    from types import SimpleNamespace
+
+                    joined = join_radio_stt_segments(text_segments)
+                    # Monotonic vs last partial Mode A already saw
+                    body = monotonic_partial_text(last_partial_text, joined)
                     latency_ms = 0
                     tr_provider = last_provider
-                    if not body:
-                        wav = write_wav_bytes(b"".join(pieces), 16000)
+                    if len(pieces) >= 1:
+                        wav = write_wav_bytes(
+                            b"".join(pieces), last_sample_rate or 16000
+                        )
                         stt_seq += 1
-                        tr, latency_ms = _transcribe_logged(
+                        tr_full, latency_ms = _transcribe_logged(
                             stt,
                             wav,
                             stream_id=stream,
                             seq=stt_seq,
                             mode=mode.value,
                             purpose="radio_final",
-                            sample_rate=16000,
+                            sample_rate=last_sample_rate or 16000,
                         )
-                        body = (tr.text or "").strip()
-                        tr_provider = tr.provider
-                    else:
-                        from types import SimpleNamespace
-                        tr = SimpleNamespace(text=body, provider=tr_provider)
+                        tr_provider = getattr(tr_full, "provider", None) or tr_provider
+                        body = prefer_complete_transcript(
+                            body, (tr_full.text or "").strip()
+                        )
+                    tr = SimpleNamespace(text=body, provider=tr_provider)
                     if agent_act == "finish":
                         store.record_stt(
                             text=body,

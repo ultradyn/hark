@@ -297,3 +297,13 @@ def test_join_radio_stt_segments_overlap_trim():
 
     assert join_radio_stt_segments(["hello world", "world there"]) == "hello world there"
     assert join_radio_stt_segments(["alpha", "beta gamma"]) == "alpha beta gamma"
+
+
+def test_prefer_complete_transcript_never_shrinks():
+    from hark.speech import monotonic_partial_text, prefer_complete_transcript
+
+    assert prefer_complete_transcript("hello world", "hello") == "hello world"
+    assert prefer_complete_transcript("hello", "hello world there") == "hello world there"
+    assert prefer_complete_transcript("", "x") == "x"
+    assert monotonic_partial_text("one two three", "one two") == "one two three"
+    assert monotonic_partial_text("one two", "one two three four") == "one two three four"

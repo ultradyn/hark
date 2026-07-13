@@ -23,7 +23,15 @@ from hark.mic_coord import ambient_pause_requested
 from hark.partial import make_final_event, new_stream_id
 from hark.speech import run_listen, run_tts
 from hark.syslog import log as syslog
-from hark.wake import WakeBackend, WakeHit, build_wake_backend
+from hark.wake import (
+    DEFAULT_ACTIVATION_PHRASES,
+    NearMissAccumulator,
+    WakeBackend,
+    WakeHit,
+    build_wake_backend,
+    make_wake_near_miss_event,
+    plausible_near_miss,
+)
 
 
 @dataclass
@@ -49,15 +57,26 @@ def _wait_for_wake(
     debug_every_s: float = 15.0,
     debug_save: bool = False,
     debug_retention_days: float = 7.0,
+    near_miss_acc: NearMissAccumulator | None = None,
+    phrases: list[str] | tuple[str, ...] | None = None,
 ) -> WakeHit | None:
     """Record short windows until activation or deadline. Reuses backend (no reload).
 
     Mic lease is held **per snippet only**, and ambient yields while
     ``ambient.pause`` is set so listen/ask can take the mic.
+
+    Plausible failed activations are grouped and emitted as
+    ``ambient.wake_near_miss`` on *out* (see NearMissAccumulator schedule).
     """
     snippet = max(0.8, min(snippet_s, 2.5))
     last_debug = 0.0
     snips_since_purge = 0
+    acc = near_miss_acc
+    phrase_list = list(
+        phrases
+        if phrases is not None
+        else getattr(backend, "phrases", None) or DEFAULT_ACTIVATION_PHRASES
+    )
     while time.monotonic() < deadline:
         if shutdown_requested():
             return None
@@ -111,6 +130,8 @@ def _wait_for_wake(
                 snips_since_purge = 0
 
         if hit is not None:
+            if acc is not None:
+                acc.reset_pending()
             syslog(
                 "ambient.wake",
                 component="ambient",
@@ -122,6 +143,31 @@ def _wait_for_wake(
                 confidence=hit.confidence,
             )
             return hit
+
+        # Plausible failed wake → Mode A monitor (grouped), never spam on noise
+        if acc is not None and text:
+            miss = plausible_near_miss(text, phrase_list)
+            if miss is not None:
+                group = acc.add(miss)
+                if group is not None:
+                    ev = make_wake_near_miss_event(
+                        group,
+                        total_near_misses=acc.total,
+                        group_index=acc.group_index,
+                        phrases=phrase_list,
+                    )
+                    if out is not None:
+                        out.write(json.dumps(ev, separators=(",", ":")) + "\n")
+                        out.flush()
+                    syslog(
+                        "ambient.wake_near_miss",
+                        component="ambient",
+                        level="info",
+                        message=f"{len(group)} near-miss(es)",
+                        count=len(group),
+                        total_near_misses=acc.total,
+                        attempts=[m.text for m in group],
+                    )
 
         now = time.monotonic()
         if now - last_debug >= debug_every_s:
@@ -256,6 +302,7 @@ def run_ambient(
     announce: bool = True,
     backend: WakeBackend | None = None,
     out: TextIO | None = None,
+    near_miss_acc: NearMissAccumulator | None = None,
 ) -> AmbientResult:
     """One wake→prompt cycle. Pass backend= to avoid reloading vosk each time."""
     amb = cfg.ambient
@@ -283,6 +330,8 @@ def run_ambient(
         out=out,
         debug_save=bool(amb.debug),
         debug_retention_days=float(amb.debug_retention_days),
+        near_miss_acc=near_miss_acc,
+        phrases=amb.activation_phrases,
     )
 
     if hit is None:
@@ -382,6 +431,8 @@ def run_ambient_loop(
         phrases=cfg.ambient.activation_phrases,
         model_path=cfg.ambient.model_path,
     )
+    # Persist near-miss grouping across wake cycles for Mode A monitor
+    near_miss_acc = NearMissAccumulator()
     # Eager load vosk so boot TTS happens after model is ready
     try:
         backend.score_snippet(b"\x00\x00" * 1600, 16000)
@@ -442,6 +493,7 @@ def run_ambient_loop(
                 announce=announce,
                 backend=backend,
                 out=out,
+                near_miss_acc=near_miss_acc,
             )
             # Always emit if we got something useful; skip pure timeouts when shutting down
             if result.activated or not shutdown_requested():

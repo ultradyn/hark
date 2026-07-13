@@ -8,3 +8,4 @@ bugs:
     - file: B007-smart-turn-better-endpointing.todo
     - file: B008-ambient-wake-offline-re-decode.todo
     - file: B009-multi-session-voice-queue-ux-p.todo
+    - file: B010-auto-pause-ambient-when-ask-li.todo

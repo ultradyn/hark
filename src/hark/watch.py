@@ -13,9 +13,11 @@ from hark.delivery import DeliveryStore
 from hark.events import (
     DEFAULT_PANE_CAPTURE_LINES,
     DEFAULT_PANE_CAPTURE_MAX_CHARS,
+    detect_active_subagents,
     extract_question_excerpt,
     is_idle_like_status,
     looks_like_pending_question,
+    make_agent_busy_subagent,
     make_agent_needs_input,
     make_agent_question_changed,
     make_agent_status_event,
@@ -61,7 +63,11 @@ class _WatchErrorLimiter:
 
 
 class EdgeTracker:
-    """Edge-detect agent status changes; surface false-done menus as needs_input."""
+    """Edge-detect agent status changes; surface false-done menus as needs_input.
+
+    Also suppresses pure ``agent.completed`` while the pane still shows active
+    Grok/Herdr Tasks / subagent chrome (B096).
+    """
 
     def __init__(
         self,
@@ -76,6 +82,9 @@ class EdgeTracker:
         self._last_fp: dict[tuple[str, str], str] = {}
         # Status value for which we already ran a false-done pane inspect.
         self._false_done_scanned: dict[tuple[str, str], str] = {}
+        # Idle-like panes still showing active Tasks/subagents (count).
+        # While set, re-read pane each tick until the strip clears, then emit done.
+        self._subagents_busy: dict[tuple[str, str], int] = {}
         self.pane_capture = pane_capture
         self.pane_capture_lines = max(1, int(pane_capture_lines))
         self.pane_capture_max_chars = max(64, int(pane_capture_max_chars))
@@ -174,20 +183,27 @@ class EdgeTracker:
                 and question_for
                 and self._watch_cares_about_input(interest)
             ):
-                false_done_events = self._maybe_false_done(
-                    agent,
-                    key=key,
-                    prev=prev,
-                    cur=cur,
-                    question_for=question_for,
-                    also_completed=(
-                        cur in interest or prev in interest
+                # Own the idle-like transition entirely (menus, subagents, or
+                # real completed). Even an empty result must not fall through:
+                # busy-subagent dedupe returns [] while still not finished.
+                events.extend(
+                    self._maybe_false_done(
+                        agent,
+                        key=key,
+                        prev=prev,
+                        cur=cur,
+                        question_for=question_for,
+                        also_completed=(
+                            cur in interest or prev in interest
+                        )
+                        and (
+                            cur == "done"
+                            or "done" in interest
+                            or prev in interest
+                        ),
                     )
-                    and (cur == "done" or "done" in interest or prev in interest),
                 )
-                if false_done_events:
-                    events.extend(false_done_events)
-                    continue
+                continue
 
             if cur in interest or prev in interest:
                 events.append(
@@ -268,6 +284,35 @@ class EdgeTracker:
             )
         ]
 
+    def _emit_busy_subagent(
+        self,
+        agent: AgentInfo,
+        *,
+        key: tuple[str, str],
+        prev: str | None,
+        cur: str,
+        hit,
+        capture: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """Suppress completed; emit a single reclassified working event (deduped)."""
+        count = max(1, int(hit.count or 1))
+        self._subagents_busy[key] = count
+        # Keep re-checking until the strip clears (do not seal false-done scan).
+        self._false_done_scanned.pop(key, None)
+        dkey = (agent.session_id, agent.pane_id, "busy_subagent", str(count))
+        if dkey in self._dedupe:
+            return []
+        self._dedupe.add(dkey)
+        return [
+            make_agent_busy_subagent(
+                agent,
+                from_status=prev,
+                herdr_status=cur,
+                hit=hit,
+                pane_capture=capture if self.pane_capture else None,
+            )
+        ]
+
     def _maybe_false_done(
         self,
         agent: AgentInfo,
@@ -278,7 +323,6 @@ class EdgeTracker:
         question_for: Callable[[AgentInfo], str | None],
         also_completed: bool,
     ) -> list[dict[str, Any]]:
-        self._false_done_scanned[key] = cur
         raw = question_for(agent)
         q_text, capture = self._split_pane_text(raw)
         heuristic = self._heuristic_text(raw)
@@ -297,6 +341,17 @@ class EdgeTracker:
                     pane_capture=cap if self.pane_capture else None,
                 )
             ]
+
+        # Full-pane scan: task strip is often near the top (not trailing excerpt).
+        sub = detect_active_subagents(raw)
+        if sub:
+            return self._emit_busy_subagent(
+                agent, key=key, prev=prev, cur=cur, hit=sub, capture=capture
+            )
+
+        # Subagents just cleared while still idle-like → allow real completion.
+        self._subagents_busy.pop(key, None)
+        self._false_done_scanned[key] = cur
 
         if not heuristic and not q_text:
             return _completed_only()
@@ -350,9 +405,11 @@ class EdgeTracker:
         question_for: Callable[[AgentInfo], str | None] | None,
         detect_false_done: bool,
     ) -> list[dict[str, Any]]:
-        """While status is unchanged: question_changed (blocked) or late false-done.
+        """While status is unchanged: question_changed, busy-subagent, or late false-done.
 
-        Idle-like re-scan only once per status epoch (avoids pane-read spam).
+        Idle-like menu re-scan only once per status epoch (avoids pane-read spam).
+        Active Tasks/subagents keep re-checking until the strip clears, then
+        completion / needs_input may fire.
         """
         if not question_for:
             return []
@@ -384,43 +441,66 @@ class EdgeTracker:
                 )
             ]
 
-        # One late re-check after status settled on done/idle (menu may paint
-        # after the status edge). Skip if transition path already inspected.
-        if (
+        if not (
             detect_false_done
             and is_idle_like_status(cur)
             and self._watch_cares_about_input(interest)
-            and self._false_done_scanned.get(key) != cur
         ):
-            self._false_done_scanned[key] = cur
-            raw = question_for(agent)
-            q_text, capture = self._split_pane_text(raw)
-            heuristic = self._heuristic_text(raw)
-            if not heuristic:
-                return []
-            hit = looks_like_pending_question(heuristic)
-            if not hit:
-                return []
-            fp_src = extract_question_excerpt(raw or "") if raw else (q_text or "")
-            fp = question_fingerprint(
-                fp_src or q_text or "", list(hit.choices) or None
+            return []
+
+        was_busy = key in self._subagents_busy
+        needs_late_menu = self._false_done_scanned.get(key) != cur
+        if not was_busy and not needs_late_menu:
+            return []
+
+        raw = question_for(agent)
+        q_text, capture = self._split_pane_text(raw)
+        sub = detect_active_subagents(raw)
+        if sub:
+            return self._emit_busy_subagent(
+                agent, key=key, prev=cur, cur=cur, hit=sub, capture=capture
             )
-            dkey = (agent.session_id, agent.pane_id, "needs_input", fp)
-            if not fp or dkey in self._dedupe:
-                return []
-            self._dedupe.add(dkey)
-            self._last_fp[key] = fp
-            return [
-                make_agent_needs_input(
-                    agent,
-                    from_status=cur,
-                    to_status=cur,
-                    question_text=q_text or heuristic,
-                    hit=hit,
-                    pane_capture=capture,
-                )
-            ]
-        return []
+
+        if was_busy:
+            # Tasks/subagents settled while Herdr still idle-like → complete now.
+            self._subagents_busy.pop(key, None)
+            return self._maybe_false_done(
+                agent,
+                key=key,
+                prev=cur,
+                cur=cur,
+                question_for=question_for,
+                also_completed=cur == "done" and "done" in interest,
+            )
+
+        # One late re-check after status settled on done/idle (menu may paint
+        # after the status edge). Skip if transition path already inspected.
+        self._false_done_scanned[key] = cur
+        heuristic = self._heuristic_text(raw)
+        if not heuristic:
+            return []
+        hit = looks_like_pending_question(heuristic)
+        if not hit:
+            return []
+        fp_src = extract_question_excerpt(raw or "") if raw else (q_text or "")
+        fp = question_fingerprint(
+            fp_src or q_text or "", list(hit.choices) or None
+        )
+        dkey = (agent.session_id, agent.pane_id, "needs_input", fp)
+        if not fp or dkey in self._dedupe:
+            return []
+        self._dedupe.add(dkey)
+        self._last_fp[key] = fp
+        return [
+            make_agent_needs_input(
+                agent,
+                from_status=cur,
+                to_status=cur,
+                question_text=q_text or heuristic,
+                hit=hit,
+                pane_capture=capture,
+            )
+        ]
 
 
 def _filter_self(
@@ -500,8 +580,10 @@ def run_watch(
     pane_capture_max_chars = int(
         getattr(cfg.watch, "pane_capture_max_chars", DEFAULT_PANE_CAPTURE_MAX_CHARS)
     )
-    # When capture is off, still read a modest trailing block for question text.
-    read_lines = pane_capture_lines if pane_capture else 40
+    # Always read a full viewport-ish block: menus are at the bottom, but
+    # Grok Tasks/subagent chrome is near the top (B096). Attachment of
+    # pane_capture to HEP is controlled separately by ``pane_capture``.
+    read_lines = max(40, pane_capture_lines)
 
     tracker = EdgeTracker(
         pane_capture=pane_capture,
@@ -544,9 +626,12 @@ def run_watch(
     )
 
     def question_for(agent: AgentInfo) -> str | None:
-        """Return recent pane body (full capture source text when enabled).
+        """Return recent pane body for EdgeTracker.
 
-        EdgeTracker splits this into a stable question excerpt + pane_capture.
+        Always prefer the full bounded read (not only the trailing ask excerpt):
+        false-done menus live at the bottom, but active Tasks/subagent chrome
+        (B096) is often near the **top** of the Herdr UI. EdgeTracker splits
+        excerpts + optional ``pane_capture`` itself.
         """
         if not read_questions:
             return None
@@ -555,10 +640,7 @@ def run_watch(
             text = client.read_pane(agent.pane_id, lines=read_lines)
             if not text or not str(text).strip():
                 return None
-            if pane_capture:
-                # Full body; EdgeTracker bounds via prepare_pane_capture.
-                return text
-            return extract_question_excerpt(text) or None
+            return text
         except (HerdrError, StopIteration):
             return None
 

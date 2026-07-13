@@ -1,7 +1,7 @@
 {
   "schema": "hark.fixtures.manifest.v1",
   "generated_at": "2026-07-13T16:11:28Z",
-  "count": 86,
+  "count": 87,
   "files": [
     {
       "path": "README.md",
@@ -177,6 +177,11 @@
       "path": "text/false_done.jsonl",
       "bytes": 1353,
       "sha256": "512ca459b5da29f5368415cab216714429485658da934ad75c668c7070714cb5"
+    },
+    {
+      "path": "text/subagent_tasks.jsonl",
+      "bytes": 2776,
+      "sha256": "9484e2ed08b8eb011fa2ae73a2cc23cef70197704b4f206464c5f92cc11b4929"
     },
     {
       "path": "text/fingerprint.jsonl",

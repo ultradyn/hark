@@ -1,0 +1,15 @@
+---
+complexity: medium
+created_at: "2026-07-13T11:38:50Z"
+depends_on: []
+estimate_hours: 1
+id: B035
+priority: medium
+status: pending
+tags:
+    - audio
+    - listen
+title: Validate Smart Turn v3 ONNX endpointing against a real model on capable hardware
+updated_at: "2026-07-13T11:38:50Z"
+---
+B007 added optional smart_turn endpointing (docs/ENDPOINTING.md). The ONNX loader's tensor names and Whisper-feature preprocessing follow the documented upstream pipecat smart-turn v3 contract but were NOT run against a real model export (no model/deps in CI; path is pragma: no cover; any failure falls back to the energy gate). Do NOT test on xsm (not beefy enough) — validate + refine on capable hardware: install the [smart-turn] extra, fetch a real pipecat smart-turn v3 ONNX export, run inference through SmartTurnStrategy, and tune probe/threshold defaults.

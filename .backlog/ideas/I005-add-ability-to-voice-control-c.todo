@@ -1,0 +1,40 @@
+---
+complexity: medium
+created_at: "2026-07-13T11:00:50Z"
+depends_on: []
+estimate_hours: 10
+id: I005
+priority: medium
+status: pending
+tags:
+    - idea
+    - planning
+title: 'Add ability to voice control creating herdr sessions and initializing new agents and kicking them off etc. should support claude code, codex, grok, `cursor-agent`, and other coding clis (must be able to be done ad-hoc). For the supported ones, we should see if we have aliases for them: cc for claude, cx for codex, gk for grok. cr for cursor-agent. If we have the 2 letter alias present, we should use that, otherwise we should use the normal cli command to start a session.'
+updated_at: "2026-07-13T11:00:50Z"
+---
+
+# Original Idea
+
+Add ability to voice control creating herdr sessions and initializing new agents and kicking them off etc. should support claude code, codex, grok, `cursor-agent`, and other coding clis (must be able to be done ad-hoc). For the supported ones, we should see if we have aliases for them: cc for claude, cx for codex, gk for grok. cr for cursor-agent. If we have the 2 letter alias present, we should use that, otherwise we should use the normal cli command to start a session.
+
+## Planning Task (Equivalent of /plan-task)
+
+- Run `/plan-task I005` to decompose this idea into actionable work.
+- Confirm placement in the current backlog hierarchy before creating work items.
+
+## Ingest Plan Into backlog
+
+- Create implementation items with `backlog add` and related hierarchy commands (`backlog add-epic`, `backlog add-milestone`, `backlog add-phase`) as needed.
+- Create follow-up defects with `backlog bug` when bug-style work is identified.
+- Record all created IDs below and wire dependencies.
+
+## Created Work Items
+
+- Add created task IDs
+- Add created bug IDs (if any)
+
+## Completion Criteria
+
+- Idea has been decomposed into concrete backlog work items.
+- New items include clear acceptance criteria and dependencies.
+- This idea intake is updated with created IDs and marked done.

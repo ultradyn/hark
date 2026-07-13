@@ -14,3 +14,5 @@ ideas:
       id: I003
     - file: I004-add-support-for-local-models-l.todo
       id: I004
+    - file: I005-add-ability-to-voice-control-c.todo
+      id: I005

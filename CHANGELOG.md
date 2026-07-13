@@ -4,6 +4,15 @@ All notable changes to **Hark** and the **`@ultradyn/hark`** npm skills package.
 
 Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package version in `packages/ultradyn-hark/package.json`.
 
+## 0.1.3
+
+- Skills discovery: monorepo `skills/` symlinks for `npx skills`; internal skill shim.
+- Harden package skill sync (`HARK_SYNC_REQUIRED`, frontmatter checks).
+- CI: `npm-package.yml` validates pack + skills list on skill/package changes.
+- Near-miss wake monitor events (B019), custom wake SIGHUP reload (B020).
+- Homepage install picker bash/npm/pnpm/bun (B023).
+- Repo transfer prep tooling (B024).
+
 ## 0.1.2
 
 - Automated release via GitHub Actions `release.yml` (OIDC trusted publishing, no NPM_TOKEN).

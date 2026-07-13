@@ -207,6 +207,47 @@ trigger_phrases = ["only this"]
     assert new_backend.score_snippet(b"TXT:start prompt go") is None
 
 
+def test_apply_config_reload_detects_wake_label_name_change(tmp_path, monkeypatch):
+    """Live-reload of primary name flags wake_label_changed for TTS announce."""
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text(
+        """
+[ambient]
+enabled = true
+engine = "text_probe"
+wake_mode = "names"
+names = ["hark", "herald"]
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("HARK_AMBIENT", raising=False)
+    cfg = load_config(cfg_path)
+    backend = build_wake_backend(
+        "text_probe", phrases=cfg.ambient.activation_phrases
+    )
+    assert ambient.primary_wake_label(cfg) == "hey hark"
+
+    cfg_path.write_text(
+        """
+[ambient]
+enabled = true
+engine = "text_probe"
+wake_mode = "names"
+names = ["clanker", "hark", "herald"]
+""",
+        encoding="utf-8",
+    )
+    new_cfg, _new_backend, info = ambient.apply_config_reload(cfg, backend)
+    assert info["wake_label_changed"] is True
+    assert info["wake_label_prev"] == "hey hark"
+    assert info["wake_label"] == "hey clanker"
+    assert ambient.primary_wake_label(new_cfg) == "hey clanker"
+
+    # Second reload with same names → no change
+    _, _, info2 = ambient.apply_config_reload(new_cfg, backend)
+    assert info2["wake_label_changed"] is False
+
+
 def test_request_reload_and_clear():
     clear_reload_request()
     assert reload_requested() is False

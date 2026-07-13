@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from hark.ambient import ambient_boot_tts_text, primary_wake_label
+from hark.ambient import (
+    ambient_boot_tts_text,
+    primary_wake_label,
+    wake_label_change_tts_text,
+)
 from hark.audio.cues import ambient_boot_line, tts_boot_cache_path, tts_cache_path
 from hark.config import AmbientConfig, HarkConfig
 
@@ -67,3 +71,13 @@ def test_different_labels_different_cache_paths():
         for label in ("hey hark", "hey herald", "start prompt", "hey alice")
     }
     assert len(paths) == 4
+
+
+def test_wake_label_change_tts_text():
+    text = wake_label_change_tts_text("hey hark", "hey clanker")
+    assert "hey hark" in text
+    assert "hey clanker" in text
+    assert "updated" in text.lower()
+    # Same label → nothing to speak
+    assert wake_label_change_tts_text("hey hark", "hey hark") == ""
+    assert wake_label_change_tts_text("Hey Hark", "hey hark") == ""

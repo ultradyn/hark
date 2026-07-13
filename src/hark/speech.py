@@ -67,6 +67,7 @@ def run_tts(
     on_near_end: Any | None = None,
     near_end_ms: int | None = None,
     conference_policy: str | None = None,
+    use_cache: bool = True,
 ) -> dict[str, Any]:
     """Synthesize and optionally play TTS.
 
@@ -75,6 +76,9 @@ def run_tts(
       - ``hold``: wait for Zoom/Teams/Meet etc. to end (soft chime optional)
       - ``skip``: do not speak while conference active (lifecycle cues)
       - ``force``: always speak immediately
+
+    ``use_cache``: when False, skip on-disk TTS phrase cache lookup and store
+    (one-shot announces such as wake-label live-reload).
     """
     limit = max_chars if max_chars is not None else cfg.tts.max_chars
     truncated = False
@@ -117,7 +121,7 @@ def run_tts(
     store = UsageStore()
     t0 = time.monotonic()
     voice_id = voice or cfg.tts.voice or "eve"
-    cached = lookup_cached_tts(voice_id, text)
+    cached = lookup_cached_tts(voice_id, text) if use_cache else None
     from_cache = False
     provider_name = provider or cfg.tts.provider
     content_type = "audio/mpeg"
@@ -152,8 +156,8 @@ def run_tts(
         content_type = result.content_type
         used_voice = result.voice or voice_id
         latency_ms = int(1000 * (time.monotonic() - t0))
-        # Persist common-ish short phrases for reuse
-        if len(text) <= 120:
+        # Persist common-ish short phrases for reuse (skip one-shot announces)
+        if use_cache and len(text) <= 120:
             try:
                 store_cached_tts(used_voice, text, audio_bytes)
             except Exception:

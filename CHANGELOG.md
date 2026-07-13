@@ -6,6 +6,13 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Ambient live-reload: when the primary wake name/phrase changes (config.toml
+  file-watch or SIGHUP), speak a one-shot TTS announce
+  (“Wake phrase updated from … to …”) without using the phrase cache
+  (`use_cache=False`). `ambient.reloaded` carries `wake_label` /
+  `wake_label_prev` / `wake_label_changed`.
+- fix(monitor): tolerate string `question`/`target` in `--for-monitor` compact
+  (legacy watch lines no longer crash `hark monitor`).
 - Voice Herdr agent control (I005 / B055–B059): resolve coding CLIs with safe alias
   preference (`cc`/`cx`/`gk`/`cr` when PATH-safe), `HerdrClient` session ensure +
   `agent start`, CLI `hark session list|ensure` and `hark agent-start` (optional

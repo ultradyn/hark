@@ -111,6 +111,9 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "model_path",
         "snippet_s",
         "timeout_s",
+        # Continuous idle ambient.timeout heartbeat (default on)
+        "surface_timeouts",
+        "emit_timeout_events",  # alias of surface_timeouts
         "debug",
         "debug_retention_days",
     }),
@@ -253,7 +256,13 @@ class AmbientConfig:
     engine: str = "vosk"
     model_path: str | None = None
     snippet_s: float = 2.5
+    # One-shot wake wait / continuous loop tick (seconds). 0 = wait indefinitely
+    # (no ambient.timeout cycle). Continuous Mode A still uses this as the idle
+    # cycle length when > 0; see surface_timeouts to hide the heartbeat event.
     timeout_s: float = 300.0
+    # When true (default), continuous ambient emits ambient.timeout NDJSON/syslog
+    # each idle cycle as a heartbeat. Set false for quieter long-running Mode A.
+    surface_timeouts: bool = True
     # Dev: save wake audio+text under state/debug/wake (7-day cleanup)
     debug: bool = False
     debug_retention_days: float = 7.0
@@ -422,7 +431,13 @@ learn_from_near_misses = true
 engine = "vosk"              # vosk | text_probe (tests)
 # model_path = "~/.local/share/hark/models/vosk-model-small-en-us-0.15"
 snippet_s = 2.5
+# One-shot wake wait / continuous idle cycle length (seconds). 0 = wait forever
+# (no ambient.timeout). Continuous Mode A re-enters the wake wait each timeout_s.
 timeout_s = 300
+# Surface ambient.timeout on continuous idle cycles (NDJSON + syslog). Default on
+# as a heartbeat (useful for provider cache / dogfood). Set false to quiet Mode A.
+surface_timeouts = true
+# emit_timeout_events = true  # alias of surface_timeouts
 debug = true                 # save wake wav+text under ~/.local/state/hark/debug/wake
 debug_retention_days = 7
 
@@ -482,6 +497,19 @@ def _dedupe_phrases(phrases: list[str]) -> list[str]:
     return out
 
 
+def _resolve_surface_timeouts(ambient_raw: dict[str, Any]) -> bool:
+    """Whether continuous ambient should emit ambient.timeout (default true).
+
+    Canonical key: surface_timeouts. Alias: emit_timeout_events.
+    If both are set, surface_timeouts wins.
+    """
+    if "surface_timeouts" in ambient_raw:
+        return _as_bool(ambient_raw.get("surface_timeouts"), default=True)
+    if "emit_timeout_events" in ambient_raw:
+        return _as_bool(ambient_raw.get("emit_timeout_events"), default=True)
+    return True
+
+
 def _build_ambient_config(
     ambient_raw: dict[str, Any],
     *,
@@ -502,6 +530,7 @@ def _build_ambient_config(
         ),
         snippet_s=float(ambient_raw.get("snippet_s", 2.5)),
         timeout_s=float(ambient_raw.get("timeout_s", 300)),
+        surface_timeouts=_resolve_surface_timeouts(ambient_raw),
         debug=bool(
             ambient_raw.get(
                 "debug",
@@ -981,6 +1010,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "model_path": cfg.ambient.model_path,
             "snippet_s": cfg.ambient.snippet_s,
             "timeout_s": cfg.ambient.timeout_s,
+            "surface_timeouts": cfg.ambient.surface_timeouts,
             "debug": cfg.ambient.debug,
             "debug_retention_days": cfg.ambient.debug_retention_days,
         },

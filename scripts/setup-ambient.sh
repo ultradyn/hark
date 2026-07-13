@@ -67,6 +67,7 @@ engine = "vosk"
 model_path = "{model}"
 snippet_s = 2.5
 timeout_s = 300
+# surface_timeouts = true  # set false to quiet continuous ambient.timeout
 """
 else:
     def set_key(block_name, key, value, text):

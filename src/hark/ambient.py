@@ -444,6 +444,26 @@ def complete_after_wake(
     )
 
 
+
+def _wake_deadline(timeout_s: float | None, amb_timeout_s: float | None) -> float:
+    """Monotonic deadline for a wake wait.
+
+    ``timeout_s`` (call arg) overrides config ``amb_timeout_s``. Values
+    ``None`` fall through to the other / default 300s. ``0`` (or negative)
+    means wait indefinitely — no ambient.timeout cycle (continuous Mode A
+    can use this, or one-shot with an explicit hang-until-wake).
+    """
+    if timeout_s is not None:
+        effective = float(timeout_s)
+    elif amb_timeout_s is not None:
+        effective = float(amb_timeout_s)
+    else:
+        effective = 300.0
+    if effective <= 0:
+        return float("inf")
+    return time.monotonic() + effective
+
+
 def run_ambient(
     cfg: HarkConfig,
     *,
@@ -484,7 +504,7 @@ def run_ambient(
         if isinstance(policy, WakePolicy):
             _apply_policy_to_backend(backend, policy)
 
-    deadline = time.monotonic() + (timeout_s or amb.timeout_s or 300.0)
+    deadline = _wake_deadline(timeout_s, amb.timeout_s)
 
     # Lease is taken per snippet inside _wait_for_wake (not for the whole wait)
     hit = _wait_for_wake(
@@ -818,23 +838,31 @@ def run_ambient_loop(
             if reload_requested() and not result.activated:
                 continue
 
-            # Always emit if we got something useful; skip pure timeouts when shutting down
+            # Always emit if we got something useful; skip pure timeouts when shutting down.
+            # ambient.timeout on continuous idle cycles is optional (surface_timeouts).
             if result.activated or not shutdown_requested():
                 line = ambient_event_line(result)
-                line = {k: v for k, v in line.items() if v is not None}
-                out.write(json.dumps(line, separators=(",", ":")) + "\n")
-                out.flush()
-                syslog(
-                    str(line.get("kind") or "ambient.event"),
-                    component="ambient",
-                    level="info" if result.activated else "debug",
-                    message=(result.text or result.phrase or "")[:200],
-                    phrase=result.phrase,
-                    text=result.text,
-                    wake_backend=result.wake_backend,
-                    listen=result.listen,
-                    event_id=result.event_id,
-                )
+                kind = str(line.get("kind") or "ambient.event")
+                if kind == "ambient.timeout" and not getattr(
+                    cfg.ambient, "surface_timeouts", True
+                ):
+                    # Quiet continuous Mode A: still re-enter wake wait, no NDJSON/syslog
+                    pass
+                else:
+                    line = {k: v for k, v in line.items() if v is not None}
+                    out.write(json.dumps(line, separators=(",", ":")) + "\n")
+                    out.flush()
+                    syslog(
+                        kind,
+                        component="ambient",
+                        level="info" if result.activated else "debug",
+                        message=(result.text or result.phrase or "")[:200],
+                        phrase=result.phrase,
+                        text=result.text,
+                        wake_backend=result.wake_backend,
+                        listen=result.listen,
+                        event_id=result.event_id,
+                    )
 
             if shutdown_requested():
                 break

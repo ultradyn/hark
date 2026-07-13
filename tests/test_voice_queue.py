@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import time
 
 import hark.cli as cli
 import hark.speech as speech
@@ -62,8 +63,18 @@ def test_queue_announcement_wording():
     assert queue_announcement(5) == "5 agents are waiting for input."
 
 
-def _queue_args(announce=False):
-    return argparse.Namespace(json=True, announce=announce)
+def _queue_args(announce=False, **extra):
+    base = dict(
+        json=True,
+        announce=announce,
+        all=False,
+        prune=False,
+        live=False,
+        offline=True,  # unit tests avoid Herdr; age/supersede still apply
+        max_age=None,
+    )
+    base.update(extra)
+    return argparse.Namespace(**base)
 
 
 def test_cmd_queue_announce_speaks_when_more_than_one(tmp_path, monkeypatch, capsys):
@@ -173,6 +184,124 @@ def test_meta_skip_removes_target_from_queue(tmp_path, monkeypatch):
     remaining = {e["event_id"] for e in store.pending_events()}
     assert remaining == {"evtB"}
     assert summarize_pending(store.pending_events())["count"] == 1
+
+
+def test_cmd_queue_hides_stale_and_prune_expires(tmp_path, monkeypatch, capsys):
+    """B101: queue lists only fresh targets; --prune expires the rest."""
+    store = DeliveryStore(tmp_path / "events.jsonl")
+    now = time.time()
+    store.save_event(
+        BoundEvent(
+            event_id="stale",
+            session_id="local",
+            pane_id="w1:p1",
+            pane_revision=1,
+            question_fingerprint="blake2b:stale",
+            created_at=now - 50_000,
+        )
+    )
+    store.save_event(
+        BoundEvent(
+            event_id="fresh",
+            session_id="work",
+            pane_id="w1:p2",
+            pane_revision=1,
+            question_fingerprint="blake2b:fresh",
+            created_at=now - 10,
+        )
+    )
+    monkeypatch.setattr(cli, "DeliveryStore", lambda: store)
+
+    rc = cli.cmd_queue(_queue_args(announce=False, max_age=3600), cfg=None)
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert [e["event_id"] for e in out["queue"]] == ["fresh"]
+    assert out["count"] == 1
+    assert out["stale_count"] >= 1
+    assert out["pruned"] == []
+
+    rc = cli.cmd_queue(
+        _queue_args(announce=False, prune=True, max_age=3600), cfg=None
+    )
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert any(p["event_id"] == "stale" for p in out["pruned"])
+    assert store.get("stale").status == "expired"
+    assert store.get("fresh").status == "pending"
+
+
+def test_cmd_queue_announce_ignores_stale_only(tmp_path, monkeypatch, capsys):
+    """Announce must not claim agents are waiting when only stale remain."""
+    store = DeliveryStore(tmp_path / "events.jsonl")
+    now = time.time()
+    for i, pane in enumerate(("w1:p1", "w1:p2", "w1:p3")):
+        store.save_event(
+            BoundEvent(
+                event_id=f"old{i}",
+                session_id="local",
+                pane_id=pane,
+                pane_revision=1,
+                question_fingerprint=f"blake2b:old{i}",
+                created_at=now - 50_000,
+            )
+        )
+    monkeypatch.setattr(cli, "DeliveryStore", lambda: store)
+
+    spoken = []
+    monkeypatch.setattr(
+        speech, "run_tts", lambda cfg, text, **kw: spoken.append(text) or {"ok": True}
+    )
+
+    rc = cli.cmd_queue(
+        _queue_args(announce=True, max_age=3600), cfg=object()
+    )
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["count"] == 0
+    assert out["announced"] is False  # only announce when count > 1
+    assert spoken == []
+    assert "No agents" in out["announcement"]
+
+
+def test_cmd_queue_live_soft_filter_drops_idle_panes(tmp_path, monkeypatch, capsys):
+    """B101: live soft-filter excludes not-blocked panes from announce/count."""
+    store = DeliveryStore(tmp_path / "events.jsonl")
+    now = time.time()
+    for eid, pane in (("blocked", "w1:p1"), ("idle", "w1:p2")):
+        store.save_event(
+            BoundEvent(
+                event_id=eid,
+                session_id="local",
+                pane_id=pane,
+                pane_revision=1,
+                question_fingerprint=f"blake2b:{eid}",
+                created_at=now - 10,
+            )
+        )
+    monkeypatch.setattr(cli, "DeliveryStore", lambda: store)
+
+    class FakeClient:
+        def get_agent(self, pane_id):
+            status = "blocked" if pane_id == "w1:p1" else "idle"
+            return AgentInfo(
+                session_id="local",
+                pane_id=pane_id,
+                agent="codex",
+                status=status,
+                revision=1,
+            )
+
+    monkeypatch.setattr(cli, "_client_for", lambda cfg, session_id: FakeClient())
+
+    rc = cli.cmd_queue(
+        _queue_args(announce=False, offline=False, max_age=3600), cfg=object()
+    )
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert [e["event_id"] for e in out["queue"]] == ["blocked"]
+    assert out["count"] == 1
+    assert out["stale_count"] >= 1
+    assert out["live"] is True
 
 
 def test_listen_echoes_for_event_binding(tmp_path, monkeypatch, capsys):

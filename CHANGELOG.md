@@ -6,6 +6,7 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- **Wake enrollment (I006):** `hark wake-enroll` — beep-paced capture of 5–10 activation samples (`ready` / `accept` / `reject` / `end` cues), local WAV + manifest under `~/.local/state/hark/wake_enroll/`, optional wake-backend scoring to seed `wake_learned` (B077 denylist). Dry-run for beep dogfood.
 - fix(ambient/B070): continuous ambient no longer rebuilds Sherpa KWS keywords
   every score hop when `learn_from_near_misses` is on — only when `wake_learned`
   mtime changes; `rebuild_keywords` no-ops if the keyword graph signature is

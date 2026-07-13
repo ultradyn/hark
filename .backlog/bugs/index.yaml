@@ -34,3 +34,4 @@ bugs:
     - file: B033-continuous-ambient-emits-ambie.todo
     - file: B034-the-startup-tts-should-be-cach.todo
     - file: B035-validate-smart-turn-v3-onnx-en.todo
+    - file: B036-watch-config-toml-and-live-rel.todo

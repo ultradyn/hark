@@ -1,0 +1,30 @@
+---
+complexity: medium
+created_at: "2026-07-13T12:33:39Z"
+depends_on: []
+estimate_hours: 1
+id: B036
+priority: high
+status: pending
+tags:
+    - ambient
+    - config
+    - ux
+    - dogfood
+title: Watch config.toml and live-reload ambient/listen settings (not only SIGHUP)
+updated_at: "2026-07-13T12:33:39Z"
+---
+## Problem
+Config changes today require **SIGHUP** the ambient process (or full Mode A restart). Learning (`wake_learned.json`) already hot-reloads by mtime; `config.toml` does not.
+
+## Dogfood
+Operator asked to flip `listen.end_mode` live while dogfooding radio vs silence. Expectation: edit config file → settings apply without remembering kill -HUP.
+
+## Wanted
+- Optional (or default) inotify/mtime watch on `HARK_CONFIG` / `~/.config/hark/config.toml`
+- On change: same path as SIGHUP `apply_config_reload` (phrases, names, listen end_mode, surface_timeouts, etc.)
+- Debounce rapid writes; emit `ambient.reloaded` (or similar) with what changed
+- Document: file-watch vs SIGHUP vs restart
+
+## Notes
+SIGHUP already works for ambient; this is UX polish so Mode A stays hands-free when tuning config by voice/agent.

@@ -55,6 +55,10 @@ def run_doctor(
             "engine": cfg.ambient.engine,
             "activation_count": len(cfg.ambient.activation_phrases),
             "model_path": cfg.ambient.model_path,
+            "model_ok": bool(
+                cfg.ambient.model_path
+                and __import__("pathlib").Path(cfg.ambient.model_path).is_dir()
+            ),
             "snippet_s": cfg.ambient.snippet_s,
         },
         "herdr_bin": shutil.which("herdr"),
@@ -143,11 +147,14 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
         file=out,
     )
     ambient = report.get("ambient") or {}
+    model = ambient.get("model_path") or "(no model_path)"
+    model_ok = ambient.get("model_ok")
     print(
         f"  ambient: enabled={ambient.get('enabled')} "
         f"engine={ambient.get('engine')} "
         f"phrases={ambient.get('activation_count', 0)} "
-        f"(local wake; cloud STT only after activation)",
+        f"model={'ok' if model_ok else 'MISSING'} "
+        f"({model})",
         file=out,
     )
     if report.get("speech_ok"):

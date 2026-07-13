@@ -85,11 +85,24 @@ uv run hark ask "What color?"
 
 Always run from **latest checkout** (`uv run hark`).
 
+### Ambient wake (`hey hark`)
+
+```bash
+./scripts/setup-ambient.sh          # uv sync --extra wake + download vosk model + enable config
+# download only:
+./scripts/download-vosk-model.sh    # methods: hf → curl → wget → browser
+./scripts/download-vosk-model.sh --method curl
+uv run hark ambient                 # say “hey hark”, then speak a prompt
+```
+
+Model lands at `~/.local/share/hark/models/vosk-model-small-en-us-0.15`.
+
 ### Config highlights (`~/.config/hark/config.toml`)
 
 - `[listen] end_mode = "radio"` — long pauses OK until `okay hark send` / `end prompt`
 - Cancel defaults are product-scoped: `hark cancel` (not “cancel that”)
 - `[ambient]` — local 2–3s wake for `hey hark` / `hey herald` (no cloud until activated)
+- `[audio] mute_mic_during_tts` — Wave mute ring while TTS plays
 
 ## Repo
 

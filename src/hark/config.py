@@ -187,11 +187,12 @@ max_listen_s = 300
 
 # Ambient: when NOT replying to a blocked agent question
 # Local 2–3s snippets scan for activation; cloud STT only after wake.
+# Setup: ./scripts/setup-ambient.sh
 [ambient]
 enabled = false
 activation_phrases = ["hey hark", "hey herald", "okay hark", "ok hark"]
 engine = "vosk"              # vosk | text_probe (tests)
-# model_path = "/path/to/vosk-model-small-en-us"
+# model_path = "~/.local/share/hark/models/vosk-model-small-en-us-0.15"
 snippet_s = 2.5
 timeout_s = 300
 
@@ -221,6 +222,23 @@ def _as_list_str(value: Any, default: list[str]) -> list[str]:
     if isinstance(value, str):
         return [p.strip() for p in value.split(",") if p.strip()]
     return list(default)
+
+
+def default_vosk_model_path() -> Path:
+    base = os.environ.get("XDG_DATA_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "share"
+    return root / "hark" / "models" / "vosk-model-small-en-us-0.15"
+
+
+def _resolve_vosk_model_path(raw: str | None) -> str | None:
+    if raw:
+        p = Path(os.path.expanduser(raw))
+        return str(p)
+    # Auto-detect common install location from setup-ambient.sh
+    auto = default_vosk_model_path()
+    if auto.is_dir():
+        return str(auto)
+    return None
 
 
 def load_config(path: Path | None = None) -> HarkConfig:
@@ -330,7 +348,7 @@ def load_config(path: Path | None = None) -> HarkConfig:
                 list(DEFAULT_ACTIVATION_PHRASES),
             ),
             engine=str(ambient_raw.get("engine", "vosk")),
-            model_path=(
+            model_path=_resolve_vosk_model_path(
                 str(ambient_raw["model_path"])
                 if ambient_raw.get("model_path")
                 else os.environ.get("HARK_VOSK_MODEL")

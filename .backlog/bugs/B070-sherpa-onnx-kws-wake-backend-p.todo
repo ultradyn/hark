@@ -130,3 +130,11 @@ SKILL.md links both; SETUP is the agent checklist.
 ## Estimate note
 
 Original ~5 h was Sherpa-only. With guided setup + docs, treat remaining as **~8 h** (Sherpa ~5 + setup/docs ~3). Split into two PRs if needed: **B070a Sherpa** then **B070b setup**.
+
+
+## Enrollment samples (I006) — setup hook
+
+After wake backend choice / confirm wake test, **optionally** offer I006 enrollment:
+`hark wake-enroll` (or setup step) with beep-paced loop:
+`[ready beep] → phrase → [captured beep] → … → [end beep]` (N=5–10).
+Does not block Sherpa ship; link SETUP.md when I006 lands. Beeps via `audio.cues`.

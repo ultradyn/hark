@@ -24,3 +24,7 @@ uv.lock
 site/_review/
 
 .worktrees/
+
+# Curated TTS comparison audio (regenerate via scripts/gen-tts-samples.py)
+assets/tts/samples/**/*.mp3
+assets/tts/eve/

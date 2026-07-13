@@ -6,6 +6,10 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Defaults: wake names **iris**, **mercury**, **hark**, **herald** (persona
+  pairing Iris→TTS **eve**, Mercury→**leo**); guided setup / Sherpa chooser
+  folded into B070; enrollment sampling idea I006. Skill: cancel radio on
+  unrelated conversation / TTS bleed.
 - Radio end UX (B068): clearer operator end signals + Mode A **must** finish
   capture on done-signal partials. Soft list gains `okay over` / `ok over`
   (STT of “okay, over” without comma) and `message done`; sentence-final

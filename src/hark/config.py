@@ -321,7 +321,9 @@ class AmbientConfig:
     enabled: bool = False
     # names (default) | phrases — see WakePolicy / docs/CUSTOM_WAKE.md
     wake_mode: str = "names"
-    names: list[str] = field(default_factory=lambda: ["hark", "herald"])
+    names: list[str] = field(
+        default_factory=lambda: ["iris", "mercury", "hark", "herald"]
+    )
     # Display / exact extras / phrase-mode list (resolved)
     activation_phrases: list[str] = field(
         default_factory=lambda: list(DEFAULT_ACTIVATION_PHRASES)
@@ -529,7 +531,7 @@ no_open_nudge = true         # TTS then re-listen once more on no-open
 # 1) Name-based (default): set product names; greating+name / bare name wake.
 #    Near-misses auto-learn alternate name tokens (no restart).
 #      wake_mode = "names"
-#      names = ["hark", "herald"]
+#      names = ["iris", "mercury", "hark", "herald"]
 #      # extra_names = ["alice"]
 #
 # 2) Full-phrase: entire trigger strings only (no name fuzzy).
@@ -543,8 +545,9 @@ no_open_nudge = true         # TTS then re-listen once more on no-open
 [ambient]
 enabled = false
 wake_mode = "names"
-names = ["hark", "herald"]
+names = ["iris", "mercury", "hark", "herald"]
 # extra_names = ["alice"]
+# Persona TTS pairing (setup): Iris→eve, Mercury→leo
 # wake_mode = "phrases"
 # trigger_phrases = ["start prompt"]
 # extra_trigger_phrases = ["begin dictation"]

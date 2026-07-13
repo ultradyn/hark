@@ -92,10 +92,11 @@ implementation.** The deliverable boundary is `hark.dashboard.v1`:
 ### Endpoints (sketch — contract task finalizes)
 
 ```text
+POST /api/v1/auth                       bearer token -> HttpOnly session cookie
 GET  /api/v1/health                     server + doctor summary
 GET  /api/v1/config                     redacted config snapshot
-GET  /api/v1/events?since=<event_id>    backfill window (paged)
-GET  /api/v1/stream                     SSE: live HEP events + dashboard.* meta
+GET  /api/v1/events?since=<cursor>      backfill window (paged, per-source cursors)
+GET  /api/v1/stream                     SSE: enveloped live events, id = cursor
 GET  /api/v1/herdr/sessions             sessions/panes/status map
 GET  /api/v1/herdr/context/<sess>/<pane>  recent pane context (like `hark context`)
 GET  /api/v1/deliveries                 delivery outcomes / pending

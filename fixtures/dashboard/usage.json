@@ -1,0 +1,47 @@
+{
+  "schema": "hark.dashboard.v1",
+  "ok": true,
+  "summary": {
+    "path": "/home/op/.local/state/hark/usage.jsonl",
+    "tts": {
+      "instances": 41,
+      "ok": 40,
+      "errors": 1,
+      "total_chars": 5120,
+      "total_words": 903,
+      "avg_chars": 124.88,
+      "avg_words": 22.02,
+      "total_audio_ms": 301000,
+      "total_audio_s": 301.0,
+      "avg_audio_ms": 7341.5,
+      "total_latency_ms": 32800,
+      "avg_latency_ms": 800.0,
+      "by_provider": { "xai": 41 }
+    },
+    "stt": {
+      "instances": 36,
+      "ok": 33,
+      "errors": 3,
+      "total_chars": 2210,
+      "total_words": 402,
+      "avg_chars": 61.39,
+      "avg_words": 11.17,
+      "total_audio_ms": 168000,
+      "total_audio_s": 168.0,
+      "avg_audio_ms": 4666.7,
+      "total_latency_ms": 27400,
+      "avg_latency_ms": 761.1,
+      "by_provider": { "xai": 30, "openai": 6 },
+      "empty_transcript": 2,
+      "empty_stt_rate": 0.0556
+    },
+    "total_events": 77
+  },
+  "near_misses": [
+    {
+      "count": 2,
+      "attempts": [{ "text": "hey heart" }, { "text": "a hark" }],
+      "observed_at": "2026-07-13T14:01:00.000Z"
+    }
+  ]
+}

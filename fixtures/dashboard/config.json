@@ -1,0 +1,42 @@
+{
+  "schema": "hark.dashboard.v1",
+  "ok": true,
+  "redacted": true,
+  "config": {
+    "version": 1,
+    "path": "/home/op/.config/hark/config.toml",
+    "warnings": [],
+    "herdr": {
+      "sessions": [
+        {
+          "id": "local",
+          "socket": "~/.config/herdr/herdr.sock",
+          "ssh": null,
+          "herdr_bin": null,
+          "label": "local herdr",
+          "remote_socket": null
+        }
+      ]
+    },
+    "watch": {
+      "statuses": ["blocked", "done"],
+      "debounce_ms": 400,
+      "transport": "auto",
+      "poll_ms": 1500,
+      "heartbeat_s": 60,
+      "detect_false_done": true
+    },
+    "listen": { "end_mode": "radio", "max_listen_s": 90 },
+    "ambient": { "enabled": true, "engine": "vosk", "wake_mode": "names" },
+    "stt": { "provider": "auto" },
+    "tts": { "provider": "auto", "voice": "eve", "language": "en" },
+    "dashboard": {
+      "host": "127.0.0.1",
+      "port": 4136,
+      "token_configured": true,
+      "require_token": false,
+      "tls_terminated": false,
+      "history_limit": 2000
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "schema": "hark.dashboard.v1",
+  "ok": true,
+  "server": {
+    "name": "hark-serve-py",
+    "version": "0.1.6",
+    "started_at": "2026-07-13T13:58:00.000Z",
+    "bind": "127.0.0.1:4136",
+    "auth_required": false,
+    "tls_terminated": false,
+    "ffmpeg": true
+  },
+  "doctor": {
+    "ok": true,
+    "herdr_ok": true,
+    "speech_ok": true,
+    "hark_version": "0.1.6",
+    "sessions": [
+      {
+        "session_id": "local",
+        "ok": true,
+        "version": "0.7.2",
+        "protocol": 1,
+        "socket": "/home/op/.config/herdr/herdr.sock",
+        "agent_count": 3,
+        "error": null
+      }
+    ],
+    "providers": [
+      { "name": "xai", "available": true, "source": "grok auth", "detail": null },
+      { "name": "openai", "available": false, "source": null, "detail": "OPENAI_API_KEY not set" }
+    ]
+  }
+}

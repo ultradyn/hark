@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hark.xk.io/schemas/dashboard-v1/deliveries.schema.json",
+  "title": "GET /api/v1/deliveries response",
+  "type": "object",
+  "required": ["schema", "ok", "pending", "recent"],
+  "properties": {
+    "schema": { "const": "hark.dashboard.v1" },
+    "ok": { "type": "boolean" },
+    "pending": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["event_id", "session_id", "pane_id"],
+        "properties": {
+          "event_id": { "type": "string" },
+          "session_id": { "type": "string" },
+          "pane_id": { "type": "string" },
+          "pane_revision": { "type": "integer" },
+          "question_fingerprint": { "type": ["string", "null"] },
+          "question_text": { "type": ["string", "null"] },
+          "risk": { "type": ["string", "null"] },
+          "status": { "type": "string" },
+          "created_at": { "type": "number" }
+        }
+      }
+    },
+    "recent": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["event_id", "status", "ts"],
+        "properties": {
+          "event_id": { "type": "string" },
+          "status": { "type": "string" },
+          "ts": { "type": "number" }
+        }
+      }
+    }
+  }
+}

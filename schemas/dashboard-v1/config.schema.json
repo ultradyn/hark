@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hark.xk.io/schemas/dashboard-v1/config.schema.json",
+  "title": "GET /api/v1/config response (redacted)",
+  "type": "object",
+  "required": ["schema", "ok", "redacted", "config"],
+  "properties": {
+    "schema": { "const": "hark.dashboard.v1" },
+    "ok": { "const": true },
+    "redacted": { "const": true },
+    "config": {
+      "description": "config_to_dict() output. Loose by design (additive keys); MUST NOT contain credential material — enforced by the redaction test, not this schema.",
+      "type": "object",
+      "required": ["version"],
+      "properties": {
+        "version": { "type": "integer" },
+        "path": { "type": ["string", "null"] },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "herdr": { "type": "object" },
+        "watch": { "type": "object" },
+        "audio": { "type": "object" },
+        "listen": { "type": "object" },
+        "ambient": { "type": "object" },
+        "stt": { "type": "object" },
+        "tts": { "type": "object" },
+        "dashboard": {
+          "type": "object",
+          "properties": {
+            "host": { "type": "string" },
+            "port": { "type": "integer" },
+            "token_configured": { "type": "boolean" },
+            "require_token": { "type": "boolean" },
+            "tls_terminated": { "type": "boolean" },
+            "history_limit": { "type": "integer" }
+          },
+          "not": { "required": ["token"] }
+        }
+      }
+    }
+  }
+}

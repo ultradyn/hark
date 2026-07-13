@@ -1,0 +1,21 @@
+{
+  "schema": "hark.dashboard.v1",
+  "ok": true,
+  "events": [
+    {
+      "schema": "hark.dashboard.v1",
+      "type": "event",
+      "source": "watch",
+      "cursor": "watch:185,ambient:44,system:9053,usage:78,delivery:14",
+      "payload": {
+        "schema": "hark.event.v1",
+        "event_id": "01JBLOCKED0000000000000001",
+        "observed_at": "2026-07-13T14:00:00.000Z",
+        "kind": "agent.blocked",
+        "session_id": "work"
+      }
+    }
+  ],
+  "cursor": "watch:185,ambient:44,system:9053,usage:78,delivery:14",
+  "complete": true
+}

@@ -1,0 +1,16 @@
+{
+  "schema": "hark.dashboard.v1",
+  "ok": true,
+  "session_id": "local",
+  "pane_id": "w1:p6",
+  "lines": 40,
+  "revision": 42,
+  "text": "… test suite passed (34 tests)\n\nAllow running rm -rf build/?\n  1. Yes\n  2. No\n> ",
+  "pending_question": {
+    "event_id": "01JBLOCKED0000000000000001",
+    "text": "Allow running rm -rf build/?",
+    "choices": ["Yes", "No"],
+    "fingerprint": "blake3:deadbeef",
+    "risk": "R2"
+  }
+}

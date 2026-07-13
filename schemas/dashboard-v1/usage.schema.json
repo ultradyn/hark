@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hark.xk.io/schemas/dashboard-v1/usage.schema.json",
+  "title": "GET /api/v1/usage response",
+  "type": "object",
+  "required": ["schema", "ok", "summary"],
+  "properties": {
+    "schema": { "const": "hark.dashboard.v1" },
+    "ok": { "type": "boolean" },
+    "summary": {
+      "description": "UsageStore.summary() shape (loose; additive).",
+      "type": "object",
+      "required": ["tts", "stt", "total_events"],
+      "properties": {
+        "tts": { "$ref": "#/$defs/agg" },
+        "stt": { "$ref": "#/$defs/agg" },
+        "total_events": { "type": "integer" }
+      }
+    },
+    "near_misses": {
+      "description": "Recent ambient.wake_near_miss groups (loose).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "count": { "type": "integer" },
+          "attempts": { "type": "array" },
+          "observed_at": { "type": ["string", "null"] }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "agg": {
+      "type": "object",
+      "properties": {
+        "instances": { "type": "integer" },
+        "ok": { "type": "integer" },
+        "errors": { "type": "integer" },
+        "empty_stt_rate": { "type": "number" },
+        "by_provider": { "type": "object" }
+      }
+    }
+  }
+}

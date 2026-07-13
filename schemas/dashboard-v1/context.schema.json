@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hark.xk.io/schemas/dashboard-v1/context.schema.json",
+  "title": "GET /api/v1/herdr/context/<session>/<pane> response",
+  "type": "object",
+  "required": ["schema", "ok", "session_id", "pane_id", "text"],
+  "properties": {
+    "schema": { "const": "hark.dashboard.v1" },
+    "ok": { "type": "boolean" },
+    "session_id": { "type": "string" },
+    "pane_id": { "type": "string" },
+    "lines": { "type": "integer" },
+    "revision": { "type": ["integer", "null"] },
+    "text": { "type": "string" },
+    "pending_question": {
+      "type": ["object", "null"],
+      "properties": {
+        "event_id": { "type": "string" },
+        "text": { "type": ["string", "null"] },
+        "choices": { "type": ["array", "null"], "items": { "type": "string" } },
+        "fingerprint": { "type": ["string", "null"] },
+        "risk": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

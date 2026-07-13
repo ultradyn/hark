@@ -1,0 +1,21 @@
+{
+  "schema": "hark.dashboard.v1",
+  "ok": true,
+  "pending": [
+    {
+      "event_id": "01JBLOCKED0000000000000002",
+      "session_id": "local",
+      "pane_id": "w1:p9",
+      "pane_revision": 7,
+      "question_fingerprint": "blake3:cafef00d",
+      "question_text": "Commit and push these changes?",
+      "risk": "R1",
+      "status": "pending",
+      "created_at": 1783346500.0
+    }
+  ],
+  "recent": [
+    { "event_id": "01JBLOCKED0000000000000001", "status": "delivered", "ts": 1783346460.2 },
+    { "event_id": "01JSTALE000000000000000009", "status": "rejected", "ts": 1783346300.9, "reason": "pane_revision mismatch" }
+  ]
+}

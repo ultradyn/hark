@@ -11,29 +11,33 @@ from hark.config import HarkConfig
 from hark.speech import run_tts
 
 
-def test_exclusive_playback_serializes(tmp_path, monkeypatch):
+def test_exclusive_playback_serializes_fifo(tmp_path, monkeypatch):
     monkeypatch.setattr(pb, "tts_play_lock_path", lambda: tmp_path / "tts_play.lock")
+    monkeypatch.setattr(pb, "tts_play_queue_path", lambda: tmp_path / "tts_play_queue.json")
     order: list[str] = []
 
-    def worker(name: str, hold: float) -> None:
+    def worker(name: str, hold: float, delay_before: float = 0.0) -> None:
+        if delay_before:
+            time.sleep(delay_before)
         with pb.exclusive_playback():
             order.append(f"{name}:in")
             time.sleep(hold)
             order.append(f"{name}:out")
 
+    # a claims ticket first; b starts slightly later but finishes "work" faster
     t1 = threading.Thread(target=worker, args=("a", 0.15))
-    t2 = threading.Thread(target=worker, args=("b", 0.05))
+    t2 = threading.Thread(target=worker, args=("b", 0.05), kwargs={"delay_before": 0.03})
     t1.start()
-    time.sleep(0.03)
     t2.start()
     t1.join()
     t2.join()
-    # a must fully finish before b enters
+    # FIFO by ticket claim order (a before b), not finish order
     assert order == ["a:in", "a:out", "b:in", "b:out"]
 
 
 def test_exclusive_playback_reentrant(tmp_path, monkeypatch):
     monkeypatch.setattr(pb, "tts_play_lock_path", lambda: tmp_path / "tts_play.lock")
+    monkeypatch.setattr(pb, "tts_play_queue_path", lambda: tmp_path / "tts_play_queue.json")
     with pb.exclusive_playback():
         with pb.exclusive_playback():
             pass  # no deadlock

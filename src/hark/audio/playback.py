@@ -29,9 +29,10 @@ class PlayResult:
     format: str
 
 
-# Cross-process exclusive speaker: synth may run in parallel; play is serial (B092).
+# Cross-process FIFO speaker: synth may run in parallel; play is serial (B092).
 _play_tls = threading.local()
 _play_lock_name = "tts_play.lock"
+_play_queue_name = "tts_play_queue.json"
 
 
 def tts_play_lock_path() -> Path:
@@ -40,13 +41,41 @@ def tts_play_lock_path() -> Path:
     return state_dir() / _play_lock_name
 
 
+def tts_play_queue_path() -> Path:
+    from hark.paths import state_dir
+
+    return state_dir() / _play_queue_name
+
+
+def _queue_read(path: Path) -> dict[str, int]:
+    import json
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {
+            "next": int(data.get("next", 0)),
+            "serving": int(data.get("serving", 0)),
+        }
+    except Exception:
+        return {"next": 0, "serving": 0}
+
+
+def _queue_write(path: Path, state: dict[str, int]) -> None:
+    import json
+
+    path.write_text(
+        json.dumps({"next": int(state["next"]), "serving": int(state["serving"])}),
+        encoding="utf-8",
+    )
+
+
 @contextmanager
 def exclusive_playback() -> Iterator[None]:
-    """Hold the global TTS speaker (fcntl flock). Re-entrant in the same thread.
+    """FIFO global TTS speaker (fcntl + ticket). Re-entrant in the same thread.
 
-    Concurrent ``hark tts`` processes synthesize freely, then block here so
-    audio plays back-to-back without overlap. Nested calls (multi-chunk under
-    one outer hold) do not re-open the file.
+    Concurrent ``hark tts`` processes synthesize freely, then take a ticket and
+    play in launch order without audio overlap. Nested multi-chunk holds do not
+    take a second ticket.
     """
     depth = int(getattr(_play_tls, "depth", 0) or 0)
     if depth > 0:
@@ -59,16 +88,43 @@ def exclusive_playback() -> Iterator[None]:
 
     import fcntl
 
-    path = tts_play_lock_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+    lock_path = tts_play_lock_path()
+    queue_path = tts_play_queue_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    ticket: int | None = None
     try:
+        # Claim FIFO ticket
         fcntl.flock(fd, fcntl.LOCK_EX)
+        st = _queue_read(queue_path)
+        ticket = int(st["next"])
+        st["next"] = ticket + 1
+        # Recover if serving ran ahead of a crashed holder (tickets wrap rarely)
+        if st["serving"] > st["next"]:
+            st["serving"] = ticket
+        _queue_write(queue_path, st)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+        # Wait until we are head of line, then hold lock through playback
+        while True:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            st = _queue_read(queue_path)
+            if int(st["serving"]) == ticket:
+                break
+            # Stale lock recovery: if serving lags forever, still wait (v1)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            time.sleep(0.03)
+
         _play_tls.depth = 1
         try:
             yield
         finally:
             _play_tls.depth = 0
+            st = _queue_read(queue_path)
+            # Advance only if we still own the head (avoid double-advance)
+            if int(st["serving"]) == ticket:
+                st["serving"] = ticket + 1
+                _queue_write(queue_path, st)
             fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)

@@ -118,6 +118,9 @@ def run_doctor(
     # Media ducking readiness (B047 / I002) — soft warnings only; never hard-fail
     report["media_duck"] = _media_duck_report(cfg)
 
+    # Coding CLI resolve readiness (I005 / B059) — soft only
+    report["coding_clis"] = _coding_clis_report(cfg)
+
     if as_json:
         out.write(json.dumps(report, indent=2) + "\n")
     else:
@@ -126,6 +129,27 @@ def run_doctor(
     if not report["herdr_ok"]:
         return HERDR
     return OK
+
+
+def _coding_clis_report(cfg: HarkConfig) -> dict[str, Any]:
+    """Which catalog coding CLIs resolve (soft; missing agents are OK)."""
+    from hark.agents.resolve import catalog_status
+
+    agents_cfg = getattr(cfg, "agents", None)
+    prefer = True
+    overrides = None
+    if agents_cfg is not None:
+        prefer = bool(getattr(agents_cfg, "prefer_aliases", True))
+        overrides = dict(getattr(agents_cfg, "cli", {}) or {}) or None
+    rows = catalog_status(overrides=overrides, prefer_aliases=prefer)
+    ok_n = sum(1 for r in rows if r.get("ok"))
+    return {
+        "status": "ready" if ok_n else "empty",
+        "resolved": ok_n,
+        "total": len(rows),
+        "prefer_aliases": prefer,
+        "agents": rows,
+    }
 
 
 def _media_duck_report(cfg: HarkConfig) -> dict[str, Any]:
@@ -235,6 +259,22 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
         )
         for w in md.get("warnings") or []:
             print(f"  warn: {w}", file=out)
+    clis = report.get("coding_clis") or {}
+    if clis:
+        print(
+            f"  coding CLIs: {clis.get('resolved', 0)}/{clis.get('total', 0)} resolved "
+            f"(prefer_aliases={clis.get('prefer_aliases')})",
+            file=out,
+        )
+        for row in clis.get("agents") or []:
+            if row.get("ok"):
+                print(
+                    f"    ✓ {row.get('agent')}: {row.get('argv0')} "
+                    f"[{row.get('source')}]",
+                    file=out,
+                )
+            else:
+                print(f"    · {row.get('agent')}: missing", file=out)
     print(
         "  overall: "
         + ("OK" if report["ok"] and report.get("speech_ok", True) else "DEGRADED"),

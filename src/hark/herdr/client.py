@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,18 @@ class HerdrSessionHealth:
     agent_count: int = 0
     error: str | None = None
     protocol: int | None = None
+
+
+@dataclass
+class NamedSessionInfo:
+    """One entry from ``herdr session list --json``."""
+
+    name: str
+    running: bool
+    default: bool = False
+    session_dir: str | None = None
+    socket_path: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 class HerdrClient:
@@ -145,6 +158,124 @@ class HerdrClient:
             if a.pane_id == pane_id:
                 return a
         return None
+
+    def list_sessions(self) -> list[NamedSessionInfo]:
+        """Global ``herdr session list --json`` (not scoped to one socket)."""
+        # session list is process-global; avoid forcing HERDR_SOCKET_PATH alone
+        proc = self.run_raw(["session", "list", "--json"], timeout=10)
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
+            raise HerdrError(f"herdr session list failed: {err[:400]}")
+        text = (proc.stdout or "").strip()
+        if not text:
+            raise HerdrError("herdr session list returned empty stdout")
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise HerdrError(f"herdr session list not JSON: {text[:200]!r}") from exc
+        return parse_session_list(data)
+
+    def ensure_session(
+        self,
+        name: str,
+        *,
+        start: bool = True,
+        wait_s: float = 8.0,
+        poll_s: float = 0.25,
+    ) -> NamedSessionInfo:
+        """Return named Herdr session; optionally start headless server if not running.
+
+        Idempotent when the session already exists and is running. Starting uses
+        ``herdr --session <name> server`` (detached). ``name`` ``default`` maps to
+        bare ``herdr server`` when needed.
+        """
+        name = (name or "").strip()
+        if not name:
+            raise HerdrError("session name is empty")
+
+        def _find() -> NamedSessionInfo | None:
+            for s in self.list_sessions():
+                if s.name == name:
+                    return s
+            return None
+
+        found = _find()
+        if found is not None and found.running:
+            return found
+        if not start:
+            if found is not None:
+                return found
+            raise HerdrError(f"herdr session {name!r} not found")
+
+        # Start headless server for this named session
+        if name == "default":
+            cmd = [self.herdr_bin, "server"]
+        else:
+            cmd = [self.herdr_bin, "--session", name, "server"]
+        try:
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                env=os.environ.copy(),
+            )
+        except FileNotFoundError as exc:
+            raise HerdrError(f"herdr binary not found: {self.herdr_bin}") from exc
+
+        deadline = time.monotonic() + max(0.5, wait_s)
+        last: NamedSessionInfo | None = found
+        while time.monotonic() < deadline:
+            time.sleep(poll_s)
+            last = _find()
+            if last is not None and last.running:
+                return last
+        raise HerdrError(
+            f"herdr session {name!r} did not become running within {wait_s}s"
+            + (f" (last={last})" if last else "")
+        )
+
+    def start_agent(
+        self,
+        name: str,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        workspace_id: str | None = None,
+        tab_id: str | None = None,
+        split: str | None = None,
+        focus: bool = False,
+        env_pairs: list[str] | None = None,
+        timeout: float = 30.0,
+    ) -> AgentInfo:
+        """Run ``herdr agent start <name> … -- <argv>`` and return the new agent.
+
+        ``argv`` must be non-empty (resolved coding CLI + args).
+        """
+        if not argv:
+            raise HerdrError("start_agent requires non-empty argv")
+        label = (name or "").strip() or "agent"
+        args: list[str] = ["agent", "start", label]
+        if cwd:
+            args.extend(["--cwd", cwd])
+        if workspace_id:
+            args.extend(["--workspace", workspace_id])
+        if tab_id:
+            args.extend(["--tab", tab_id])
+        if split:
+            if split not in ("right", "down"):
+                raise HerdrError(f"invalid split {split!r} (use right|down)")
+            args.extend(["--split", split])
+        if env_pairs:
+            for pair in env_pairs:
+                args.extend(["--env", pair])
+        args.append("--focus" if focus else "--no-focus")
+        args.append("--")
+        args.extend(str(a) for a in argv)
+
+        data = self.run_json(args, timeout=timeout)
+        return parse_agent_start(data, session_id=self.session.id)
 
     def health(self) -> HerdrSessionHealth:
         sock = str(self.socket_path)
@@ -275,35 +406,110 @@ def parse_agent_list(
 
     out: list[AgentInfo] = []
     for item in agents_raw:
+        info = _agent_info_from_dict(item, session_id=session_id)
+        if info is not None:
+            out.append(info)
+    return out
+
+
+def parse_session_list(data: dict[str, Any] | list[Any]) -> list[NamedSessionInfo]:
+    """Parse ``herdr session list --json``."""
+    if isinstance(data, list):
+        raw_list = data
+    elif isinstance(data, dict):
+        raw_list = data.get("sessions")
+        if raw_list is None and isinstance(data.get("result"), dict):
+            raw_list = data["result"].get("sessions")
+        if raw_list is None:
+            raise HerdrError("session list missing sessions[]")
+    else:
+        raise HerdrError(
+            f"expected JSON object/list for session list, got {type(data).__name__}"
+        )
+    if not isinstance(raw_list, list):
+        raise HerdrError("session list missing sessions[]")
+    out: list[NamedSessionInfo] = []
+    for item in raw_list:
         if not isinstance(item, dict):
             continue
-        pane_id = str(item.get("pane_id") or item.get("id") or "")
-        if not pane_id:
+        name = str(item.get("name") or item.get("id") or "").strip()
+        if not name:
             continue
-        status = str(
-            item.get("agent_status")
-            or item.get("status")
-            or item.get("state")
-            or "unknown"
-        )
         out.append(
-            AgentInfo(
-                session_id=session_id,
-                pane_id=pane_id,
-                agent=(str(item["agent"]) if item.get("agent") else None),
-                status=status,
-                revision=int(item.get("revision") or item.get("pane_revision") or 0),
-                workspace_id=(
-                    str(item["workspace_id"]) if item.get("workspace_id") else None
+            NamedSessionInfo(
+                name=name,
+                running=bool(item.get("running", False)),
+                default=bool(item.get("default", False)),
+                session_dir=(
+                    str(item["session_dir"]) if item.get("session_dir") else None
                 ),
-                tab_id=str(item["tab_id"]) if item.get("tab_id") else None,
-                terminal_id=(
-                    str(item["terminal_id"]) if item.get("terminal_id") else None
+                socket_path=(
+                    str(item["socket_path"])
+                    if item.get("socket_path")
+                    else (str(item["socket"]) if item.get("socket") else None)
                 ),
-                cwd=str(item["cwd"]) if item.get("cwd") else None,
-                focused=bool(item.get("focused", False)),
                 raw=item,
             )
         )
     return out
+
+
+def parse_agent_start(
+    data: dict[str, Any],
+    *,
+    session_id: str = "default",
+) -> AgentInfo:
+    """Parse ``herdr agent start`` JSON into :class:`AgentInfo`."""
+    if not isinstance(data, dict):
+        raise HerdrError(
+            f"expected JSON object for agent start, got {type(data).__name__}"
+        )
+    result = data.get("result") if isinstance(data.get("result"), dict) else data
+    agent_raw = result.get("agent") if isinstance(result, dict) else None
+    if not isinstance(agent_raw, dict):
+        # some versions may return the agent at top level
+        if isinstance(result, dict) and result.get("pane_id"):
+            agent_raw = result
+        else:
+            raise HerdrError("agent start response missing result.agent")
+    info = _agent_info_from_dict(agent_raw, session_id=session_id)
+    if info is None:
+        raise HerdrError("agent start response missing pane_id")
+    return info
+
+
+def _agent_info_from_dict(
+    item: Any,
+    *,
+    session_id: str,
+) -> AgentInfo | None:
+    if not isinstance(item, dict):
+        return None
+    pane_id = str(item.get("pane_id") or item.get("id") or "")
+    if not pane_id:
+        return None
+    status = str(
+        item.get("agent_status")
+        or item.get("status")
+        or item.get("state")
+        or "unknown"
+    )
+    agent_label = item.get("agent") or item.get("name")
+    return AgentInfo(
+        session_id=session_id,
+        pane_id=pane_id,
+        agent=(str(agent_label) if agent_label else None),
+        status=status,
+        revision=int(item.get("revision") or item.get("pane_revision") or 0),
+        workspace_id=(
+            str(item["workspace_id"]) if item.get("workspace_id") else None
+        ),
+        tab_id=str(item["tab_id"]) if item.get("tab_id") else None,
+        terminal_id=(
+            str(item["terminal_id"]) if item.get("terminal_id") else None
+        ),
+        cwd=str(item["cwd"]) if item.get("cwd") else None,
+        focused=bool(item.get("focused", False)),
+        raw=item,
+    )
 

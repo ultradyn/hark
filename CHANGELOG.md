@@ -6,6 +6,13 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Voice Herdr agent control (I005 / B055–B059): resolve coding CLIs with safe alias
+  preference (`cc`/`cx`/`gk`/`cr` when PATH-safe), `HerdrClient` session ensure +
+  `agent start`, CLI `hark session list|ensure` and `hark agent-start` (optional
+  kickoff `--prompt`), Mode A skill playbook (clarify session/space with short
+  options; one audio question at a time), `[agents]` config + doctor coding-CLI
+  readiness. Site (B054): footer links `llms.txt` instead of SPEC; add `site/llms.txt`.
+
 ## 0.1.6
 
 - Docs (B053): align root and npm READMEs with the marketing site — OG hero image,

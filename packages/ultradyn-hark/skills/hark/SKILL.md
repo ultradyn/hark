@@ -299,6 +299,42 @@ If transcript is a command: **repeat**, **skip**, **cancel**, **next**, **status
 
 Handle one target fully before the next. Announce count when >1 by TTS (`hark queue --announce` does this). Never merge replies across panes — always deliver with `hark answer <event_id>` (bound to one session/pane); the count from `hark queue` is by distinct target.
 
+## Start Herdr sessions + coding agents by voice (I005)
+
+When the operator asks to **start / spin up / launch / open** a coding agent (Claude, Codex, Grok, Cursor Agent, OpenCode, ad-hoc CLI, …) or to **create a Herdr session**, you drive it with **`hark session`** / **`hark agent-start`** — not freestyle `herdr` shell when avoidable.
+
+### Intents (paraphrase OK)
+
+- “Start claude in amaroo”
+- “New codex in clawq on swarm”
+- “Spin up grok”
+- “Start cursor-agent and tell it to review the last commit”
+- “Create a herdr session called lab”
+- “Run opencode in preview-md”
+
+### Steps
+
+1. Parse **agent**, **cwd**, **Herdr session / space**, and optional **kickoff prompt** from speech.
+2. If **session or space is unclear**, do **not** guess. Ask by voice with a **brief** options list from `hark session list` (and recent workspaces if known). Same for ambiguous cwd.
+3. **One audio question at a time** for the whole flow (session → cwd → kickoff, etc.). Never stack multiple questions in one TTS turn.
+4. Confirm when creating a **new** named Herdr session.
+5. Prefer library CLI:
+   ```bash
+   hark session list --json
+   hark session ensure <name> --json
+   hark agent-start <agent> --cwd PATH [--herdr-session NAME] [--prompt "…"] [--json]
+   # ad-hoc binary:
+   hark agent-start my-cli --adhoc --cwd PATH -- extra args…
+   ```
+   Catalog agents resolve safe aliases when present (`cc`→claude, `cx`→codex, `gk`→grok, `cr`→cursor-agent) and **reject** known collisions (gcc-as-`cc`, CodeRabbit-as-`cr`). See `hark doctor` coding CLIs section.
+6. TTS short ack: agent + cwd + session + target (`session/pane`) when known.
+7. Stay **outside** Herdr as Mode A — spawn is not pane delivery of a blocked answer.
+8. File dogfood bugs if start fails mid-voice.
+
+### CLI argv policy
+
+Use PATH binaries only (Herdr cannot see fish functions). Overrides: `[agents]` in config.toml.
+
 ## Cheatsheet
 
 | Command | Use |
@@ -313,6 +349,8 @@ Handle one target fully before the next. Announce count when >1 by TTS (`hark qu
 | `hark listen-end` | Agent finish/cancel active radio listen |
 | `hark answer` | Bound send (preferred) |
 | `hark reply` / `hark keys` | Freeform / keys |
+| `hark session list\|ensure` | Named Herdr sessions (voice spawn) |
+| `hark agent-start` | Start coding agent + optional kickoff prompt |
 | `hark mute` / `unmute` | System mic mute |
 
 ## Failures

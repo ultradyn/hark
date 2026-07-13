@@ -102,6 +102,27 @@ herdr pane send-keys <pane_id> <key> [key ...]   # 2 enter down esc …
 herdr pane run <pane_id> <command>               # text+Enter for shells, not chat
 ```
 
+### Sessions + start agent (I005 / voice spawn)
+
+Prefer **`hark`** wrappers for Mode A (alias-safe CLI resolve + kickoff):
+
+```bash
+hark session list [--json]
+hark session ensure <name> [--json]          # start headless server if needed
+hark agent-start <agent> --cwd PATH [--herdr-session NAME] [--prompt "…"] [--json]
+# agent: claude|cc, codex|cx, grok|gk, cursor-agent|cr, opencode, pi, agy, or --adhoc
+```
+
+Raw Herdr equivalents:
+
+```bash
+herdr session list [--json]
+herdr --session <name> server                # headless named session
+herdr agent start <name> [--cwd PATH] [--workspace ID] [--tab ID] [--split right|down] [--no-focus] -- <argv...>
+```
+
+See `docs/plans/I005-voice-herdr-agent-control.md` and `hark.agents.resolve` for alias reject rules (gcc-as-`cc`, CodeRabbit-as-`cr`).
+
 ### Keys for menus
 
 Herdr key-combo syntax: `enter`, `tab`, `esc`, `down`, `up`, digits as printable keys, `ctrl+c`, etc.

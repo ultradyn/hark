@@ -46,3 +46,4 @@ bugs:
     - file: B045-duck-other-media-volume-during.todo
     - file: B046-duck-or-pause-media-during-stt.todo
     - file: B047-config-docs-and-doctor-checks.todo
+    - file: B048-site-show-logos-of-compatible.todo

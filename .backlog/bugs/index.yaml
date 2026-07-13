@@ -79,3 +79,4 @@ bugs:
     - file: B078-answer-window-record-beep-stil.todo
     - file: B079-ambient-wake-keep-mic-stream-o.todo
     - file: B080-test-boot-tts-test-default-boo.todo
+    - file: B081-optional-local-streaming-stt-f.todo

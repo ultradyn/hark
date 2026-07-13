@@ -1,13 +1,13 @@
 critical_path:
-    - I003
+    - I004
 description: Voice bridge for Herdr agents (Mode A Python prototype; Rust client later)
 next_available: B001
 phases: []
 project: hark
 stats:
     blocked: 0
-    done: 51
-    in_progress: 2
-    pending: 11
-    total_tasks: 64
+    done: 69
+    in_progress: 12
+    pending: 6
+    total_tasks: 87
 timeline_weeks: 12

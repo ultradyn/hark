@@ -1,0 +1,59 @@
+---
+completed_at: null
+complexity: medium
+created_at: "2026-07-13T16:12:16Z"
+depends_on:
+    - B072
+estimate_hours: 5
+id: B081
+priority: medium
+started_at: null
+status: pending
+tags:
+    - audio
+    - stt
+    - streaming
+    - local-models
+title: Optional local streaming STT for radio/partial-transcript mode (offline)
+updated_at: "2026-07-13T16:12:16Z"
+---
+
+# Optional local streaming STT for radio/partial-transcript mode (offline)
+
+_Derived from idea I004 / survey B069 (`docs/plans/B069-local-stt-survey.md`). Sibling of B072 (batch local STT)._
+
+## Problem
+I004's idea names "the new whisper **streaming** one" specifically. The B069 survey (§4) noted streaming ASR (Sherpa Zipformer / whisper-streaming forks / Moonshine streaming) as a fit for post-wake local dictation but filed **no task** for it. B072 covers only **batch utterance STT** (`SttProvider.transcribe(wav_bytes) -> Transcript`), and its non-goals exclude the wake path but say nothing about the radio path.
+
+Today the radio / partial-transcript mode (`hark.partial`, driven from `src/hark/speech.py:1039-1062`) produces `ambient.partial` / `listen.partial` events by **re-calling batch `stt.transcribe()` on a growing buffer** and diffing with `partial_fragment`. This path is served **only by cloud STT** — there is no local/offline option for streaming partials. This is the concrete gap versus the idea's streaming emphasis.
+
+## Goal
+Optional **local streaming STT** backend that can serve radio/partial-transcript mode offline, CPU-OK, GPU never required. Cloud STT stays the product default (ADR-004). Complements B072 (batch) — this is the incremental/partial-decode path.
+
+## Scope
+- Extend the STT seam with an **incremental/streaming decode** capability (e.g. a `StreamingSttProvider` protocol with `accept_pcm()` / `partials()` / `finalize()`), keeping the existing batch `SttProvider.transcribe` intact and default.
+- Wire the streaming backend into the `hark.partial` producer as an optional engine, replacing the growing-buffer re-transcribe loop when enabled; fail-open to the current cloud/batch path when the local model is missing or disabled.
+- Candidate engines (evaluate on capable hardware, do not benchmark here):
+  - **Moonshine v2 streaming** (Ergodic Streaming Encoder, MIT English, ~tens–hundreds ms on short clips, smallest CPU/edge footprint) — primary CPU-first candidate.
+  - **whisper-streaming (ufal) LocalAgreement-2** over the faster-whisper backend from B072 — reuses B072's dependency; committed-token stability without hallucinated rewrites.
+  - Note as **GPU-biased / deferred**: NVIDIA Parakeet-TDT (CC-BY-4.0, NVIDIA dep) and Kyutai STT (streaming but batching/GPU-oriented) — record but do not adopt as CPU defaults.
+- Config: `engine`/provider selection + enable flag; document expected latency/RTF and the stability policy (committed vs revisable tokens) so `partial_fragment` rewrite behaviour stays correct.
+- Doctor readiness check for the optional streaming model/deps (pattern like Vosk/Sherpa readiness).
+
+## Non-goals
+- Dropping xAI/cloud STT as default (ADR-004).
+- Wake-path replacement (that is Sherpa KWS / B070) — this is post-wake radio streaming only.
+- Replacing the batch utterance path (that is B072).
+
+## Acceptance criteria
+- [ ] Streaming STT seam added beside batch `SttProvider`; batch path and cloud default unchanged.
+- [ ] `hark.partial` radio/listen path can be driven by a local streaming backend behind config, fail-open to cloud/batch when unavailable.
+- [ ] At least one CPU-capable open backend integrated (Moonshine v2 streaming or whisper-streaming/LocalAgreement over faster-whisper), GPU optional and never required.
+- [ ] Token-stability policy documented and reconciled with `partial_fragment` (no spurious full-body rewrites on revised tokens).
+- [ ] Doctor readiness + docs (config keys, latency expectations, offline/privacy posture), cross-linked from docs/plans/B069-local-stt-survey.md §4.
+- [ ] Unit tests only in this repo (mocked/fixture streaming frames). **Real model latency/accuracy validation on the radio path requires capable hardware** (this host is CPU-only, no local model download/benchmark — file/track separately, cf. B035 pattern).
+
+## References
+- docs/plans/B069-local-stt-survey.md §4 (streaming notes) and §5 (optional local full-STT).
+- src/hark/partial.py, src/hark/speech.py (partial producer), src/hark/providers/base.py (`SttProvider`).
+- Depends on B072 (faster-whisper backend reused by the whisper-streaming/LocalAgreement option).

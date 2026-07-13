@@ -37,11 +37,23 @@ Add support for local models like the new whisper streaming one or whatever is b
 - **B071** — Wake eval harness: expand fixtures / hit-rate for Vosk vs KWS
 - **B072** — Optional local full-STT provider (faster-whisper / Moonshine), cloud remains default
 - **B073** — Docs/helper: optional larger Vosk model_path (0.22-lgraph / 0.22)
+- **B081** — Optional local **streaming** STT for radio/partial-transcript mode (offline) — closes the "whisper streaming" gap left by B069/B072 (added 2026-07-14)
 
 Survey recommendation (summary): keep Vosk+cloud as default interim; next wake engine = Sherpa open-vocab KWS; optional local utterance STT via faster-whisper — do not use Whisper for always-on wake.
 
+## Gap Analysis (2026-07-14, close-out)
+
+**Question:** does the B069–B073 decomposition fully cover the idea, in particular "the new whisper **streaming** one"?
+
+**Finding — one concrete gap, now filed as B081.** The idea's literal emphasis is *streaming*. The B069 survey acknowledged streaming ASR (Sherpa Zipformer, whisper-streaming forks, Moonshine streaming) in §4 as a fit for post-wake local dictation, but filed **no task** for it. B072 scopes only **batch utterance STT** (`SttProvider.transcribe(wav_bytes) -> Transcript`); it says nothing about the radio path. Today the radio / partial-transcript mode (`hark.partial`, produced in `src/hark/speech.py:1039-1062`) generates partials by re-calling **batch** `stt.transcribe()` on a growing buffer and diffing — served **only by cloud STT**. There is no local/offline streaming-partial path. B081 fills exactly this: an optional local streaming STT seam (Moonshine v2 streaming or whisper-streaming/LocalAgreement over B072's faster-whisper), CPU-OK, cloud still default.
+
+**Streaming-STT landscape check (light web search, mid-2026):** Moonshine v2 (Ergodic Streaming Encoder, MIT English, smallest CPU/edge footprint), NVIDIA Parakeet-TDT-0.6B (very high throughput but NVIDIA/GPU-biased, CC-BY-4.0 attribution), and Kyutai STT (true streaming, but batching/GPU-oriented) are the notable additions since the survey. **This does not change the B069 recommendation** for wake (Sherpa open-vocab KWS) or the "keep cloud STT default" posture — it is purely **additive**: it turns the survey's §4 streaming note into a concrete optional post-wake radio backend, with Parakeet/Kyutai recorded but deferred as GPU-biased and non-CPU-first.
+
+**Coverage verdict:** wake path (B070/B071), batch local STT (B072), larger-Vosk docs (B073), and now streaming local STT (B081) together cover the idea. Any real model download / latency / accuracy validation is out of scope for this host (CPU-only) and is flagged in each task to run on capable hardware (cf. B035).
+
 ## Completion Criteria
 
-- Idea has been decomposed into concrete backlog work items.
-- New items include clear acceptance criteria and dependencies.
-- This idea intake is updated with created IDs and marked done.
+- [x] Idea has been decomposed into concrete backlog work items. (B069–B073 + B081)
+- [x] New items include clear acceptance criteria and dependencies. (B081 has acceptance criteria + depends_on B072)
+- [x] This idea intake is updated with created IDs. (B081 added above; gap analysis recorded)
+- [ ] Marked done — deferred to the parent/coordinator session after review + merge (do not `bl done I004` here).

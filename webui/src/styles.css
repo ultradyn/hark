@@ -541,14 +541,22 @@ textarea {
   margin-bottom: 10px;
 }
 
-/* panel scaffolding shared by later views */
+/* panel scaffolding shared by later views — flat + dense, not card grids */
 .panelwrap {
   flex: 1;
   overflow-y: auto;
-  padding: var(--pad);
+  padding: 4px var(--pad) 30px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+}
+
+.section {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.section:last-child {
+  border-bottom: none;
 }
 
 .paneltitle {
@@ -556,7 +564,47 @@ textarea {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text-faint);
-  margin: 0 0 8px;
+  margin: 0 0 10px;
+}
+
+/* dense terminal readout rows: `label  value · value · value` */
+.readout {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 0;
+  flex-wrap: wrap;
+}
+
+.readout .rlabel {
+  color: var(--brand-hi);
+  font-weight: 700;
+  min-width: 64px;
+}
+
+.readout .v {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.readout .v.ok {
+  color: var(--ok);
+}
+
+.readout .v.warn {
+  color: var(--warn);
+}
+
+.readout .v.err {
+  color: var(--error);
+}
+
+.readout .dim {
+  color: var(--text-faint);
+}
+
+.readout .sep {
+  color: var(--text-faint);
 }
 
 /* ---------------------------------------------------------------- mobile */

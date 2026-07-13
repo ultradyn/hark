@@ -1,13 +1,22 @@
 import { useComputed, useSignal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { api } from "./lib/api";
+import { conferenceHold, deliveries, wireDataRefreshes } from "./lib/data";
 import { connState, connect, events, serverInfo, severityOf } from "./lib/stream";
 import { EventsView } from "./views/EventsView";
+import { HealthView } from "./views/HealthView";
+import { HerdrView } from "./views/HerdrView";
+import { QueueView } from "./views/QueueView";
+import { VoiceView } from "./views/VoiceView";
 
-export type ViewId = "events";
+export type ViewId = "events" | "herdr" | "queue" | "voice" | "health";
 
 const VIEWS: { id: ViewId; label: string; icon: string }[] = [
   { id: "events", label: "events", icon: "≋" },
+  { id: "herdr", label: "herdr", icon: "⛶" },
+  { id: "queue", label: "queue", icon: "⇶" },
+  { id: "voice", label: "voice", icon: "◉" },
+  { id: "health", label: "health", icon: "♥" },
 ];
 
 function ConnBadge() {
@@ -65,7 +74,10 @@ function AuthGate() {
 
 export function App() {
   const view = useSignal<ViewId>("events");
-  useEffect(() => connect(), []);
+  useEffect(() => {
+    wireDataRefreshes();
+    connect();
+  }, []);
 
   const blockedCount = useComputed(
     () =>
@@ -90,6 +102,7 @@ export function App() {
             ⚠ {blockedCount.value} blocked
           </span>
         )}
+        {conferenceHold.value && <span class="badge warn">⏸ conference</span>}
         {errorCount.value > 0 && (
           <span class="badge err">{errorCount.value} errors</span>
         )}
@@ -112,11 +125,26 @@ export function App() {
                   {blockedCount.value ? `${blockedCount.value}⚠` : events.value.length}
                 </span>
               )}
+              {v.id === "queue" && (deliveries.value?.pending.length ?? 0) > 0 && (
+                <span class="count hot">{deliveries.value!.pending.length}</span>
+              )}
             </button>
           ))}
         </nav>
         <main class="content">
-          {connState.value === "auth" ? <AuthGate /> : view.value === "events" && <EventsView />}
+          {connState.value === "auth" ? (
+            <AuthGate />
+          ) : view.value === "events" ? (
+            <EventsView />
+          ) : view.value === "herdr" ? (
+            <HerdrView />
+          ) : view.value === "queue" ? (
+            <QueueView />
+          ) : view.value === "voice" ? (
+            <VoiceView />
+          ) : (
+            <HealthView />
+          )}
         </main>
       </div>
     </div>

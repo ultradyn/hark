@@ -41,7 +41,30 @@ def health_snapshot(cfg: HarkConfig, server_meta: dict[str, Any]) -> dict[str, A
         "ok": bool(doctor.get("ok", False)),
         "server": server_meta,
         "doctor": doctor,
+        "pipeline": pipeline_state(),
     }
+
+
+def pipeline_state() -> dict[str, Any]:
+    """Live voice-pipeline coordination state (additive health field, B064)."""
+    from hark.daemon import collect_status
+
+    status = collect_status().to_dict()
+    root = state_dir()
+    status["ambient_pause"] = (root / "ambient.pause").is_file()
+    # announcements currently held for a conference: latest status per queue id
+    queue = root / "announce_hold_queue.jsonl"
+    latest: dict[str, str] = {}
+    if queue.is_file():
+        for line in queue.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict) and rec.get("id"):
+                latest[str(rec["id"])] = str(rec.get("status") or "")
+    status["announce_hold_queued"] = sum(1 for s in latest.values() if s == "held")
+    return status
 
 
 def config_snapshot(cfg: HarkConfig) -> dict[str, Any]:
@@ -121,10 +144,13 @@ def context_snapshot(
     store = DeliveryStore()
     for ev in store.pending_events():
         if ev.get("session_id") == session_id and ev.get("pane_id") == pane_id:
+            event_id = str(ev.get("event_id"))
+            hep = find_hep_event(event_id)
+            question = (hep or {}).get("question") or {}
             pending_question = {
-                "event_id": str(ev.get("event_id")),
-                "text": ev.get("question_text"),
-                "choices": None,
+                "event_id": event_id,
+                "text": ev.get("question_text") or question.get("text"),
+                "choices": question.get("choices"),
                 "fingerprint": ev.get("question_fingerprint"),
                 "risk": ev.get("risk"),
             }

@@ -1,10 +1,12 @@
 ---
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T17:20:00Z"
 depends_on: []
 estimate_hours: 1
 id: B089
 priority: high
+started_at: null
 status: pending
 tags: []
 title: add start/stop/restart commands to `hark`
@@ -12,3 +14,5 @@ updated_at: "2026-07-13T17:20:00Z"
 ---
 
 add start/stop/restart commands to `hark`
+
+add start/stop/restart commands to 'hark'

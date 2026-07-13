@@ -136,6 +136,10 @@ class HostDictation:
         self, cfg: HarkConfig, publish: Callable[[dict[str, Any]], None]
     ) -> tuple[int, dict[str, Any]]:
         from hark.audio.capture import MicBusyError, MicLease
+        # resolve BEFORE spawning: a lazy import inside the thread binds
+        # non-deterministically (test monkeypatches would race the thread and
+        # a lost race silently opens the real microphone)
+        from hark.speech import run_listen
 
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
@@ -152,8 +156,6 @@ class HostDictation:
             self.stream_id = stream_id
 
             def worker() -> None:
-                from hark.speech import run_listen
-
                 try:
                     self._publish(publish, "recording", stream_id=stream_id)
                     result = run_listen(

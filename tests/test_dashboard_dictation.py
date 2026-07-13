@@ -143,6 +143,7 @@ def test_host_dictation_flow(env, monkeypatch):
     assert done["text"] == "use option two"
     partials = [p for p in published if p.get("partial")]
     assert partials and partials[0]["text"] == "use option"
+    host._thread.join(timeout=5)
 
 
 def test_host_dictation_stop_requests_finish(env, monkeypatch):
@@ -166,6 +167,7 @@ def test_host_dictation_stop_requests_finish(env, monkeypatch):
     status, _ = host.control("cancel")
     assert requested[-1][0] == "cancel"
     release.set()
+    host._thread.join(timeout=5)
 
 
 def test_host_dictation_no_capture_409(env):
@@ -191,6 +193,7 @@ def test_host_dictation_listen_error_publishes_failed(env, monkeypatch):
         time.sleep(0.02)
     failed = next(p for p in published if p["state"] == "failed")
     assert "no audio device" in failed["error"]
+    host._thread.join(timeout=5)
 
 
 def test_server_transcribe_endpoint(env, tmp_path, monkeypatch):

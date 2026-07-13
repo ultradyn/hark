@@ -2,14 +2,16 @@
 
 Policy:
   - Ambient path MUST NOT open cloud STT until an activation phrase fires.
-  - Short local snippets (default ~2.5 s) are scanned by a small local model
-    or a mock/test backend. Full dictation after wake still uses cloud STT.
+  - Short local snippets (default ~2 s) are scanned by a small local model.
+  - Full dictation after wake still uses cloud STT.
 """
 
 from __future__ import annotations
 
+import json
+import math
 import re
-import unicodedata
+import struct
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -29,7 +31,7 @@ _PUNCT = re.compile(r"[\.\!\?\,\;\:…]+")
 @dataclass(frozen=True)
 class WakeHit:
     phrase: str
-    remainder: str  # text after activation, if any
+    remainder: str
     raw: str
     confidence: float = 1.0
     backend: str = "text"
@@ -38,8 +40,10 @@ class WakeHit:
 def match_activation(
     text: str,
     phrases: list[str] | tuple[str, ...] = DEFAULT_ACTIVATION_PHRASES,
+    *,
+    anywhere: bool = False,
 ) -> WakeHit | None:
-    """Match activation at start of text (or whole short snippet)."""
+    """Match activation at start of text, or anywhere in a short wake snippet."""
     raw = text or ""
     norm = normalize_for_match(raw)
     norm = _PUNCT.sub(" ", norm)
@@ -58,35 +62,58 @@ def match_activation(
         if norm == p:
             return WakeHit(phrase=p, remainder="", raw=raw, backend="text")
         if norm.startswith(p + " "):
-            rem = norm[len(p) :].strip()
-            return WakeHit(phrase=p, remainder=rem, raw=raw, backend="text")
+            return WakeHit(
+                phrase=p, remainder=norm[len(p) :].strip(), raw=raw, backend="text"
+            )
+        if anywhere:
+            # whole-word contain: "noise hey hark please"
+            padded = f" {norm} "
+            needle = f" {p} "
+            idx = padded.find(needle)
+            if idx >= 0:
+                after = padded[idx + len(needle) :].strip()
+                return WakeHit(phrase=p, remainder=after, raw=raw, backend="text")
+            if norm.endswith(" " + p) or norm.endswith(p):
+                # ends with phrase
+                if norm == p or norm.endswith(" " + p):
+                    return WakeHit(phrase=p, remainder="", raw=raw, backend="text")
     return None
+
+
+def pcm16_rms(pcm16_le: bytes) -> float:
+    if len(pcm16_le) < 2:
+        return 0.0
+    n = len(pcm16_le) // 2
+    # sample a subset for speed
+    step = max(1, n // 2000)
+    acc = 0.0
+    count = 0
+    for i in range(0, n, step):
+        (sample,) = struct.unpack_from("<h", pcm16_le, i * 2)
+        acc += float(sample) * float(sample)
+        count += 1
+    if count == 0:
+        return 0.0
+    return math.sqrt(acc / count) / 32768.0
 
 
 class WakeBackend(Protocol):
     name: str
 
     def score_snippet(self, pcm16_le: bytes, sample_rate: int = 16000) -> WakeHit | None:
-        """Return WakeHit if activation detected in this short PCM snippet."""
         ...
 
 
 class TextProbeBackend:
-    """Test/dev backend: treat UTF-8 payload as already-transcribed text.
-
-    Production uses Vosk/tiny-local; this allows unit tests without models.
-    """
-
     name = "text_probe"
 
     def __init__(self, phrases: list[str] | tuple[str, ...] | None = None) -> None:
         self.phrases = list(phrases or DEFAULT_ACTIVATION_PHRASES)
 
     def score_snippet(self, pcm16_le: bytes, sample_rate: int = 16000) -> WakeHit | None:
-        # Convention: if buffer starts with magic b"TXT:" rest is utf-8 text
         if pcm16_le.startswith(b"TXT:"):
             text = pcm16_le[4:].decode("utf-8", errors="replace")
-            hit = match_activation(text, self.phrases)
+            hit = match_activation(text, self.phrases, anywhere=True)
             if hit:
                 return WakeHit(
                     phrase=hit.phrase,
@@ -98,7 +125,7 @@ class TextProbeBackend:
 
 
 class VoskWakeBackend:
-    """Optional tiny local ASR on short snippets (vosk model path required)."""
+    """Tiny local ASR on short snippets — model loaded once and reused."""
 
     name = "vosk"
 
@@ -106,17 +133,27 @@ class VoskWakeBackend:
         self,
         model_path: str,
         phrases: list[str] | tuple[str, ...] | None = None,
+        *,
+        energy_floor: float = 0.008,
     ) -> None:
         self.model_path = model_path
         self.phrases = list(phrases or DEFAULT_ACTIVATION_PHRASES)
+        self.energy_floor = energy_floor
         self._model = None
-        self._rec = None
+        self._Rec = None
+        self._sample_rate = 16000
+        self.last_text: str = ""
+        self.last_rms: float = 0.0
+        self.snippets_scored: int = 0
+        self.snippets_skipped_quiet: int = 0
 
     def _ensure(self, sample_rate: int) -> None:
         if self._model is not None:
             return
         try:
-            from vosk import KaldiRecognizer, Model  # type: ignore
+            from vosk import KaldiRecognizer, Model, SetLogLevel  # type: ignore
+
+            SetLogLevel(-1)  # silence spam into ambient logs
         except ImportError as exc:
             raise RuntimeError(
                 "vosk not installed; pip install vosk or uv sync --extra wake"
@@ -126,19 +163,30 @@ class VoskWakeBackend:
         self._sample_rate = sample_rate
 
     def score_snippet(self, pcm16_le: bytes, sample_rate: int = 16000) -> WakeHit | None:
-        self._ensure(sample_rate)
-        rec = self._Rec(self._model, sample_rate)
-        rec.AcceptWaveform(pcm16_le)
-        import json
+        rms = pcm16_rms(pcm16_le)
+        self.last_rms = rms
+        if rms < self.energy_floor:
+            self.snippets_skipped_quiet += 1
+            self.last_text = ""
+            return None
 
+        self._ensure(sample_rate)
+        self.snippets_scored += 1
+        rec = self._Rec(self._model, sample_rate)
+        # Feed in chunks (vosk prefers ~0.2–0.5s blocks)
+        frame = sample_rate * 2 // 5  # 0.2s of int16 mono = sr*0.2*2 bytes
+        frame = max(3200, frame)
+        for i in range(0, len(pcm16_le), frame):
+            rec.AcceptWaveform(pcm16_le[i : i + frame])
         try:
             data = json.loads(rec.FinalResult())
         except Exception:
             return None
         text = str(data.get("text") or "").strip()
+        self.last_text = text
         if not text:
             return None
-        hit = match_activation(text, self.phrases)
+        hit = match_activation(text, self.phrases, anywhere=True)
         if not hit:
             return None
         return WakeHit(
@@ -158,14 +206,14 @@ def build_wake_backend(
 ) -> WakeBackend:
     engine = (engine or "vosk").lower()
     if engine in ("off", "none", "disabled"):
-        return TextProbeBackend(phrases)  # inert unless TXT: probe
+        return TextProbeBackend(phrases)
     if engine in ("text_probe", "mock", "test"):
         return TextProbeBackend(phrases)
     if engine == "vosk":
         if not model_path:
             raise RuntimeError(
                 "ambient.engine=vosk requires ambient.model_path "
-                "(download a small vosk model)"
+                "(run ./scripts/setup-ambient.sh)"
             )
         return VoskWakeBackend(model_path, phrases)
     raise ValueError(f"unknown ambient wake engine: {engine!r}")

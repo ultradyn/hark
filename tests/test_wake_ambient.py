@@ -19,9 +19,18 @@ def test_activation_hey_herald():
     assert hit.remainder == ""
 
 
+def test_activation_anywhere_in_snippet():
+    hit = match_activation("um yes hey hark ship it", anywhere=True)
+    assert hit is not None
+    assert hit.phrase == "hey hark"
+    assert "ship" in hit.remainder
+
+
 def test_no_false_wake_on_normal_speech():
     assert match_activation("please hark back to the earlier design") is None
     assert match_activation("the herald of spring arrived") is None
+    # without anywhere, mid-phrase start-only fails
+    assert match_activation("noise hey hark") is None
 
 
 def test_text_probe_backend():

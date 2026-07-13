@@ -101,15 +101,27 @@ def test_cmd_answer_rejects_when_agent_is_no_longer_blocked(monkeypatch):
     assert client.sent_keys == []
 
 
-def test_cmd_answer_rejects_bound_event_without_stale_protection(monkeypatch):
-    store = FakeStore(_bound_event(fingerprint=" ", revision=0))
+def test_cmd_answer_requires_fingerprint_even_with_revision(monkeypatch):
+    store = FakeStore(_bound_event(fingerprint=" ", revision=3))
     client = FakeClient(_live_agent())
     _patch_answer_dependencies(monkeypatch, store, client)
 
     assert cli.cmd_answer(_answer_args(), cfg=None) == ABORT
     assert store.marks == [
-        ("evt1", "rejected", {"reason": "missing_stale_protection"})
+        ("evt1", "rejected", {"reason": "missing_question_fingerprint"})
     ]
     assert client.get_agent_calls == []
+    assert client.sent_text == []
+    assert client.sent_keys == []
+
+
+def test_cmd_answer_rejects_unknown_live_revision(monkeypatch):
+    store = FakeStore(_bound_event(revision=3))
+    client = FakeClient(_live_agent(revision=0))
+    _patch_answer_dependencies(monkeypatch, store, client)
+
+    assert cli.cmd_answer(_answer_args(), cfg=None) == ABORT
+    assert store.marks == [("evt1", "rejected", {"reason": "stale_revision"})]
+    assert client.read_pane_calls == []
     assert client.sent_text == []
     assert client.sent_keys == []

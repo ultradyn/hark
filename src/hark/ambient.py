@@ -12,7 +12,7 @@ from hark.audio.capture import MicLease, record_seconds
 from hark.config import HarkConfig
 from hark.events import new_event_id, utc_now_iso
 from hark.speech import run_listen, run_tts
-from hark.wake import WakeHit, build_wake_backend
+from hark.wake import WakeBackend, WakeHit, build_wake_backend
 
 
 @dataclass
@@ -25,68 +25,68 @@ class AmbientResult:
     event_id: str | None = None
 
 
-def run_ambient(
-    cfg: HarkConfig,
+def _wait_for_wake(
+    backend: WakeBackend,
     *,
-    once: bool = True,
-    timeout_s: float | None = None,
+    snippet_s: float,
+    deadline: float,
+    out: TextIO | None = None,
+    debug_every_s: float = 15.0,
+) -> WakeHit | None:
+    """Record short windows until activation or deadline. Reuses backend (no reload)."""
+    snippet = max(0.8, min(snippet_s, 2.5))
+    last_debug = 0.0
+    while time.monotonic() < deadline:
+        try:
+            pcm = record_seconds(snippet, sample_rate=16000)
+        except Exception as exc:
+            if out is not None:
+                err = {
+                    "schema": "hark.event.v1",
+                    "kind": "ambient.error",
+                    "event_id": new_event_id(),
+                    "observed_at": utc_now_iso(),
+                    "error": f"record: {exc}",
+                }
+                out.write(json.dumps(err, separators=(",", ":")) + "\n")
+                out.flush()
+            time.sleep(0.5)
+            continue
+
+        hit = backend.score_snippet(pcm, 16000)
+        if hit is not None:
+            return hit
+
+        now = time.monotonic()
+        if out is not None and now - last_debug >= debug_every_s:
+            last_debug = now
+            dbg = {
+                "schema": "hark.event.v1",
+                "kind": "ambient.debug",
+                "event_id": new_event_id(),
+                "observed_at": utc_now_iso(),
+                "rms": round(getattr(backend, "last_rms", 0.0), 5),
+                "last_text": getattr(backend, "last_text", "") or None,
+                "scored": getattr(backend, "snippets_scored", None),
+                "skipped_quiet": getattr(backend, "snippets_skipped_quiet", None),
+            }
+            out.write(json.dumps(dbg, separators=(",", ":")) + "\n")
+            out.flush()
+        # small idle so we don't peg a core if record returns instantly
+        time.sleep(0.05)
+    return None
+
+
+def complete_after_wake(
+    cfg: HarkConfig,
+    hit: WakeHit,
+    *,
     announce: bool = True,
 ) -> AmbientResult:
-    """Scan short local snippets until activation, then cloud-listen for prompt.
-
-    Does NOT use cloud STT during the wake scan (except test text_probe).
-    """
-    amb = cfg.ambient
-    if not amb.enabled and not once:
-        return AmbientResult(activated=False, phrase=None, text=None)
-
-    if not amb.model_path and amb.engine == "vosk":
-        raise RuntimeError(
-            "ambient.engine=vosk requires model_path — run ./scripts/setup-ambient.sh"
-        )
-
-    phrases = amb.activation_phrases
-    backend = build_wake_backend(
-        amb.engine,
-        phrases=phrases,
-        model_path=amb.model_path,
-    )
-    # once=True without timeout: single cycle with long wait
-    deadline = time.monotonic() + (timeout_s or amb.timeout_s or 300.0)
-    snippet = max(1.0, amb.snippet_s)
-    hit: WakeHit | None = None
-    remainder = ""
-
-    with MicLease("ambient"):
-        while time.monotonic() < deadline:
-            try:
-                pcm = record_seconds(snippet, sample_rate=16000)
-            except Exception as exc:
-                return AmbientResult(
-                    activated=False,
-                    phrase=None,
-                    text=None,
-                    wake_backend=backend.name,
-                    listen={"error": str(exc)},
-                )
-            hit = backend.score_snippet(pcm, 16000)
-            if hit is None:
-                continue
-            remainder = hit.remainder
-            break
-        else:
-            return AmbientResult(
-                activated=False, phrase=None, text=None, wake_backend=backend.name
-            )
-
-    if hit is None:
-        return AmbientResult(
-            activated=False, phrase=None, text=None, wake_backend=backend.name
-        )
-
+    """After wake hit: optional cue + cloud STT for the prompt body."""
     event_id = new_event_id()
+    remainder = hit.remainder
 
-    # Prompt already in same utterance after wake phrase
     if remainder and len(remainder.split()) >= 3:
         if announce:
             try:
@@ -102,7 +102,6 @@ def run_ambient(
             event_id=event_id,
         )
 
-    # Cue then cloud STT (mic unmuted after any TTS)
     if announce:
         try:
             run_tts(cfg, "Listening.", play=True)
@@ -162,8 +161,54 @@ def run_ambient(
     )
 
 
+def run_ambient(
+    cfg: HarkConfig,
+    *,
+    once: bool = True,
+    timeout_s: float | None = None,
+    announce: bool = True,
+    backend: WakeBackend | None = None,
+    out: TextIO | None = None,
+) -> AmbientResult:
+    """One wake→prompt cycle. Pass backend= to avoid reloading vosk each time."""
+    amb = cfg.ambient
+    if not amb.enabled and not once:
+        return AmbientResult(activated=False, phrase=None, text=None)
+
+    if backend is None:
+        if not amb.model_path and amb.engine == "vosk":
+            raise RuntimeError(
+                "ambient.engine=vosk requires model_path — run ./scripts/setup-ambient.sh"
+            )
+        backend = build_wake_backend(
+            amb.engine,
+            phrases=amb.activation_phrases,
+            model_path=amb.model_path,
+        )
+
+    deadline = time.monotonic() + (timeout_s or amb.timeout_s or 300.0)
+
+    with MicLease("ambient"):
+        hit = _wait_for_wake(
+            backend,
+            snippet_s=amb.snippet_s,
+            deadline=deadline,
+            out=out,
+        )
+
+    if hit is None:
+        return AmbientResult(
+            activated=False,
+            phrase=None,
+            text=None,
+            wake_backend=getattr(backend, "name", None),
+        )
+
+    # Mic lease released — cloud listen / TTS may take the mic
+    return complete_after_wake(cfg, hit, announce=announce)
+
+
 def ambient_event_line(result: AmbientResult) -> dict[str, Any]:
-    """HEP-ish monitor line for Mode A orchestrators."""
     if result.activated and result.text and not (
         result.listen and result.listen.get("cancelled")
     ):
@@ -203,10 +248,33 @@ def run_ambient_loop(
     announce: bool = True,
     idle_log_s: float = 60.0,
 ) -> int:
-    """Continuous ambient: wake → prompt → emit JSONL → repeat until Ctrl+C."""
+    """Continuous ambient: load vosk once, wake→prompt→repeat until Ctrl+C."""
     out = out or sys.stdout
     cfg.ambient.enabled = True
-    last_idle = time.monotonic()
+
+    if not cfg.ambient.model_path and cfg.ambient.engine == "vosk":
+        err = {
+            "schema": "hark.event.v1",
+            "kind": "ambient.error",
+            "event_id": new_event_id(),
+            "observed_at": utc_now_iso(),
+            "error": "no vosk model_path — run ./scripts/setup-ambient.sh",
+        }
+        out.write(json.dumps(err, separators=(",", ":")) + "\n")
+        out.flush()
+        return 1
+
+    # Load model once
+    backend = build_wake_backend(
+        cfg.ambient.engine,
+        phrases=cfg.ambient.activation_phrases,
+        model_path=cfg.ambient.model_path,
+    )
+    # Eager load vosk so boot TTS happens after model is ready
+    try:
+        backend.score_snippet(b"\x00\x00" * 1600, 16000)
+    except Exception:
+        pass
 
     boot = {
         "schema": "hark.event.v1",
@@ -216,9 +284,10 @@ def run_ambient_loop(
         "engine": cfg.ambient.engine,
         "model_path": cfg.ambient.model_path,
         "phrases": list(cfg.ambient.activation_phrases),
+        "snippet_s": cfg.ambient.snippet_s,
         "instructions": (
             "Ambient armed. Say hey hark / hey herald, then your prompt. "
-            "Mic mutes during TTS replies."
+            "Mic mutes during TTS. Energy-gated vosk (quiet frames skipped)."
         ),
     }
     out.write(json.dumps(boot, separators=(",", ":")) + "\n")
@@ -242,37 +311,28 @@ def run_ambient_loop(
             out.write(json.dumps(err, separators=(",", ":")) + "\n")
             out.flush()
 
+    last_idle = time.monotonic()
     try:
         while True:
-            # Each cycle waits up to ambient.timeout_s for a wake, then retries
             result = run_ambient(
                 cfg,
                 once=True,
                 timeout_s=cfg.ambient.timeout_s,
                 announce=announce,
+                backend=backend,
+                out=out,
             )
             line = ambient_event_line(result)
-            # Drop null instructions
             line = {k: v for k, v in line.items() if v is not None}
+            # Don't spam timeout lines every 300s without info — keep them
             out.write(json.dumps(line, separators=(",", ":")) + "\n")
             out.flush()
 
-            if not result.activated:
-                now = time.monotonic()
-                if now - last_idle >= idle_log_s:
-                    hb = {
-                        "schema": "hark.event.v1",
-                        "kind": "ambient.idle",
-                        "event_id": new_event_id(),
-                        "observed_at": utc_now_iso(),
-                    }
-                    out.write(json.dumps(hb, separators=(",", ":")) + "\n")
-                    out.flush()
-                    last_idle = now
-            else:
+            if result.activated:
                 last_idle = time.monotonic()
-            # brief gap so mic/TTS settle
-            time.sleep(0.35)
+            elif time.monotonic() - last_idle >= idle_log_s:
+                last_idle = time.monotonic()
+            time.sleep(0.25)
     except KeyboardInterrupt:
         stop = {
             "schema": "hark.event.v1",

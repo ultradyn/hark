@@ -9,11 +9,12 @@ conservative local heuristic for informal closers ("send it", "that's all",
 utterance-final "over", …) without requiring the orchestrator to call
 ``hark listen-end``. Soft matches are **utterance-final only** (phrase must end
 the transcript after normalize) and only evaluated after a radio segment
-boundary (trailing silence). Bare ``over`` additionally requires a
-**sentence-final** boundary (sole utterance or after ``.`` / ``!`` / ``?`` /
-``,``) so mid-clause "turn it over" / "over the weekend" never finishes.
-Multi-word ``okay over`` / ``ok over`` cover STT that drops the comma in
-"okay, over". The orchestrator **must** also call ``hark listen-end`` on partials when
+boundary (trailing silence). Bare ``over`` is a radio prosign: it finalizes when
+utterance-final unless the preceding word is a phrasal-verb particle
+("turn it over", "hand it over", "take over", "start over"). Sole "over",
+sentence-final ". over", and multi-word ``okay over`` / ``ok over`` always
+finish as **end** (never cancel). Mid-clause "over the weekend" never finishes.
+The orchestrator **must** also call ``hark listen-end`` on partials when
 the operator clearly finished. See docs/AUDIO_DESIGN.md.
 """
 
@@ -54,9 +55,10 @@ DEFAULT_CANCEL_PHRASES: tuple[str, ...] = (
 # SAFE (included): informal closers that are unlikely mid-clause endings in
 # technical dictation when required to be **transcript-terminal**.
 #
-# Bare "over" is special: it is listed here but matched only with an extra
-# **sentence-final** rule (see SENTENCE_FINAL_SOFT_PHRASES) so "turn it over"
-# and "over the weekend" never finalize.
+# Bare "over" is special: listed here but matched only with an extra prosign
+# rule (see SENTENCE_FINAL_SOFT_PHRASES / _is_bare_over_prosign) so phrasal
+# "turn it over" / "take over" and mid-clause "over the weekend" never finish,
+# while radio "… fix over" / sole "over" / ". over" always finish as **end**.
 #
 # UNSAFE (not included — do not add without strong justification):
 #   - "done" / "i'm done" → mid-thought pauses ("I'm done with the first part")
@@ -66,10 +68,11 @@ DEFAULT_CANCEL_PHRASES: tuple[str, ...] = (
 #
 # Matching rules when soft_end_phrases_enabled:
 #   1. Same terminal word-boundary match as product end phrases
-#   2. Phrases in SENTENCE_FINAL_SOFT_PHRASES also need a sentence boundary
-#      (or sole-utterance) — see _is_sentence_final_suffix
+#   2. Phrases in SENTENCE_FINAL_SOFT_PHRASES use a prosign/guard rule
+#      (bare "over": sole / sentence boundary / non-phrasal prev word)
 #   3. Only runs after radio segment silence (caller evaluates post-capture)
 #   4. Cancel and product end phrases always take priority
+#   5. Soft "over" is always kind=end — never cancel (B103)
 # ---------------------------------------------------------------------------
 DEFAULT_SOFT_END_PHRASES: tuple[str, ...] = (
     "that's all",
@@ -89,24 +92,86 @@ DEFAULT_SOFT_END_PHRASES: tuple[str, ...] = (
     # STT often drops the comma in "okay, over" → bare "okay over" / "ok over"
     "okay over",
     "ok over",
-    "over",  # sentence-final only (see SENTENCE_FINAL_SOFT_PHRASES)
+    "over",  # radio prosign; see _is_bare_over_prosign
 )
 
-# Soft phrases that must not fire on mere word-final use (e.g. "turn it over").
-# Require sole utterance or sentence-ending punctuation immediately before the
-# phrase (after normalize + trail-punct strip keeps internal ". " boundaries).
+# Soft phrases with an extra guard beyond utterance-final (currently bare "over").
 SENTENCE_FINAL_SOFT_PHRASES: frozenset[str] = frozenset({"over"})
 
 # Soft end master switch default (B039 dogfood: bare "send it" / ". over." work).
 DEFAULT_SOFT_END_PHRASES_ENABLED: bool = True
 
+# Preceding word → phrasal-verb "… over", not radio prosign (B103).
+# "turn it over", "hand them over", "take over", "start over", "go over", …
+_OVER_PHRASAL_PREV: frozenset[str] = frozenset(
+    {
+        # pronouns / deictics used as particle targets
+        "it",
+        "them",
+        "him",
+        "her",
+        "this",
+        "that",
+        # common verb stems for "… over"
+        "take",
+        "start",
+        "go",
+        "look",
+        "get",
+        "roll",
+        "cross",
+        "come",
+        "think",
+        "hand",
+        "turn",
+        "flip",
+        "pass",
+        "give",
+        "carry",
+        "switch",
+        "read",
+        "run",
+        "make",
+        "win",
+        "lean",
+        "sleep",
+        "move",
+        "slide",
+        "tip",
+        "knock",
+        "bend",
+        "fall",
+        "boil",
+        "paper",
+        "gloss",
+        "smooth",
+        "brush",
+        "rake",
+        "check",
+        "watch",
+        "hold",
+        "pull",
+        "push",
+        "put",
+        "bring",
+        "left",
+        "right",
+        "head",
+        "sign",
+        "change",
+        "cut",
+        "break",
+    }
+)
+
 
 _PUNCT_TRAIL = re.compile(r"[\s\.\!\?\,\;\:…]+$", re.UNICODE)
 _WS = re.compile(r"\s+")
-# Sentence-ending punct at end of prefix before a sentence-final soft phrase.
+# Sentence-ending punct at end of prefix before bare "over".
 # Comma counts as a soft sentence boundary so "okay, over" / "ready, over"
-# finalize while mid-clause "turn it over" / "this is over" still do not.
+# finalize (also covered by multi-word okay/ok over).
 _SENTENCE_END = re.compile(r"[.!?…;:,]+$")
+_WORD_TRAIL_PUNCT = re.compile(r"[\.\!\?\,\;\:…'\"”’]+$")
 
 
 def normalize_for_match(text: str) -> str:
@@ -149,8 +214,7 @@ def _ends_with_phrase(normalized: str, phrase: str) -> bool:
 def _is_sentence_final_suffix(normalized: str, phrase: str) -> bool:
     """Utterance-final phrase that is also sentence-final (or sole utterance).
 
-    Used for bare ``over`` so technical "turn it over" / "hand it over" does
-    not finalize, while "... implement. over." does.
+    Kept for callers/tests; bare ``over`` uses :func:`_is_bare_over_prosign`.
     """
     p = normalize_for_match(phrase)
     if not p or not _ends_with_phrase(normalized, p):
@@ -162,6 +226,47 @@ def _is_sentence_final_suffix(normalized: str, phrase: str) -> bool:
     if not prefix:
         return True
     return _SENTENCE_END.search(prefix) is not None
+
+
+def _is_bare_over_prosign(normalized: str) -> bool:
+    """True when utterance-final bare ``over`` is a radio end, not a phrasal verb.
+
+    B103: operators often say content then "over" without STT putting a period
+    before it (``please implement the fix over``). That must finalize as **end**,
+    never cancel. Block only clear phrasal patterns (``turn it over``,
+    ``take over``, ``start over``, ``over and over``).
+    """
+    if not _ends_with_phrase(normalized, "over"):
+        return False
+    if normalized == "over":
+        return True
+    before = len(normalized) - len("over")
+    prefix = normalized[:before].rstrip()
+    if not prefix:
+        return True
+    # Explicit sentence / soft-sentence boundary always counts as prosign.
+    if _SENTENCE_END.search(prefix) is not None:
+        return True
+    toks = prefix.split()
+    if not toks:
+        return True
+    # "… over and over" is emphasis, not a radio closer.
+    if len(toks) >= 2 and toks[-1] == "and" and toks[-2] == "over":
+        return False
+    prev = _WORD_TRAIL_PUNCT.sub("", toks[-1]).strip()
+    if not prev:
+        return True
+    if prev in _OVER_PHRASAL_PREV:
+        return False
+    return True
+
+
+def _guarded_soft_phrase_ok(normalized: str, phrase: str) -> bool:
+    """Extra guard for SENTENCE_FINAL_SOFT_PHRASES entries."""
+    p = normalize_for_match(phrase)
+    if p == "over":
+        return _is_bare_over_prosign(normalized)
+    return _is_sentence_final_suffix(normalized, p)
 
 
 def find_terminal_phrase(
@@ -176,8 +281,9 @@ def find_terminal_phrase(
     Mid-thought speech such as "that's all I know about X" does **not** match
     soft or hard end phrases — the phrase must terminate the normalized text.
 
-    Phrases listed in *sentence_final_phrases* (normalized form) additionally
-    require a sentence boundary before the phrase (or sole-utterance match).
+    Phrases listed in *sentence_final_phrases* (normalized form) use an extra
+    guard: bare ``over`` is a radio prosign unless the previous word is a
+    phrasal-verb cue (see :func:`_is_bare_over_prosign`).
     """
     raw = text or ""
     norm = normalize_for_match(raw)
@@ -202,7 +308,7 @@ def find_terminal_phrase(
             continue
         seen.add(p)
         if p in sf:
-            if not _is_sentence_final_suffix(norm, p):
+            if not _guarded_soft_phrase_ok(norm, p):
                 continue
         elif not _ends_with_phrase(norm, p):
             continue
@@ -227,7 +333,8 @@ def evaluate_radio_transcript(
 
     Priority: cancel → product end phrases → soft end (if enabled).
     Soft end default ON (B039); when on, only **terminal** soft phrases match.
-    Bare ``over`` (when present in soft list) is **sentence-final** only.
+    Bare ``over`` is a radio prosign (kind=**end**, never cancel) unless a
+    phrasal-verb previous word blocks it (B103).
     """
     cancel = find_terminal_phrase(text, cancel_phrases, kind="cancel")
     if cancel is not None:
@@ -243,6 +350,11 @@ def evaluate_radio_transcript(
             sentence_final_phrases=sentence_final_soft_phrases,
         )
         if soft is not None:
+            # Soft over / okay over are always finish, never cancel (B103).
+            if soft.kind != "end":
+                soft = PhraseHit(
+                    kind="end", phrase=soft.phrase, body=soft.body, raw=soft.raw
+                )
             return soft
     return None
 

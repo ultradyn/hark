@@ -91,7 +91,8 @@ right after a terminal soft closer mid-thought — disable for product-only.
 - Config: `[listen] soft_end_phrases_enabled = true` (default)
 - Env: `HARK_SOFT_END_PHRASES_ENABLED=0` / `false` to disable
 - Match only **utterance-final** (word-bounded suffix); never mid-clause
-- Bare `over` is **sentence-final** only (after `.`/`!`/`?`/`,` or sole utterance)
+- Bare `over` is a radio prosign (end, never cancel): sole / after punct / other
+  utterance-final unless previous word is a phrasal-verb cue (B103)
 - Multi-word `okay over` / `ok over` cover STT comma drop
 - Only evaluated after radio segment silence
 - Product cancel/end phrases take priority

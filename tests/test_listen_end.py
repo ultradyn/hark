@@ -189,7 +189,7 @@ def test_soft_end_bare_send_that():
 
 
 def test_soft_end_sentence_final_over():
-    """B039 addendum: utterance-final 'over' after sentence end."""
+    """B039/B103: utterance-final radio prosign 'over' finishes as end."""
     positives = [
         "please implement. over.",
         "and that is what you should please implement. over.",
@@ -199,11 +199,20 @@ def test_soft_end_sentence_final_over():
         "done with the plan? over",
         "okay, over",  # comma is a soft sentence boundary
         "ready, over.",
+        # B103: no period before over (common STT / radio pause join)
+        "please implement the fix over",
+        "and that is what you should please implement over",
+        "ship the branch over",
+        "thanks over",
+        "oh and over",
+        "Yeah, you can restart Ambient, thanks. Oh, and over.",
+        "sorry, that's over",
+        "that's all, over",
     ]
     for text in positives:
         hit = evaluate_radio_transcript(text, soft_end_phrases_enabled=True)
         assert hit is not None, f"expected end for {text!r}"
-        assert hit.kind == "end"
+        assert hit.kind == "end", f"over must be end not {hit.kind!r}: {text!r}"
         assert hit.phrase == "over"
 
 
@@ -218,8 +227,27 @@ def test_soft_end_okay_over_without_comma():
     ):
         hit = evaluate_radio_transcript(text, soft_end_phrases_enabled=True)
         assert hit is not None, f"expected end for {text!r}"
-        assert hit.kind == "end"
+        assert hit.kind == "end", f"okay over must be end not cancel: {text!r}"
         assert hit.phrase == phrase
+
+
+def test_soft_end_over_never_cancel():
+    """B103: terminal over / okay over finalize as complete prompt, never cancel."""
+    for text in (
+        "over",
+        "Over.",
+        "please implement the fix over",
+        "please implement. over.",
+        "okay over",
+        "ok over",
+        "long radio turn okay over",
+        "hark over",  # product end
+        "ship the branch hark over",
+    ):
+        hit = evaluate_radio_transcript(text, soft_end_phrases_enabled=True)
+        assert hit is not None, f"expected finish for {text!r}"
+        assert hit.kind == "end", f"treated as cancel: {text!r} → {hit}"
+        assert hit.kind != "cancel"
 
 
 def test_soft_end_message_done():
@@ -239,19 +267,23 @@ def test_soft_end_over_and_out_still_works():
     )
     assert hit is not None
     assert hit.phrase == "over and out"
+    assert hit.kind == "end"
 
 
 def test_soft_end_no_mid_clause_over():
-    """Bare 'over' must not fire mid-clause or without sentence boundary."""
+    """Bare 'over' must not fire mid-clause or on phrasal-verb finals (B103)."""
     negatives = [
         "think it over and continue",
         "over the weekend we ship",
         "turn it over carefully",
-        "turn it over",  # word-final but not sentence-final
+        "turn it over",  # phrasal particle
         "hand it over",
         "look over the diff",
         "please go over the checklist again",
-        "this is over",  # no sentence punct before terminal over
+        "take over",
+        "start over",
+        "go over",
+        "keep going over and over",
     ]
     for text in negatives:
         assert (
@@ -321,7 +353,7 @@ def test_soft_end_safe_list_documented():
         "message done",
     ):
         assert required in soft_norm
-    # Bare over is sentence-final only; multi-word okay over is not
+    # Bare over uses prosign guard; multi-word okay over does not need it
     assert "over" in SENTENCE_FINAL_SOFT_PHRASES
     assert "okay over" not in SENTENCE_FINAL_SOFT_PHRASES
     # Still exclude high-risk singles
@@ -336,6 +368,25 @@ def test_soft_end_safe_list_documented():
         "stop recording",  # orchestrator backup only — mid "don't stop recording"
     }
     assert soft_norm.isdisjoint(unsafe)
+
+
+def test_soft_end_joined_radio_segments_over():
+    """B103: per-segment STT join of content + sole 'over' finalizes as end."""
+    from hark.speech import join_radio_stt_segments
+
+    for segs, expect_body_part in (
+        (["please implement the fix", "over"], "implement"),
+        (["please implement the fix.", "over"], "implement"),
+        (["ship the branch", "okay over"], "ship"),
+        (["ship the branch", "ok over"], "ship"),
+        (["long answer about the bug", "Over."], "bug"),
+    ):
+        joined = join_radio_stt_segments(segs)
+        hit = evaluate_radio_transcript(joined, soft_end_phrases_enabled=True)
+        assert hit is not None, f"expected end for segments {segs!r} → {joined!r}"
+        assert hit.kind == "end"
+        assert hit.phrase in ("over", "okay over", "ok over")
+        assert expect_body_part in (hit.body or joined).lower()
 
 
 def test_soft_end_should_keep_listening():
@@ -515,3 +566,149 @@ def test_cli_prints_config_warnings_to_stderr_on_normal_startup(tmp_path, capsys
 
     assert main(["--config", str(cfg_file), "config", "show"]) == 0
     assert "config warning" in capsys.readouterr().err.lower()
+
+
+def test_run_listen_radio_over_finalizes_not_cancel(monkeypatch):
+    """B103: multi-segment radio content + sole 'over' → end, not cancel."""
+    from types import SimpleNamespace
+
+    import hark.speech as speech
+    from hark.audio.capture import CaptureResult
+    from hark.config import HarkConfig, ListenConfig
+
+    class NullContext:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class FakeStore:
+        def record_stt(self, **kwargs):
+            pass
+
+    transcripts = [
+        "please implement the fix",
+        "over",
+    ]
+    idx = {"n": 0}
+
+    def fake_capture(**kwargs):
+        return CaptureResult(
+            pcm16=b"\0\0" * 10,
+            sample_rate=16000,
+            duration_ms=40,
+            speech_ms=40,
+        )
+
+    def fake_transcribe(_wav):
+        i = min(idx["n"], len(transcripts) - 1)
+        idx["n"] += 1
+        return SimpleNamespace(text=transcripts[i], provider="fake")
+
+    monkeypatch.setattr(
+        speech,
+        "resolve_stt",
+        lambda *args, **kwargs: SimpleNamespace(
+            name="fake", transcribe=fake_transcribe
+        ),
+    )
+    monkeypatch.setattr(speech, "pause_ambient_for_mic", lambda **kwargs: NullContext())
+    monkeypatch.setattr(speech, "MicLease", lambda *args: NullContext())
+    monkeypatch.setattr(speech, "BusySection", lambda *args: NullContext())
+    monkeypatch.setattr(speech, "UsageStore", FakeStore)
+    monkeypatch.setattr(speech, "configure_cues_from_config", lambda cfg: None)
+    monkeypatch.setattr(speech, "register_active_listen", lambda *args, **kwargs: None)
+    monkeypatch.setattr(speech, "clear_active_listen", lambda *args, **kwargs: None)
+    monkeypatch.setattr(speech, "poll_listen_action", lambda *args: None)
+    monkeypatch.setattr(speech, "consume_listen_action", lambda *args: None)
+    monkeypatch.setattr(speech, "play_record_start", lambda: None)
+    monkeypatch.setattr(speech, "play_record_stop", lambda: None)
+    monkeypatch.setattr(speech, "capture_utterance", fake_capture)
+
+    result = speech.run_listen(
+        HarkConfig(
+            listen=ListenConfig(
+                end_mode="radio",
+                soft_end_phrases_enabled=True,
+                stream_partials=False,
+            )
+        ),
+        end_mode="radio",
+        post_tts_guard_s=0,
+    )
+    assert result.cancelled is False, f"over treated as cancel: {result}"
+    assert result.end_phrase == "over"
+    assert "implement" in (result.text or "").lower()
+    assert "over" not in (result.text or "").lower()  # strip_phrase default on
+
+
+def test_run_listen_radio_okay_over_finalizes_not_cancel(monkeypatch):
+    """B103: 'okay over' soft end finishes the answer window as complete prompt."""
+    from types import SimpleNamespace
+
+    import hark.speech as speech
+    from hark.audio.capture import CaptureResult
+    from hark.config import HarkConfig, ListenConfig
+
+    class NullContext:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class FakeStore:
+        def record_stt(self, **kwargs):
+            pass
+
+    transcripts = ["long radio turn about the branch okay over"]
+    idx = {"n": 0}
+
+    def fake_capture(**kwargs):
+        return CaptureResult(
+            pcm16=b"\0\0" * 10,
+            sample_rate=16000,
+            duration_ms=40,
+            speech_ms=40,
+        )
+
+    def fake_transcribe(_wav):
+        i = min(idx["n"], len(transcripts) - 1)
+        idx["n"] += 1
+        return SimpleNamespace(text=transcripts[i], provider="fake")
+
+    monkeypatch.setattr(
+        speech,
+        "resolve_stt",
+        lambda *args, **kwargs: SimpleNamespace(
+            name="fake", transcribe=fake_transcribe
+        ),
+    )
+    monkeypatch.setattr(speech, "pause_ambient_for_mic", lambda **kwargs: NullContext())
+    monkeypatch.setattr(speech, "MicLease", lambda *args: NullContext())
+    monkeypatch.setattr(speech, "BusySection", lambda *args: NullContext())
+    monkeypatch.setattr(speech, "UsageStore", FakeStore)
+    monkeypatch.setattr(speech, "configure_cues_from_config", lambda cfg: None)
+    monkeypatch.setattr(speech, "register_active_listen", lambda *args, **kwargs: None)
+    monkeypatch.setattr(speech, "clear_active_listen", lambda *args, **kwargs: None)
+    monkeypatch.setattr(speech, "poll_listen_action", lambda *args: None)
+    monkeypatch.setattr(speech, "consume_listen_action", lambda *args: None)
+    monkeypatch.setattr(speech, "play_record_start", lambda: None)
+    monkeypatch.setattr(speech, "play_record_stop", lambda: None)
+    monkeypatch.setattr(speech, "capture_utterance", fake_capture)
+
+    result = speech.run_listen(
+        HarkConfig(
+            listen=ListenConfig(
+                end_mode="radio",
+                soft_end_phrases_enabled=True,
+                stream_partials=False,
+            )
+        ),
+        end_mode="radio",
+        post_tts_guard_s=0,
+    )
+    assert result.cancelled is False
+    assert result.end_phrase == "okay over"
+    assert "branch" in (result.text or "").lower()

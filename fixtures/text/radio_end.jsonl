@@ -19,11 +19,16 @@
 {"id":"soft-on-over-and-out","input":"that covers the plan over and out","expect_kind":"end","expect_phrase":"over and out","soft_end_phrases_enabled":true}
 {"id":"soft-on-sentence-final-over","input":"and that is what you should please implement. over.","expect_kind":"end","expect_phrase":"over","expect_body_contains":"implement","soft_end_phrases_enabled":true}
 {"id":"soft-on-sole-over","input":"Over.","expect_kind":"end","expect_phrase":"over","expect_body":"","soft_end_phrases_enabled":true}
+{"id":"soft-on-prosign-over-no-period","input":"please implement the fix over","expect_kind":"end","expect_phrase":"over","expect_body_contains":"implement","soft_end_phrases_enabled":true}
+{"id":"soft-on-joined-thanks-over","input":"Yeah, you can restart Ambient, thanks. Oh, and over.","expect_kind":"end","expect_phrase":"over","expect_body_contains":"restart","soft_end_phrases_enabled":true}
+{"id":"soft-on-okay-over-after-content","input":"ship the branch okay over","expect_kind":"end","expect_phrase":"okay over","expect_body_contains":"ship","soft_end_phrases_enabled":true}
 {"id":"soft-no-mid-clause-thats-all","input":"that's all I know about the auth bug","expect_kind":null,"soft_end_phrases_enabled":true}
 {"id":"soft-no-mid-send-it-production","input":"please just send it to production","expect_kind":null,"soft_end_phrases_enabled":true}
 {"id":"soft-no-mid-over-weekend","input":"think about over the weekend and continue","expect_kind":null,"soft_end_phrases_enabled":true}
 {"id":"soft-no-turn-it-over","input":"turn it over carefully","expect_kind":null,"soft_end_phrases_enabled":true}
 {"id":"soft-no-word-final-over","input":"turn it over","expect_kind":null,"soft_end_phrases_enabled":true}
 {"id":"soft-no-think-it-over-continue","input":"think it over and continue","expect_kind":null,"soft_end_phrases_enabled":true}
+{"id":"soft-no-take-over","input":"take over","expect_kind":null,"soft_end_phrases_enabled":true}
+{"id":"soft-no-start-over","input":"start over","expect_kind":null,"soft_end_phrases_enabled":true}
 {"id":"soft-no-when-disabled","input":"end of message","expect_kind":null,"soft_end_phrases_enabled":false}
 {"id":"soft-no-send-it-when-disabled","input":"Send it.","expect_kind":null,"soft_end_phrases_enabled":false}

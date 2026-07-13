@@ -91,7 +91,7 @@ pauses. Finish a turn with any of:
 | Say… / do… | Kind |
 |------------|------|
 | **`okay hark send`** / **`hark over`** / **`end prompt`** | Product end (always on) |
-| **`over`** (after a sentence / alone) / **`okay, over`** / **`okay over`** | Soft end (default on) |
+| **`over`** (utterance-final prosign) / **`okay, over`** / **`okay over`** | Soft end (default on; always finish, never cancel) |
 | **`send it`**, **`that's all`**, **`over and out`**, **`message done`** | Soft end (default on) |
 | Stay quiet ~**6.3 s** after you have started speaking | Idle auto-finish (default 3× `end_silence_s`; B074) |
 | **`hark cancel`** | Abort without using the transcript |
@@ -239,11 +239,11 @@ closers without agent intervention (radio dogfood).
 4. Mid-clause text does **not** match — e.g. `"that's all I know about X"`
    never finishes on `"that's all"`, and `"please just send it to production"`
    never finishes on `"send it"`.
-5. Bare **`over`** is **sentence-final** as well as utterance-final: the sole
-   utterance `"over"`, or a suffix after sentence-ending punctuation
-   (`". over"`, `"! over"`, `"? over"`, `", over"` — comma is a soft boundary
-   so `"okay, over"` works). Word-final but not sentence-final forms such as
-   `"turn it over"` / `"hand it over"` do **not** finish. Mid-clause
+5. Bare **`over`** is a radio prosign (always **end**, never cancel — B103):
+   sole `"over"`, after sentence punct (`". over"`, `", over"`, …), or any
+   other utterance-final `"… over"` whose previous word is **not** a
+   phrasal-verb cue. Phrasal finals such as `"turn it over"`, `"hand it over"`,
+   `"take over"`, `"start over"` do **not** finish. Mid-clause
    `"over the weekend"` / `"think it over and continue"` never finish.
 6. Multi-word **`okay over`** / **`ok over`** match without sentence punct
    (STT often drops the comma in “okay, over”).
@@ -260,7 +260,7 @@ closers without agent intervention (radio dogfood).
 | `message done` | Informal “I'm finished dictating” closer |
 | `over and out` | Multi-word radio closer (no sentence-punct required) |
 | `okay over` / `ok over` | STT of “okay, over” when comma is dropped |
-| bare `over` | **Sentence-final only** (sole utterance or after `.`/`!`/`?`/`,`) |
+| bare `over` | Radio prosign: utterance-final unless phrasal prev word (`turn it over`, `take over`, …) |
 
 **Not in the default list (unsafe / high false-finish risk):**
 

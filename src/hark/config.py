@@ -647,8 +647,9 @@ cancel_phrases = [
 ]
 # Soft (informal) end phrases — DEFAULT ON (B039 radio dogfood).
 # Finalize on utterance-final soft closers after radio silence (e.g. "send it",
-# "that's all", sentence-final "over"). Does NOT match mid-clause
-# ("that's all I know about X", "over the weekend", "turn it over").
+# "that's all", prosign "over"). Bare "over" is end (never cancel) unless a
+# phrasal-verb prev word blocks it ("turn it over", "take over"). Does NOT
+# match mid-clause ("that's all I know about X", "over the weekend").
 # Set false to require product phrases only. Safe list: docs/AUDIO_DESIGN.md
 soft_end_phrases_enabled = true
 # soft_end_phrases = ["send it", "send that", "that's all", "over and out", "over"]

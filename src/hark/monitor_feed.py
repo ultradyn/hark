@@ -196,7 +196,27 @@ def emit_line(
     for_monitor: bool,
     out: TextIO,
 ) -> None:
-    payload = compact_mode_a_event(obj) if for_monitor else obj
+    if for_monitor:
+        try:
+            payload = compact_mode_a_event(obj)
+        except Exception as exc:
+            # Never kill the whole feed on one malformed line (dogfood: string
+            # question/target crashed monitor_profile). Fall back to a minimal
+            # compact object the Mode A agent can still see.
+            payload = {
+                "schema": obj.get("schema") or "hark.event.v1",
+                "kind": obj.get("kind") or obj.get("event"),
+                "event_id": obj.get("event_id"),
+                "observed_at": obj.get("observed_at"),
+                "session_id": obj.get("session_id"),
+                "compact_error": str(exc)[:200],
+                "instructions": (
+                    "Monitor compact failed for this event; inspect raw logs. "
+                    "Do not invent an answer."
+                ),
+            }
+    else:
+        payload = obj
     out.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
     out.flush()
 

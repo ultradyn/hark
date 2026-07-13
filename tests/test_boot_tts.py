@@ -24,10 +24,18 @@ def _cfg(*, phrases=None, names=None, wake_mode=None) -> HarkConfig:
 
 
 def test_default_boot_uses_first_activation_phrase():
-    cfg = _cfg(phrases=["hey hark", "hey herald"])
-    assert primary_wake_label(cfg) == "hey hark"
-    assert ambient_boot_tts_text(cfg) == ambient_boot_line("hey hark")
-    assert "hey hark" in ambient_boot_tts_text(cfg)
+    # Default (names) wake mode: boot label tracks the first configured name,
+    # i.e. "hey <names[0]>", which also equals the first default activation
+    # phrase. Derive the expectation from the defaults so this stays correct if
+    # the default persona names change again (see B080 / B074/B076).
+    cfg = HarkConfig(ambient=AmbientConfig(enabled=True))
+    expected = f"hey {AmbientConfig().names[0]}"
+    # The first default activation phrase is the "hey <name>" form of the first
+    # name, so the boot label is equally "the first activation phrase".
+    assert AmbientConfig().activation_phrases[0] == expected
+    assert primary_wake_label(cfg) == expected
+    assert ambient_boot_tts_text(cfg) == ambient_boot_line(expected)
+    assert expected in ambient_boot_tts_text(cfg)
 
 
 def test_custom_phrase_boot_label():

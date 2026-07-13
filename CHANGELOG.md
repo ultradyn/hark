@@ -6,6 +6,24 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+## 0.1.7
+
+- Radio STT assemble (B083): per-segment cloud STT + `join_radio_stt_segments`
+  instead of cumulative re-STT that dropped earlier words; monotonic partials
+  never shrink; final prefers complete join.
+- Mute clock freeze (B084): while TTS holds mic mute, listen does not burn
+  `initial_timeout_s`, end/segment silence, or `max_s`; after unmute discard
+  `audio.mute_edge_pad_ms` (default 300) without counting it as user silence.
+- Radio STT PCM overlap (B085): each segment STT window prepends real prior-segment
+  tail (`listen.radio_segment_overlap_ms`, default 300) so boundary phonemes are
+  not lost between cuts (complements B075 silence pad).
+- Mute desync repair (B086): outermost TTS mute restores Pulse **and** ALSA;
+  `ensure_unmuted` / `release_tts_mute_hold` fully clear `tts_mute_depth`;
+  post-`run_tts` `repair_tts_mute_after_play` logs `mic.mute_desync` when repair
+  was needed. Recovery: `hark mute-sync`.
+- fix(sherpa): load `libonnxruntime` via `LD_LIBRARY_PATH` re-exec so
+  `sherpa_onnx` imports when the wheel’s shared lib is not on the default path
+  (`hark[wake-sherpa]` + `onnxruntime`).
 - fix(dashboard): re-resolve webui static root on each request so a build after `hark webui` started is picked up; clearer placeholder (build + restart); SW cache bump.
 
 - CLI: prefer **`hark webui`** (and `hark dashboard`) for the live web dashboard; `hark serve` remains an alias.

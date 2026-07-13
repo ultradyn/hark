@@ -151,7 +151,15 @@ fi
 
 if [[ "$DO_AMBIENT" -eq 1 ]]; then
   echo "starting ambient loop → $AMBIENT_LOG"
-  echo "  say: hey hark / hey herald / hello herald"
+  # List configured wake/trigger phrases (custom via config [ambient])
+  PHRASE_LINE="$(
+    cd "$ROOT" && python3 -c '
+from hark.config import load_config
+ps = load_config().ambient.activation_phrases
+print("  say: " + " / ".join(ps[:10]) + (" …" if len(ps) > 10 else ""))
+' 2>/dev/null || echo "  say: hey hark / hey herald (or custom trigger_phrases)"
+  )"
+  echo "$PHRASE_LINE"
   nohup "${HARK[@]}" ambient \
     >>"$AMBIENT_LOG" 2>&1 &
   echo $! >>"$PIDFILE"

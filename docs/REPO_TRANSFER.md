@@ -34,7 +34,7 @@ This repo includes:
 - [ ] Wait until `https://github.com/ultradyn/hark` loads.
 - [ ] Verify **redirect**: `https://github.com/clankercode/hark` → `ultradyn/hark` (GitHub maintains redirects for renamed/transferred repos).
 - [ ] Verify raw URLs still resolve via old path *or* new path:
-  - `https://raw.githubusercontent.com/ultradyn/hark/master/install.sh`
+  - `https://hark.xk.io/install.sh`
   - (redirect behavior for raw.githubusercontent.com can lag; prefer updating docs after transfer).
 
 ### 3. Local remotes (each clone / worktree)
@@ -172,7 +172,7 @@ Until default branch points `GITHUB_REPO` at `ultradyn/hark`, the env override i
 ```bash
 gh repo view ultradyn/hark
 gh repo view clankercode/hark   # should redirect / show moved
-curl -fsI https://raw.githubusercontent.com/ultradyn/hark/master/install.sh | head
+curl -fsI https://hark.xk.io/install.sh | head
 curl -fsSL https://hark.xk.io/ | head
 ./scripts/rewrite-github-urls.sh          # expect no remaining FROM matches after apply+commit
 rg -n 'clankercode/hark' || true          # should be empty (or only historical notes)

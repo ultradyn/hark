@@ -15,6 +15,7 @@ from typing import Callable
 
 import numpy as np
 
+from hark.endpointing import EndpointFrame, EndpointStrategy, SilenceEndpointer
 from hark.paths import state_dir
 
 try:
@@ -173,8 +174,19 @@ def capture_utterance(
     # Drop leading frames (fixed window from open and/or until audio_ok_after)
     discard_leading_ms: int = 0,
     audio_ok_after: Callable[[], float | None] | None = None,
+    # Pluggable endpointing (B007). None strategy == legacy fixed-silence gate.
+    endpoint_strategy: EndpointStrategy | None = None,
+    endpoint_probe_silence_s: float | None = None,
+    endpoint_max_silence_s: float | None = None,
+    on_endpoint_event: Callable[[str, dict], None] | None = None,
 ) -> CaptureResult:
-    """Energy-gated capture until end silence or should_stop or max.
+    """Energy-gated capture until turn end or should_stop or max.
+
+    The turn-end decision is delegated to :class:`~hark.endpointing.SilenceEndpointer`.
+    With ``endpoint_strategy=None`` this is exactly the legacy fixed-silence gate
+    (end after ``end_silence_s`` of quiet once ``min_speech_s`` speech seen). A
+    smarter strategy may end earlier (reducing long waits) or wait longer up to
+    ``endpoint_max_silence_s`` (reducing mid-thought cutoffs).
 
     Leading silence / background noise is **not** kept: the gate waits until
     speech is confirmed, then starts the capture buffer with a short pre-roll
@@ -199,6 +211,14 @@ def capture_utterance(
     silent_blocks = 0
     end_silence_blocks = max(1, int(end_silence_s / 0.02))
     min_speech_blocks = max(1, int(min_speech_s / 0.02))
+    endpointer = SilenceEndpointer(
+        end_silence_s=end_silence_s,
+        min_speech_s=min_speech_s,
+        strategy=endpoint_strategy,
+        probe_silence_s=endpoint_probe_silence_s,
+        max_silence_s=endpoint_max_silence_s,
+        on_event=on_endpoint_event,
+    )
     max_blocks = int(max_s / 0.02)
     timeout_blocks = int(initial_timeout_s / 0.02)
     preroll_blocks = max(1, int(preroll_ms / 20.0))
@@ -282,9 +302,20 @@ def capture_utterance(
                     speech_blocks += 1
                 else:
                     silent_blocks += 1
-                    if (
-                        silent_blocks >= end_silence_blocks
-                        and speech_blocks >= min_speech_blocks
+
+                    def _endpoint_frame() -> EndpointFrame:
+                        pcm = pcm16_mono_bytes(np.concatenate(chunks)) if chunks else b""
+                        return EndpointFrame(
+                            pcm16=pcm,
+                            sample_rate=sample_rate,
+                            trailing_silence_s=silent_blocks * 0.02,
+                            speech_s=speech_blocks * 0.02,
+                        )
+
+                    if endpointer.should_end(
+                        silent_blocks=silent_blocks,
+                        speech_blocks=speech_blocks,
+                        audio_fn=_endpoint_frame,
                     ):
                         break
 

@@ -86,6 +86,12 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         # Optional informal closers (default off) — see listen_end.DEFAULT_SOFT_END_PHRASES
         "soft_end_phrases_enabled",
         "soft_end_phrases",
+        # Pluggable endpointing (B007) — energy gate default + optional smart turn
+        "endpoint_strategy",
+        "endpoint_probe_silence_s",
+        "endpoint_max_silence_s",
+        "smart_turn_model_path",
+        "smart_turn_threshold",
     }),
     "ambient": frozenset({
         "enabled",
@@ -213,6 +219,21 @@ class ListenConfig:
     soft_end_phrases: list[str] = field(
         default_factory=lambda: list(DEFAULT_SOFT_END_PHRASES)
     )
+    # Endpointing strategy (B007): "energy" (default/fallback) | "smart_turn".
+    # Smart turn needs the optional [smart-turn] extra + a model file; if it
+    # cannot load, capture transparently falls back to the energy gate.
+    endpoint_strategy: str = "energy"
+    # Trailing silence before a smart strategy is consulted (lets it finish
+    # early). Ignored by the energy gate. 0 = auto (min(end_silence_s, 0.6)).
+    endpoint_probe_silence_s: float = 0.0
+    # Max trailing silence to wait when a smart strategy says "incomplete".
+    # 0 = same as end_silence_s (energy gate stays the ceiling). Raise it to let
+    # smart turn hold longer through mid-thought pauses.
+    endpoint_max_silence_s: float = 0.0
+    # Path to the Smart Turn v2 ONNX model (required for endpoint_strategy="smart_turn").
+    smart_turn_model_path: str | None = None
+    # Completion probability at/above which smart turn ends the turn.
+    smart_turn_threshold: float = 0.5
 
 
 @dataclass
@@ -332,6 +353,16 @@ end_mode = "silence"         # silence | radio
 # end_mode = "radio"         # keep listening until end phrase (long pauses OK)
 end_silence_s = 2.1          # quiet seconds before ending silence-mode capture
 # radio_end_silence_s = 2.5
+# Endpointing strategy (B007): "energy" (default) reduces to the fixed
+# end_silence_s gate. "smart_turn" consults a Smart Turn v2 model to finish
+# earlier when you clearly stopped, or wait longer through mid-thought pauses.
+# It needs the optional extra + a model; if it can't load, capture falls back
+# to the energy gate. See docs/ENDPOINTING.md.
+endpoint_strategy = "energy" # energy | smart_turn
+# endpoint_probe_silence_s = 0.4   # smart turn: trailing quiet before first probe (0 = auto)
+# endpoint_max_silence_s = 3.0     # smart turn: max quiet to wait when "incomplete" (0 = end_silence_s)
+# smart_turn_model_path = "~/.local/share/hark/models/smart-turn-v2.onnx"
+# smart_turn_threshold = 0.5
 stream_partials = true       # radio mode: stream interim text to agent (HOLD until final)
 end_phrases = [
   "okay hark send",
@@ -704,6 +735,16 @@ def load_config(path: Path | None = None) -> HarkConfig:
     if env_soft is not None:
         soft_end_enabled = env_soft.strip().lower() in ("1", "true", "yes", "on")
 
+    endpoint_strategy = str(listen_raw.get("endpoint_strategy", "energy"))
+    env_endpoint = os.environ.get("HARK_LISTEN_ENDPOINT_STRATEGY")
+    if env_endpoint:
+        endpoint_strategy = env_endpoint
+    smart_turn_model_path = (
+        str(listen_raw["smart_turn_model_path"])
+        if listen_raw.get("smart_turn_model_path")
+        else os.environ.get("HARK_SMART_TURN_MODEL")
+    )
+
     ambient_enabled = bool(ambient_raw.get("enabled", False))
     if os.environ.get("HARK_AMBIENT"):
         ambient_enabled = os.environ["HARK_AMBIENT"].lower() in (
@@ -800,6 +841,15 @@ def load_config(path: Path | None = None) -> HarkConfig:
             soft_end_phrases=_as_list_str(
                 listen_raw.get("soft_end_phrases"), list(DEFAULT_SOFT_END_PHRASES)
             ),
+            endpoint_strategy=endpoint_strategy,
+            endpoint_probe_silence_s=float(
+                listen_raw.get("endpoint_probe_silence_s", 0.0)
+            ),
+            endpoint_max_silence_s=float(
+                listen_raw.get("endpoint_max_silence_s", 0.0)
+            ),
+            smart_turn_model_path=smart_turn_model_path,
+            smart_turn_threshold=float(listen_raw.get("smart_turn_threshold", 0.5)),
         ),
         ambient=_build_ambient_config(
             ambient_raw if isinstance(ambient_raw, dict) else {},
@@ -915,6 +965,11 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "empty_stt_nudge": cfg.listen.empty_stt_nudge,
             "soft_end_phrases_enabled": cfg.listen.soft_end_phrases_enabled,
             "soft_end_phrases": list(cfg.listen.soft_end_phrases),
+            "endpoint_strategy": cfg.listen.endpoint_strategy,
+            "endpoint_probe_silence_s": cfg.listen.endpoint_probe_silence_s,
+            "endpoint_max_silence_s": cfg.listen.endpoint_max_silence_s,
+            "smart_turn_model_path": cfg.listen.smart_turn_model_path,
+            "smart_turn_threshold": cfg.listen.smart_turn_threshold,
         },
         "ambient": {
             "enabled": cfg.ambient.enabled,

@@ -52,8 +52,12 @@ Operators may add casual phrases if they accept false triggers.
 
 | `end_mode` | Behavior |
 |------------|----------|
-| **`silence`** (default) | Smart Turn / end-silence |
+| **`silence`** (default) | Energy gate + end-silence; optional Smart Turn (see [ENDPOINTING.md](ENDPOINTING.md)) |
 | **`radio`** | Keep listening through long pauses until end phrase |
+
+Silence-mode turn detection is pluggable via `listen.endpoint_strategy`
+(`energy` default / `smart_turn` optional). See [ENDPOINTING.md](ENDPOINTING.md)
+for the evaluation, the strategy seam, and config.
 
 ```toml
 [listen]

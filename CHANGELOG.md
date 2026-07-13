@@ -11,6 +11,14 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   excludes it from watch — no self events, no self pane reads (prevents feedback
   loops). Excluded pane is surfaced on `watch.armed` as `self_target`; escape
   hatch `HARK_WATCH_INCLUDE_SELF=1` disables exclusion.
+- Pluggable silence-mode endpointing (B007): `listen.endpoint_strategy` selects the
+  turn-end detector. Default `"energy"` reduces exactly to the previous fixed
+  `end_silence_s` gate; optional `"smart_turn"` consults a Smart Turn v2 model
+  (optional `[smart-turn]` extra + model) to finish early or hold through
+  mid-thought pauses, with transparent fallback to the energy gate. New
+  `endpoint_probe_silence_s`, `endpoint_max_silence_s`, `smart_turn_model_path`,
+  `smart_turn_threshold` config; env `HARK_LISTEN_ENDPOINT_STRATEGY`,
+  `HARK_SMART_TURN_MODEL`. See `docs/ENDPOINTING.md`.
 - Optional TTS/listen overlap pre-arm (`audio.overlap_prearm`, `overlap_discard_ms`): start
   capture near TTS end while discarding audio until TTS ends + residual (B004). Half-duplex
   remains the default.

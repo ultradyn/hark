@@ -19,6 +19,11 @@ dev = [
 wake = [
   "vosk>=0.3.45",
 ]
+# Optional Smart Turn endpointing (B007). Default install stays lean; the
+# energy gate needs none of this. See docs/ENDPOINTING.md.
+smart-turn = [
+  "onnxruntime>=1.17",
+]
 
 [project.scripts]
 hark = "hark.cli:main"

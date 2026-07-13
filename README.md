@@ -49,6 +49,7 @@ The verse is playful; **routing and confirmation are not.**
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | HEP event protocol |
 | [docs/SAFETY.md](docs/SAFETY.md) | Routing, risk R0–R3, distrust |
 | [docs/AUDIO_DESIGN.md](docs/AUDIO_DESIGN.md) | Gate, endpointing, half-duplex |
+| [docs/ENDPOINTING.md](docs/ENDPOINTING.md) | Turn detection eval + Smart Turn seam |
 | [docs/HERDR.md](docs/HERDR.md) | Herdr / multi-session |
 | [docs/PROVIDERS.md](docs/PROVIDERS.md) | STT/TTS providers |
 | [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | Build plan |

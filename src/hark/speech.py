@@ -29,6 +29,7 @@ from hark.listen_control import (
     poll_listen_action,
     register_active_listen,
 )
+from hark.endpointing import EndpointStrategy, build_endpoint_strategy
 from hark.listen_end import EndMode, evaluate_radio_transcript, parse_end_mode
 from hark.mic_coord import pause_ambient_for_mic
 from hark.partial import make_partial_event, new_stream_id
@@ -302,6 +303,33 @@ def run_listen(
         if mode is EndMode.SILENCE
         else float(cfg.listen.radio_end_silence_s)
     )
+    # Pluggable endpointing (B007): only for silence mode. Falls back to the
+    # energy gate (strategy=None) if the smart detector can't load.
+    endpoint_strategy: EndpointStrategy | None = None
+    if mode is EndMode.SILENCE and str(
+        getattr(cfg.listen, "endpoint_strategy", "energy")
+    ).strip().lower() not in ("energy", "energy_gate", "gate", "off", "none", ""):
+        endpoint_strategy = build_endpoint_strategy(
+            strategy_name=cfg.listen.endpoint_strategy,
+            smart_turn_model_path=cfg.listen.smart_turn_model_path,
+            smart_turn_threshold=cfg.listen.smart_turn_threshold,
+            on_warn=lambda msg: syslog(
+                "listen.endpoint_fallback",
+                component="stt",
+                level="warn",
+                message=msg,
+            ),
+        )
+        if endpoint_strategy is not None:
+            syslog(
+                "listen.endpoint_strategy",
+                component="stt",
+                level="info",
+                strategy=getattr(endpoint_strategy, "name", "?"),
+            )
+
+    def _endpoint_event(event: str, fields: dict) -> None:
+        syslog(event, component="stt", level="debug", stream_id=stream, **fields)
     store = UsageStore()
     configure_cues_from_config(cfg)
     stream = stream_id or new_stream_id()
@@ -361,6 +389,10 @@ def run_listen(
                             should_stop=_agent_wants_stop,
                             discard_leading_ms=lead_discard,
                             audio_ok_after=lead_ok,
+                            endpoint_strategy=endpoint_strategy,
+                            endpoint_probe_silence_s=cfg.listen.endpoint_probe_silence_s,
+                            endpoint_max_silence_s=cfg.listen.endpoint_max_silence_s,
+                            on_endpoint_event=_endpoint_event,
                         )
                     except TimeoutError as exc:
                         if recording_cued:

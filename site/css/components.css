@@ -610,11 +610,12 @@ a.product-link:hover {
 .arch {
   position: relative;
   border-radius: var(--radius-lg);
-  border: 1px solid rgba(232, 184, 74, 0.2);
+  border: 1px solid rgba(232, 184, 74, 0.28);
   background:
-    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(232, 184, 74, 0.08), transparent 55%),
+    radial-gradient(ellipse 70% 55% at 48% 18%, rgba(232, 184, 74, 0.1), transparent 55%),
+    radial-gradient(ellipse 40% 40% at 88% 80%, rgba(94, 234, 212, 0.05), transparent 50%),
     linear-gradient(180deg, #0c1018 0%, var(--bg-deep) 100%);
-  box-shadow: var(--shadow-panel), 0 0 48px rgba(232, 184, 74, 0.08);
+  box-shadow: var(--shadow-panel), 0 0 48px rgba(232, 184, 74, 0.1);
   overflow: hidden;
   padding: var(--s-4) var(--s-3) var(--s-3);
 }
@@ -635,103 +636,198 @@ a.product-link:hover {
   display: block;
 }
 
-.arch__svg .node-fill {
-  fill: var(--bg-elevated);
-}
-
 .arch__svg .node-stroke {
   stroke: var(--border-strong);
-  stroke-width: 1.25;
+  stroke-width: 1.4;
   fill: none;
-}
-
-.arch__svg .node-fill--you {
-  fill: rgba(94, 234, 212, 0.12);
 }
 
 .arch__svg .node-stroke--you {
   stroke: rgba(94, 234, 212, 0.55);
-}
-
-.arch__svg .node-fill--hark {
-  fill: rgba(232, 184, 74, 0.14);
+  stroke-width: 1.6;
 }
 
 .arch__svg .node-stroke--hark {
   stroke: var(--herald);
-  stroke-width: 1.5;
-}
-
-.arch__svg .node-fill--svc {
-  fill: rgba(238, 241, 247, 0.04);
+  stroke-width: 1.9;
 }
 
 .arch__svg .node-stroke--svc {
-  stroke: rgba(238, 241, 247, 0.16);
+  stroke: rgba(238, 241, 247, 0.2);
+  stroke-width: 1.4;
 }
 
 .arch__svg .node-fill--herdr {
-  fill: rgba(16, 19, 28, 0.9);
+  fill: rgba(16, 19, 28, 0.55);
 }
 
 .arch__svg .node-stroke--herdr {
-  stroke: rgba(232, 184, 74, 0.28);
-  stroke-dasharray: 4 3;
+  stroke: rgba(94, 234, 212, 0.22);
+  stroke-width: 1.4;
+  stroke-dasharray: 4 5;
 }
 
-.arch__svg .node-fill--agent {
-  fill: rgba(251, 113, 133, 0.1);
+.arch__svg .dot {
+  fill: var(--herald);
 }
 
-.arch__svg .node-stroke--agent {
-  stroke: rgba(251, 113, 133, 0.4);
+.arch__svg .dot--signal {
+  fill: var(--signal);
 }
 
 .arch__svg .lbl {
   fill: var(--ink);
   font-family: var(--font-body), system-ui, sans-serif;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
+}
+
+.arch__svg .lbl--sm {
+  font-size: 12.5px;
 }
 
 .arch__svg .lbl-sub {
   fill: var(--ink-muted);
   font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+
+.arch__svg .lbl-sub--faint {
+  fill: var(--ink-faint);
   font-size: 9.5px;
-  letter-spacing: 0.04em;
 }
 
 .arch__svg .lbl-you {
-  fill: var(--signal);
+  fill: var(--ink);
 }
 
 .arch__svg .lbl-hark {
   fill: var(--herald);
 }
 
+.arch__svg .lbl-hark--display {
+  font-family: var(--font-display), Georgia, serif;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
 .arch__svg .arrow {
-  stroke: rgba(232, 184, 74, 0.55);
-  stroke-width: 1.5;
+  stroke: rgba(232, 184, 74, 0.75);
+  stroke-width: 1.7;
   fill: none;
   marker-end: url(#arch-arrow);
 }
 
 .arch__svg .arrow--signal {
-  stroke: rgba(94, 234, 212, 0.5);
+  stroke: rgba(94, 234, 212, 0.75);
+  stroke-width: 1.7;
   marker-end: url(#arch-arrow-signal);
 }
 
 .arch__svg .arrow--dim {
-  stroke: rgba(238, 241, 247, 0.22);
+  stroke: rgba(238, 241, 247, 0.28);
+  stroke-width: 1.4;
   marker-end: url(#arch-arrow-dim);
 }
 
+.arch__svg .fan {
+  stroke: rgba(232, 184, 74, 0.45);
+  stroke-width: 1.5;
+}
+
 .arch__svg .edge-lbl {
-  fill: var(--ink-faint);
+  fill: var(--ink-muted);
   font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 9px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.arch__svg .edge-lbl--signal {
+  fill: var(--signal);
+}
+
+.arch__svg .edge-lbl--herald {
+  fill: var(--herald-dim);
+}
+
+/* Agent status chips (match OG card language) */
+.arch__svg .agent .node-stroke {
+  stroke-width: 1.5;
+}
+
+.arch__svg .agent--blocked .node-stroke {
+  stroke: rgba(251, 113, 133, 0.55);
+}
+
+.arch__svg .agent--blocked .dot {
+  fill: var(--blocked);
+}
+
+.arch__svg .agent--blocked .status {
+  fill: var(--blocked);
+}
+
+.arch__svg .agent--working .node-stroke {
+  stroke: rgba(232, 184, 74, 0.5);
+}
+
+.arch__svg .agent--working .dot {
+  fill: var(--herald);
+}
+
+.arch__svg .agent--working .status {
+  fill: var(--herald-dim);
+}
+
+.arch__svg .agent--done .node-stroke {
+  stroke: rgba(94, 234, 212, 0.45);
+}
+
+.arch__svg .agent--done .dot {
+  fill: var(--signal);
+}
+
+.arch__svg .agent--done .status {
+  fill: var(--signal-dim);
+}
+
+.arch__svg .status {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.arch__svg .herdr-cap {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 600;
   letter-spacing: 0.06em;
-  text-transform: uppercase;
+}
+
+.arch__svg .herdr-cap__brand {
+  fill: var(--signal);
+}
+
+.arch__svg .herdr-cap__meta {
+  fill: var(--ink-faint);
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+
+.arch__svg .herdr-link {
+  fill: rgba(94, 234, 212, 0.75);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.arch__svg .herdr-link:hover {
+  fill: var(--signal);
 }
 
 .arch__caption {

@@ -102,92 +102,123 @@
             <p class="arch__title">Handsfree · herd topology</p>
             <svg
               class="arch__svg"
-              viewBox="0 0 440 360"
+              viewBox="0 0 440 300"
               role="img"
               xmlns="http://www.w3.org/2000/svg"
             >
               <title>
                 You speak to the Hark handsfree agent; it uses cloud STT/TTS and
-                talks to coding agents inside Herdr.
+                routes watch and answers to coding agents inside Herdr.
               </title>
               <defs>
-                <marker id="arch-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(232,184,74,0.75)" />
+                <marker id="arch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto">
+                  <path d="M0,1.5 L9,5 L0,8.5 z" fill="#e8b84a" />
                 </marker>
-                <marker id="arch-arrow-signal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(94,234,212,0.7)" />
+                <marker id="arch-arrow-signal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto">
+                  <path d="M0,1.5 L9,5 L0,8.5 z" fill="#5eead4" />
                 </marker>
-                <marker id="arch-arrow-dim" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(238,241,247,0.35)" />
+                <marker id="arch-arrow-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+                  <path d="M0,1.5 L9,5 L0,8.5 z" fill="rgba(238,241,247,0.45)" />
                 </marker>
+                <linearGradient id="arch-chip" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#161b28" />
+                  <stop offset="100%" stop-color="#0a0c12" />
+                </linearGradient>
+                <linearGradient id="arch-hark-fill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#1a160c" />
+                  <stop offset="100%" stop-color="#0d0b08" />
+                </linearGradient>
+                <radialGradient id="arch-hark-glow" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%" stop-color="#e8b84a" stop-opacity="0.3" />
+                  <stop offset="100%" stop-color="#e8b84a" stop-opacity="0" />
+                </radialGradient>
               </defs>
 
+              <!--
+                Geometry (viewBox 440×300) — collision-free:
+                You 12,26 88×52 | gap voice/tts | Hark 146,20 120×58 | gap api | Services 320,24 108×56
+                Herdr 14,116 412×158; agents y=164; caption y=238; fan hub (206,130)
+              -->
+
+              <!-- Herdr boundary first (underlay) -->
+              <rect class="node-fill node-fill--herdr" x="14" y="116" width="412" height="158" rx="14" />
+              <rect class="node-stroke node-stroke--herdr" x="14" y="116" width="412" height="158" rx="14" />
+
               <!-- You -->
-              <rect class="node-fill node-fill--you" x="24" y="22" width="100" height="64" rx="12" />
-              <rect class="node-stroke node-stroke--you" x="24" y="22" width="100" height="64" rx="12" />
-              <text class="lbl lbl-you" x="74" y="48" text-anchor="middle">You!</text>
-              <text class="lbl-sub" x="74" y="66" text-anchor="middle">operator · mic</text>
+              <rect class="node-fill node-fill--you" x="12" y="26" width="88" height="52" rx="11" fill="url(#arch-chip)" />
+              <rect class="node-stroke node-stroke--you" x="12" y="26" width="88" height="52" rx="11" />
+              <circle class="dot dot--signal" cx="32" cy="52" r="4" />
+              <text class="lbl lbl-you" x="46" y="49">You</text>
+              <text class="lbl-sub" x="46" y="64">operator</text>
 
-              <!-- Arrows You ↔ Hark -->
-              <path class="arrow arrow--signal" d="M 128 46 H 168" />
-              <path class="arrow arrow--signal" d="M 168 62 H 128" />
-              <text class="edge-lbl" x="148" y="38" text-anchor="middle">voice</text>
-              <text class="edge-lbl" x="148" y="80" text-anchor="middle">tts</text>
+              <!-- voice / tts in wider inter-chip gap (100–142) -->
+              <path class="arrow arrow--signal" d="M 104 42 H 140" />
+              <path class="arrow arrow--signal" d="M 140 62 H 104" />
+              <text class="edge-lbl edge-lbl--signal" x="122" y="34" text-anchor="middle">voice</text>
+              <text class="edge-lbl" x="122" y="78" text-anchor="middle">tts</text>
 
-              <!-- Hark / handsfree -->
-              <rect class="node-fill node-fill--hark" x="172" y="18" width="132" height="72" rx="12" />
-              <rect class="node-stroke node-stroke--hark" x="172" y="18" width="132" height="72" rx="12" />
-              <text class="lbl lbl-hark" x="238" y="46" text-anchor="middle">Hark</text>
-              <text class="lbl-sub" x="238" y="64" text-anchor="middle">handsfree · Mode A</text>
-              <text class="lbl-sub" x="238" y="78" text-anchor="middle">outside Herdr</text>
+              <!-- Hark hub (two-line chip — display name + mode) -->
+              <circle cx="206" cy="52" r="40" fill="url(#arch-hark-glow)" />
+              <rect class="node-fill node-fill--hark" x="146" y="20" width="120" height="58" rx="12" fill="url(#arch-hark-fill)" />
+              <rect class="node-stroke node-stroke--hark" x="146" y="20" width="120" height="58" rx="12" />
+              <text class="lbl lbl-hark lbl-hark--display" x="206" y="48" text-anchor="middle">Hark</text>
+              <text class="lbl-sub" x="206" y="64" text-anchor="middle">handsfree · Mode A</text>
+
+              <!-- api → Services (gap 270–316) -->
+              <path class="arrow arrow--dim" d="M 270 49 H 316" />
+              <text class="edge-lbl" x="293" y="42" text-anchor="middle">api</text>
 
               <!-- Services -->
-              <rect class="node-fill node-fill--svc" x="328" y="14" width="92" height="80" rx="12" />
-              <rect class="node-stroke node-stroke--svc" x="328" y="14" width="92" height="80" rx="12" />
-              <text class="lbl" x="374" y="38" text-anchor="middle" style="font-size:12px">Services</text>
-              <text class="lbl-sub" x="374" y="56" text-anchor="middle">cloud STT</text>
-              <text class="lbl-sub" x="374" y="70" text-anchor="middle">cloud TTS</text>
-              <text class="lbl-sub" x="374" y="84" text-anchor="middle">xAI · …</text>
+              <rect class="node-fill node-fill--svc" x="320" y="24" width="108" height="56" rx="11" fill="url(#arch-chip)" />
+              <rect class="node-stroke node-stroke--svc" x="320" y="24" width="108" height="56" rx="11" />
+              <text class="lbl lbl--sm" x="374" y="44" text-anchor="middle">Services</text>
+              <text class="lbl-sub" x="374" y="58" text-anchor="middle">STT · TTS</text>
+              <text class="lbl-sub lbl-sub--faint" x="374" y="70" text-anchor="middle">xAI · cloud</text>
 
-              <path class="arrow arrow--dim" d="M 308 48 H 324" />
-              <text class="edge-lbl" x="316" y="40" text-anchor="middle">api</text>
+              <!-- spine Hark → Herdr -->
+              <path class="arrow" d="M 206 80 V 112" />
+              <text class="edge-lbl edge-lbl--herald" x="220" y="100">watch · answer</text>
 
-              <!-- Down to Herdr -->
-              <path class="arrow" d="M 238 94 V 128" />
-              <text class="edge-lbl" x="252" y="116">watch · answer</text>
+              <!-- fan-out inside Herdr (no labels in this band) -->
+              <g class="fan" fill="none">
+                <path d="M 206 130 C 172 140, 108 150, 78 162" />
+                <path d="M 206 130 V 162" />
+                <path d="M 206 130 C 240 140, 304 150, 334 162" />
+              </g>
 
-              <!-- Herdr boundary -->
-              <rect class="node-fill node-fill--herdr" x="28" y="136" width="384" height="200" rx="16" />
-              <rect class="node-stroke node-stroke--herdr" x="28" y="136" width="384" height="200" rx="16" />
-              <text class="lbl-hark" x="48" y="160" style="font-size:12px">Herdr</text>
-              <text class="lbl-sub" x="100" y="160">sessions · panes · agents</text>
+              <!-- Agents — status-colored like OG card -->
+              <g class="agent agent--blocked">
+                <rect class="node-fill" x="26" y="164" width="104" height="48" rx="10" fill="url(#arch-chip)" />
+                <rect class="node-stroke" x="26" y="164" width="104" height="48" rx="10" />
+                <circle class="dot" cx="46" cy="188" r="4" />
+                <text class="lbl lbl--sm" x="60" y="184">Agent</text>
+                <text class="status" x="60" y="198">blocked</text>
+              </g>
+              <g class="agent agent--working">
+                <rect class="node-fill" x="154" y="164" width="104" height="48" rx="10" fill="url(#arch-chip)" />
+                <rect class="node-stroke" x="154" y="164" width="104" height="48" rx="10" />
+                <circle class="dot" cx="174" cy="188" r="4" />
+                <text class="lbl lbl--sm" x="188" y="184">Agent</text>
+                <text class="status" x="188" y="198">working</text>
+              </g>
+              <g class="agent agent--done">
+                <rect class="node-fill" x="282" y="164" width="104" height="48" rx="10" fill="url(#arch-chip)" />
+                <rect class="node-stroke" x="282" y="164" width="104" height="48" rx="10" />
+                <circle class="dot" cx="302" cy="188" r="4" />
+                <text class="lbl lbl--sm" x="316" y="184">Agent</text>
+                <text class="status" x="316" y="198">done</text>
+              </g>
+
+              <!-- Herdr caption BELOW agents (link-free) -->
+              <text class="herdr-cap" x="168" y="238" text-anchor="middle">
+                <tspan class="herdr-cap__brand">HERDR</tspan>
+                <tspan class="herdr-cap__meta" dx="8">sessions · panes · agents</tspan>
+              </text>
               <a href="https://herdr.dev/">
-                <text class="edge-lbl" x="380" y="160" text-anchor="end" fill="rgba(94,234,212,0.7)">herdr.dev ↗</text>
+                <text class="herdr-link" x="406" y="238" text-anchor="end">herdr.dev ↗</text>
               </a>
 
-              <!-- Agents inside Herdr -->
-              <rect class="node-fill node-fill--agent" x="52" y="184" width="100" height="56" rx="10" />
-              <rect class="node-stroke node-stroke--agent" x="52" y="184" width="100" height="56" rx="10" />
-              <text class="lbl" x="102" y="208" text-anchor="middle" style="font-size:12px">Agent</text>
-              <text class="lbl-sub" x="102" y="224" text-anchor="middle">blocked?</text>
-
-              <rect class="node-fill node-fill--agent" x="170" y="184" width="100" height="56" rx="10" />
-              <rect class="node-stroke node-stroke--agent" x="170" y="184" width="100" height="56" rx="10" />
-              <text class="lbl" x="220" y="208" text-anchor="middle" style="font-size:12px">Agent</text>
-              <text class="lbl-sub" x="220" y="224" text-anchor="middle">working</text>
-
-              <rect class="node-fill node-fill--agent" x="288" y="184" width="100" height="56" rx="10" />
-              <rect class="node-stroke node-stroke--agent" x="288" y="184" width="100" height="56" rx="10" />
-              <text class="lbl" x="338" y="208" text-anchor="middle" style="font-size:12px">Agent</text>
-              <text class="lbl-sub" x="338" y="224" text-anchor="middle">done?</text>
-
-              <!-- Arrows Hark → each agent (via herdr zone) -->
-              <path class="arrow" d="M 200 128 V 152 H 102 V 180" />
-              <path class="arrow" d="M 238 128 V 180" />
-              <path class="arrow" d="M 276 128 V 152 H 338 V 180" />
-
-              <!-- Local machine label -->
-              <text class="lbl-sub" x="220" y="318" text-anchor="middle">local machine · multi-session OK</text>
+              <text class="lbl-sub lbl-sub--faint" x="220" y="258" text-anchor="middle">local machine · multi-session OK</text>
             </svg>
             <figcaption class="arch__caption">You ↔ Hark ↔ services · Hark → agents in Herdr</figcaption>
           </figure>

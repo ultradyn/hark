@@ -3,8 +3,9 @@
   Hark Open Graph / Twitter card source — 1200×630.
   Brand tokens from site/css/tokens.css (void / herald amber / serif display).
 
-  Render with headless-browser-screenshots:
+  Render with headless-browser-screenshots (or site/render-og-image.mjs):
 
+    export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"
     node ~/.llm-general/skills/headless-browser-screenshots/scripts/screenshot.mjs \
       --url site/og-image.html \
       --out site/og.png \
@@ -19,7 +20,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@500;600&family=Source+Sans+3:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <style>
@@ -35,6 +36,9 @@
         --herald-dim: #b8892a;
         --herald-glow: rgba(232, 184, 74, 0.35);
         --signal: #5eead4;
+        --signal-dim: #2a9d8f;
+        --border: rgba(238, 241, 247, 0.1);
+        --border-herald: rgba(232, 184, 74, 0.32);
         --font-display: "Fraunces", Georgia, serif;
         --font-body: "Source Sans 3", system-ui, sans-serif;
         --font-mono: "JetBrains Mono", ui-monospace, monospace;
@@ -53,13 +57,13 @@
       body {
         background:
           radial-gradient(
-            70% 90% at 18% 42%,
-            rgba(232, 184, 74, 0.2),
+            65% 85% at 14% 28%,
+            rgba(232, 184, 74, 0.18),
             transparent 55%
           ),
           radial-gradient(
-            50% 70% at 88% 80%,
-            rgba(94, 234, 212, 0.08),
+            45% 60% at 92% 78%,
+            rgba(94, 234, 212, 0.09),
             transparent 50%
           ),
           linear-gradient(155deg, var(--deep) 0%, var(--void) 55%, #0d1018 100%);
@@ -73,8 +77,8 @@
         position: absolute;
         inset: 0;
         background-image:
-          linear-gradient(rgba(238, 241, 247, 0.035) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(238, 241, 247, 0.035) 1px, transparent 1px);
+          linear-gradient(rgba(238, 241, 247, 0.03) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(238, 241, 247, 0.03) 1px, transparent 1px);
         background-size: 40px 40px;
         pointer-events: none;
       }
@@ -89,27 +93,32 @@
         background: linear-gradient(
           90deg,
           transparent 0%,
-          var(--herald) 20%,
-          var(--herald) 80%,
+          var(--herald) 18%,
+          var(--herald) 82%,
           transparent 100%
         );
-        opacity: 0.65;
+        opacity: 0.7;
+        z-index: 2;
       }
+
       .frame {
         position: absolute;
-        inset: 40px 48px;
+        /* safe inset ≥40px all sides */
+        inset: 40px 48px 40px;
         display: grid;
-        grid-template-rows: auto 1fr auto;
-        gap: 28px;
+        grid-template-rows: auto 1fr auto auto;
+        gap: 16px;
       }
+
+      /* ── brand row ── */
       .brand-row {
         display: flex;
         align-items: center;
-        gap: 28px;
+        gap: 22px;
       }
       .mark {
-        width: 88px;
-        height: 88px;
+        width: 72px;
+        height: 72px;
         position: relative;
         flex-shrink: 0;
       }
@@ -117,25 +126,25 @@
         position: absolute;
         inset: 0;
         border-radius: 50%;
-        border: 4px solid var(--herald);
+        border: 3.5px solid var(--herald);
         box-shadow:
-          0 0 0 10px rgba(232, 184, 74, 0.12),
-          0 0 36px var(--herald-glow);
+          0 0 0 8px rgba(232, 184, 74, 0.1),
+          0 0 28px var(--herald-glow);
       }
       .mark__core {
         position: absolute;
         top: 50%;
         left: 50%;
-        width: 28px;
-        height: 28px;
-        margin: -14px 0 0 -14px;
+        width: 22px;
+        height: 22px;
+        margin: -11px 0 0 -11px;
         border-radius: 50%;
         background: var(--herald);
-        box-shadow: 0 0 20px var(--herald-glow);
+        box-shadow: 0 0 16px var(--herald-glow);
       }
       .title {
         font-family: var(--font-display);
-        font-size: 120px;
+        font-size: 96px;
         font-weight: 600;
         line-height: 0.95;
         letter-spacing: -0.04em;
@@ -149,58 +158,177 @@
         background-clip: text;
         color: transparent;
       }
+      .eyebrow {
+        margin-left: auto;
+        font-family: var(--font-mono);
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--faint);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .eyebrow .live {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--signal);
+        box-shadow: 0 0 10px rgba(94, 234, 212, 0.7);
+      }
+
+      /* ── mid: copy + diagram ── */
       .mid {
+        display: grid;
+        grid-template-columns: 1fr 1.05fr;
+        gap: 36px;
+        align-items: center;
+        min-height: 0;
+      }
+      .copy {
         display: flex;
         flex-direction: column;
         justify-content: center;
         gap: 14px;
-        padding-left: 4px;
-        max-width: 52ch;
+        padding-left: 2px;
       }
       .tag {
+        font-family: var(--font-display);
         font-size: 40px;
         font-weight: 500;
-        letter-spacing: 0.01em;
-        color: var(--muted);
-        line-height: 1.2;
+        letter-spacing: -0.015em;
+        color: var(--ink);
+        line-height: 1.15;
+        max-width: 14ch;
       }
       .lede {
-        font-size: 26px;
-        line-height: 1.4;
-        color: var(--faint);
-        max-width: 38ch;
+        font-size: 25px;
+        line-height: 1.32;
+        color: var(--muted);
+        max-width: 22ch;
+        font-weight: 500;
       }
+
+      /* diagram panel */
+      .diagram {
+        height: 100%;
+        min-height: 248px;
+        border-radius: 16px;
+        border: 1px solid var(--border-herald);
+        background:
+          linear-gradient(180deg, rgba(232, 184, 74, 0.04), transparent 50%),
+          rgba(10, 12, 18, 0.72);
+        box-shadow:
+          0 16px 40px rgba(0, 0, 0, 0.35),
+          inset 0 1px 0 rgba(238, 241, 247, 0.04);
+        position: relative;
+        overflow: hidden;
+      }
+      .diagram svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .diagram svg text {
+        font-family: var(--font-mono);
+      }
+
+      /* ── command chrome ── */
+      .cmd {
+        display: flex;
+        align-items: center;
+        gap: 0;
+        height: 52px;
+        border-radius: 12px;
+        background: rgba(5, 6, 10, 0.85);
+        border: 1px solid var(--border);
+        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+        overflow: hidden;
+        font-family: var(--font-mono);
+        font-size: 20px;
+        font-weight: 500;
+      }
+      .cmd__main {
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 22px;
+        min-width: 0;
+        white-space: nowrap;
+      }
+      .cmd .gp {
+        color: var(--herald);
+        font-weight: 700;
+      }
+      .cmd .c {
+        color: var(--signal);
+      }
+      .cmd .arg {
+        color: var(--ink);
+      }
+      .cmd .str {
+        color: var(--herald);
+      }
+      .cmd .ok {
+        margin-left: 14px;
+        color: var(--signal);
+        font-weight: 700;
+      }
+      .cmd__badge {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 20px;
+        height: 100%;
+        border-left: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 17px;
+        white-space: nowrap;
+      }
+      .cmd__badge .tick {
+        color: var(--signal);
+        font-weight: 700;
+      }
+
+      /* ── footer ── */
       .footer {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 24px;
         border-top: 1px solid rgba(232, 184, 74, 0.28);
-        padding-top: 22px;
+        padding-top: 16px;
       }
       .pills {
         display: flex;
-        gap: 12px;
+        gap: 10px;
         flex-wrap: wrap;
       }
       .pill {
         font-family: var(--font-mono);
-        font-size: 18px;
+        font-size: 17px;
         font-weight: 500;
         color: var(--ink);
-        border: 1px solid rgba(238, 241, 247, 0.1);
-        background: rgba(16, 19, 28, 0.75);
+        border: 1px solid rgba(238, 241, 247, 0.12);
+        background: rgba(16, 19, 28, 0.8);
         border-radius: 999px;
-        padding: 10px 18px;
+        padding: 8px 16px;
       }
       .pill--signal {
-        border-color: rgba(94, 234, 212, 0.28);
+        border-color: rgba(94, 234, 212, 0.32);
         color: var(--signal);
+      }
+      .pill--herald {
+        border-color: rgba(232, 184, 74, 0.4);
+        color: var(--herald);
       }
       .site {
         font-family: var(--font-mono);
-        font-size: 26px;
-        font-weight: 600;
+        font-size: 24px;
+        font-weight: 700;
         color: var(--herald);
         letter-spacing: 0.02em;
         white-space: nowrap;
@@ -215,18 +343,132 @@
           <div class="mark__core"></div>
         </div>
         <h1 class="title">Hark</h1>
+        <div class="eyebrow"><span class="live" aria-hidden="true"></span> handsfree · fleet</div>
       </div>
+
       <div class="mid">
-        <p class="tag">When your agents need a word.</p>
-        <p class="lede">
-          Handsfree voice for your coding-agent fleet in Herdr.
-        </p>
+        <div class="copy">
+          <p class="tag">When your agents need a word.</p>
+          <p class="lede">
+            Handsfree voice for your coding-agent fleet in Herdr.
+          </p>
+        </div>
+
+        <!-- Compact topology: You ↔ Hark → agents in Herdr -->
+        <div class="diagram" aria-hidden="true">
+          <svg viewBox="0 0 560 260" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="arrH" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto">
+                <path d="M0,1.5 L9,5 L0,8.5 z" fill="#e8b84a" />
+              </marker>
+              <marker id="arrS" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto">
+                <path d="M0,1.5 L9,5 L0,8.5 z" fill="#5eead4" />
+              </marker>
+              <linearGradient id="chipFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#161b28" />
+                <stop offset="100%" stop-color="#0a0c12" />
+              </linearGradient>
+              <linearGradient id="harkFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#1a160c" />
+                <stop offset="100%" stop-color="#0d0b08" />
+              </linearGradient>
+              <radialGradient id="harkGlow" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#e8b84a" stop-opacity="0.28" />
+                <stop offset="100%" stop-color="#e8b84a" stop-opacity="0" />
+              </radialGradient>
+            </defs>
+
+            <!--
+              Geometry (viewBox 560×260):
+              - You chip:  x=48..156, y=28..84   (center ~65)
+              - Hark chip: x=232..352, y=22..90  (center 292,65)
+              - Links in the clear gap x=160..228 (no chip text)
+              - Herdr: y=128..242; agents y=168..218; labels below agents
+              - Fan hub at (292,140) → agent tops; header band free of lines
+            -->
+
+            <!-- Herdr boundary (bottom) — labels BELOW agents so fan lines stay clean -->
+            <rect x="28" y="128" width="504" height="116" rx="14"
+              fill="rgba(16,19,28,0.55)" stroke="rgba(94,234,212,0.22)" stroke-width="1.5"
+              stroke-dasharray="4 5" />
+
+            <!-- You chip: subtitle avoids "voice" (edge labels own that word) -->
+            <rect x="48" y="28" width="108" height="56" rx="12" fill="url(#chipFill)" stroke="rgba(94,234,212,0.45)" stroke-width="1.8" />
+            <circle cx="72" cy="56" r="5" fill="#5eead4" />
+            <text x="88" y="52" fill="#eef1f7" font-size="18" font-weight="600">You</text>
+            <text x="88" y="70" fill="#a4adc0" font-size="12" font-weight="500">operator</text>
+
+            <!-- voice / tts links fully in the inter-chip gap (no chip text collision) -->
+            <line x1="160" y1="46" x2="224" y2="46" stroke="#5eead4" stroke-width="2.2" marker-end="url(#arrS)" opacity="0.95" />
+            <line x1="224" y1="70" x2="160" y2="70" stroke="#5eead4" stroke-width="1.8" marker-end="url(#arrS)" opacity="0.6" />
+            <text x="192" y="38" text-anchor="middle" fill="#5eead4" font-size="12" font-weight="600">voice</text>
+            <text x="192" y="88" text-anchor="middle" fill="#a4adc0" font-size="12" font-weight="500">tts</text>
+
+            <!-- Hark hub (diagram hero) -->
+            <circle cx="292" cy="58" r="50" fill="url(#harkGlow)" />
+            <rect x="232" y="22" width="120" height="68" rx="14" fill="url(#harkFill)" stroke="#e8b84a" stroke-width="2.2" />
+            <text x="292" y="52" text-anchor="middle" fill="#e8b84a" font-size="22" font-weight="700" font-family="Fraunces, Georgia, serif" letter-spacing="-0.02em">Hark</text>
+            <text x="292" y="72" text-anchor="middle" fill="#c4cad6" font-size="12" font-weight="500">handsfree</text>
+
+            <!-- spine down to Herdr (stops at boundary; fan starts inside) -->
+            <line x1="292" y1="92" x2="292" y2="126" stroke="#e8b84a" stroke-width="2.4" marker-end="url(#arrH)" opacity="0.95" />
+            <text x="310" y="114" fill="#b8892a" font-size="12" font-weight="600">watch · answer</text>
+
+            <!-- fan-out: hub just inside Herdr top → agent top centers; no text in this band -->
+            <g stroke="#e8b84a" stroke-width="1.7" opacity="0.5" fill="none">
+              <path d="M 292 140 C 250 148, 160 156, 116 166" />
+              <path d="M 292 140 V 166" />
+              <path d="M 292 140 C 334 148, 424 156, 468 166" />
+            </g>
+
+            <!-- Agent chips (centers 116 / 292 / 468) -->
+            <g>
+              <rect x="52" y="168" width="128" height="50" rx="10" fill="url(#chipFill)" stroke="rgba(251,113,133,0.5)" stroke-width="1.6" />
+              <circle cx="74" cy="193" r="5" fill="#fb7185" />
+              <text x="90" y="189" fill="#eef1f7" font-size="16" font-weight="600">Agent</text>
+              <text x="90" y="206" fill="#fb7185" font-size="12" font-weight="500">blocked</text>
+
+              <rect x="228" y="168" width="128" height="50" rx="10" fill="url(#chipFill)" stroke="rgba(232,184,74,0.45)" stroke-width="1.6" />
+              <circle cx="250" cy="193" r="5" fill="#e8b84a" />
+              <text x="266" y="189" fill="#eef1f7" font-size="16" font-weight="600">Agent</text>
+              <text x="266" y="206" fill="#b8892a" font-size="12" font-weight="500">working</text>
+
+              <rect x="404" y="168" width="128" height="50" rx="10" fill="url(#chipFill)" stroke="rgba(94,234,212,0.4)" stroke-width="1.6" />
+              <circle cx="426" cy="193" r="5" fill="#5eead4" />
+              <text x="442" y="189" fill="#eef1f7" font-size="16" font-weight="600">Agent</text>
+              <text x="442" y="206" fill="#2a9d8f" font-size="12" font-weight="500">done</text>
+            </g>
+
+            <!-- Herdr caption BELOW agents (link-free band; ≥10px to border) -->
+            <text x="280" y="234" text-anchor="middle" font-size="12" font-weight="600" letter-spacing="0.04em">
+              <tspan fill="#5eead4">HERDR</tspan>
+              <tspan fill="#7a8396" dx="10">sessions · panes · agents</tspan>
+            </text>
+          </svg>
+        </div>
       </div>
+
+      <div class="cmd" aria-hidden="true">
+        <div class="cmd__main">
+          <span class="gp">$</span>
+          <span class="c">hark</span>
+          <span class="arg">watch</span>
+          <span class="arg">·</span>
+          <span class="str">“hey hark”</span>
+          <span class="arg">·</span>
+          <span class="arg">deliver</span>
+          <span class="ok">✓ routed</span>
+        </div>
+        <div class="cmd__badge"><span class="tick">✓</span> skill-first</div>
+        <div class="cmd__badge"><span class="tick">✓</span> Herdr</div>
+      </div>
+
       <div class="footer">
         <div class="pills">
           <span class="pill">skill-first</span>
           <span class="pill">fleet</span>
           <span class="pill pill--signal">voice</span>
+          <span class="pill pill--herald">wake</span>
         </div>
         <div class="site">hark.xk.io</div>
       </div>

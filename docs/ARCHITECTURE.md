@@ -72,11 +72,9 @@ Mode A needs the orchestrator to wake on **`hark monitor --for-monitor`** (unifi
 | Claude Code, Grok | Native | Built-in long-lived Monitor tool on `hark monitor --for-monitor` |
 | Pi | Plugin | [`pi-monitor`](https://github.com/clankercode/pi-monitor) (`pi install npm:pi-monitor`) — runs a background command and delivers regex-matching stdout into the session |
 | OpenCode | Plugin | [`opencode-monitor-bg`](https://github.com/clankercode/opencode-monitor-bg) — `monitor_start` / `monitor_list` / `monitor_fetch` / `monitor_kill` deliver background output back into the owning session |
-| Antigravity (`agy`) | agentapi | `agy agentapi` inject wakes the session on Mode A feed lines (full path: B049) |
 | **Antigravity (`agy`)** | **agentapi inject (experimental)** | No native Monitor. Register env + run `hark agentapi deliver --follow-monitor` (or `./scripts/hark-agy-deliver.sh`). See [AGY.md](AGY.md). |
 
-Point the plugin / agentapi path at `hark watch --for-monitor --statuses blocked,done` (or `hark monitor --for-monitor`). Without a Monitor-equivalent, blocks won't interrupt the session.
-Point plugins at `hark monitor --for-monitor` (or at minimum `hark watch --for-monitor --statuses blocked,done`). Without a Monitor/inject path, blocks won't interrupt the session.
+Point plugins / agentapi at `hark monitor --for-monitor` (or at minimum `hark watch --for-monitor --statuses blocked,done`). Without a Monitor/inject path, blocks won't interrupt the session.
 
 ## Related docs
 

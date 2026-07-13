@@ -6,7 +6,7 @@ import os
 
 import httpx
 
-from hark.providers.base import ProviderError, SynthResult, Transcript
+from hark.providers.base import ProviderError, SynthResult, Transcript, provider_operation
 
 API = "https://api.openai.com/v1"
 
@@ -21,6 +21,7 @@ def _key() -> str:
 class OpenAIStt:
     name = "openai"
 
+    @provider_operation("OpenAI STT")
     def transcribe(self, wav_bytes: bytes, *, language: str | None = None) -> Transcript:
         headers = {"Authorization": f"Bearer {_key()}"}
         files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
@@ -43,6 +44,7 @@ class OpenAIStt:
 class OpenAITts:
     name = "openai"
 
+    @provider_operation("OpenAI TTS")
     def synthesize(self, text: str, *, voice: str | None = None) -> SynthResult:
         headers = {
             "Authorization": f"Bearer {_key()}",

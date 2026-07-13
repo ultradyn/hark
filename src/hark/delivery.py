@@ -83,6 +83,47 @@ class DeliveryStore:
         with self._deliveries.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
 
+    def _latest_statuses(self) -> dict[str, str]:
+        statuses: dict[str, str] = {}
+        if not self._deliveries.is_file():
+            return statuses
+        with self._deliveries.open(encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                event_id = data.get("event_id")
+                status = data.get("status")
+                if isinstance(event_id, str) and isinstance(status, str):
+                    statuses[event_id] = status
+        return statuses
+
+    def invalidate_target(
+        self, session_id: str, pane_id: str, *, reason: str
+    ) -> list[str]:
+        """Mark still-pending bound events for a removed/moved target invalid."""
+        if not self.path.is_file():
+            return []
+        statuses = self._latest_statuses()
+        invalidated: list[str] = []
+        with self.path.open(encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                event_id = data.get("event_id")
+                if (
+                    isinstance(event_id, str)
+                    and data.get("session_id") == session_id
+                    and data.get("pane_id") == pane_id
+                    and statuses.get(event_id, "pending") == "pending"
+                ):
+                    self.mark(event_id, "invalidated", reason=reason)
+                    invalidated.append(event_id)
+        return invalidated
+
     def already_delivered(self, event_id: str) -> bool:
         if not self._deliveries.is_file():
             return False

@@ -75,6 +75,27 @@ def make_watch_error(session_id: str, message: str) -> dict[str, Any]:
     }
 
 
+def make_target_invalidated(
+    session_id: str,
+    pane_id: str,
+    *,
+    reason: str,
+    event_ids: list[str],
+) -> dict[str, Any]:
+    return {
+        "schema": __schema__,
+        "event_id": new_event_id(),
+        "observed_at": utc_now_iso(),
+        "kind": "target.invalidated",
+        "priority": 90,
+        "session_id": session_id,
+        "target": {"server_instance": session_id, "pane_id": pane_id},
+        "reason": reason,
+        "invalidated_event_ids": event_ids,
+        "disposition": "invalidated",
+    }
+
+
 def agent_to_target(agent: AgentInfo) -> dict[str, Any]:
     return {
         "server_instance": agent.session_id,

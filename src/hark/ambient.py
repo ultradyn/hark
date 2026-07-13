@@ -105,30 +105,14 @@ def complete_after_wake(
     *,
     announce: bool = True,
 ) -> AmbientResult:
-    """After wake hit: optional cue + cloud STT for the prompt body."""
+    """After wake: beep→record→beep (no spoken 'okay' / 'listening').
+
+    Non-verbal cues live in run_listen (record_start / record_stop).
+    """
+    del announce
     event_id = new_event_id()
-    remainder = hit.remainder
-
-    if remainder and len(remainder.split()) >= 3:
-        if announce:
-            try:
-                run_tts(cfg, "Got it.", play=True)
-            except Exception:
-                pass
-        return AmbientResult(
-            activated=True,
-            phrase=hit.phrase,
-            text=remainder,
-            wake_backend=hit.backend,
-            listen={"provider": "inline_after_wake", "duration_ms": 0},
-            event_id=event_id,
-        )
-
-    if announce:
-        try:
-            run_tts(cfg, "Listening.", play=True)
-        except Exception:
-            pass
+    # Discard wake-window remainder: local vosk is only for activation.
+    # Prompt body always comes from cloud STT after record beeps.
 
     try:
         listened = run_listen(cfg, end_mode=cfg.listen.end_mode)
@@ -143,11 +127,6 @@ def complete_after_wake(
         )
 
     if listened.cancelled:
-        if announce:
-            try:
-                run_tts(cfg, "Cancelled.", play=True)
-            except Exception:
-                pass
         return AmbientResult(
             activated=True,
             phrase=hit.phrase,
@@ -161,12 +140,6 @@ def complete_after_wake(
             },
             event_id=event_id,
         )
-
-    if announce and listened.text:
-        try:
-            run_tts(cfg, "Okay.", play=True)
-        except Exception:
-            pass
 
     return AmbientResult(
         activated=True,

@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from hark.audio.capture import MicLease, capture_utterance, write_wav_bytes
+from hark.audio.cues import (
+    lookup_cached_tts,
+    play_record_start,
+    play_record_stop,
+    store_cached_tts,
+)
 from hark.audio.mic_mute import mic_muted_during_tts
 from hark.audio.playback import play_wav_bytes, write_wav
 from hark.config import HarkConfig
@@ -56,28 +62,52 @@ def run_tts(
     do_mute = cfg.audio.mute_mic_during_tts if mute_mic is None else mute_mic
     store = UsageStore()
     t0 = time.monotonic()
-    tts = resolve_tts(
-        provider or cfg.tts.provider,
-        voice=voice or cfg.tts.voice,
-        language=cfg.tts.language,
-    )
-    try:
-        result = tts.synthesize(text, voice=voice or cfg.tts.voice)
-    except Exception as exc:
-        store.record_tts(
-            text=text,
-            provider=provider or cfg.tts.provider,
-            voice=voice or cfg.tts.voice,
-            ok=False,
-            error=str(exc)[:200],
-            latency_ms=int(1000 * (time.monotonic() - t0)),
-        )
-        raise
+    voice_id = voice or cfg.tts.voice or "eve"
+    cached = lookup_cached_tts(voice_id, text)
+    from_cache = False
+    provider_name = provider or cfg.tts.provider
+    content_type = "audio/mpeg"
+    audio_bytes: bytes
 
-    latency_ms = int(1000 * (time.monotonic() - t0))
+    if cached is not None:
+        audio_bytes = cached
+        from_cache = True
+        provider_name = "cache"
+        latency_ms = int(1000 * (time.monotonic() - t0))
+        used_voice = voice_id
+    else:
+        tts = resolve_tts(
+            provider or cfg.tts.provider,
+            voice=voice_id,
+            language=cfg.tts.language,
+        )
+        try:
+            result = tts.synthesize(text, voice=voice_id)
+        except Exception as exc:
+            store.record_tts(
+                text=text,
+                provider=provider or cfg.tts.provider,
+                voice=voice_id,
+                ok=False,
+                error=str(exc)[:200],
+                latency_ms=int(1000 * (time.monotonic() - t0)),
+            )
+            raise
+        audio_bytes = result.audio
+        provider_name = result.provider
+        content_type = result.content_type
+        used_voice = result.voice or voice_id
+        latency_ms = int(1000 * (time.monotonic() - t0))
+        # Persist common-ish short phrases for reuse
+        if len(text) <= 120:
+            try:
+                store_cached_tts(used_voice, text, audio_bytes)
+            except Exception:
+                pass
+
     out_path = None
     if out:
-        out_path = str(write_wav(out, result.audio))
+        out_path = str(write_wav(out, audio_bytes))
 
     play_ms = 0
     mute_applied = False
@@ -90,7 +120,7 @@ def run_tts(
         with mic_muted_during_tts(enabled=do_mute) as mute_state:
             mute_applied = mute_state.applied
             pr = play_wav_bytes(
-                result.audio,
+                audio_bytes,
                 on_near_end=on_near_end,
                 near_end_ms=near if on_near_end else 0,
             )
@@ -98,24 +128,26 @@ def run_tts(
 
     store.record_tts(
         text=text,
-        provider=result.provider,
-        voice=result.voice,
+        provider=provider_name,
+        voice=used_voice,
         audio_ms=play_ms,
         latency_ms=latency_ms,
         ok=True,
+        meta={"from_cache": from_cache},
     )
     return {
         "ok": True,
-        "provider": result.provider,
-        "voice": result.voice,
+        "provider": provider_name,
+        "voice": used_voice,
         "truncated": truncated,
         "chars": len(text),
         "words": len(text.split()),
         "out": out_path,
-        "content_type": result.content_type,
+        "content_type": content_type,
         "audio_ms": play_ms,
         "latency_ms": latency_ms,
         "mic_muted": mute_applied,
+        "from_cache": from_cache,
     }
 
 
@@ -161,14 +193,17 @@ def run_listen(
 
     with MicLease("listen"):
         if mode is EndMode.SILENCE:
-            t0 = time.monotonic()
+            if guard > 0:
+                time.sleep(guard)
+            play_record_start()
             try:
                 cap = capture_utterance(
                     max_s=max_listen,
                     end_silence_s=end_silence,
-                    post_tts_guard_s=guard,
+                    post_tts_guard_s=0,
                 )
             except TimeoutError as exc:
+                play_record_stop()
                 store.record_stt(
                     text="",
                     provider=getattr(stt, "name", None),
@@ -176,6 +211,7 @@ def run_listen(
                     error=str(exc)[:200],
                 )
                 raise
+            play_record_stop()
             t_api = time.monotonic()
             tr = stt.transcribe(cap.wav)
             latency_ms = int(1000 * (time.monotonic() - t_api))
@@ -221,6 +257,7 @@ def run_listen(
         started = time.monotonic()
         if guard > 0:
             time.sleep(guard)
+        play_record_start()
         while time.monotonic() - started < max_listen:
             remaining = max_listen - (time.monotonic() - started)
             try:
@@ -233,6 +270,7 @@ def run_listen(
             except TimeoutError:
                 if pieces:
                     continue
+                play_record_stop()
                 store.record_stt(
                     text="",
                     provider=getattr(stt, "name", None),
@@ -255,6 +293,7 @@ def run_listen(
             )
             if hit is None:
                 continue
+            play_record_stop()
             body = hit.body if cfg.listen.strip_phrase else tr.text
             store.record_stt(
                 text=body,
@@ -280,6 +319,7 @@ def run_listen(
                 end_mode=mode.value,
                 end_phrase=hit.phrase,
             )
+        play_record_stop()
         raise TimeoutError(f"radio listen exceeded max_listen_s={max_listen}")
 
 

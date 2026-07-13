@@ -6,7 +6,13 @@ import os
 
 import httpx
 
-from hark.providers.base import ProviderError, ProviderUnsupported, SynthResult, Transcript
+from hark.providers.base import (
+    ProviderError,
+    ProviderUnsupported,
+    SynthResult,
+    Transcript,
+    provider_operation,
+)
 
 T2A_URL = "https://api.minimax.io/v1/t2a_v2"
 
@@ -30,6 +36,7 @@ class MinimaxStt:
 class MinimaxTts:
     name = "minimax"
 
+    @provider_operation("MiniMax TTS")
     def synthesize(self, text: str, *, voice: str | None = None) -> SynthResult:
         key = _key()
         group = os.environ.get("MINIMAX_GROUP_ID", "")

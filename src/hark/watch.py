@@ -15,6 +15,7 @@ from hark.events import (
     make_watch_armed,
     make_watch_error,
     make_watch_heartbeat,
+    make_target_invalidated,
     monitor_profile,
 )
 from hark.fingerprint import question_fingerprint
@@ -172,6 +173,7 @@ def run_watch(
                 heartbeat_s=heartbeat_s,
                 sessions=[c.session.id for c in clients],
                 question_for=question_for if read_questions else None,
+                store=store,
             )
         except Exception as exc:
             emit(make_watch_error(clients[0].session.id, f"socket watch failed, poll: {exc}"))
@@ -217,6 +219,7 @@ def _watch_socket(
     heartbeat_s: float,
     sessions: list[str],
     question_for: Callable[[AgentInfo], str | None] | None,
+    store: DeliveryStore | None,
 ) -> int:
     """Hybrid: socket events trigger refresh + poll edges; heartbeat thread."""
     from hark.herdr.socket_client import run_subscribe_loop
@@ -227,7 +230,9 @@ def _watch_socket(
         while not stop.wait(heartbeat_s):
             emit(make_watch_heartbeat(sessions))
 
-    def on_wire(_raw: dict[str, Any]) -> None:
+    def on_wire(raw: dict[str, Any]) -> None:
+        if _handle_lifecycle_event(raw, client=client, store=store, emit=emit):
+            return
         try:
             agents = client.list_agents()
         except HerdrError as exc:
@@ -257,3 +262,55 @@ def _watch_socket(
     finally:
         stop.set()
     return 0
+
+
+_LIFECYCLE_TYPES = frozenset({"pane.closed", "pane.exited", "pane.moved"})
+
+
+def _handle_lifecycle_event(
+    raw: dict[str, Any],
+    *,
+    client: HerdrClient,
+    store: DeliveryStore | None,
+    emit: Callable[[dict[str, Any]], None],
+) -> bool:
+    """Invalidate bound answers from a socket lifecycle event, if present."""
+    containers: list[dict[str, Any]] = []
+    todo: list[dict[str, Any]] = [raw]
+    event_type: str | None = None
+    while todo:
+        value = todo.pop()
+        containers.append(value)
+        for key, child in value.items():
+            if key in ("type", "method", "event", "name") and isinstance(child, str):
+                if child in _LIFECYCLE_TYPES:
+                    event_type = child
+            if key in ("params", "data", "result", "event", "payload", "pane", "target") and isinstance(child, dict):
+                todo.append(child)
+    if event_type is None:
+        return False
+    pane_id = next(
+        (str(container["pane_id"]) for container in containers if container.get("pane_id")),
+        None,
+    )
+    if pane_id is None:
+        pane_id = next(
+            (str(container["id"]) for container in containers if container.get("id")),
+            None,
+        )
+    if pane_id is None:
+        return False
+    event_ids = (
+        store.invalidate_target(client.session.id, pane_id, reason=event_type)
+        if store is not None
+        else []
+    )
+    emit(
+        make_target_invalidated(
+            client.session.id,
+            pane_id,
+            reason=event_type,
+            event_ids=event_ids,
+        )
+    )
+    return True

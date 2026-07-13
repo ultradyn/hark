@@ -4,6 +4,7 @@ import json
 import hark.cli as cli
 import hark.watch as watch
 from hark.config import HarkConfig, SessionConfig
+from hark.delivery import BoundEvent, DeliveryStore
 from hark.herdr.client import AgentInfo, HerdrError
 
 
@@ -92,3 +93,54 @@ def test_watch_cli_reads_questions_by_default_and_keeps_legacy_flag(monkeypatch)
     assert cli.dispatch(args, HarkConfig()) == 0
     assert cli.dispatch(legacy_args, HarkConfig()) == 0
     assert [call["read_questions"] for call in calls] == [True, True]
+
+
+def test_socket_lifecycle_event_invalidates_bound_target(monkeypatch, tmp_path):
+    from hark.herdr import socket_client
+
+    store = DeliveryStore(tmp_path / "events.jsonl")
+    store.save_event(
+        BoundEvent(
+            event_id="evt-pending",
+            session_id="local",
+            pane_id="w1:p1",
+            pane_revision=3,
+            question_fingerprint="blake2b:abc",
+        )
+    )
+    client = FakeWatchClient(SessionConfig(id="local"))
+    client.socket_path = tmp_path / "herdr.sock"
+    emitted: list[dict[str, object]] = []
+    raw = {
+        "method": "events.notify",
+        "params": {
+            "event": {
+                "type": "pane.closed",
+                "data": {"pane": {"id": "w1:p1", "revision": 4}},
+            }
+        },
+    }
+
+    def fake_subscribe(_socket_path, on_event):
+        on_event(raw)
+
+    monkeypatch.setattr(socket_client, "run_subscribe_loop", fake_subscribe)
+
+    assert watch._watch_socket(
+        client,
+        tracker=watch.EdgeTracker(),
+        interest={"blocked"},
+        emit=emitted.append,
+        heartbeat_s=60,
+        sessions=["local"],
+        question_for=None,
+        store=store,
+    ) == 0
+
+    invalidated = [event for event in emitted if event["kind"] == "target.invalidated"]
+    assert len(invalidated) == 1
+    assert invalidated[0]["session_id"] == "local"
+    assert invalidated[0]["target"]["pane_id"] == "w1:p1"
+    assert invalidated[0]["disposition"] == "invalidated"
+    assert invalidated[0]["invalidated_event_ids"] == ["evt-pending"]
+    assert store.get("evt-pending").status == "invalidated"

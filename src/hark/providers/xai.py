@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 
 from hark.providers.auth import resolve_xai_token
-from hark.providers.base import ProviderError, SynthResult, Transcript
+from hark.providers.base import ProviderError, SynthResult, Transcript, provider_operation
 
 STT_URL = "https://api.x.ai/v1/stt"
 TTS_URL = "https://api.x.ai/v1/tts"
@@ -36,6 +36,7 @@ class XaiStt:
     def __init__(self, timeout: float = 120.0) -> None:
         self.timeout = timeout
 
+    @provider_operation("xAI STT")
     def transcribe(self, wav_bytes: bytes, *, language: str | None = None) -> Transcript:
         token = _token()
         files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
@@ -78,6 +79,7 @@ class XaiStt:
         return Transcript(text=str(text).strip(), provider=self.name)
 
 
+@provider_operation("xAI voices")
 def list_xai_voices() -> list[dict[str, Any]]:
     """GET /v1/tts/voices — built-in voice catalog."""
     token = _token()
@@ -109,6 +111,7 @@ class XaiTts:
         self.voice = voice
         self.language = language
 
+    @provider_operation("xAI TTS")
     def synthesize(self, text: str, *, voice: str | None = None) -> SynthResult:
         token = _token()
         voice_id = voice or self.voice or DEFAULT_VOICE

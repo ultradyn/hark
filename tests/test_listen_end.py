@@ -111,3 +111,60 @@ def test_env_overrides_end_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("HARK_LISTEN_END_MODE", "radio")
     cfg = load_config(cfg_file)
     assert cfg.listen.end_mode == "radio"
+
+
+def test_config_warns_for_unknown_nested_keys_in_all_sections(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        """
+[herdr]
+unknown_herdr = true
+[[herdr.sessions]]
+id = "local"
+unknown_session = true
+[watch]
+unknown_watch = true
+[audio]
+unknown_audio = true
+[listen]
+unknown_listen = true
+[ambient]
+unknown_ambient = true
+[stt]
+unknown_stt = true
+[tts]
+unknown_tts = true
+[confirm]
+unknown_confirm = true
+[safety]
+unknown_safety = true
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("HARK_LISTEN_END_MODE", raising=False)
+
+    cfg = load_config(cfg_file)
+
+    for name in (
+        "herdr.unknown_herdr",
+        "herdr.sessions[0].unknown_session",
+        "watch.unknown_watch",
+        "audio.unknown_audio",
+        "listen.unknown_listen",
+        "ambient.unknown_ambient",
+        "stt.unknown_stt",
+        "tts.unknown_tts",
+        "confirm.unknown_confirm",
+        "safety.unknown_safety",
+    ):
+        assert any(name in warning for warning in cfg.warnings)
+
+
+def test_cli_prints_config_warnings_to_stderr_on_normal_startup(tmp_path, capsys):
+    from hark.cli import main
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text("[watch]\nunknown_watch = true\n", encoding="utf-8")
+
+    assert main(["--config", str(cfg_file), "config", "show"]) == 0
+    assert "config warning" in capsys.readouterr().err.lower()

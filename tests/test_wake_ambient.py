@@ -1,7 +1,11 @@
 from hark.config import load_config
+from hark.ambient import complete_after_wake
+from hark.config import HarkConfig
+from hark.speech import ListenResult
 from hark.wake import (
     DEFAULT_ACTIVATION_PHRASES,
     TextProbeBackend,
+    WakeHit,
     match_activation,
 )
 
@@ -76,3 +80,33 @@ snippet_s = 2.0
 def test_default_activation_includes_herald():
     assert "hey hark" in DEFAULT_ACTIVATION_PHRASES
     assert "hey herald" in DEFAULT_ACTIVATION_PHRASES
+
+
+def test_wake_remainder_is_discarded_and_cloud_listen_captures_prompt(monkeypatch):
+    listened = ListenResult(
+        text="cloud captured prompt",
+        provider="xai",
+        duration_ms=123,
+        end_mode="radio",
+    )
+    calls = []
+
+    def fake_listen(cfg, *, end_mode):
+        calls.append((cfg, end_mode))
+        return listened
+
+    monkeypatch.setattr("hark.ambient.run_listen", fake_listen)
+    result = complete_after_wake(
+        HarkConfig(),
+        WakeHit(
+            phrase="hey hark",
+            remainder="locally heard but untrusted prompt",
+            raw="hey hark locally heard but untrusted prompt",
+            backend="vosk",
+        ),
+        announce=False,
+    )
+
+    assert calls and calls[0][1] == "silence"
+    assert result.text == "cloud captured prompt"
+    assert result.listen["provider"] == "xai"

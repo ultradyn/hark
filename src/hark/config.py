@@ -34,6 +34,19 @@ KNOWN_TOP_KEYS = frozenset(
     }
 )
 
+KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
+    "herdr": frozenset({"sessions"}),
+    "watch": frozenset({"statuses", "debounce_ms", "transport", "poll_ms", "heartbeat_s"}),
+    "audio": frozenset({"half_duplex", "post_tts_guard_ms", "listen_pre_arm_ms", "mute_mic_during_tts"}),
+    "listen": frozenset({"end_mode", "end_phrases", "cancel_phrases", "strip_phrase", "max_listen_s", "nudge_silence_s"}),
+    "ambient": frozenset({"enabled", "activation_phrases", "engine", "model_path", "snippet_s", "timeout_s"}),
+    "stt": frozenset({"provider"}),
+    "tts": frozenset({"provider", "voice", "language", "max_chars", "allow_espeak_fallback"}),
+    "confirm": frozenset({"mode"}),
+    "safety": frozenset({"deny_patterns"}),
+}
+KNOWN_SESSION_KEYS = frozenset({"id", "socket", "ssh", "herdr_bin", "label", "remote_socket"})
+
 
 @dataclass
 class SessionConfig:
@@ -224,6 +237,17 @@ def _as_list_str(value: Any, default: list[str]) -> list[str]:
     return list(default)
 
 
+def _warn_unknown_keys(
+    raw: dict[str, Any],
+    known: frozenset[str],
+    section: str,
+    warnings: list[str],
+) -> None:
+    for key in raw:
+        if key not in known:
+            warnings.append(f"unknown config key: {section}.{key}")
+
+
 def default_vosk_model_path() -> Path:
     base = os.environ.get("XDG_DATA_HOME")
     root = Path(base) if base else Path.home() / ".local" / "share"
@@ -242,7 +266,7 @@ def _resolve_vosk_model_path(raw: str | None) -> str | None:
 
 
 def load_config(path: Path | None = None) -> HarkConfig:
-    cfg_path = path or default_config_path()
+    cfg_path = Path(path) if path is not None else default_config_path()
     raw: dict[str, Any] = {}
     warnings: list[str] = []
 
@@ -253,6 +277,11 @@ def load_config(path: Path | None = None) -> HarkConfig:
             if key not in KNOWN_TOP_KEYS:
                 warnings.append(f"unknown config key: {key!r}")
 
+    for section, known in KNOWN_SECTION_KEYS.items():
+        value = raw.get(section)
+        if isinstance(value, dict):
+            _warn_unknown_keys(value, known, section, warnings)
+
     herdr = raw.get("herdr") or {}
     sessions_raw = herdr.get("sessions") if isinstance(herdr, dict) else None
     sessions: list[SessionConfig] = []
@@ -261,6 +290,7 @@ def load_config(path: Path | None = None) -> HarkConfig:
             if not isinstance(item, dict) or "id" not in item:
                 warnings.append(f"skipping invalid session entry: {item!r}")
                 continue
+            _warn_unknown_keys(item, KNOWN_SESSION_KEYS, "herdr.sessions", warnings)
             sessions.append(
                 SessionConfig(
                     id=str(item["id"]),

@@ -69,6 +69,7 @@ class UsageStore:
         latency_ms: int = 0,
         ok: bool = True,
         error: str | None = None,
+        meta: dict | None = None,
     ) -> None:
         self.record(
             UsageEvent(
@@ -81,6 +82,7 @@ class UsageStore:
                 audio_ms=audio_ms,
                 latency_ms=latency_ms,
                 error=error,
+                meta=meta or {},
             )
         )
 

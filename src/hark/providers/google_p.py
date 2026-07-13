@@ -7,7 +7,7 @@ import os
 
 import httpx
 
-from hark.providers.base import ProviderError, SynthResult, Transcript
+from hark.providers.base import ProviderError, SynthResult, Transcript, provider_operation
 
 GEMINI = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -22,6 +22,7 @@ def _key() -> str:
 class GoogleStt:
     name = "google"
 
+    @provider_operation("Gemini STT")
     def transcribe(self, wav_bytes: bytes, *, language: str | None = None) -> Transcript:
         key = _key()
         b64 = base64.b64encode(wav_bytes).decode("ascii")
@@ -62,6 +63,7 @@ class GoogleStt:
 class GoogleTts:
     name = "google"
 
+    @provider_operation("Gemini TTS")
     def synthesize(self, text: str, *, voice: str | None = None) -> SynthResult:
         # Gemini TTS is model/version sensitive; try audio generation if available
         key = _key()

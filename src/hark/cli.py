@@ -177,6 +177,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(code) if isinstance(code, int) else USAGE
 
     cfg = load_config(getattr(args, "config_path", None))
+    for warning in cfg.warnings:
+        eprint(f"hark config: {warning}")
     try:
         return dispatch(args, cfg)
     except HerdrError as exc:

@@ -81,3 +81,4 @@ Point the plugin at `hark watch --for-monitor --statuses blocked,done`. Without 
 - [SAFETY.md](SAFETY.md) — risk, stale, distrust  
 - [AUDIO_DESIGN.md](AUDIO_DESIGN.md) — gate / duplex  
 - [PRIOR_ART.md](PRIOR_ART.md) — what we merged from other agents  
+- [HARKD.md](HARKD.md) — optional `harkd` vs Mode A boundary (experimental)  

@@ -50,7 +50,8 @@ hark mute | unmute
 hark devices
 hark providers
 # later:
-harkd                      # optional always-on Mode B
+harkd                      # optional always-on Mode B (experimental; docs/HARKD.md)
+hark daemon start|status|stop
 ```
 
 ## Verse (README flavor only)

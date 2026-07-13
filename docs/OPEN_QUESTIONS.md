@@ -7,7 +7,7 @@
 | Name | **Hark** / CLI **`hark`** / skill **`hark`** |
 | Skill alias | **`handsfree`** at `skill/handsfree/` (full alias) |
 | Mode | **A primary**; **Mode A only for v1** |
-| `harkd` | **Not in v1** — after Mode A works |
+| `harkd` | **Not in v1** — scaffold + boundary in [HARKD.md](HARKD.md); Mode A remains product path |
 | Repo path | **`/home/xertrov/src/grok/hark`** |
 | Orchestrator | Local, outside Herdr |
 | Sessions | Multi; local + SSH |

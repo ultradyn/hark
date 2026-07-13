@@ -28,6 +28,7 @@ smart-turn = [
 
 [project.scripts]
 hark = "hark.cli:main"
+harkd = "hark.daemon:main"
 
 [build-system]
 requires = ["hatchling"]

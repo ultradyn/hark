@@ -45,6 +45,7 @@ The verse is playful; **routing and confirmation are not.**
 | [docs/NAMING.md](docs/NAMING.md) | Locked names (`hark`, `harkd`, paths) |
 | [docs/PRODUCT.md](docs/PRODUCT.md) | Goals |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Topology, Mode A, library vs daemon |
+| [docs/HARKD.md](docs/HARKD.md) | **Experimental `harkd`** — Mode A boundary (not required for v1) |
 | [docs/SPEC.md](docs/SPEC.md) | Normative software spec |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | HEP event protocol |
 | [docs/SAFETY.md](docs/SAFETY.md) | Routing, risk R0–R3, distrust |
@@ -144,6 +145,19 @@ uv run hark ask "What color?"
 ```
 
 Dev tip: run from **latest checkout** (`uv run hark`). After `./install.sh`, the global `hark` on `PATH` is fine for day-to-day use.
+
+### Experimental `harkd` (not required for Mode A)
+
+Mode A v1 does **not** need a daemon. The optional `harkd` scaffold is for process ownership experiments only — see **[docs/HARKD.md](docs/HARKD.md)**.
+
+```bash
+uv run hark daemon status
+uv run hark daemon start    # foreground; refuses if Mode A workers are live
+uv run hark daemon stop
+# or: uv run harkd status|start|stop
+```
+
+Do not run `harkd` alongside `./scripts/run-mode-a.sh` (single always-on owner; no silent double-send).
 
 ### Ambient wake (`hey hark`)
 

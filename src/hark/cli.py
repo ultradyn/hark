@@ -234,6 +234,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="print log path only",
     )
 
+    dae = sub.add_parser(
+        "daemon",
+        help="experimental harkd scaffold (not required for Mode A v1; see docs/HARKD.md)",
+    )
+    dae_sub = dae.add_subparsers(dest="daemon_cmd", required=True)
+    dae_start = dae_sub.add_parser(
+        "start", help="foreground supervisor (single-instance pidfile)"
+    )
+    dae_start.add_argument(
+        "--workers",
+        action="store_true",
+        help="also supervise ambient + watch (same pieces as run-mode-a.sh)",
+    )
+    dae_start.add_argument(
+        "--no-watch", action="store_true", help="with --workers: skip watch"
+    )
+    dae_start.add_argument(
+        "--no-ambient", action="store_true", help="with --workers: skip ambient"
+    )
+    dae_start.add_argument("--session", default="default")
+    dae_status = dae_sub.add_parser("status", help="harkd / Mode A / locks")
+    dae_status.add_argument("--json", action="store_true")
+    dae_stop = dae_sub.add_parser("stop", help="SIGTERM via harkd.pid")
+    dae_stop.add_argument("--force", action="store_true")
+    dae_stop.add_argument("--timeout", type=float, default=15.0)
+    dae_stop.add_argument("--json", action="store_true")
+
     return p
 
 
@@ -351,6 +378,10 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
         return cmd_stats(args)
     if cmd == "logs":
         return cmd_logs(args)
+    if cmd == "daemon":
+        from hark.daemon import dispatch_daemon
+
+        return dispatch_daemon(args)
     return USAGE
 
 

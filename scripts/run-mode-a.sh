@@ -12,6 +12,7 @@
 #   ~/.local/state/hark/system.jsonl
 # PIDs:
 #   ~/.local/state/hark/mode-a.pids
+# Refuses start if experimental harkd is live (~/.local/state/hark/harkd.pid).
 # Busy marker (while user is recording):
 #   ~/.local/state/hark/busy.lock
 #
@@ -24,6 +25,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/hark"
 mkdir -p "$STATE"
 PIDFILE="$STATE/mode-a.pids"
+HARKD_PIDFILE="$STATE/harkd.pid"
 BUSY="$STATE/busy.lock"
 WATCH_LOG="$STATE/watch.jsonl"
 AMBIENT_LOG="$STATE/ambient.jsonl"
@@ -235,6 +237,19 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown: $1" >&2; exit 1 ;;
   esac
 done
+
+# Refuse to race experimental harkd (docs/HARKD.md): single always-on owner.
+if [[ -f "$HARKD_PIDFILE" ]]; then
+  harkd_pid="$(tr -d '[:space:]' <"$HARKD_PIDFILE" 2>/dev/null || true)"
+  if [[ "$harkd_pid" =~ ^[0-9]+$ ]] && kill -0 "$harkd_pid" 2>/dev/null; then
+    echo "error: harkd is running (pid $harkd_pid via $HARKD_PIDFILE)" >&2
+    echo "  stop it first: uv run hark daemon stop" >&2
+    echo "  (Mode A and harkd must not both own ambient/watch — see docs/HARKD.md)" >&2
+    exit 1
+  fi
+  # stale pidfile
+  rm -f "$HARKD_PIDFILE"
+fi
 
 cd "$ROOT"
 HARK=(uv run hark)

@@ -33,7 +33,7 @@ python prototype/herdr_event_monitor.py --socket "$HERDR_SOCKET_PATH"
 10. [x] SSH tunnel helper  
 11. [x] Socket subscribe path (auto; poll fallback)  
 12. [x] Ambient wake (`hey hark` / `hey herald`) via local short snippets  
-13. *(explicitly not v1)* `harkd`  
+13. *(explicitly not v1 product)* `harkd` — Python scaffold + boundary: [HARKD.md](HARKD.md)  
 
 ### Dev rule
 
@@ -53,7 +53,7 @@ Rust `hark` (Mode A tools + watch); same HEP and CLI. **Still no daemon required
 
 ## Phase 4 — Optional
 
-- **`harkd` Mode B** (after Mode A is solid)  
+- **`harkd` Mode B** (after Mode A is solid) — see [HARKD.md](HARKD.md)  
 - MCP tools (prior `MCP_TOOLS.md` as draft)  
 - Herdr plugin packaging  
 - Wake-prefix mode  

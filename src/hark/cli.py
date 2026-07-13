@@ -58,7 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--for-monitor", action="store_true")
     w.add_argument("--transport", choices=("auto", "socket", "poll"))
     w.add_argument("--once", action="store_true")
-    w.add_argument("--read-questions", action="store_true")
+    w.add_argument(
+        "--read-questions",
+        action="store_true",
+        default=True,
+        help="read question excerpts before emitting blocked events (default)",
+    )
 
     ctx = sub.add_parser("context", help="read pane context")
     ctx.add_argument("target")
@@ -104,8 +109,23 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--provider")
     ask.add_argument("--json", action="store_true")
 
-    amb = sub.add_parser("ambient", help="wake-phrase then capture prompt")
+    amb = sub.add_parser(
+        "ambient",
+        help="wake-phrase ambient (default: continuous loop)",
+    )
+    amb.add_argument(
+        "--once",
+        action="store_true",
+        help="single wake cycle then exit (default is --loop)",
+    )
+    amb.add_argument(
+        "--loop",
+        action="store_true",
+        default=True,
+        help="continuous ambient (default)",
+    )
     amb.add_argument("--timeout", type=float, default=None)
+    amb.add_argument("--no-announce", action="store_true")
     amb.add_argument("--json", action="store_true")
 
     q = sub.add_parser("queue", help="pending bound events")
@@ -388,11 +408,12 @@ def cmd_answer(args: argparse.Namespace, cfg) -> int:
         if isinstance(bound.question_fingerprint, str)
         else ""
     )
-    has_revision = isinstance(bound.pane_revision, int) and bound.pane_revision > 0
-    if not fingerprint and not has_revision:
-        store.mark(args.event_id, "rejected", reason="missing_stale_protection")
-        eprint("hark answer: bound event has no fingerprint or pane revision")
+    if not fingerprint:
+        store.mark(args.event_id, "rejected", reason="missing_question_fingerprint")
+        eprint("hark answer: bound event has no question fingerprint")
         return ABORT
+
+    has_revision = isinstance(bound.pane_revision, int) and bound.pane_revision > 0
 
     client = _client_for(cfg, bound.session_id)
     live = client.get_agent(bound.pane_id)
@@ -405,14 +426,12 @@ def cmd_answer(args: argparse.Namespace, cfg) -> int:
         eprint(f"hark answer: agent is no longer blocked (live status: {live.status})")
         return ABORT
     if has_revision and live.revision != bound.pane_revision:
-        # revision 0 often means unknown — only reject if both non-zero mismatch
-        if live.revision > 0:
-            store.mark(args.event_id, "rejected", reason="stale_revision")
-            eprint(
-                f"hark answer: stale revision "
-                f"(expected {bound.pane_revision}, live {live.revision})"
-            )
-            return ABORT
+        store.mark(args.event_id, "rejected", reason="stale_revision")
+        eprint(
+            f"hark answer: stale revision "
+            f"(expected {bound.pane_revision}, live {live.revision})"
+        )
+        return ABORT
 
     if fingerprint:
         try:
@@ -511,20 +530,26 @@ def cmd_ask(args: argparse.Namespace, cfg) -> int:
 
 
 def cmd_ambient(args: argparse.Namespace, cfg) -> int:
-    from hark.ambient import run_ambient
+    from hark.ambient import ambient_event_line, run_ambient, run_ambient_loop
 
-    # force enabled for explicit command
     cfg.ambient.enabled = True
-    result = run_ambient(cfg, once=True, timeout_s=args.timeout)
-    payload = {
-        "activated": result.activated,
-        "phrase": result.phrase,
-        "text": result.text,
-        "wake_backend": result.wake_backend,
-        "listen": result.listen,
-    }
-    print(json.dumps(payload, indent=2 if args.json else None))
-    return OK if result.activated else TIMEOUT
+    announce = not args.no_announce
+    if args.once:
+        result = run_ambient(
+            cfg,
+            once=True,
+            timeout_s=args.timeout,
+            announce=announce,
+        )
+        payload = ambient_event_line(result)
+        payload = {k: v for k, v in payload.items() if v is not None}
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print(json.dumps(payload, separators=(",", ":")))
+        return OK if result.activated else TIMEOUT
+    # continuous Mode A ambient
+    return run_ambient_loop(cfg, announce=announce)
 
 
 def cmd_queue(args: argparse.Namespace) -> int:

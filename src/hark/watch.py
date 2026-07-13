@@ -80,7 +80,7 @@ def run_watch(
     transport: str | None = None,
     once: bool = False,
     out: TextIO | None = None,
-    read_questions: bool = False,
+    read_questions: bool = True,
     register_events: bool = True,
 ) -> int:
     out = out or sys.stdout
@@ -122,9 +122,15 @@ def run_watch(
     last_heartbeat = time.monotonic()
 
     def emit(event: dict[str, Any]) -> None:
-        if store and event.get("kind") in (
-            "agent.blocked",
-            "agent.question_changed",
+        question = event.get("question")
+        fingerprint = (
+            question.get("fingerprint") if isinstance(question, dict) else None
+        )
+        if (
+            store
+            and event.get("kind") in ("agent.blocked", "agent.question_changed")
+            and isinstance(fingerprint, str)
+            and fingerprint.strip()
         ):
             try:
                 store.register_from_hep(event)

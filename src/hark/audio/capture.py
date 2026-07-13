@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import fcntl
+import os
 import struct
 import threading
 import time
@@ -11,6 +13,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
+
+from hark.paths import state_dir
 
 try:
     import sounddevice as sd
@@ -23,7 +27,7 @@ class MicBusyError(RuntimeError):
 
 
 class MicLease:
-    """Process-wide single mic lease."""
+    """Process- and system-wide single mic lease."""
 
     _lock = threading.Lock()
     _holder: str | None = None
@@ -31,20 +35,40 @@ class MicLease:
     def __init__(self, name: str = "hark") -> None:
         self.name = name
         self._held = False
+        self._lock_fd: int | None = None
 
     def __enter__(self) -> MicLease:
         with MicLease._lock:
             if MicLease._holder is not None:
                 raise MicBusyError(f"mic busy ({MicLease._holder})")
+            lock_path = state_dir() / "mic.lock"
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                os.close(fd)
+                raise MicBusyError("mic busy (held by another Hark process)") from None
+            except OSError:
+                os.close(fd)
+                raise
             MicLease._holder = self.name
             self._held = True
+            self._lock_fd = fd
         return self
 
     def __exit__(self, *args: object) -> None:
         with MicLease._lock:
+            fd = self._lock_fd
+            self._lock_fd = None
             if self._held and MicLease._holder == self.name:
                 MicLease._holder = None
             self._held = False
+            if fd is not None:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd)
 
 
 def _require_sd() -> None:

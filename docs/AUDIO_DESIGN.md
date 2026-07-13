@@ -141,6 +141,7 @@ Env: `HARK_LISTEN_END_MODE=radio`. Disable soft end with
 | `radio_segment_overlap_ms` | **radio** only | 300 | Real PCM lookback from the prior segment into the next STT window (B085); prefers captured samples over silence pad for boundary phonemes |
 | `radio_end_silence_s` | legacy | 2.5 s | Kept for config BC; segment cadence is `radio_partial_silence_s` |
 | `stream_partials` | radio | `true` | Emit interim events when segment text grows |
+| `ambient.streaming` | ambient | `false` | When true, `ambient.partial` instructions allow short live TTS (B098); default HOLD |
 
 Radio does **not** finalize on short silence alone. After each short quiet
 (`radio_partial_silence_s`), Hark runs STT on accumulated audio: if an
@@ -154,6 +155,19 @@ timeout / nudge path. Shorter `radio_partial_silence_s` → more frequent
 partials for the orchestrator; raise it (e.g. 1.0–1.5) to cut STT cost when pauses are
 long. Do **not** lower `end_silence_s` to chase radio partials — that would
 change normal silence-mode answer windows.
+
+#### Ambient streaming mode (B098)
+
+```toml
+[ambient]
+# streaming = false   # default: HOLD on ambient.partial (no live TTS)
+# streaming = true    # short live TTS acks allowed on partials; pane still waits for final
+```
+
+Policy is carried on each `ambient.partial` as `streaming` + `warning` /
+`instructions` (see [PROTOCOL.md](PROTOCOL.md)). This is **agent policy**, not
+full-duplex audio: half-duplex mute-during-TTS and post-TTS guard still apply;
+barge-in / TTS-defer-while-user-speaking are separate (B097+).
 
 #### Radio segment boundary pad (B075) + ring overlap (B085)
 

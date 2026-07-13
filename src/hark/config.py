@@ -173,6 +173,8 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "config_watch",
         "config_watch_poll_ms",
         "config_watch_debounce_ms",
+        # Ambient streaming mode (B098): short live TTS on partials allowed
+        "streaming",
     }),
     "stt": frozenset({
         "provider",
@@ -424,6 +426,11 @@ class AmbientConfig:
     config_watch: bool = True
     config_watch_poll_ms: int = 1000
     config_watch_debounce_ms: int = 400
+    # Streaming mode (B098): when true, ambient.partial HEP instructions allow
+    # short live TTS acks/interim replies (not hard HOLD-only). Default false
+    # keeps classic radio HOLD until ambient.prompt / final.
+    # Full duplex barge-in / TTS-defer-while-speaking are separate (B097+).
+    streaming: bool = False
     # Full wake policy (names/phrases + learned aliases); set by load_config
     wake_policy: Any = None
 
@@ -690,6 +697,11 @@ post_wake_no_open_nudge = true
 config_watch = true
 config_watch_poll_ms = 1000
 config_watch_debounce_ms = 400
+# Streaming mode (B098): short live TTS on ambient.partial (default OFF = HOLD).
+# When true, partial HEP instructions allow brief interruptible acks while the
+# operator is still speaking; pane delivery and full answers still wait for final.
+# streaming = false
+# Barge-in / TTS-defer-while-speaking are separate work (B097+).
 
 # Coding CLI resolution for voice spawn (I005 / B055–B059)
 # Prefer short aliases (cc/cx/gk/cr) when they are *safe* PATH binaries — not
@@ -885,6 +897,7 @@ def _build_ambient_config(
         config_watch_debounce_ms=int(
             ambient_raw.get("config_watch_debounce_ms", 400)
         ),
+        streaming=_as_bool(ambient_raw.get("streaming"), default=False),
         wake_policy=policy,
     )
 
@@ -1583,6 +1596,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "config_watch": cfg.ambient.config_watch,
             "config_watch_poll_ms": cfg.ambient.config_watch_poll_ms,
             "config_watch_debounce_ms": cfg.ambient.config_watch_debounce_ms,
+            "streaming": cfg.ambient.streaming,
         },
         "stt": {
             "provider": cfg.stt.provider,

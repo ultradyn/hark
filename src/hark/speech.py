@@ -808,7 +808,8 @@ def run_listen(
     """Capture speech. Radio mode streams partials via on_partial when enabled.
 
     on_partial(event_dict) is called for each non-final radio transcript so the orchestrator
-    agents can start thinking early. Events always set partial=true and HOLD warnings.
+    agents can start thinking early. Events always set partial=true. HOLD warnings
+    apply unless ``[ambient].streaming`` is true (short live TTS allowed; B098).
 
     Empty STT recovery (silence mode): log ``speech.empty_stt``, optionally
     re-listen once (``empty_stt_retry``), then TTS nudge + re-listen
@@ -938,6 +939,10 @@ def run_listen(
     # Partials only meaningful when waiting for an end phrase
     stream_partials = mode is EndMode.RADIO and getattr(
         cfg.listen, "stream_partials", True
+    )
+    # B098: ambient.streaming flips partial HEP policy (HOLD vs short live TTS)
+    ambient_streaming = bool(
+        getattr(getattr(cfg, "ambient", None), "streaming", False)
     )
     recording_cued = False
 
@@ -1576,6 +1581,7 @@ def run_listen(
                             provider=tr.provider,
                             fragment=frag,
                             prev_text=prev_body,
+                            streaming=ambient_streaming,
                         )
                         ev["stt_seq"] = stt_seq
                         try:

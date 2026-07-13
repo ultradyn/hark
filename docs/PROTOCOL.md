@@ -78,7 +78,9 @@ Consumers **MUST ignore unknown fields**.
 
 ### Partial streaming (radio end mode)
 
-When `[listen] end_mode = "radio"` and `stream_partials = true`, interim transcripts are emitted after each radio segment (trailing quiet of `radio_partial_silence_s`, default 0.6 s — not a final). HOLD until `final=true` / `ambient.prompt` for the same `stream_id`:
+When `[listen] end_mode = "radio"` and `stream_partials = true`, interim transcripts are emitted after each radio segment (trailing quiet of `radio_partial_silence_s`, default 0.6 s — not a final). Events set `partial=true`, `streaming` (from `[ambient].streaming`, default **false**), and policy strings in `warning` / `instructions`.
+
+**HOLD (default, `ambient.streaming = false`)** — no live TTS until final:
 
 ```json
 {
@@ -86,10 +88,11 @@ When `[listen] end_mode = "radio"` and `stream_partials = true`, interim transcr
   "kind": "ambient.partial",
   "partial": true,
   "final": false,
+  "streaming": false,
   "stream_id": "s…",
   "seq": 1,
   "text": "please open the pull request for…",
-  "warning": "PARTIAL TRANSCRIPT — not complete. … HOLD …",
+  "warning": "PARTIAL TRANSCRIPT — not complete. … Do NOT speak to the user yet …",
   "instructions": "HOLD RESPONSE. … If text clearly ends with a done signal you MUST run agent_control.end_recording …",
   "agent_control": {
     "end_recording": "hark listen-end --stream-id s…",
@@ -99,15 +102,34 @@ When `[listen] end_mode = "radio"` and `stream_partials = true`, interim transcr
 }
 ```
 
+**Streaming (`ambient.streaming = true`, B098)** — short live TTS allowed on partials; pane delivery still waits for final:
+
+```json
+{
+  "schema": "hark.event.v1",
+  "kind": "ambient.partial",
+  "partial": true,
+  "final": false,
+  "streaming": true,
+  "stream_id": "s…",
+  "seq": 1,
+  "text": "please open the pull request for…",
+  "warning": "PARTIAL TRANSCRIPT — … Streaming mode is ON: you MAY speak short, interruptible live acks …",
+  "instructions": "STREAMING PARTIAL — short live reply allowed. … Do NOT deliver to a Herdr pane yet …"
+}
+```
+
 The orchestrator **must** finalize a stuck radio capture with `hark listen-end` (finish) when the partial clearly ends with a done signal (`over`, `okay hark send`, `that's all`, `send it`, `stop recording`, `message done`, …) and the stream is still active. Prefer finish over cancel when the thought is complete; use `--cancel` only to abort. Do **not** end mid-clause (`over the weekend`, `send it to staging`). By default (`[listen].soft_end_phrases_enabled = true`), Hark itself also auto-finishes on conservative utterance-final soft closers (`send it`, sentence-final `over`, `okay over`, …) without agent intervention — see [AUDIO_DESIGN.md](AUDIO_DESIGN.md). Set `soft_end_phrases_enabled = false` for product phrases only.
 
 Consumers **MUST**:
 
 1. Treat `partial=true` as **non-authoritative** for full answers / pane delivery.  
-2. **Not** speak a full answer to the operator or deliver to a pane based on partials alone.  
+2. **HOLD mode:** **Not** speak a full answer to the operator or deliver to a pane based on partials alone. **Streaming mode:** short, interruptible acks / brief interim TTS are allowed; still no pane delivery and no full final-style answer until `final=true`.  
 3. **May** begin private thinking/planning.  
 4. **Must** run `hark listen-end` when a done signal is clear and capture is still active (backup to soft/product end).  
 5. On `ambient.prompt` / final with the same `stream_id`: use that text; discard prior partials.
+
+**Deferred (not this event policy):** full barge-in / echo cancel while mic stays open during agent speech, and TTS-defer-while-user-speaking (see B097 / follow-ups). Continuous multi-turn without re-wake is optional follow-up.
 
 ## Monitor profile (`hark watch --for-monitor` / `hark monitor --for-monitor`)
 

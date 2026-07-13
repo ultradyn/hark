@@ -149,6 +149,8 @@ Cancel phrases abort without delivery (`hark cancel`, not casual “cancel that�
 
 **Ambient** (`[ambient]`): when not in an answer window, optional local 2–3 s snippet wake (`hey hark` / `hey herald`); **no cloud STT until activation**.
 
+**Ambient streaming** (`[ambient].streaming`, default **`false`**, B098): when **false**, radio `ambient.partial` HEP instructions are hard HOLD (think privately; no TTS full answer). When **true**, partial instructions allow **short live TTS** acks / brief interim replies while capture continues; pane delivery and full answers still wait for `ambient.prompt` / `final=true`. Event field `streaming` mirrors the flag. Does **not** implement full-duplex barge-in or TTS-defer-while-speaking (B097+).
+
 ## 10. Providers
 
 See [PROVIDERS.md](PROVIDERS.md). xAI via Grok OAuth preferred. No local neural STT/TTS. No Playwright as production STT.

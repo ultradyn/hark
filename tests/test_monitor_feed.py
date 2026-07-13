@@ -147,6 +147,28 @@ def test_compact_ambient_partial_must_listen_end_language():
     assert "MUST" in c["instructions"]
     assert "listen-end" in c["instructions"]
     assert "over" in c["instructions"].lower()
+    assert c.get("streaming") is False
+    assert "HOLD" in c["instructions"]
+
+
+def test_compact_ambient_partial_streaming_language():
+    """B098: streaming=true flips compact instructions off hard HOLD."""
+    c = compact_mode_a_event(
+        {
+            "kind": "ambient.partial",
+            "event_id": "e-partial-stream",
+            "stream_id": "s100",
+            "seq": 1,
+            "text": "looking that up",
+            "fragment": "looking that up",
+            "streaming": True,
+        }
+    )
+    assert c["streaming"] is True
+    assert "STREAMING" in c["instructions"]
+    assert "MUST" in c["instructions"]
+    assert "listen-end" in c["instructions"]
+    assert "pane" in c["instructions"].lower()
 
 
 def test_compact_ambient_partial_includes_fragment():

@@ -79,6 +79,8 @@ def compact_mode_a_event(event: dict[str, Any]) -> dict[str, Any]:
             }
         )
     elif kind == "ambient.partial":
+        from hark.partial import partial_compact_instructions
+
         text = event.get("text")
         full_len = len(text) if isinstance(text, str) else 0
         if isinstance(text, str) and len(text) > 400:
@@ -86,6 +88,7 @@ def compact_mode_a_event(event: dict[str, Any]) -> dict[str, Any]:
         frag = event.get("fragment")
         if isinstance(frag, str) and len(frag) > 240:
             frag = frag[:237] + "…"
+        streaming = bool(event.get("streaming"))
         compact.update(
             {
                 "stream_id": event.get("stream_id"),
@@ -96,14 +99,8 @@ def compact_mode_a_event(event: dict[str, Any]) -> dict[str, Any]:
                 "text_len": full_len or None,
                 "partial": True,
                 "final": False,
-                "instructions": (
-                    "RADIO PARTIAL — HOLD. Do not TTS a full answer. "
-                    "Use fragment for the new slice; text is cumulative. "
-                    "MUST: if text clearly ends with a done signal (over, okay hark send, "
-                    "that's all, send it, stop recording, message done, …) and stream "
-                    "still active → hark listen-end --stream-id <id> (finish, not cancel). "
-                    "No mid-clause false finishes. Then STOP; wait for next partial or final."
-                ),
+                "streaming": streaming,
+                "instructions": partial_compact_instructions(streaming=streaming),
             }
         )
     elif kind == "ambient.wake_near_miss":

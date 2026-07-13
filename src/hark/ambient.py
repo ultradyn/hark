@@ -469,8 +469,9 @@ def complete_after_wake(
     No spoken 'okay' / 'listening' by default. Post-wake settle, softer/configurable
     open threshold, and no-open retry/nudge are driven by ``[ambient]`` /
     ``[listen]`` (B031). In radio end_mode, interim STT is streamed as
-    ambient.partial (HOLD) via on_partial / out until the end phrase yields
-    ambient.prompt (final).
+    ambient.partial via on_partial / out until the end phrase yields
+    ambient.prompt (final). Default HOLD; when ``[ambient].streaming`` is true
+    (B098), partial instructions allow short live TTS acks (not pane delivery).
     """
     del announce
     event_id = new_event_id()

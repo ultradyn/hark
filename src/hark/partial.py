@@ -30,6 +30,67 @@ HOLD_INSTRUCTIONS = (
     "(same stream_id, final=true)."
 )
 
+# B098: ambient.streaming = true — short live TTS allowed; pane delivery still waits.
+STREAMING_WARNING = (
+    "PARTIAL TRANSCRIPT — not complete. More speech may still be captured. "
+    "Streaming mode is ON: you MAY speak short, interruptible live acks or "
+    "brief interim replies as understanding firms up. Do NOT deliver to a "
+    "Herdr pane or treat this as the final operator prompt. Wait for the "
+    "matching final event (same stream_id, partial=false / final=true) for "
+    "full answers and pane delivery."
+)
+
+STREAMING_INSTRUCTIONS = (
+    "STREAMING PARTIAL — short live reply allowed. "
+    "You MAY TTS a brief ack or interim answer while the operator may still "
+    "be talking (e.g. 'got it', 'looking that up', one short clarifying question). "
+    "Keep replies short and interruptible; prefer not talking over continuous speech. "
+    "Do NOT deliver to a Herdr pane yet. Do NOT treat this as the final prompt. "
+    "If the cumulative text (or fragment) clearly ends with a done/stop signal "
+    "and capture is still active, you MUST run agent_control.end_recording "
+    "(finish) for this stream_id — e.g. ends with 'over', 'okay over', "
+    "'okay hark send', 'that's all', 'send it', 'stop recording', 'message done'. "
+    "Prefer finish when the thought is complete; use cancel_recording only to abort. "
+    "Do NOT end on mid-clause false positives ('over the weekend', "
+    "'send it to staging', 'that's all I know about X'). "
+    "Otherwise continue; wait for the next partial or ambient.prompt "
+    "(same stream_id, final=true)."
+)
+
+# Compact monitor-feed strings (shorter than full HEP instructions).
+HOLD_COMPACT_INSTRUCTIONS = (
+    "RADIO PARTIAL — HOLD. Do not TTS a full answer. "
+    "Use fragment for the new slice; text is cumulative. "
+    "MUST: if text clearly ends with a done signal (over, okay hark send, "
+    "that's all, send it, stop recording, message done, …) and stream "
+    "still active → hark listen-end --stream-id <id> (finish, not cancel). "
+    "No mid-clause false finishes. Then STOP; wait for next partial or final."
+)
+
+STREAMING_COMPACT_INSTRUCTIONS = (
+    "STREAMING PARTIAL — short live TTS ok (acks / brief interim). "
+    "Use fragment for the new slice; text is cumulative. "
+    "Do NOT deliver to a pane; full answer still waits for final. "
+    "MUST: if text clearly ends with a done signal (over, okay hark send, "
+    "that's all, send it, stop recording, message done, …) and stream "
+    "still active → hark listen-end --stream-id <id> (finish, not cancel). "
+    "No mid-clause false finishes. Then STOP; wait for next partial or final."
+)
+
+
+def partial_warning(*, streaming: bool = False) -> str:
+    return STREAMING_WARNING if streaming else HOLD_WARNING
+
+
+def partial_instructions(*, streaming: bool = False) -> str:
+    return STREAMING_INSTRUCTIONS if streaming else HOLD_INSTRUCTIONS
+
+
+def partial_compact_instructions(*, streaming: bool = False) -> str:
+    return (
+        STREAMING_COMPACT_INSTRUCTIONS if streaming else HOLD_COMPACT_INSTRUCTIONS
+    )
+
 
 def new_stream_id() -> str:
     return f"s{int(time.time() * 1000):x}{secrets.token_hex(3)}"
@@ -60,6 +121,7 @@ def make_partial_event(
     event_id: str | None = None,
     fragment: str | None = None,
     prev_text: str | None = None,
+    streaming: bool = False,
 ) -> dict[str, Any]:
     from hark.listen_control import agent_control_block
 
@@ -67,6 +129,7 @@ def make_partial_event(
     if frag is None:
         frag = partial_fragment(prev_text, text)
 
+    streaming = bool(streaming)
     return {
         "schema": "hark.event.v1",
         "kind": kind,
@@ -81,8 +144,9 @@ def make_partial_event(
         "text_len": len(text or ""),
         "phrase": phrase,
         "provider": provider,
-        "warning": HOLD_WARNING,
-        "instructions": HOLD_INSTRUCTIONS,
+        "streaming": streaming,
+        "warning": partial_warning(streaming=streaming),
+        "instructions": partial_instructions(streaming=streaming),
         "agent_control": agent_control_block(stream_id),
     }
 

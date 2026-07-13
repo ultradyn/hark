@@ -137,6 +137,27 @@ CLI: `hark ambient` (forces a wake+listen cycle).
 3. Arm capture.  
 4. Endpoint (silence or radio phrase) → STT → confirm if needed → deliver.  
 
+Default remains **half-duplex**: capture starts only after TTS exits the mic-mute
+context. `listen_pre_arm_ms` fires a near-end signal so the sequential listen can
+skip/tighten `post_tts_guard_ms`, but the InputStream still opens after play.
+
+### Optional overlap pre-arm
+
+When low handoff latency matters more than strict half-duplex:
+
+```toml
+[audio]
+listen_pre_arm_ms = 300
+overlap_prearm = true        # default false — keep half-duplex
+overlap_discard_ms = 150     # drop audio until TTS ends + this many ms
+```
+
+With `overlap_prearm = true`, capture starts near TTS end (same near-end timer).
+While TTS is still finishing (and often while the mic is still muted), frames are
+**discarded**. After TTS ends, another `overlap_discard_ms` of audio is dropped
+so residual acoustic echo does not open the energy gate or reach STT. Speech
+after the discard window is kept as usual.
+
 ## False-trigger defenses
 
 - No cloud STT outside answer window or post-activation.  

@@ -267,6 +267,8 @@ def run_listen(
     on_partial: Any | None = None,
     stream_id: str | None = None,
     partial_kind: str = "ambient.partial",
+    discard_leading_ms: int = 0,
+    audio_ok_after: Any | None = None,
 ) -> ListenResult:
     """Capture speech. Radio mode streams partials via on_partial when enabled.
 
@@ -276,6 +278,10 @@ def run_listen(
     Empty STT recovery (silence mode): log ``speech.empty_stt``, optionally
     re-listen once (``empty_stt_retry``), then TTS nudge + re-listen
     (``empty_stt_nudge``) before failing.
+
+    Overlap pre-arm: pass ``audio_ok_after`` (callable → monotonic deadline or None)
+    and/or ``discard_leading_ms`` so TTS tail / residual echo is dropped before the
+    energy gate runs.
     """
     mode = parse_end_mode(end_mode or cfg.listen.end_mode)
     max_listen = float(max_s if max_s is not None else cfg.listen.max_listen_s)
@@ -344,12 +350,17 @@ def run_listen(
                     settle = max(0.05, min(0.2, guard if guard > 0 else 0.1))
                     recording_cued = False
                     try:
+                        # Overlap discard only on first attempt after TTS
+                        lead_discard = discard_leading_ms if attempt == 0 else 0
+                        lead_ok = audio_ok_after if attempt == 0 else None
                         cap = capture_utterance(
                             max_s=max_listen,
                             end_silence_s=end_silence,
                             post_tts_guard_s=0,
                             on_opened=_cue_start_once,
                             should_stop=_agent_wants_stop,
+                            discard_leading_ms=lead_discard,
+                            audio_ok_after=lead_ok,
                         )
                     except TimeoutError as exc:
                         if recording_cued:
@@ -510,6 +521,9 @@ def run_listen(
                     break
                 remaining = max_listen - (time.monotonic() - started)
                 try:
+                    # Only first segment uses discard (TTS handoff); later segments clean
+                    seg_discard = discard_leading_ms if not pieces else 0
+                    seg_ok_after = audio_ok_after if not pieces else None
                     cap = capture_utterance(
                         max_s=min(remaining, max_listen),
                         end_silence_s=end_silence,
@@ -517,6 +531,8 @@ def run_listen(
                         post_tts_guard_s=0,
                         on_opened=_cue_start_once,
                         should_stop=_agent_wants_stop,
+                        discard_leading_ms=seg_discard,
+                        audio_ok_after=seg_ok_after,
                     )
                 except TimeoutError:
                     agent_act = poll_listen_action(stream)
@@ -707,6 +723,131 @@ def run_listen(
             clear_active_listen(stream)
 
 
+def speak_and_listen(
+    cfg: HarkConfig,
+    text: str,
+    *,
+    provider: str | None = None,
+    voice: str | None = None,
+    end_mode: str | None = None,
+    out: Path | None = None,
+    mute_mic: bool | None = None,
+    on_partial: Any | None = None,
+    partial_kind: str = "ambient.partial",
+) -> tuple[dict[str, Any], ListenResult]:
+    """TTS then listen with half-duplex default or optional overlap pre-arm.
+
+    Default (``overlap_prearm=false``): half-duplex — capture starts after TTS
+    exits the mute context. ``listen_pre_arm_ms`` only signals near-end so the
+    sequential listen can skip / tighten the post-TTS guard.
+
+    Optional (``overlap_prearm=true``): start the capture thread near TTS end
+    while mute may still be held. Frames are discarded until TTS finishes plus
+    ``overlap_discard_ms`` so residual echo is not fed to STT.
+    """
+    pre_arm_ms = int(cfg.audio.listen_pre_arm_ms)
+    overlap = bool(cfg.audio.overlap_prearm) and pre_arm_ms > 0
+    discard_ms = max(0, int(cfg.audio.overlap_discard_ms))
+    arm_event = threading.Event()
+    # Monotonic time when TTS fully ends (mute released); None while still playing
+    handoff: dict[str, float | None] = {"tts_done_at": None}
+    listen_box: dict[str, Any] = {}
+    listen_thread: threading.Thread | None = None
+    listen_lock = threading.Lock()
+
+    def audio_ok_after() -> float | None:
+        done = handoff["tts_done_at"]
+        if done is None:
+            return None
+        return float(done) + discard_ms / 1000.0
+
+    def _listen_worker() -> None:
+        try:
+            listen_box["result"] = run_listen(
+                cfg,
+                provider=provider,
+                end_mode=end_mode,
+                last_tts=text,
+                already_armed=True,
+                post_tts_guard_s=0.0,
+                on_partial=on_partial,
+                partial_kind=partial_kind,
+                audio_ok_after=audio_ok_after,
+            )
+        except BaseException as exc:  # noqa: BLE001 — surface to joiner
+            listen_box["error"] = exc
+
+    def _on_near_end() -> None:
+        # Half-duplex: only mark armed so sequential listen uses zero/tight guard.
+        # Overlap: also start capture now (thread); discard until TTS ends + residual.
+        arm_event.set()
+        if not overlap:
+            return
+        nonlocal listen_thread
+        with listen_lock:
+            if listen_thread is not None:
+                return
+            listen_thread = threading.Thread(
+                target=_listen_worker,
+                name="hark-overlap-listen",
+                daemon=True,
+            )
+            listen_thread.start()
+            syslog(
+                "listen.overlap_prearm",
+                component="stt",
+                level="info",
+                discard_ms=discard_ms,
+                pre_arm_ms=pre_arm_ms,
+            )
+
+    tts_info = run_tts(
+        cfg,
+        text,
+        provider=provider,
+        voice=voice,
+        play=True,
+        out=out,
+        mute_mic=cfg.audio.mute_mic_during_tts if mute_mic is None else mute_mic,
+        on_near_end=_on_near_end if pre_arm_ms > 0 else None,
+        near_end_ms=pre_arm_ms if pre_arm_ms > 0 else 0,
+    )
+    # Mic unmuted as TTS context exits — allow overlap discard window to close
+    handoff["tts_done_at"] = time.monotonic()
+
+    def _attach_tts(exc: BaseException) -> BaseException:
+        try:
+            setattr(exc, "tts_info", tts_info)
+        except Exception:
+            pass
+        return exc
+
+    if listen_thread is not None:
+        listen_thread.join()
+        err = listen_box.get("error")
+        if err is not None:
+            raise _attach_tts(err)
+        listened = listen_box["result"]
+        assert isinstance(listened, ListenResult)
+        return tts_info, listened
+
+    # Half-duplex path (default): start listen after TTS + optional guard
+    try:
+        listened = run_listen(
+            cfg,
+            provider=provider,
+            end_mode=end_mode,
+            last_tts=text,
+            post_tts_guard_s=cfg.audio.post_tts_guard_ms / 1000.0,
+            already_armed=arm_event.is_set(),
+            on_partial=on_partial,
+            partial_kind=partial_kind,
+        )
+    except BaseException as exc:
+        raise _attach_tts(exc) from exc
+    return tts_info, listened
+
+
 def run_ask(
     cfg: HarkConfig,
     prompt: str,
@@ -718,42 +859,26 @@ def run_ask(
 ) -> dict[str, Any]:
     """Speak prompt (mic muted), then listen ASAP — optional pre-arm before TTS ends."""
     confirm_mode = confirm or cfg.confirm.mode
-    pre_arm_ms = int(cfg.audio.listen_pre_arm_ms)
-    arm_event = threading.Event()
-
-    def _on_near_end() -> None:
-        # Signal that TTS is nearly done — listen starts immediately after play returns
-        # with already_armed / zero guard. True overlap capture needs a second thread;
-        # we keep half-duplex: unmute happens when play exits mute context, then listen.
-        arm_event.set()
-
-    tts_info = run_tts(
-        cfg,
-        prompt,
-        provider=provider,
-        play=True,
-        mute_mic=cfg.audio.mute_mic_during_tts,
-        on_near_end=_on_near_end if pre_arm_ms > 0 else None,
-        near_end_ms=pre_arm_ms if pre_arm_ms > 0 else 0,
-    )
-    # Mic unmuted as TTS context exits. Start listen with minimal guard.
     try:
-        listened = run_listen(
+        tts_info, listened = speak_and_listen(
             cfg,
+            prompt,
             provider=provider,
             end_mode=end_mode,
-            last_tts=prompt,
-            post_tts_guard_s=cfg.audio.post_tts_guard_ms / 1000.0,
-            already_armed=arm_event.is_set(),
         )
     except TimeoutError as exc:
-        return {"ok": False, "error": str(exc), "exit": TIMEOUT, "tts": tts_info}
+        return {
+            "ok": False,
+            "error": str(exc),
+            "exit": TIMEOUT,
+            "tts": getattr(exc, "tts_info", None),
+        }
     except ProviderError as exc:
         return {
             "ok": False,
             "error": str(exc),
             "exit": getattr(exc, "code", PROVIDER),
-            "tts": tts_info,
+            "tts": getattr(exc, "tts_info", None),
         }
 
     if listened.cancelled:

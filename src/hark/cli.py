@@ -705,7 +705,7 @@ def cmd_skip(args: argparse.Namespace) -> int:
 
 
 def cmd_tts(args: argparse.Namespace, cfg) -> int:
-    from hark.speech import run_listen, run_tts
+    from hark.speech import run_tts, speak_and_listen
 
     text = " ".join(args.text)
     want_listen = bool(getattr(args, "listen", False))
@@ -713,29 +713,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
         eprint("hark tts: --listen requires playback (drop --no-play)")
         return USAGE
 
-    # When listening after speech, reuse ask handoff (near-end pre-arm + tight guard)
-    arm_event = None
-    if want_listen:
-        import threading
-
-        arm_event = threading.Event()
-
-        def _on_near_end() -> None:
-            arm_event.set()
-
-        result = run_tts(
-            cfg,
-            text,
-            provider=args.provider,
-            voice=args.voice,
-            play=True,
-            out=args.out,
-            on_near_end=_on_near_end if cfg.audio.listen_pre_arm_ms > 0 else None,
-            near_end_ms=cfg.audio.listen_pre_arm_ms
-            if cfg.audio.listen_pre_arm_ms > 0
-            else 0,
-        )
-    else:
+    if not want_listen:
         result = run_tts(
             cfg,
             text,
@@ -744,28 +722,26 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
             play=not args.no_play,
             out=args.out,
         )
-
-    if not want_listen:
         if args.json or args.no_play or args.out:
             print(json.dumps(result))
         else:
             print(json.dumps({"ok": True, "provider": result["provider"]}))
         return OK
 
-    # Auto-listen: record-start cue fires when speech opens (run_listen)
+    # Auto-listen: half-duplex default, or overlap_prearm (see speak_and_listen)
     try:
-        listened = run_listen(
+        result, listened = speak_and_listen(
             cfg,
+            text,
             provider=args.provider,
+            voice=args.voice,
             end_mode=args.end_mode,
-            last_tts=text,
-            post_tts_guard_s=cfg.audio.post_tts_guard_ms / 1000.0,
-            already_armed=bool(arm_event and arm_event.is_set()),
+            out=args.out,
         )
     except Exception as exc:
         payload = {
             "ok": False,
-            "tts": result,
+            "tts": getattr(exc, "tts_info", None),
             "error": str(exc),
             "listen": None,
         }

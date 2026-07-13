@@ -68,7 +68,9 @@ hark config path|init|show
 
 1. At most one mic lease at a time.  
 2. Capture binds to an `event_id` (or explicit freeform flag).  
-3. TTS and mic capture do not overlap (half-duplex).  
+3. TTS and mic capture do not overlap by default (half-duplex). Optional
+   `audio.overlap_prearm` may open capture near TTS end while discarding audio
+   until TTS ends + `overlap_discard_ms` (echo guard).  
 4. A transcript does not retarget because a newer event arrives mid-utterance.  
 5. Delivery checks pane identity, revision, and question fingerprint when bound.  
 6. Uncertain writes reconcile before retry; no blind double-send.  
@@ -168,6 +170,9 @@ transport = "auto"
 # adaptive gate params — see AUDIO_DESIGN
 half_duplex = true
 post_tts_guard_ms = 350
+# listen_pre_arm_ms = 300
+# overlap_prearm = false       # true: concurrent capture near TTS end
+# overlap_discard_ms = 150     # echo discard after TTS ends (overlap mode)
 
 [listen]
 # silence | radio — radio = keep listening until end phrase (long pauses OK)

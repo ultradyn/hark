@@ -71,9 +71,11 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "conference_check_audio",
         "conference_poll_ms",
         "conference_max_hold_s",
-        # Media ducking during TTS (B045 / I002); STT duck is B046
+        # Media ducking during TTS/STT (B045/B046 / I002)
         "duck_media_during_tts",
         "pause_media_during_tts",
+        "duck_media_during_stt",
+        "pause_media_during_stt",
         "duck_level",
         "duck_exclude_apps",
         "media_check_mpris",
@@ -224,6 +226,10 @@ class AudioConfig:
     duck_media_during_tts: bool = True
     # Prefer MPRIS/playerctl Pause for Playing players, then duck remaining
     pause_media_during_tts: bool = False
+    # Lower other apps' volumes while STT capture windows run (I002 / B046)
+    duck_media_during_stt: bool = True
+    # Prefer MPRIS Pause during STT (dogfood default on — reduces bleed into mic)
+    pause_media_during_stt: bool = True
     # Fraction of each stream's prior volume (0.0–1.0); default ~15%
     duck_level: float = 0.15
     # Extra application.name / binary substrings to never duck
@@ -420,9 +426,11 @@ conference_fail_open = true  # missing /proc or tools → allow TTS
 conference_check_audio = true
 conference_poll_ms = 2000
 # conference_max_hold_s = 0  # 0 = wait until free; >0 speak after timeout
-# Duck other media while TTS plays (I002 / B045) — never changes master/sink volume
+# Duck other media while TTS/STT runs (I002 / B045–B046) — never changes master/sink volume
 duck_media_during_tts = true
 pause_media_during_tts = false  # true: playerctl Pause Playing players + duck rest
+duck_media_during_stt = true    # duck during answer / post-wake listen (not idle wake)
+pause_media_during_stt = true   # true: MPRIS Pause during STT (dogfood default on)
 duck_level = 0.15               # fraction of prior per-stream volume (0.0–1.0)
 # duck_exclude_apps = ["easyeffects"]  # optional app name / binary substrings
 media_check_mpris = true        # secondary media signal via playerctl
@@ -976,6 +984,14 @@ def load_config(path: Path | None = None) -> HarkConfig:
                 audio_raw.get("pause_media_during_tts"),
                 default=False,
             ),
+            duck_media_during_stt=_as_bool(
+                audio_raw.get("duck_media_during_stt"),
+                default=True,
+            ),
+            pause_media_during_stt=_as_bool(
+                audio_raw.get("pause_media_during_stt"),
+                default=True,
+            ),
             duck_level=float(audio_raw.get("duck_level", 0.15)),
             duck_exclude_apps=_as_list_str(
                 audio_raw.get("duck_exclude_apps"),
@@ -1125,6 +1141,8 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "conference_max_hold_s": cfg.audio.conference_max_hold_s,
             "duck_media_during_tts": cfg.audio.duck_media_during_tts,
             "pause_media_during_tts": cfg.audio.pause_media_during_tts,
+            "duck_media_during_stt": cfg.audio.duck_media_during_stt,
+            "pause_media_during_stt": cfg.audio.pause_media_during_stt,
             "duck_level": cfg.audio.duck_level,
             "duck_exclude_apps": list(cfg.audio.duck_exclude_apps),
             "media_check_mpris": cfg.audio.media_check_mpris,

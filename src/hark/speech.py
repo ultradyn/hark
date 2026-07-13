@@ -608,11 +608,24 @@ def run_listen(
     def _agent_wants_stop(_pcm: bytes, _elapsed: float) -> bool:
         return poll_listen_action(stream) is not None
 
+    # Duck/pause non-Hark media for the full answer-window capture (B046 / I002).
+    # Explicit STT flags — do not inherit TTS defaults (pause_media_during_tts=false).
+    # Idle ambient wake (local Vosk) never enters run_listen, so continuous wake
+    # scanning does not duck/pause media.
+    do_duck_stt = bool(getattr(cfg.audio, "duck_media_during_stt", True))
+    do_pause_stt = bool(getattr(cfg.audio, "pause_media_during_stt", True))
+
     # Pause ambient wake scanning so we get the mic (dogfood B010)
     with (
         pause_ambient_for_mic(reason="listen"),
         MicLease("listen"),
         BusySection("listen"),
+        duck_media(
+            cfg,
+            enabled=do_duck_stt,
+            pause_players=do_pause_stt,
+            exclude_conference=True,
+        ),
     ):
         register_active_listen(stream, mode=mode.value)
         try:

@@ -46,6 +46,7 @@ The verse is playful; **routing and confirmation are not.**
 | [docs/PRODUCT.md](docs/PRODUCT.md) | Goals |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Topology, Mode A, library vs daemon |
 | [docs/HARKD.md](docs/HARKD.md) | **Experimental `harkd`** — Mode A boundary (not required for v1) |
+| [docs/AGY.md](docs/AGY.md) | **Experimental Antigravity (`agy`)** Mode A via agentapi |
 | [docs/SPEC.md](docs/SPEC.md) | Normative software spec |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | HEP event protocol |
 | [docs/SAFETY.md](docs/SAFETY.md) | Routing, risk R0–R3, distrust |
@@ -113,11 +114,11 @@ npx skills add ultradyn/hark -g -y
 
 You still need the **Python `hark` CLI** on `PATH` for Mode A.
 
-**Monitor-capable harness required.** Mode A needs a long-lived Monitor on `hark watch --for-monitor`. Claude Code and Grok provide this natively; on other harnesses install a plugin or use agentapi:
+**Monitor-capable harness required.** Mode A needs a long-lived wake on `hark monitor --for-monitor` (unified Herdr + ambient). Claude Code and Grok provide a native Monitor; on other harnesses:
 
 - **Pi** — [pi-monitor](https://github.com/clankercode/pi-monitor) (`pi install npm:pi-monitor`): `Monitor` tool that runs a background command and delivers regex-matching stdout into the session
 - **OpenCode** — [opencode-monitor-bg](https://github.com/clankercode/opencode-monitor-bg): `monitor_start` / `monitor_list` / `monitor_fetch` / `monitor_kill` — background output delivered back into the owning session
-- **Antigravity (`agy`)** — agentapi inject wakes the session when the Mode A feed has new lines
+- **Antigravity (`agy`)** — experimental **agentapi** inject (no native Monitor): `hark agentapi register` then `hark agentapi deliver --follow-monitor` (or `./scripts/hark-agy-deliver.sh`). See [docs/AGY.md](docs/AGY.md).
 
 ### npm package (`@ultradyn/hark`)
 

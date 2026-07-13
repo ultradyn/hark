@@ -327,6 +327,108 @@ def build_parser() -> argparse.ArgumentParser:
     dae_stop.add_argument("--timeout", type=float, default=15.0)
     dae_stop.add_argument("--json", action="store_true")
 
+    # Antigravity (agy) agentapi — Mode A wake without native Monitor (B049)
+    api = sub.add_parser(
+        "agentapi",
+        help=(
+            "experimental Antigravity (agy) agentapi wake/deliver "
+            "(see docs/AGY.md)"
+        ),
+    )
+    api_sub = api.add_subparsers(dest="agentapi_cmd", required=True)
+    api_reg = api_sub.add_parser(
+        "register",
+        help=(
+            "persist ANTIGRAVITY_LS_ADDRESS + conversation id "
+            f"to ~/.local/state/hark/agy-env.json"
+        ),
+    )
+    api_reg.add_argument(
+        "--ls-address",
+        default=None,
+        help="override LS HTTP address (default: env ANTIGRAVITY_LS_ADDRESS)",
+    )
+    api_reg.add_argument(
+        "--conversation",
+        default=None,
+        dest="conversation_id",
+        help="override conversation id (default: env ANTIGRAVITY_CONVERSATION_ID)",
+    )
+    api_reg.add_argument(
+        "--path",
+        type=Path,
+        default=None,
+        help="override agy-env.json path",
+    )
+    api_reg.add_argument("--json", action="store_true")
+    api_st = api_sub.add_parser("status", help="show registered / process agy env")
+    api_st.add_argument("--path", type=Path, default=None)
+    api_st.add_argument("--json", action="store_true")
+    api_st.add_argument(
+        "--agy-bin",
+        default="agy",
+        help="agy binary name/path (default: agy)",
+    )
+    api_send = api_sub.add_parser(
+        "send",
+        help="inject one message into the registered conversation (wake)",
+    )
+    api_send.add_argument("content", nargs="+", help="message body")
+    api_send.add_argument("--title", default=None)
+    api_send.add_argument("--path", type=Path, default=None)
+    api_send.add_argument("--agy-bin", default="agy")
+    api_send.add_argument("--timeout", type=float, default=60.0)
+    api_send.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print argv only; do not call agy",
+    )
+    api_send.add_argument("--json", action="store_true")
+    api_send.add_argument(
+        "--raw",
+        action="store_true",
+        help="do not wrap with the Mode A wake preamble",
+    )
+    api_del = api_sub.add_parser(
+        "deliver",
+        help=(
+            "Mode A sidecar: read monitor lines and inject via agentapi "
+            "(stdin or --follow-monitor)"
+        ),
+    )
+    api_del.add_argument(
+        "--follow-monitor",
+        action="store_true",
+        help="spawn `hark monitor --for-monitor` and inject each HEP line",
+    )
+    api_del.add_argument(
+        "--stdin",
+        action="store_true",
+        help="read NDJSON lines from stdin (default if not --follow-monitor)",
+    )
+    api_del.add_argument("--title", default=None)
+    api_del.add_argument("--path", type=Path, default=None)
+    api_del.add_argument("--agy-bin", default="agy")
+    api_del.add_argument("--timeout", type=float, default=60.0)
+    api_del.add_argument("--dry-run", action="store_true")
+    api_del.add_argument(
+        "--raw",
+        action="store_true",
+        help="do not wrap lines with the Mode A wake preamble",
+    )
+    api_del.add_argument(
+        "--replay",
+        type=int,
+        default=0,
+        help="with --follow-monitor: pass --replay N to hark monitor",
+    )
+    api_del.add_argument(
+        "--stop-on-error",
+        action="store_true",
+        help="exit on first failed inject",
+    )
+    api_del.add_argument("--json", action="store_true")
+
     return p
 
 
@@ -464,6 +566,176 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
         from hark.daemon import dispatch_daemon
 
         return dispatch_daemon(args)
+    if cmd == "agentapi":
+        return cmd_agentapi(args)
+    return USAGE
+
+
+def cmd_agentapi(args: argparse.Namespace) -> int:
+    """Antigravity agentapi register / status / send / deliver (B049)."""
+    from hark.agentapi import (
+        DEFAULT_TITLE,
+        AgyEnv,
+        deliver_line,
+        follow_monitor_and_deliver,
+        format_wake_payload,
+        resolve_agy_env_from_environ,
+        send_message,
+        status_dict,
+        write_agy_env,
+    )
+
+    sub = getattr(args, "agentapi_cmd", None)
+    if sub == "register":
+        ls = getattr(args, "ls_address", None)
+        conv = getattr(args, "conversation_id", None)
+        if not ls or not conv:
+            from_env = resolve_agy_env_from_environ()
+            if from_env is None and (not ls or not conv):
+                eprint(
+                    "hark agentapi register: need --ls-address and --conversation, "
+                    "or both ANTIGRAVITY_LS_ADDRESS and ANTIGRAVITY_CONVERSATION_ID"
+                )
+                return USAGE
+            if from_env is not None:
+                ls = ls or from_env.ls_address
+                conv = conv or from_env.conversation_id
+        try:
+            env = AgyEnv(ls_address=str(ls), conversation_id=str(conv)).normalized()
+        except ValueError as exc:
+            eprint(f"hark agentapi register: {exc}")
+            return USAGE
+        path = write_agy_env(env, path=getattr(args, "path", None))
+        payload = {
+            "path": str(path),
+            "ls_address": env.ls_address,
+            "conversation_id": env.conversation_id,
+        }
+        if args.json:
+            print(json.dumps(payload))
+        else:
+            print(f"wrote {path}")
+            print(f"  ls_address={env.ls_address}")
+            print(f"  conversation_id={env.conversation_id}")
+        return OK
+
+    if sub == "status":
+        info = status_dict(
+            path=getattr(args, "path", None),
+            agy_bin=str(getattr(args, "agy_bin", "agy") or "agy"),
+        )
+        if args.json:
+            print(json.dumps(info, indent=2))
+            return OK
+        print(f"env_path: {info['env_path']}")
+        print(f"agy: {info.get('agy_path') or '(not found)'}")
+        for label in ("file", "process", "resolved"):
+            val = info.get(label)
+            if val:
+                print(f"{label}: ls={val['ls_address']} conv={val['conversation_id']}")
+            else:
+                print(f"{label}: (none)")
+        return OK if info.get("resolved") else ERROR
+
+    if sub == "send":
+        content = " ".join(args.content)
+        wrap = not bool(getattr(args, "raw", False))
+        body = format_wake_payload(content) if wrap else content
+        title = getattr(args, "title", None) or DEFAULT_TITLE
+        result = send_message(
+            body,
+            path=getattr(args, "path", None),
+            title=title,
+            agy_bin=str(getattr(args, "agy_bin", "agy") or "agy"),
+            timeout=float(getattr(args, "timeout", 60.0) or 60.0),
+            dry_run=bool(getattr(args, "dry_run", False)),
+        )
+        out = {
+            "ok": result.ok,
+            "dry_run": result.dry_run,
+            "argv": result.argv,
+            "returncode": result.returncode,
+            "error": result.error,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+        if args.json:
+            print(json.dumps(out, indent=2))
+        else:
+            if result.dry_run:
+                print("dry-run argv:", " ".join(result.argv))
+            elif result.ok:
+                print("sent ok")
+            else:
+                eprint(f"hark agentapi send: {result.error}")
+                if result.stderr:
+                    eprint(result.stderr.rstrip())
+        return OK if result.ok else ERROR
+
+    if sub == "deliver":
+        follow = bool(getattr(args, "follow_monitor", False))
+        title = getattr(args, "title", None) or DEFAULT_TITLE
+        wrap = not bool(getattr(args, "raw", False))
+        dry = bool(getattr(args, "dry_run", False))
+        path = getattr(args, "path", None)
+        agy_bin = str(getattr(args, "agy_bin", "agy") or "agy")
+        timeout = float(getattr(args, "timeout", 60.0) or 60.0)
+        stop = bool(getattr(args, "stop_on_error", False))
+
+        if follow:
+            return follow_monitor_and_deliver(
+                path=path,
+                title=title,
+                agy_bin=agy_bin,
+                timeout=timeout,
+                dry_run=dry,
+                wrap=wrap,
+                replay=int(getattr(args, "replay", 0) or 0),
+                stop_on_error=stop,
+            )
+
+        # stdin (default)
+        results = []
+        for line in sys.stdin:
+            r = deliver_line(
+                line,
+                path=path,
+                title=title,
+                agy_bin=agy_bin,
+                timeout=timeout,
+                dry_run=dry,
+                wrap=wrap,
+            )
+            if r is None:
+                continue
+            results.append(r)
+            if not r.ok:
+                eprint(f"hark agentapi deliver: {r.error}")
+                if stop:
+                    return ERROR
+            elif dry:
+                print("dry-run argv:", " ".join(r.argv), file=sys.stderr)
+            else:
+                print("sent ok", file=sys.stderr)
+        if args.json:
+            print(
+                json.dumps(
+                    [
+                        {
+                            "ok": r.ok,
+                            "dry_run": r.dry_run,
+                            "error": r.error,
+                            "argv": r.argv,
+                        }
+                        for r in results
+                    ],
+                    indent=2,
+                )
+            )
+        if not results:
+            return OK
+        return OK if all(r.ok for r in results) else ERROR
+
     return USAGE
 
 

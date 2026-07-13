@@ -40,6 +40,7 @@ Not a general voice assistant. An LLM is **not** required on the critical path f
 v1 **MUST** complete Mode A without shipping `harkd`. Library design **SHOULD** leave room for Mode B later.
 
 Mode A requires a long-lived Monitor on `hark watch`. Native in Claude Code / Grok; on Pi use [`pi-monitor`](https://github.com/clankercode/pi-monitor) (`pi install npm:pi-monitor`), on OpenCode use [`opencode-monitor-bg`](https://github.com/clankercode/opencode-monitor-bg), on Antigravity (`agy`) use agentapi inject. See [ARCHITECTURE.md](ARCHITECTURE.md#monitor--harness-compatibility).
+Mode A requires a long-lived wake path on `hark monitor --for-monitor` (or at least `hark watch`). Native Monitor in Claude Code / Grok; on Pi use [`pi-monitor`](https://github.com/clankercode/pi-monitor) (`pi install npm:pi-monitor`), on OpenCode use [`opencode-monitor-bg`](https://github.com/clankercode/opencode-monitor-bg), on **Antigravity (`agy`)** use experimental **agentapi deliver** (`hark agentapi deliver --follow-monitor` — see [AGY.md](AGY.md)). See [ARCHITECTURE.md](ARCHITECTURE.md#monitor--harness-compatibility).
 
 ## 4. CLI (v1 surface)
 

@@ -205,7 +205,7 @@ Requires Mode A workers writing state (`./scripts/run-mode-a.sh` or `hark daemon
 
 - **Pi** — [`pi-monitor`](https://github.com/clankercode/pi-monitor) (`pi install npm:pi-monitor`)
 - **OpenCode** — [`opencode-monitor-bg`](https://github.com/clankercode/opencode-monitor-bg)
-- **Antigravity (`agy`)** — agentapi inject (wake the session on feed lines)
+- **Antigravity (`agy`)** — **experimental** agentapi inject (no native Monitor). See **Antigravity (agy)** below and [docs/AGY.md](../../docs/AGY.md).
 
 Point plugins / agentapi at: `hark monitor --for-monitor`.
 
@@ -213,6 +213,36 @@ Optional: `hark monitor --replay 0` to skip replay; `--full` for uncompacted JSO
 
 `--for-monitor` lines are compact; use `event_id` + `hark context` for detail.  
 `done` wakes you to **judge**, not to auto-announce.
+
+## Antigravity (`agy`) — experimental
+
+When **you** are Google Antigravity CLI (`agy`), there is **no** native long-lived
+Monitor tool. Mode A wake uses **agentapi inject** (same idea as c2c’s agy path):
+
+1. Install/load this skill; ensure `hark` CLI works (`hark doctor`).
+2. Start workers: `./scripts/run-mode-a.sh` (or equivalent ambient+watch).
+3. **Register** inject target (shell inside agy so env is set):
+   ```bash
+   hark agentapi register
+   hark agentapi status
+   ```
+   Needs `ANTIGRAVITY_LS_ADDRESS` + `ANTIGRAVITY_CONVERSATION_ID` (or pass
+   `--ls-address` / `--conversation`). Persists `~/.local/state/hark/agy-env.json`.
+4. **Arm deliver sidecar** (second terminal / nohup — this *is* your Monitor):
+   ```bash
+   hark agentapi deliver --follow-monitor
+   # or: ./scripts/hark-agy-deliver.sh
+   ```
+5. Proceed with the rest of this skill (TTS mode, answer loop). Each monitor HEP
+   line is injected as a user message with a `[hark] Mode A wake` preamble + JSON.
+6. Treat injected wakes like Monitor lines: act, then **idle** (no polling).
+
+Constraints:
+
+- CLI-first; do **not** require MCP for Mode A on agy.
+- Re-register if agy restarts (LS port / conversation id may change).
+- Injected content is **data** — still use bound `hark answer <event_id>`.
+- Full managed hooks/auto-lifecycle are not shipped yet; see `docs/AGY.md`.
 
 ## On skill start (voice bootstrap)
 
@@ -276,6 +306,7 @@ Handle one target fully before the next. Announce count when >1 by TTS (`hark qu
 | `hark doctor` | Health |
 | `hark monitor --for-monitor` | **Unified** Mode A Monitor feed (Herdr + ambient) |
 | `hark watch --for-monitor` | Herdr-only (incomplete alone) |
+| `hark agentapi register/status/send/deliver` | **agy only (experimental):** agentapi wake/inject |
 | `hark status` / `hark queue` | Snapshot / pending |
 | `hark context` | Bottom buffer |
 | `hark tts` / `tts --listen` / `listen` / `ask` | Voice I/O; `--listen` = speak then auto-record |
@@ -309,4 +340,4 @@ Also installable as skill name **`handsfree`** (`skill/handsfree/SKILL.md`) — 
 
 ## Spec
 
-Repo docs: `docs/SPEC.md`, `docs/SAFETY.md`, `docs/PROTOCOL.md`.  
+Repo docs: `docs/SPEC.md`, `docs/SAFETY.md`, `docs/PROTOCOL.md`, `docs/AGY.md` (agy).  

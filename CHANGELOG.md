@@ -20,6 +20,12 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 - First-class orchestrator listing (B050): **Antigravity (`agy`)** joins Claude,
   Grok, Pi, and OpenCode on the homepage Supports table (Monitor: **agentapi**),
   skill Monitor notes, README, and package docs. agentapi Mode A path is B049.
+- Antigravity (`agy`) Mode A foundation (B049): experimental **agentapi** wake path
+  for harnesses without a native Monitor. New `hark agentapi`
+  (`register` / `status` / `send` / `deliver`), module `src/hark/agentapi.py`,
+  sidecar script `scripts/hark-agy-deliver.sh`, docs `docs/AGY.md` +
+  `docs/plans/B049-agy-agentapi.md`, skill notes listing agy as experimental.
+  Pattern inspired by c2c (`AgyAdapter` / agentapi inject); not a c2c dependency.
 - Skill: document Herdr **local / SSH / mixed** multi-session setup (`[[herdr.sessions]]`
   with optional per-session `ssh`) for Mode A agents — see `skill/hark/SKILL.md`.
 - Site homepage (B043): sticky nav chrome spans full viewport width (content still

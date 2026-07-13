@@ -34,7 +34,7 @@ Once `/hark` or `/handsfree` is invoked, you enter **TTS mode**:
 4. Chat/text is for **tool output, event_ids, and debugging** — not the main operator UI.
 5. **Ambient voice → TTS reply (hard rule).** On every final `ambient.prompt` (and after you act on a finished radio stream), **speak your response with `hark tts`**. Do **not** answer ambient operator speech with chat-only prose. Short acks count; long plans can be summarized by voice with detail in chat if needed. Radio **partials** are HOLD (think privately); when the stream is **final**, reply by TTS.
 
-Mic mutes automatically during TTS (`mute_mic_during_tts`). Recording **waits for speech** before the start cue and before content is kept (leading silence/noise is trimmed).
+Mic mutes automatically during TTS (`mute_mic_during_tts`). After TTS/ask, the **record beep plays when listen is ready** (`answer_arm_cue`, default on) — not when speech opens. Leading silence/noise is still trimmed before content is kept.
 
 ## Placement
 
@@ -113,7 +113,7 @@ Full contract: [docs/HERDR.md](../../docs/HERDR.md).
 
 ## Preconditions
 
-1. `hark` available — while developing: `uv run hark` from latest checkout.  
+1. `hark` available — while developing: `uv run hark` from latest checkout, or `uv tool install -e .` (not a stale non-editable `uv tool` install).  
 2. `hark doctor` healthy (Herdr, **tunnels for any `ssh` sessions**, Grok OAuth / keys, mic).  
 3. STT/TTS: xAI via **Grok Build OAuth** preferred; OpenAI / Google / MiniMax as configured.  
 
@@ -145,7 +145,18 @@ When you hit a problem (mic busy, missed alert, empty STT, skill gap, confusing 
 1. **Log it immediately** — session todo list **and** `bl bug "…"` in this repo when durable.  
 2. **Do not silently work around and forget.** Workarounds are fine mid-task; the issue must still be filed.  
 3. **Fix now** if small and unblocks the operator; otherwise file and continue, then pick up when free.  
-4. Prefer fixes that help the *next* Mode A agent, not only this turn.  
+4. Prefer fixes that help the *next* Mode A agent, not only this turn.
+
+**CLI must match the checkout.** A stale `uv tool install hark` (site-packages) can lag behind `master` (e.g. answer-window arm beep). Prefer one of:
+
+```bash
+# from this repo (editable; picks up speech.py fixes immediately)
+uv tool install -e .
+# or run without installing:
+uv run hark …
+```
+
+Do **not** dogfood Mode A against an old global tool when validating listen/TTS handoff.  
 
 ## Agent-controlled end of recording (radio partials) — hard rule
 
@@ -271,7 +282,7 @@ Constraints:
 3. TTS: “Hark is ready. I'll speak from here. When you're done talking in radio mode, say over or okay hark send.”  
 4. Voice-ask session targets if not already configured (local / SSH / mix — write `[[herdr.sessions]]` accordingly).  
 5. **Required:** arm **`hark monitor --for-monitor`** (persistent). One feed for Herdr + ambient (includes `wake_near_miss`). Do **not** arm only `hark watch` or only ambient tails.  
-6. Prefer `hark tts --listen "…"` or `hark ask` so recording starts after you speak (start cue on speech). **Ambient auto-pauses** for listen/ask (mic lease yield); no manual kill needed.  
+6. Prefer `hark tts --listen "…"` or `hark ask` so recording arms after you speak (**beep when listen ready**, not when speech opens). **Ambient auto-pauses** for listen/ask (mic lease yield); no manual kill needed.  
 7. **Idle and wait for that Monitor** to deliver the next line. Do not poll.
 
 ## On `agent.blocked` / blocked monitor line
@@ -282,7 +293,7 @@ Constraints:
 4. Speak + listen (pick one):
    ```bash
    hark ask --confirm auto --event-id <event_id> "…"  # upgrades to always for R2/R3 when risk known
-   # or TTS then auto-record (start cue when speech opens):
+   # or TTS then auto-record (beep when listen ready):
    hark tts --listen --event-id <event_id> "…"
    hark tts --listen-for-user-response "…"   # alias
    ```

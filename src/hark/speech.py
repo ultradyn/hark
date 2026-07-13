@@ -598,7 +598,10 @@ def run_listen(
             )
 
     def _arm_cue_if_requested() -> None:
-        """Optional early arm cue (post-wake) so operator knows listen is ready."""
+        """Early arm cue (answer window / post-wake): beep when listen is ready.
+
+        Sets ``recording_cued`` so speech-open paths do not double-beep.
+        """
         nonlocal recording_cued
         if arm_cue and not recording_cued:
             recording_cued = True

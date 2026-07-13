@@ -23,6 +23,25 @@ device
   → utterance → cloud STT
 ```
 
+### Arm cue (record-start beep)
+
+After TTS for `hark ask` / `tts --listen` / confirm, the **record-start beep plays when
+listen is armed** — not when the energy gate first opens. That way the operator
+knows they can speak without waiting through silence. Leading silence is still
+trimmed from STT content.
+
+| Knob | Default | Role |
+|------|---------|------|
+| `[audio] answer_arm_cue` | `true` | Beep when answer-window listen is ready (silence **and** radio) |
+| `[ambient] post_wake_arm_cue` | `true` | Same after ambient wake → post-wake listen |
+
+With arm cue on, speech-open only logs (`listen.speech_opened`); it does **not**
+double-beep. With arm cue off, record-start still plays once when speech opens.
+
+**Dogfood:** use the checkout (`uv run hark`) or `uv tool install -e .` so the
+CLI matches repo arm-cue behaviour; a stale `uv tool` site-packages install can
+still wait for speech before beeping.
+
 ## Ambient pipeline (not answering a blocked agent)
 
 ```text

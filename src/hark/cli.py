@@ -1428,7 +1428,13 @@ def cmd_listen(args: argparse.Namespace, cfg) -> int:
     from hark.meta_commands import classify_meta_command
     from hark.speech import run_listen
 
-    result = run_listen(cfg, provider=args.provider, end_mode=args.end_mode)
+    # Beep when listen is armed (same knob as ask/tts --listen), not only when speech opens.
+    result = run_listen(
+        cfg,
+        provider=args.provider,
+        end_mode=args.end_mode,
+        arm_cue=bool(getattr(cfg.audio, "answer_arm_cue", True)),
+    )
     if result.cancelled:
         eprint(f"cancelled via {result.end_phrase!r}")
         print(json.dumps({"ok": False, "cancelled": True, "text": result.text}))

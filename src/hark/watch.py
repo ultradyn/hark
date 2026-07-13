@@ -598,7 +598,13 @@ def _watch_socket(
             emit(event)
 
     def on_wire(raw: dict[str, Any]) -> None:
-        if _handle_lifecycle_event(raw, client=client, store=store, emit=emit):
+        if _handle_lifecycle_event(
+            raw,
+            client=client,
+            store=store,
+            emit=emit,
+            self_ident=self_ident,
+        ):
             return
         try:
             agents = client.list_agents()
@@ -663,6 +669,7 @@ def _handle_lifecycle_event(
     client: HerdrClient,
     store: DeliveryStore | None,
     emit: Callable[[dict[str, Any]], None],
+    self_ident: SelfIdentity | None = None,
 ) -> bool:
     """Invalidate bound answers from a socket lifecycle event, if present."""
     containers: list[dict[str, Any]] = []
@@ -690,6 +697,13 @@ def _handle_lifecycle_event(
         )
     if pane_id is None:
         return False
+    if self_ident is not None and self_ident.matches_pane(
+        pane_id,
+        session_socket=getattr(client, "socket_path", None),
+        session_is_remote=bool(getattr(client.session, "ssh", None)),
+    ):
+        # Do not forward lifecycle changes from hark's own pane either.
+        return True
     invalidated = (
         store.invalidate_target(client.session.id, pane_id, reason=event_type)
         if store is not None

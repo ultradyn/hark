@@ -53,11 +53,20 @@ def test_detect_self_escape_hatch_disables():
     assert detect_self(env) is None
 
 
-def test_detect_self_target_defaults_to_local():
-    ident = detect_self({"HERDR_ENV": "1", "HERDR_PANE_ID": "wG:p3"})
-    assert ident is not None
-    assert ident.session is None
-    assert ident.target == "local/wG:p3"
+def test_detect_self_requires_socket_path_to_scope_pane_id():
+    # Pane ids can collide across local configured sessions, so an unscoped id
+    # must not suppress an unrelated agent.
+    assert detect_self({"HERDR_ENV": "1", "HERDR_PANE_ID": "wG:p3"}) is None
+
+
+def test_detect_self_ignores_malformed_values():
+    assert detect_self(
+        {
+            "HERDR_ENV": 1,  # type: ignore[dict-item]
+            "HERDR_PANE_ID": object(),  # type: ignore[dict-item]
+            "HERDR_SOCKET_PATH": object(),  # type: ignore[dict-item]
+        }
+    ) is None
 
 
 # --- SelfIdentity.matches_agent -------------------------------------------
@@ -80,12 +89,12 @@ def test_matches_agent_socket_mismatch_is_not_self():
     )
 
 
-def test_matches_agent_unknown_socket_local_trusts_pane():
+def test_matches_agent_unknown_socket_does_not_trust_pane():
     ident = SelfIdentity(pane_id="wG:p3", socket_path=None)
-    assert ident.matches_agent(
+    assert not ident.matches_agent(
         _agent("wG:p3"), session_socket=None, session_is_remote=False
     )
-    assert ident.matches_agent(
+    assert not ident.matches_agent(
         _agent("wG:p3"), session_socket="/run/h.sock", session_is_remote=False
     )
 
@@ -98,6 +107,13 @@ def test_matches_agent_unknown_socket_remote_never_self():
     # Even with a session socket on our side, if self socket unknown and remote:
     assert not ident.matches_agent(
         _agent("wG:p3"), session_socket="/tunnel/h.sock", session_is_remote=True
+    )
+
+
+def test_matches_agent_rejects_remote_even_when_socket_matches():
+    ident = SelfIdentity(pane_id="wG:p3", socket_path="/run/h.sock")
+    assert not ident.matches_agent(
+        _agent("wG:p3"), session_socket="/run/h.sock", session_is_remote=True
     )
 
 

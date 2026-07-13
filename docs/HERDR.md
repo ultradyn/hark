@@ -137,17 +137,20 @@ If subscribe missing on protocol 14, poll only — still correct multi-session v
 | `HERDR_ENV=1` | Inside Herdr |
 | `HERDR_PANE_ID` | Pane id |
 | `HERDR_SOCKET_PATH` | Socket |
+| `HERDR_SESSION` | Optional named session |
 
 The **Hark orchestrator does not need these**; it addresses remote/local sessions via config.
 
 **Self-exclusion (B029):** when `hark watch` itself runs inside a Herdr pane,
 hark's own pane appears in `agent list`. Watch reads `HERDR_ENV` +
 `HERDR_PANE_ID` + `HERDR_SOCKET_PATH` to identify that pane and filters it out
-before edge-detection — it emits no `agent.*` events for, and never reads, its
-own pane (avoids a feedback loop). The excluded target is reported on
+before regular edge and lifecycle handling — it emits no watch events for, and
+never reads, its own pane (avoids a feedback loop). The excluded target is reported on
 `watch.armed` as `self_target`. Set `HARK_WATCH_INCLUDE_SELF=1` to disable this.
 Pane-id matches are scoped to the herdr server at `HERDR_SOCKET_PATH`; a pane on
-a different (e.g. remote/tunnelled) session is never treated as self.
+a different (e.g. remote/tunnelled) session is never treated as self. If the
+socket is absent or malformed, Hark leaves every pane included rather than
+risking a collision with another server.
 
 ## Integrations
 

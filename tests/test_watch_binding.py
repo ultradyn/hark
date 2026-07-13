@@ -148,6 +148,45 @@ def test_socket_lifecycle_event_invalidates_bound_target(monkeypatch, tmp_path):
     assert store.get("evt-pending").status == "invalidated"
 
 
+def test_socket_lifecycle_event_from_self_is_not_forwarded(monkeypatch, tmp_path):
+    from hark.herdr import socket_client
+    from hark.self_detect import SelfIdentity
+
+    store = DeliveryStore(tmp_path / "events.jsonl")
+    store.save_event(
+        BoundEvent(
+            event_id="evt-self",
+            session_id="local",
+            pane_id="wG:p3",
+            pane_revision=3,
+            question_fingerprint="blake2b:abc",
+        )
+    )
+    client = FakeWatchClient(SessionConfig(id="local"))
+    client.socket_path = tmp_path / "herdr.sock"
+    emitted: list[dict[str, object]] = []
+
+    def fake_subscribe(_socket_path, on_event):
+        on_event({"type": "pane.closed", "pane_id": "wG:p3"})
+
+    monkeypatch.setattr(socket_client, "run_subscribe_loop", fake_subscribe)
+
+    assert watch._watch_socket(
+        client,
+        tracker=watch.EdgeTracker(),
+        interest={"blocked"},
+        emit=emitted.append,
+        heartbeat_s=60,
+        sessions=["local"],
+        question_for=None,
+        store=store,
+        self_ident=SelfIdentity(pane_id="wG:p3", socket_path=str(client.socket_path)),
+    ) == 0
+
+    assert not [event for event in emitted if event["kind"] == "target.invalidated"]
+    assert store.get("evt-self").status == "pending"
+
+
 def test_is_expected_disconnect_classifies_pipe_and_reset():
     assert is_expected_disconnect(BrokenPipeError(errno.EPIPE, "Broken pipe"))
     assert is_expected_disconnect(

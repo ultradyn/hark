@@ -96,3 +96,82 @@ def test_self_on_different_socket_not_excluded(monkeypatch):
     blocked = [e for e in events if e["kind"] == "agent.blocked"]
     panes = {e["target"]["pane_id"] for e in blocked}
     assert panes == {"wG:p3", "w1:p1"}
+
+
+def test_missing_self_socket_does_not_exclude_same_pane_on_another_server(monkeypatch):
+    # Pane ids are scoped to a server; with no self socket, a local session
+    # bearing the same pane id must remain visible rather than being hidden.
+    ident = SelfIdentity(pane_id="wG:p3", socket_path=None, session="local")
+    client, events = _run_once(monkeypatch, ident)
+    blocked = [e for e in events if e["kind"] == "agent.blocked"]
+    panes = {e["target"]["pane_id"] for e in blocked}
+    assert panes == {"wG:p3", "w1:p1"}
+    assert "wG:p3" in client.read_pane_calls
+
+
+def test_multiple_sessions_exclude_only_the_matching_server(monkeypatch):
+    clients: dict[str, FakeMultiClient] = {}
+
+    def make_client(session: SessionConfig) -> FakeMultiClient:
+        socket = "/run/herdr.sock" if session.id == "local" else "/run/other.sock"
+        client = FakeMultiClient(session, socket_path=socket)
+        clients[session.id] = client
+        return client
+
+    monkeypatch.setattr(watch, "HerdrClient", make_client)
+    monkeypatch.setattr(
+        watch,
+        "detect_self",
+        lambda: SelfIdentity(pane_id="wG:p3", socket_path="/run/herdr.sock"),
+    )
+    out = io.StringIO()
+    cfg = HarkConfig(
+        sessions=[
+            SessionConfig(id="local"),
+            SessionConfig(id="other", socket="/run/other.sock"),
+        ]
+    )
+
+    assert watch.run_watch(cfg, transport="poll", once=True, out=out, register_events=False) == 0
+    events = [json.loads(line) for line in out.getvalue().splitlines()]
+    blocked = [event for event in events if event["kind"] == "agent.blocked"]
+    targets = {(event["session_id"], event["target"]["pane_id"]) for event in blocked}
+
+    assert targets == {
+        ("local", "w1:p1"),
+        ("other", "wG:p3"),
+        ("other", "w1:p1"),
+    }
+    assert clients["local"].read_pane_calls == ["w1:p1"]
+    assert set(clients["other"].read_pane_calls) == {"wG:p3", "w1:p1"}
+
+
+def test_socket_reconcile_and_wire_never_read_or_emit_self(monkeypatch):
+    from hark.herdr import socket_client
+
+    client = FakeMultiClient(SessionConfig(id="local"))
+    emitted: list[dict[str, object]] = []
+
+    def fake_subscribe(_socket_path, on_event):
+        # This non-lifecycle notification exercises the on_wire refresh after
+        # the initial reconcile has already run.
+        on_event({"type": "pane.agent_status_changed"})
+
+    monkeypatch.setattr(socket_client, "run_subscribe_loop", fake_subscribe)
+
+    assert watch._watch_socket(
+        client,
+        tracker=watch.EdgeTracker(),
+        interest={"blocked"},
+        emit=emitted.append,
+        heartbeat_s=60,
+        sessions=["local"],
+        question_for=lambda agent: client.read_pane(agent.pane_id),
+        store=None,
+        self_ident=SelfIdentity(pane_id="wG:p3", socket_path="/run/herdr.sock"),
+    ) == 0
+
+    blocked = [event for event in emitted if event["kind"] == "agent.blocked"]
+    assert [event["target"]["pane_id"] for event in blocked] == ["w1:p1"]
+    assert client.read_pane_calls
+    assert set(client.read_pane_calls) == {"w1:p1"}

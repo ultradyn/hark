@@ -28,14 +28,15 @@ New module `src/hark/self_detect.py`:
 
 - `SelfIdentity(pane_id, socket_path, session)` frozen dataclass.
 - `detect_self(env=os.environ) -> SelfIdentity | None`:
-  - Returns `None` unless `HERDR_ENV` truthy and `HERDR_PANE_ID` set.
+  - Returns `None` unless `HERDR_ENV` is truthy and `HERDR_PANE_ID` plus a
+    valid `HERDR_SOCKET_PATH` are set.
   - Escape hatch: `HARK_WATCH_INCLUDE_SELF` truthy → `None` (disable exclusion).
 - `SelfIdentity.matches_agent(agent, *, session_socket, session_is_remote)`:
   - Requires `agent.pane_id == self.pane_id`.
-  - If both socket paths known → must be the same realpath.
-  - If a socket path is unknown → trust the pane match only for **local**
-    (non-ssh) sessions; never exclude a remote/tunnelled session's pane, since
-    the orchestrator cannot be running inside a remote herdr.
+  - Requires both socket paths to resolve to the same realpath.
+  - If either socket is unknown or malformed → do not exclude: pane ids can
+    collide across configured local servers. Remote/tunnelled sessions are
+    never self.
 
 Integration in `src/hark/watch.py`:
 
@@ -43,7 +44,8 @@ Integration in `src/hark/watch.py`:
 - Filter each client's `list_agents()` through `_filter_self(...)` before
   `tracker.process(...)` in the poll loop, and inside `_watch_socket`
   (`reconcile` + `on_wire`). Filtering before `process` also prevents self-pane
-  reads (`question_for`), covering "do not react".
+  reads (`question_for`), and lifecycle notifications use the same identity
+  check before invalidating/forwarding a target.
 - Surface the excluded self target on `watch.armed` (`self_target`) and in
   `monitor_profile` for observability.
 

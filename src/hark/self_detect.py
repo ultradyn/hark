@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
 if TYPE_CHECKING:
@@ -23,8 +22,8 @@ if TYPE_CHECKING:
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
-def _is_truthy(value: str | None) -> bool:
-    return bool(value) and value.strip().lower() in _TRUTHY
+def _is_truthy(value: object | None) -> bool:
+    return isinstance(value, str) and value.strip().lower() in _TRUTHY
 
 
 def _resolve(path: str | os.PathLike[str] | None) -> str | None:
@@ -33,8 +32,8 @@ def _resolve(path: str | os.PathLike[str] | None) -> str | None:
         return None
     try:
         return os.path.realpath(os.path.expanduser(str(path)))
-    except OSError:
-        return os.path.abspath(os.path.expanduser(str(path)))
+    except (OSError, TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -49,6 +48,27 @@ class SelfIdentity:
     def target(self) -> str:
         return f"{self.session or 'local'}/{self.pane_id}"
 
+    def matches_pane(
+        self,
+        pane_id: str,
+        *,
+        session_socket: str | os.PathLike[str] | None,
+        session_is_remote: bool,
+    ) -> bool:
+        """Is *pane_id* hark's own pane on this local herdr server?
+
+        Pane id and canonical socket path must both match. Missing or malformed
+        socket paths deliberately fail closed: pane ids are only unique within a
+        herdr server, so they cannot identify self across configured sessions.
+        Remote/tunnelled sessions are never self, even if their local tunnel
+        path happens to match malformed input.
+        """
+        if session_is_remote or not self.pane_id or pane_id != self.pane_id:
+            return False
+        self_sock = _resolve(self.socket_path)
+        other_sock = _resolve(session_socket)
+        return self_sock is not None and self_sock == other_sock
+
     def matches_agent(
         self,
         agent: "AgentInfo",
@@ -56,21 +76,12 @@ class SelfIdentity:
         session_socket: str | os.PathLike[str] | None,
         session_is_remote: bool,
     ) -> bool:
-        """Is *agent* hark's own pane?
-
-        Pane id must match. When both socket paths are known they must resolve to
-        the same file. When either socket is unknown, trust the pane match only
-        for local (non-remote) sessions — hark cannot run inside a remote herdr,
-        so a remote pane sharing an id must never be excluded.
-        """
-        if not self.pane_id or agent.pane_id != self.pane_id:
-            return False
-        self_sock = _resolve(self.socket_path)
-        other_sock = _resolve(session_socket)
-        if self_sock is not None and other_sock is not None:
-            return self_sock == other_sock
-        # One side unknown: pane id alone is only trustworthy for local sessions.
-        return not session_is_remote
+        """Is *agent* hark's own pane?"""
+        return self.matches_pane(
+            agent.pane_id,
+            session_socket=session_socket,
+            session_is_remote=session_is_remote,
+        )
 
 
 def detect_self(env: Mapping[str, str] | None = None) -> SelfIdentity | None:
@@ -85,9 +96,14 @@ def detect_self(env: Mapping[str, str] | None = None) -> SelfIdentity | None:
         return None
     if not _is_truthy(env.get("HERDR_ENV")):
         return None
-    pane_id = (env.get("HERDR_PANE_ID") or "").strip()
+    pane_id_value = env.get("HERDR_PANE_ID")
+    pane_id = pane_id_value.strip() if isinstance(pane_id_value, str) else ""
     if not pane_id:
         return None
-    socket_path = (env.get("HERDR_SOCKET_PATH") or "").strip() or None
-    session = (env.get("HERDR_SESSION") or "").strip() or None
+    socket_value = env.get("HERDR_SOCKET_PATH")
+    socket_path = socket_value.strip() if isinstance(socket_value, str) else ""
+    if not _resolve(socket_path):
+        return None
+    session_value = env.get("HERDR_SESSION")
+    session = session_value.strip() if isinstance(session_value, str) else ""
     return SelfIdentity(pane_id=pane_id, socket_path=socket_path, session=session)

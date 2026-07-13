@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
+import sys
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from hark.audio.capture import (
     MicLease,
@@ -80,6 +81,127 @@ def soft_truncate_text(text: str, max_chars: int) -> str:
         if cut >= max(1, max_chars // 4):
             return window[: cut + len(sep)].rstrip()
     return window.rstrip()
+
+
+# B095: operator visual quick-reference for TTS questions (ask / Mode A).
+_ITEM_PREFIX_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:Q\s*)?\d+\s*[\.\)\:\-–—]"  # 1.  1)  Q1:  2-
+    r"|[A-Za-z]\s*[\.\)]"  # A.  b)
+    r"|[-*•·]"  # bullets
+    r")\s+",
+    re.IGNORECASE,
+)
+# Capitalized ordinals only, at start or after sentence/line break — avoids
+# mid-clause false hits like "the second: attempt".
+_WORD_ORDINAL_SPLIT_RE = re.compile(
+    r"(?:(?<=^)|(?<=[.!?\n][ \t])|(?<=\n))"
+    r"(?:"
+    r"One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|"
+    r"First|Second|Third|Fourth|Fifth|Sixth|Seventh|Eighth|Ninth|Tenth"
+    r")"
+    r"\s*[:.—–-]\s+"
+)
+_Q_LABEL_SPLIT_RE = re.compile(
+    r"(?:(?<=^)|(?<=\s))Q\s*\d+\s*[:.\-–—]\s*",
+    re.IGNORECASE,
+)
+
+
+def _strip_item_prefix(item: str) -> str:
+    """Remove a leading list/number prefix so we can renumber cleanly."""
+    s = (item or "").strip()
+    if not s:
+        return s
+    return _ITEM_PREFIX_RE.sub("", s, count=1).strip() or s
+
+
+def extract_question_items(text: str) -> list[str]:
+    """Split multi-item interview prompts when the pattern is obvious.
+
+    Returns a single-element list when no multi-item structure is detected.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    # 1) Explicit multi-line list (numbered, lettered, or bulleted)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) >= 2:
+        prefixed = sum(1 for ln in lines if _ITEM_PREFIX_RE.match(ln))
+        if prefixed >= max(2, (len(lines) + 1) // 2):
+            return [_strip_item_prefix(ln) for ln in lines]
+
+    # 2) Q1: / Q2: labels in a single block
+    q_parts = [p.strip() for p in _Q_LABEL_SPLIT_RE.split(text) if p.strip()]
+    if len(q_parts) >= 2 and _Q_LABEL_SPLIT_RE.search(text):
+        return q_parts
+
+    # 3) Word ordinals: "One: … Two: …" / "First — … Second — …"
+    if _WORD_ORDINAL_SPLIT_RE.search(text):
+        word_parts = [p.strip() for p in _WORD_ORDINAL_SPLIT_RE.split(text) if p.strip()]
+        if len(word_parts) >= 2:
+            return word_parts
+
+    # 4) Several distinct questions (sentence-ending '?')
+    q_sents = re.findall(r"[^?]+?\?", text)
+    if len(q_sents) >= 2:
+        cleaned = [s.strip() for s in q_sents if s.strip()]
+        # Require leftover after last ? is short/empty so we don't chop prose badly
+        tail = text[sum(len(s) for s in q_sents) :].strip()
+        if cleaned and len(tail) < 40:
+            if tail:
+                cleaned[-1] = f"{cleaned[-1]} {tail}".strip()
+            return cleaned
+
+    # 5) Plain multi-line paragraphs (2+ non-trivial lines, not one prose block)
+    if len(lines) >= 2:
+        # Prefer list-like short lines over a reflowed paragraph
+        if all(len(ln) <= 200 for ln in lines) and len(lines) <= 12:
+            return lines
+
+    return [text]
+
+
+def format_tts_question_text(text: str) -> str:
+    """Readable operator form of a TTS question; numbers multi-item prompts."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    items = extract_question_items(text)
+    if len(items) <= 1:
+        return text
+    return "\n".join(f"{i}. {_strip_item_prefix(item)}" for i, item in enumerate(items, 1))
+
+
+def print_tts_question_text(
+    text: str,
+    *,
+    stream: TextIO | None = None,
+) -> None:
+    """Print full question text to the controlling terminal as TTS starts (B095).
+
+    Uses stderr so JSON results / radio partials on stdout stay machine-parseable.
+    """
+    body = format_tts_question_text(text)
+    if not body:
+        return
+    out = stream if stream is not None else sys.stderr
+    bar = "=" * 36
+    print(f"{bar} hark question {bar}", file=out, flush=True)
+    print(body, file=out, flush=True)
+    print("=" * (36 * 2 + len(" hark question ")), file=out, flush=True)
+
+
+def maybe_print_tts_question(cfg: HarkConfig, text: str) -> None:
+    """Print TTS question when ``tts.print_prompt`` is enabled (default on)."""
+    if not bool(getattr(cfg.tts, "print_prompt", True)):
+        return
+    try:
+        print_tts_question_text(text)
+    except Exception:
+        # Never fail speak/listen because the terminal write failed.
+        pass
 
 
 def surface_tts_event(kind: str, **fields: Any) -> None:
@@ -1796,6 +1918,10 @@ def speak_and_listen(
                 discard_ms=discard_ms,
                 pre_arm_ms=pre_arm_ms,
             )
+
+    # Operator visual quick-reference (B095): print full question as TTS starts.
+    # Only this path (ask / tts --listen) — not ambient acks or confirm readbacks.
+    maybe_print_tts_question(cfg, text)
 
     tts_info = run_tts(
         cfg,

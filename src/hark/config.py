@@ -193,6 +193,8 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
             "max_chars",
             "chunk_chars",
             "allow_espeak_fallback",
+            # B095: print question text to terminal on ask / tts --listen
+            "print_prompt",
         }
     ),
     "confirm": frozenset({"mode"}),
@@ -459,6 +461,9 @@ class TtsConfig:
     # Per provider synth request size; long text is multi-chunk played in full.
     chunk_chars: int = 1500
     allow_espeak_fallback: bool = False
+    # Print full question text to the controlling terminal when ask /
+    # tts --listen speaks (B095). Default on; does not affect radio partials.
+    print_prompt: bool = True
 
 
 @dataclass
@@ -737,6 +742,7 @@ language = "en"
 # voice = "ara"
 # max_chars = 0                # total cap per TTS call; 0 = unlimited (speak full agent text)
 # chunk_chars = 1500           # per synth request; multi-chunk plays in full (B091)
+print_prompt = true          # print question text to terminal on ask / tts --listen (B095)
 
 [confirm]
 mode = "auto"
@@ -1404,6 +1410,7 @@ def load_config(path: Path | None = None) -> HarkConfig:
             max_chars=int(tts_raw.get("max_chars", 0)),
             chunk_chars=int(tts_raw.get("chunk_chars", 1500)),
             allow_espeak_fallback=bool(tts_raw.get("allow_espeak_fallback", False)),
+            print_prompt=_as_bool(tts_raw.get("print_prompt"), default=True),
         ),
         confirm=ConfirmConfig(mode=str(confirm_raw.get("mode", "auto"))),
         safety=SafetyConfig(
@@ -1635,6 +1642,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "language": cfg.tts.language,
             "max_chars": cfg.tts.max_chars,
             "chunk_chars": cfg.tts.chunk_chars,
+            "print_prompt": cfg.tts.print_prompt,
         },
         "confirm": {"mode": cfg.confirm.mode},
         "dashboard": {

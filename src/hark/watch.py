@@ -11,6 +11,10 @@ from typing import Any, Callable, TextIO
 from hark.config import HarkConfig, SessionConfig
 from hark.delivery import DeliveryStore
 from hark.events import (
+    is_idle_like_status,
+    looks_like_pending_question,
+    make_agent_needs_input,
+    make_agent_question_changed,
     make_agent_status_event,
     make_watch_armed,
     make_watch_error,
@@ -52,9 +56,15 @@ class _WatchErrorLimiter:
 
 
 class EdgeTracker:
+    """Edge-detect agent status changes; surface false-done menus as needs_input."""
+
     def __init__(self) -> None:
         self._status: dict[tuple[str, str], str] = {}
         self._dedupe: set[tuple[str, str, str, str]] = set()
+        # Last question fingerprint while awaiting input (blocked or false-done).
+        self._last_fp: dict[tuple[str, str], str] = {}
+        # Status value for which we already ran a false-done pane inspect.
+        self._false_done_scanned: dict[tuple[str, str], str] = {}
 
     def process(
         self,
@@ -62,42 +72,281 @@ class EdgeTracker:
         *,
         interest: set[str],
         question_for: Callable[[AgentInfo], str | None] | None = None,
+        detect_false_done: bool = True,
     ) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         for agent in agents:
             key = (agent.session_id, agent.pane_id)
             prev = self._status.get(key)
             cur = agent.status
+
+            # Same status: optional question_changed while still blocked, or
+            # re-scan idle-like for a newly appeared menu (rare but cheap).
             if prev == cur:
+                events.extend(
+                    self._same_status_events(
+                        agent,
+                        key=key,
+                        cur=cur,
+                        interest=interest,
+                        question_for=question_for,
+                        detect_false_done=detect_false_done,
+                    )
+                )
                 continue
+
             self._status[key] = cur
+            first_seen = prev is None
 
-            if prev is None:
-                if cur != "blocked" or "blocked" not in interest:
+            # First observation: only surface blocked (or false-done on idle-like).
+            if first_seen:
+                if cur == "blocked" and "blocked" in interest:
+                    events.extend(
+                        self._emit_blocked(
+                            agent, key=key, prev=prev, cur=cur, question_for=question_for
+                        )
+                    )
+                elif (
+                    detect_false_done
+                    and is_idle_like_status(cur)
+                    and question_for
+                    and self._watch_cares_about_input(interest)
+                ):
+                    events.extend(
+                        self._maybe_false_done(
+                            agent,
+                            key=key,
+                            prev=prev,
+                            cur=cur,
+                            question_for=question_for,
+                            also_completed=cur == "done" and "done" in interest,
+                        )
+                    )
+                continue
+
+            # Leaving interest entirely (e.g. working→working never hits here).
+            if cur not in interest and prev not in interest:
+                # Still catch false done when status becomes idle-like even if
+                # "done" was not in interest but blocked was (Mode A often has both).
+                if (
+                    detect_false_done
+                    and is_idle_like_status(cur)
+                    and question_for
+                    and self._watch_cares_about_input(interest)
+                ):
+                    events.extend(
+                        self._maybe_false_done(
+                            agent,
+                            key=key,
+                            prev=prev,
+                            cur=cur,
+                            question_for=question_for,
+                            also_completed=False,
+                        )
+                    )
+                continue
+
+            if cur == "blocked":
+                events.extend(
+                    self._emit_blocked(
+                        agent, key=key, prev=prev, cur=cur, question_for=question_for
+                    )
+                )
+                continue
+
+            if (
+                detect_false_done
+                and is_idle_like_status(cur)
+                and question_for
+                and self._watch_cares_about_input(interest)
+            ):
+                false_done_events = self._maybe_false_done(
+                    agent,
+                    key=key,
+                    prev=prev,
+                    cur=cur,
+                    question_for=question_for,
+                    also_completed=(
+                        cur in interest or prev in interest
+                    )
+                    and (cur == "done" or "done" in interest or prev in interest),
+                )
+                if false_done_events:
+                    events.extend(false_done_events)
                     continue
-            elif cur not in interest and prev not in interest:
-                continue
 
-            q_text = None
-            if cur == "blocked" and question_for:
-                q_text = question_for(agent)
-            fp = question_fingerprint(q_text or "", None) if q_text else ""
-            dkey = (agent.session_id, agent.pane_id, cur, fp)
-            if cur == "blocked" and fp and dkey in self._dedupe:
-                continue
-            if cur == "blocked" and fp:
-                self._dedupe.add(dkey)
-
-            if cur in interest or (prev is not None and prev in interest):
+            if cur in interest or prev in interest:
                 events.append(
                     make_agent_status_event(
                         agent,
                         from_status=prev,
                         to_status=cur,
-                        question_text=q_text,
+                        question_text=None,
                     )
                 )
         return events
+
+    @staticmethod
+    def _watch_cares_about_input(interest: set[str]) -> bool:
+        return bool(interest & {"blocked", "done", "idle"})
+
+    def _emit_blocked(
+        self,
+        agent: AgentInfo,
+        *,
+        key: tuple[str, str],
+        prev: str | None,
+        cur: str,
+        question_for: Callable[[AgentInfo], str | None] | None,
+    ) -> list[dict[str, Any]]:
+        q_text = question_for(agent) if question_for else None
+        fp = question_fingerprint(q_text or "", None) if q_text else ""
+        dkey = (agent.session_id, agent.pane_id, cur, fp)
+        if fp and dkey in self._dedupe:
+            return []
+        if fp:
+            self._dedupe.add(dkey)
+            self._last_fp[key] = fp
+        return [
+            make_agent_status_event(
+                agent,
+                from_status=prev,
+                to_status=cur,
+                question_text=q_text,
+            )
+        ]
+
+    def _maybe_false_done(
+        self,
+        agent: AgentInfo,
+        *,
+        key: tuple[str, str],
+        prev: str | None,
+        cur: str,
+        question_for: Callable[[AgentInfo], str | None],
+        also_completed: bool,
+    ) -> list[dict[str, Any]]:
+        self._false_done_scanned[key] = cur
+        q_text = question_for(agent)
+
+        def _completed_only(q: str | None = None) -> list[dict[str, Any]]:
+            if not also_completed:
+                return []
+            return [
+                make_agent_status_event(
+                    agent, from_status=prev, to_status=cur, question_text=q
+                )
+            ]
+
+        if not q_text:
+            return _completed_only()
+
+        hit = looks_like_pending_question(q_text)
+        if not hit:
+            return _completed_only()
+
+        fp = question_fingerprint(q_text, list(hit.choices) or None)
+        dkey = (agent.session_id, agent.pane_id, "needs_input", fp)
+        if fp and dkey in self._dedupe:
+            return _completed_only(q_text)
+        if fp:
+            self._dedupe.add(dkey)
+            self._last_fp[key] = fp
+
+        out: list[dict[str, Any]] = [
+            make_agent_needs_input(
+                agent,
+                from_status=prev,
+                to_status=cur,
+                question_text=q_text,
+                hit=hit,
+            )
+        ]
+        if also_completed and cur == "done":
+            completed = make_agent_status_event(
+                agent,
+                from_status=prev,
+                to_status=cur,
+                question_text=q_text,
+            )
+            # Lower priority so needs_input wins attention in sorted UIs.
+            completed["priority"] = min(int(completed.get("priority") or 50), 40)
+            completed["false_done"] = True
+            out.append(completed)
+        elif also_completed and cur != "done":
+            out.extend(_completed_only(q_text))
+        return out
+
+    def _same_status_events(
+        self,
+        agent: AgentInfo,
+        *,
+        key: tuple[str, str],
+        cur: str,
+        interest: set[str],
+        question_for: Callable[[AgentInfo], str | None] | None,
+        detect_false_done: bool,
+    ) -> list[dict[str, Any]]:
+        """While status is unchanged: question_changed (blocked) or late false-done.
+
+        Idle-like re-scan only once per status epoch (avoids pane-read spam).
+        """
+        if not question_for:
+            return []
+
+        # Re-block heuristic: still blocked, question text changed.
+        if cur == "blocked" and "blocked" in interest:
+            q_text = question_for(agent)
+            if not q_text:
+                return []
+            fp = question_fingerprint(q_text, None)
+            prev_fp = self._last_fp.get(key)
+            if not fp or fp == prev_fp:
+                if fp:
+                    self._last_fp[key] = fp
+                return []
+            self._last_fp[key] = fp
+            dkey = (agent.session_id, agent.pane_id, "question_changed", fp)
+            if dkey in self._dedupe:
+                return []
+            self._dedupe.add(dkey)
+            return [
+                make_agent_question_changed(
+                    agent, to_status=cur, question_text=q_text
+                )
+            ]
+
+        # One late re-check after status settled on done/idle (menu may paint
+        # after the status edge). Skip if transition path already inspected.
+        if (
+            detect_false_done
+            and is_idle_like_status(cur)
+            and self._watch_cares_about_input(interest)
+            and self._false_done_scanned.get(key) != cur
+        ):
+            self._false_done_scanned[key] = cur
+            q_text = question_for(agent)
+            if not q_text:
+                return []
+            hit = looks_like_pending_question(q_text)
+            if not hit:
+                return []
+            fp = question_fingerprint(q_text, list(hit.choices) or None)
+            dkey = (agent.session_id, agent.pane_id, "needs_input", fp)
+            if not fp or dkey in self._dedupe:
+                return []
+            self._dedupe.add(dkey)
+            self._last_fp[key] = fp
+            return [
+                make_agent_needs_input(
+                    agent,
+                    from_status=cur,
+                    to_status=cur,
+                    question_text=q_text,
+                    hit=hit,
+                )
+            ]
+        return []
 
 
 def run_watch(
@@ -150,6 +399,8 @@ def run_watch(
     heartbeat_s = max(5.0, cfg.watch.heartbeat_s)
     last_heartbeat = time.monotonic()
 
+    detect_false_done = bool(getattr(cfg.watch, "detect_false_done", True))
+
     def emit(event: dict[str, Any]) -> None:
         question = event.get("question")
         fingerprint = (
@@ -157,7 +408,8 @@ def run_watch(
         )
         if (
             store
-            and event.get("kind") in ("agent.blocked", "agent.question_changed")
+            and event.get("kind")
+            in ("agent.blocked", "agent.question_changed", "agent.needs_input")
             and isinstance(fingerprint, str)
             and fingerprint.strip()
         ):
@@ -203,6 +455,7 @@ def run_watch(
                 sessions=[c.session.id for c in clients],
                 question_for=question_for if read_questions else None,
                 store=store,
+                detect_false_done=detect_false_done,
             )
         except Exception as exc:
             # Expected disconnects should normally reconnect inside _watch_socket.
@@ -224,7 +477,10 @@ def run_watch(
                     emit(make_watch_error(client.session.id, str(exc)))
                     continue
                 for event in tracker.process(
-                    agents, interest=interest, question_for=question_for
+                    agents,
+                    interest=interest,
+                    question_for=question_for,
+                    detect_false_done=detect_false_done,
                 ):
                     emit(event)
             if once:
@@ -275,6 +531,7 @@ def _watch_socket(
     sessions: list[str],
     question_for: Callable[[AgentInfo], str | None] | None,
     store: DeliveryStore | None,
+    detect_false_done: bool = True,
 ) -> int:
     """Hybrid: socket events trigger refresh + poll edges; heartbeat thread.
 
@@ -300,7 +557,10 @@ def _watch_socket(
             emit(make_watch_error(client.session.id, str(exc)))
             return
         for event in tracker.process(
-            agents, interest=interest, question_for=question_for
+            agents,
+            interest=interest,
+            question_for=question_for,
+            detect_false_done=detect_false_done,
         ):
             emit(event)
 
@@ -313,7 +573,10 @@ def _watch_socket(
             emit(make_watch_error(client.session.id, str(exc)))
             return
         for event in tracker.process(
-            agents, interest=interest, question_for=question_for
+            agents,
+            interest=interest,
+            question_for=question_for,
+            detect_false_done=detect_false_done,
         ):
             emit(event)
 

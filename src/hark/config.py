@@ -36,7 +36,14 @@ KNOWN_TOP_KEYS = frozenset(
 
 KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
     "herdr": frozenset({"sessions"}),
-    "watch": frozenset({"statuses", "debounce_ms", "transport", "poll_ms", "heartbeat_s"}),
+    "watch": frozenset({
+        "statuses",
+        "debounce_ms",
+        "transport",
+        "poll_ms",
+        "heartbeat_s",
+        "detect_false_done",
+    }),
     "audio": frozenset({
         "half_duplex",
         "post_tts_guard_ms",
@@ -96,6 +103,9 @@ class WatchConfig:
     transport: str = "auto"  # auto | socket | poll
     poll_ms: int = 1000
     heartbeat_s: float = 30.0
+    # When status is done/idle but trailing pane text looks like a menu/ask,
+    # emit agent.needs_input (false done). Default on for dogfood.
+    detect_false_done: bool = True
 
 
 @dataclass
@@ -215,6 +225,7 @@ statuses = ["blocked", "done"]
 debounce_ms = 250
 transport = "auto"           # auto | socket | poll
 poll_ms = 1000
+detect_false_done = true     # done/idle + menu-like pane → agent.needs_input
 
 [audio]
 half_duplex = true
@@ -309,6 +320,18 @@ def _as_list_str(value: Any, default: list[str]) -> list[str]:
     if isinstance(value, str):
         return [p.strip() for p in value.split(",") if p.strip()]
     return list(default)
+
+
+def _as_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return default
 
 
 def _dedupe_phrases(phrases: list[str]) -> list[str]:
@@ -480,6 +503,10 @@ def load_config(path: Path | None = None) -> HarkConfig:
             transport=str(watch_raw.get("transport", "auto")),
             poll_ms=int(watch_raw.get("poll_ms", 1000)),
             heartbeat_s=float(watch_raw.get("heartbeat_s", 30.0)),
+            detect_false_done=_as_bool(
+                watch_raw.get("detect_false_done"),
+                default=True,
+            ),
         ),
         audio=AudioConfig(
             half_duplex=bool(audio_raw.get("half_duplex", True)),
@@ -615,6 +642,8 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "debounce_ms": cfg.watch.debounce_ms,
             "transport": cfg.watch.transport,
             "poll_ms": cfg.watch.poll_ms,
+            "heartbeat_s": cfg.watch.heartbeat_s,
+            "detect_false_done": cfg.watch.detect_false_done,
         },
         "audio": {
             "half_duplex": cfg.audio.half_duplex,

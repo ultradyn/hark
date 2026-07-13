@@ -142,11 +142,16 @@ tail -n0 -F ~/.local/state/hark/system.jsonl ~/.local/state/hark/ambient.jsonl
 6. If stale: re-context, re-ask human by voice, do not force-send.  
 7. Short ack TTS. Leave Monitor armed.  
 
+## On `agent.needs_input` (false done)
+
+Herdr may report `done`/`idle` while the pane still shows a multi-option menu. Watch emits **`agent.needs_input`** (priority like blocked, `false_done: true`) when trailing text looks menu-like. **Treat exactly like `agent.blocked`** — context, speak, answer. Prefer bound `event_id` from the needs_input line.
+
 ## On `done` / completed
 
-1. `hark context … --lines 40`.  
-2. Judge false done vs real completion.  
-3. TTS only when useful.  
+1. If a paired `agent.needs_input` already fired for this pane, handle that first (do not treat as finished).  
+2. Else `hark context … --lines 40`.  
+3. Judge false done vs real completion (menu still on screen?).  
+4. TTS only when useful.  
 
 ## Meta (during answer windows / if human interrupts)
 
@@ -178,7 +183,7 @@ Handle one target fully before the next. Announce count when >1 (by TTS). Never 
 | xAI 401 | `grok login` |
 | Audio | `hark devices` |
 | Stale answer | re-read context; re-prompt human by voice |
-| False done | context judgment; stay quiet if busy |
+| False done | prefer `agent.needs_input` from watch; else context judgment; stay quiet if busy |
 | Stuck radio listen | partial → `hark listen-end` if they want out |
 
 ## Not this skill

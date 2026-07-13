@@ -49,7 +49,8 @@ Consumers **MUST ignore unknown fields**.
 | `watch.error` | Recoverable/fatal watch error |
 | `agent.blocked` | Needs human input |
 | `agent.question_changed` | Still blocked; ask changed |
-| `agent.completed` | Transition to done (judgment required) |
+| `agent.needs_input` | Status done/idle but pane still shows a menu/ask (false done) — treat like blocked |
+| `agent.completed` | Transition to done (judgment required; may pair with needs_input) |
 | `agent.state_changed` | Other transitions if `--all-transitions` |
 | `target.invalidated` | Pane closed/moved; cancel in-flight |
 | `answer.transcribed` | (daemon/library) STT finished |

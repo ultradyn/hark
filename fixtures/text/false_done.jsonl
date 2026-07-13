@@ -1,0 +1,8 @@
+{"id":"nomad-menu","text":"Which option should I use for the Nomad worker path?\n\n1. Use the default path\n2. Custom path under /opt\n3. Skip worker setup\n\nReply with a number or option.","expect_pending":true,"expect_reasons_any":["numbered_menu","choice_phrase"]}
+{"id":"letter-menu","text":"Pick a strategy:\n\na) Continue with current plan\nb) Rewrite the module\nc) Abort\n\nWhich option?","expect_pending":true,"expect_reasons_any":["numbered_menu","choice_phrase"]}
+{"id":"yes-no-allow","text":"Allow running npm install --force? [y/n]","expect_pending":true,"expect_reasons_any":["yes_no_prompt"]}
+{"id":"reply-with-only","text":"I need a decision on the deploy target.\nReply with staging or production.","expect_pending":true,"expect_reasons_any":["choice_phrase"]}
+{"id":"clean-done","text":"All tasks completed successfully.\nTests passed: 42\nReady for review.","expect_pending":false}
+{"id":"prose-no-menu","text":"I finished the migration. The database schema is updated and the app starts cleanly.","expect_pending":false}
+{"id":"single-number-not-enough","text":"Step 1. already done earlier in the log dump without a question","expect_pending":false}
+{"id":"permission-question","text":"Do you want me to proceed with deleting the temporary branch?","expect_pending":true,"expect_reasons_any":["yes_no_prompt","trailing_question"]}

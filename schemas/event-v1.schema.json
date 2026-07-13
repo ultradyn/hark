@@ -32,6 +32,7 @@
         "watch.armed",
         "agent.blocked",
         "agent.question_changed",
+        "agent.needs_input",
         "agent.completed",
         "agent.failed",
         "agent.state_changed",

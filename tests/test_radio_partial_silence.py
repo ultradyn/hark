@@ -28,7 +28,7 @@ def _stub_listen_deps(monkeypatch, speech, *, transcript: str = "okay hark send"
     monkeypatch.setattr(
         speech,
         "resolve_stt",
-        lambda *args: SimpleNamespace(
+        lambda *args, **kwargs: SimpleNamespace(
             name="fake",
             transcribe=lambda wav: SimpleNamespace(text=transcript, provider="fake"),
         ),
@@ -188,7 +188,7 @@ def test_radio_partials_emit_before_end_phrase(monkeypatch):
     monkeypatch.setattr(
         speech,
         "resolve_stt",
-        lambda *args: SimpleNamespace(name="fake", transcribe=fake_transcribe),
+        lambda *args, **kwargs: SimpleNamespace(name="fake", transcribe=fake_transcribe),
     )
 
     result = speech.run_listen(

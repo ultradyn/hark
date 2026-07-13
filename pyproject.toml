@@ -27,6 +27,12 @@ smart-turn = [
   "onnxruntime>=1.17",
   "transformers>=4.0",
 ]
+# Optional local full-STT for offline/privacy post-wake prompts (B072).
+# Cloud remains default (ADR-004). Do not use for continuous ambient wake.
+# Moonshine is a stretch path — install separately if desired.
+local-stt = [
+  "faster-whisper>=1.0",
+]
 
 [project.scripts]
 hark = "hark.cli:main"
@@ -50,4 +56,5 @@ pythonpath = ["src"]
 markers = [
   "vosk: optional offline Vosk re-decode tests (needs model + vosk extra)",
   "sherpa_kws: optional Sherpa-ONNX KWS wake eval (B070 backend + model; skip if absent)",
+  "local_stt: optional local full-STT tests (needs faster-whisper / model)",
 ]

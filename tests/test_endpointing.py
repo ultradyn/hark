@@ -422,7 +422,7 @@ def test_radio_mode_neither_builds_nor_passes_an_endpoint_strategy(monkeypatch):
         )
 
     monkeypatch.setattr(speech, "build_endpoint_strategy", lambda **kwargs: (_ for _ in ()).throw(AssertionError("radio must not build endpoint strategy")))
-    monkeypatch.setattr(speech, "resolve_stt", lambda *args: SimpleNamespace(
+    monkeypatch.setattr(speech, "resolve_stt", lambda *args, **kwargs: SimpleNamespace(
         name="fake",
         transcribe=lambda wav: SimpleNamespace(text="okay hark send", provider="fake"),
     ))
@@ -491,7 +491,7 @@ def test_silence_mode_builds_and_wires_the_configured_endpoint_strategy(monkeypa
         )
 
     monkeypatch.setattr(speech, "build_endpoint_strategy", fake_build)
-    monkeypatch.setattr(speech, "resolve_stt", lambda *args: SimpleNamespace(
+    monkeypatch.setattr(speech, "resolve_stt", lambda *args, **kwargs: SimpleNamespace(
         name="fake",
         transcribe=lambda wav: SimpleNamespace(text="captured", provider="fake"),
     ))

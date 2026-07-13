@@ -23,6 +23,14 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   before STT so edge phonemes are less often clipped at the energy gate. Clamped
   under the inter-segment quiet budget (`min(300, radio_partial_silence_s×400)`).
   Silence `end_mode` unchanged. Config: `listen.radio_segment_pad_ms`.
+- Optional local full-STT (B072 / I004): pluggable `faster_whisper` (prefer
+  `tiny.en` / `base.en` int8 CPU) and stretch `moonshine` behind the existing
+  `SttProvider` interface. Cloud remains default (`stt.provider = "auto"`,
+  ADR-004). Config/env: `local_model`, `local_device`, `local_compute_type`,
+  `local_fail_open` (default true → cloud auto when local missing),
+  `HARK_STT_PROVIDER` / `HARK_STT_LOCAL_*`. Extra: `pip install 'hark[local-stt]'`.
+  Documented B069 RTF (~0.1–0.15 tiny.en on short clips). Not for continuous
+  ambient wake. `hark doctor` / `hark providers` surface readiness.
 - **Live web dashboard** (I003 / B060–B067): `hark serve` — REST + SSE backend
   implementing the new versioned `hark.dashboard.v1` contract
   ([docs/DASHBOARD.md](docs/DASHBOARD.md), `schemas/dashboard-v1/`,

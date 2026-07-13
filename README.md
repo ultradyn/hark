@@ -70,7 +70,7 @@ The verse is playful; **routing and confirmation are not.** Site: **[hark.xk.io]
 - Fast, low-overhead, always-on friendly  
 - Event-driven Herdr integration (socket subscribe; poll fallback)  
 - Reliable multi-agent / multi-session targeting with **fingerprint + revision** checks  
-- Pluggable cloud STT/TTS (no local speech model)  
+- Pluggable cloud STT/TTS (default); optional local full-STT via `hark[local-stt]`  
 - Confirm ordinary answers only when unsure; **always** confirm permissions/destructive  
 - Recoverable across disconnects (no silent double-send)  
 

@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T11:17:09Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T11:18:10Z"
 complexity: medium
 created_at: "2026-07-13T11:10:30Z"
 depends_on: []
+duration_minutes: 1.028878003
 estimate_hours: 1
 id: B032
 priority: high
 started_at: "2026-07-13T11:17:09Z"
-status: in_progress
+status: done
 tags: []
 title: Bare herald/hark tokens miss wake; near-miss not reaching Mode A monitor
-updated_at: "2026-07-13T11:17:09Z"
+updated_at: "2026-07-13T11:18:10Z"
 ---
 ## Dogfood
 Wake snips show bare tokens that should be near-misses (or soft-wake):

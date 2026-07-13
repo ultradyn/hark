@@ -33,10 +33,11 @@ jobs:
           # workflow_dispatch may pass a tag; default ref is the pushed tag
           ref: ${{ inputs.tag || github.ref }}
 
+      # Do NOT set registry-url here — it writes a dummy NODE_AUTH_TOKEN into
+      # .npmrc and breaks OIDC trusted publishing (404 / ENEEDAUTH).
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
 
       - name: Sync skills from monorepo
         run: node ./scripts/sync-skills.mjs
@@ -77,15 +78,14 @@ jobs:
 
       # Trusted publishing: npm exchanges the GitHub OIDC token for a
       # short-lived publish token and attaches build provenance automatically.
-      # setup-node with registry-url injects a dummy NODE_AUTH_TOKEN that
-      # breaks OIDC (404) — must clear it. No NPM_TOKEN secret.
-      # Configure once: https://www.npmjs.com/package/@ultradyn/hark/access
+      # No NPM_TOKEN secret. Configure once at:
+      # https://www.npmjs.com/package/@ultradyn/hark/access
       # → Trusted Publisher → GitHub Actions
-      #    org/user: clankercode  repo: hark  workflow: release.yml
+      #    Organization/user: clankercode
+      #    Repository: hark
+      #    Workflow filename: release.yml
+      #    Environment: (leave blank)
       - name: Publish @ultradyn/hark to npm
-        env:
-          # Empty string clears the placeholder from actions/setup-node
-          NODE_AUTH_TOKEN: ""
         run: npm publish --access public
 
       - name: Create GitHub Release

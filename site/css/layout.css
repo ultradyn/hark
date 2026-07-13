@@ -20,21 +20,26 @@
   max-width: 100%;
   box-sizing: border-box;
   overflow: visible;
-  /* Room for title drop-shadow + primary button glow inside the shell */
-  padding-inline: 0.25rem;
+  /*
+    Glow budget: title drop-shadow is ~40px; primary button box-shadow ~32–44px.
+    Keep that inside the shell so html/body overflow-x:clip cannot slice it.
+  */
+  padding-inline: clamp(1.25rem, 3vw, 2.5rem);
 }
 
 .hero > * {
   min-width: 0;
   max-width: 100%;
+  overflow: visible;
 }
 
 /* Diagram column only: prevent SVG from painting past the shell RHS */
 .hero > :last-child {
   overflow-x: clip;
+  overflow-y: visible;
   /* arch figure still has margin:0; allow its box-shadow a little air */
-  padding: 0.15rem;
-  margin: -0.15rem;
+  padding: 0.25rem;
+  margin: -0.25rem;
 }
 
 @media (min-width: 900px) {
@@ -42,7 +47,8 @@
     /* Slight left bias so diagram sits left of the page edge, still large */
     grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
     gap: var(--s-5);
-    padding: var(--s-7) 0.35rem var(--s-8);
+    padding-block: var(--s-7) var(--s-8);
+    /* keep glow budget (padding-inline from base .hero) */
     min-height: min(78vh, 52rem);
     align-items: start;
   }
@@ -74,6 +80,10 @@
   filter: drop-shadow(0 0 40px var(--herald-glow));
   /* Avoid oversized title crushing mobile first fold */
   max-width: 8ch;
+  /* filter creates a containing box; allow shadow to paint outside text box */
+  overflow: visible;
+  padding-inline: 0.06em;
+  margin-inline: -0.06em;
 }
 
 @media (max-width: 719px) {
@@ -105,6 +115,9 @@
   gap: var(--s-2);
   margin-top: var(--s-5);
   row-gap: var(--s-2);
+  padding: 0.35rem 0.2rem;
+  margin-inline: -0.2rem;
+  overflow: visible;
 }
 
 @media (max-width: 719px) {

@@ -233,6 +233,10 @@ a.product-link:hover {
   flex-wrap: wrap;
   gap: var(--s-3);
   margin-top: var(--s-6);
+  /* Primary button glow paints outside the hit box */
+  padding: 0.5rem 0.35rem;
+  margin-inline: -0.35rem;
+  overflow: visible;
 }
 
 /* Mobile first fold: keep CTAs side-by-side when they fit; stack only on very narrow */

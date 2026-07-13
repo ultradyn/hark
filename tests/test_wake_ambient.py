@@ -103,8 +103,8 @@ def test_wake_remainder_is_discarded_and_cloud_listen_captures_prompt(monkeypatc
     )
     calls = []
 
-    def fake_listen(cfg, *, end_mode):
-        calls.append((cfg, end_mode))
+    def fake_listen(cfg, *, end_mode, **kwargs):
+        calls.append((cfg, end_mode, kwargs))
         return listened
 
     monkeypatch.setattr("hark.ambient.run_listen", fake_listen)

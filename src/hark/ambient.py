@@ -12,6 +12,7 @@ from hark.audio.capture import MicLease, record_seconds
 from hark.config import HarkConfig
 from hark.debug_snips import purge_old_debug_snips, save_wake_snippet
 from hark.events import new_event_id, utc_now_iso
+from hark.lifecycle import install_signal_handlers, shutdown_requested
 from hark.speech import run_listen, run_tts
 from hark.syslog import log as syslog
 from hark.wake import WakeBackend, WakeHit, build_wake_backend
@@ -42,6 +43,8 @@ def _wait_for_wake(
     last_debug = 0.0
     snips_since_purge = 0
     while time.monotonic() < deadline:
+        if shutdown_requested():
+            return None
         try:
             pcm = record_seconds(snippet, sample_rate=16000)
         except Exception as exc:
@@ -268,9 +271,14 @@ def run_ambient_loop(
     announce: bool = True,
     idle_log_s: float = 60.0,
 ) -> int:
-    """Continuous ambient: load vosk once, wake→prompt→repeat until Ctrl+C."""
+    """Continuous ambient: load vosk once, wake→prompt→repeat until Ctrl+C/SIGTERM.
+
+    SIGTERM during an active listen does not abort mid-recording: we finish the
+    current wake→STT cycle, emit the event, then exit.
+    """
     out = out or sys.stdout
     cfg.ambient.enabled = True
+    install_signal_handlers()
 
     if not cfg.ambient.model_path and cfg.ambient.engine == "vosk":
         err = {
@@ -340,7 +348,7 @@ def run_ambient_loop(
 
     last_idle = time.monotonic()
     try:
-        while True:
+        while not shutdown_requested():
             result = run_ambient(
                 cfg,
                 once=True,
@@ -349,34 +357,42 @@ def run_ambient_loop(
                 backend=backend,
                 out=out,
             )
-            line = ambient_event_line(result)
-            line = {k: v for k, v in line.items() if v is not None}
-            out.write(json.dumps(line, separators=(",", ":")) + "\n")
-            out.flush()
-            syslog(
-                str(line.get("kind") or "ambient.event"),
-                component="ambient",
-                level="info" if result.activated else "debug",
-                message=(result.text or result.phrase or "")[:200],
-                phrase=result.phrase,
-                text=result.text,
-                wake_backend=result.wake_backend,
-                listen=result.listen,
-                event_id=result.event_id,
-            )
+            # Always emit if we got something useful; skip pure timeouts when shutting down
+            if result.activated or not shutdown_requested():
+                line = ambient_event_line(result)
+                line = {k: v for k, v in line.items() if v is not None}
+                out.write(json.dumps(line, separators=(",", ":")) + "\n")
+                out.flush()
+                syslog(
+                    str(line.get("kind") or "ambient.event"),
+                    component="ambient",
+                    level="info" if result.activated else "debug",
+                    message=(result.text or result.phrase or "")[:200],
+                    phrase=result.phrase,
+                    text=result.text,
+                    wake_backend=result.wake_backend,
+                    listen=result.listen,
+                    event_id=result.event_id,
+                )
 
+            if shutdown_requested():
+                break
             if result.activated:
                 last_idle = time.monotonic()
             elif time.monotonic() - last_idle >= idle_log_s:
                 last_idle = time.monotonic()
             time.sleep(0.25)
     except KeyboardInterrupt:
-        stop = {
-            "schema": "hark.event.v1",
-            "kind": "ambient.stopped",
-            "event_id": new_event_id(),
-            "observed_at": utc_now_iso(),
-        }
-        out.write(json.dumps(stop, separators=(",", ":")) + "\n")
-        out.flush()
-        return 0
+        pass
+
+    stop = {
+        "schema": "hark.event.v1",
+        "kind": "ambient.stopped",
+        "event_id": new_event_id(),
+        "observed_at": utc_now_iso(),
+        "graceful": True,
+    }
+    out.write(json.dumps(stop, separators=(",", ":")) + "\n")
+    out.flush()
+    syslog("ambient.stopped", component="ambient", graceful=True)
+    return 0

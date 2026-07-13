@@ -22,6 +22,7 @@ from hark.audio.playback import play_wav_bytes, write_wav
 from hark.config import HarkConfig
 from hark.confirm_lexicon import classify_confirm_reply
 from hark.exitcodes import ABORT, OK, PROVIDER, TIMEOUT
+from hark.lifecycle import BusySection
 from hark.listen_end import EndMode, evaluate_radio_transcript, parse_end_mode
 from hark.providers.base import ProviderError
 from hark.providers.resolve import resolve_stt, resolve_tts
@@ -197,7 +198,7 @@ def run_listen(
     store = UsageStore()
     configure_cues_from_config(cfg)
 
-    with MicLease("listen"):
+    with MicLease("listen"), BusySection("listen"):
         if mode is EndMode.SILENCE:
             if guard > 0:
                 time.sleep(guard)

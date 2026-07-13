@@ -1,16 +1,18 @@
 ---
+claimed_at: "2026-07-13T11:07:51Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T06:40:31Z"
 depends_on: []
 estimate_hours: 1
 id: B009
 priority: high
-status: pending
-tags:
-    - ux
-    - mode-a
+started_at: "2026-07-13T11:07:51Z"
+status: in_progress
+tags: []
 title: Multi-session voice queue UX polish
-updated_at: "2026-07-13T06:40:31Z"
+updated_at: "2026-07-13T11:07:51Z"
 ---
 ## Problem
 Skill says announce count when >1 blocked agents; needs reliable queue TTS and skip/next voice meta commands end-to-end.

@@ -6,16 +6,13 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+## 0.1.8
+
 - **Install freshness (B100):** `hark doctor` reports PATH / `uv tool` install vs
   local source (`install: stale|frozen|editable`), missing cmds (e.g. `start`/`stop`),
   and reinstall hint `uv tool install -e . --force`. Skill SETUP + dogfood notes.
-- fix(tts/streaming, B105): pause-gate live streaming TTS acks — when
-  `[ambient].streaming` is on, `hark tts` waits for operator quiet ≥
-  `streaming_ack_min_quiet_s` (default **2.0 s**) or listen end before play +
-  mic mute, so continuous speech is not barged into. Voice energy is published
-  during capture; HOLD mode still waits for capture idle (B097). Partial HEP /
-  skill note the quiet gate; config sample documents default-on once dogfooded.
-- fix(ambient, B104): dual-write HEP wake events to ambient.jsonl even when ambient stdout is redirected (e.g. restart log), so Mode A `hark monitor` always sees ambient.prompt/partials.
+- fix(delivery, B101): prune stale bound queue events; `hark queue --announce` only
+  counts currently answerable targets; `hark queue --prune` expires junk.
 - fix(monitor, B102): singleflight lock on `hark monitor` (`monitor.pid` + flock)
   so a second consumer refuses instead of duplicating HEP wakes; skill documents
   arm-once; `hark start --status` reports monitor holder; `--allow-multiple` debug only.
@@ -23,6 +20,13 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   **end** (never cancel). Utterance-final `… over` without a period (common
   radio pause join / STT) is a prosign; only phrasal-verb finals (`turn it
   over`, `take over`, …) stay blocked.
+- fix(ambient, B104): dual-write HEP wake events to ambient.jsonl even when ambient stdout is redirected (e.g. restart log), so Mode A `hark monitor` always sees ambient.prompt/partials.
+- fix(tts/streaming, B105): pause-gate live streaming TTS acks — when
+  `[ambient].streaming` is on, `hark tts` waits for operator quiet ≥
+  `streaming_ack_min_quiet_s` (default **2.0 s**) or listen end before play +
+  mic mute, so continuous speech is not barged into. Voice energy is published
+  during capture; HOLD mode still waits for capture idle (B097). Partial HEP /
+  skill note the quiet gate; config sample documents default-on once dogfooded.
 - **Handsfree workers (B089):** `hark start` / `stop` / `restart` for ambient +
   `watch --for-monitor` (idempotent start, SIGTERM then SIGKILL, `mode-a.pids`);
   preferred over `./scripts/run-mode-a.sh`. `hark start --status` for running state.

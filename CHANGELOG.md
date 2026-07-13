@@ -6,6 +6,11 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Self-detection (B029): when `hark watch` runs inside a herdr pane it now
+  detects its own pane (via `HERDR_ENV`/`HERDR_PANE_ID`/`HERDR_SOCKET_PATH`) and
+  excludes it from watch — no self events, no self pane reads (prevents feedback
+  loops). Excluded pane is surfaced on `watch.armed` as `self_target`; escape
+  hatch `HARK_WATCH_INCLUDE_SELF=1` disables exclusion.
 - Optional TTS/listen overlap pre-arm (`audio.overlap_prearm`, `overlap_discard_ms`): start
   capture near TTS end while discarding audio until TTS ends + residual (B004). Half-duplex
   remains the default.

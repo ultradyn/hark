@@ -145,8 +145,9 @@ def make_watch_armed(
     *,
     transport: str,
     statuses: list[str],
+    self_target: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    event: dict[str, Any] = {
         "schema": __schema__,
         "event_id": new_event_id(),
         "observed_at": utc_now_iso(),
@@ -163,6 +164,10 @@ def make_watch_armed(
             "pane still shows a menu (false done)."
         ),
     }
+    if self_target:
+        # Own pane (hark runs inside herdr): excluded from watch to avoid loops.
+        event["self_target"] = self_target
+    return event
 
 
 def make_watch_heartbeat(sessions: list[str]) -> dict[str, Any]:
@@ -444,6 +449,8 @@ def monitor_profile(event: dict[str, Any]) -> dict[str, Any]:
     elif kind == "watch.armed":
         compact["sessions"] = event.get("sessions")
         compact["instructions"] = event.get("instructions")
+        if event.get("self_target"):
+            compact["self_target"] = event["self_target"]
     elif kind == "watch.error":
         compact["error"] = event.get("error")
         compact["session_id"] = event.get("session_id")

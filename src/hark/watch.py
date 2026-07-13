@@ -26,6 +26,7 @@ from hark.fingerprint import question_fingerprint
 from hark.herdr.client import AgentInfo, HerdrClient, HerdrError
 from hark.herdr.socket_client import is_expected_disconnect
 from hark.herdr.tunnel import Tunnel, ensure_tunnel
+from hark.self_detect import SelfIdentity, detect_self
 
 # Min gap between watch.error for expected socket drops (Broken pipe, reset, …).
 _EXPECTED_DISCONNECT_ERROR_INTERVAL_S = 60.0
@@ -349,6 +350,32 @@ class EdgeTracker:
         return []
 
 
+def _filter_self(
+    agents: list[AgentInfo],
+    self_ident: SelfIdentity | None,
+    client: HerdrClient,
+) -> list[AgentInfo]:
+    """Drop hark's own pane so watch never forwards or reacts to itself.
+
+    When hark runs inside a herdr pane, that pane appears in ``agent list``.
+    Filtering it here (before edge-detection and pane reads) prevents both the
+    event feedback loop and self-pane reads.
+    """
+    if self_ident is None:
+        return agents
+    session_socket = getattr(client, "socket_path", None)
+    session_is_remote = bool(getattr(client.session, "ssh", None))
+    return [
+        agent
+        for agent in agents
+        if not self_ident.matches_agent(
+            agent,
+            session_socket=session_socket,
+            session_is_remote=session_is_remote,
+        )
+    ]
+
+
 def run_watch(
     cfg: HarkConfig,
     *,
@@ -394,6 +421,7 @@ def run_watch(
         clients.append(HerdrClient(s))
 
     tracker = EdgeTracker()
+    self_ident = detect_self()
     store = DeliveryStore() if register_events else None
     poll_s = max(0.2, cfg.watch.poll_ms / 1000.0)
     heartbeat_s = max(5.0, cfg.watch.heartbeat_s)
@@ -424,6 +452,7 @@ def run_watch(
             [c.session.id for c in clients],
             transport=transport if transport != "auto" else "poll",
             statuses=sorted(interest),
+            self_target=self_ident.target if self_ident else None,
         )
     )
 
@@ -456,6 +485,7 @@ def run_watch(
                 question_for=question_for if read_questions else None,
                 store=store,
                 detect_false_done=detect_false_done,
+                self_ident=self_ident,
             )
         except Exception as exc:
             # Expected disconnects should normally reconnect inside _watch_socket.
@@ -476,6 +506,7 @@ def run_watch(
                 except HerdrError as exc:
                     emit(make_watch_error(client.session.id, str(exc)))
                     continue
+                agents = _filter_self(agents, self_ident, client)
                 for event in tracker.process(
                     agents,
                     interest=interest,
@@ -532,6 +563,7 @@ def _watch_socket(
     question_for: Callable[[AgentInfo], str | None] | None,
     store: DeliveryStore | None,
     detect_false_done: bool = True,
+    self_ident: SelfIdentity | None = None,
 ) -> int:
     """Hybrid: socket events trigger refresh + poll edges; heartbeat thread.
 
@@ -556,6 +588,7 @@ def _watch_socket(
             # list_agents failures are operational; always surface (not disconnect spam).
             emit(make_watch_error(client.session.id, str(exc)))
             return
+        agents = _filter_self(agents, self_ident, client)
         for event in tracker.process(
             agents,
             interest=interest,
@@ -572,6 +605,7 @@ def _watch_socket(
         except HerdrError as exc:
             emit(make_watch_error(client.session.id, str(exc)))
             return
+        agents = _filter_self(agents, self_ident, client)
         for event in tracker.process(
             agents,
             interest=interest,

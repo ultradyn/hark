@@ -80,3 +80,4 @@ bugs:
     - file: B079-ambient-wake-keep-mic-stream-o.todo
     - file: B080-test-boot-tts-test-default-boo.todo
     - file: B081-optional-local-streaming-stt-f.todo
+    - file: B082-when-we-do-the-rust-port-it-sh.todo

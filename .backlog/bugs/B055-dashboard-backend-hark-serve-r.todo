@@ -1,0 +1,31 @@
+---
+complexity: high
+created_at: "2026-07-13T14:18:57Z"
+depends_on:
+    - B054
+estimate_hours: 4
+id: B055
+priority: high
+status: pending
+tags:
+    - dashboard
+    - backend
+    - sse
+    - server
+title: 'Dashboard backend: hark serve (REST snapshots + SSE live stream)'
+updated_at: "2026-07-13T14:18:57Z"
+---
+## Scope
+Thin Python implementation of hark.dashboard.v1 (see docs/plans/I003-dashboard.md). Stdlib http.server + threads — no new hard deps (keep pyproject lean).
+
+- Tail + backfill state JSONLs (watch/ambient/system/usage/events/deliveries) into the SSE stream + /events paging (Last-Event-ID -> event_id backfill)
+- Snapshot endpoints: health(+doctor), config (redacted), herdr sessions/context, deliveries, usage
+- Actions: /answer (bound, DeliveryStore expectations), /prompt (ambient.prompt injection)
+- Serve webui static bundle same-origin; 127.0.0.1 default bind; bearer token required for non-localhost
+- Naming decision: hark serve vs hark dash serve (NAMING.md)
+
+## Acceptance
+- [ ] Passes fixtures/dashboard/ contract fixtures
+- [ ] Live tail delivers new HEP events end-to-end within ~1s
+- [ ] /answer rejects on stale fingerprint/pane revision (test)
+- [ ] Non-localhost bind without token refuses to start

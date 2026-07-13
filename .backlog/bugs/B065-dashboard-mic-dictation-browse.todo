@@ -1,4 +1,6 @@
 ---
+claimed_at: "2026-07-13T14:33:08Z"
+claimed_by: cli-user
 completed_at: null
 complexity: high
 created_at: "2026-07-13T14:19:32Z"
@@ -8,11 +10,11 @@ depends_on:
 estimate_hours: 4
 id: B065
 priority: high
-started_at: null
-status: pending
+started_at: "2026-07-13T14:33:08Z"
+status: in_progress
 tags: []
 title: 'Dashboard: mic dictation (browser + host mic) with safe submit'
-updated_at: "2026-07-13T14:19:32Z"
+updated_at: "2026-07-13T14:33:08Z"
 ---
 ## Scope
 Dictation round-trip per docs/plans/I003-dashboard.md.

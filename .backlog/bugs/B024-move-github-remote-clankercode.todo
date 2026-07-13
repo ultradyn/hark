@@ -1,17 +1,18 @@
 ---
+claimed_at: "2026-07-13T09:13:47Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T09:11:11Z"
 depends_on: []
 estimate_hours: 1
 id: B024
 priority: high
-status: pending
-tags:
-    - ops
-    - github
-    - dx
+started_at: "2026-07-13T09:13:47Z"
+status: in_progress
+tags: []
 title: Move GitHub remote clankercode/hark → ultradyn/hark
-updated_at: "2026-07-13T09:11:11Z"
+updated_at: "2026-07-13T09:13:47Z"
 ---
 ## Goal
 Transfer repository ownership/path from `clankercode/hark` to `ultradyn/hark` on GitHub.

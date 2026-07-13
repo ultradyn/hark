@@ -1,4 +1,6 @@
 ---
+claimed_at: "2026-07-13T09:13:47Z"
+claimed_by: cli-user
 completed_at: null
 complexity: medium
 created_at: "2026-07-13T08:47:05Z"
@@ -6,11 +8,11 @@ depends_on: []
 estimate_hours: 1
 id: B022
 priority: high
-started_at: null
-status: pending
+started_at: "2026-07-13T09:13:47Z"
+status: in_progress
 tags: []
 title: npx skills / npm package distribution with automated release
-updated_at: "2026-07-13T08:47:05Z"
+updated_at: "2026-07-13T09:13:47Z"
 ---
 ## Goal
 Make the hark (handsfree) skill installable via the npx skills ecosystem, and optionally ship an npm package with automatic releases similar to the ~/src/pi-* extensions.

@@ -4,6 +4,9 @@
 .shell {
   width: min(var(--max), 100% - 2 * var(--gutter));
   margin-inline: auto;
+  /* Contain grid children so fr tracks cannot paint past the page edge */
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .nav {

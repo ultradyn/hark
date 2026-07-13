@@ -1,0 +1,40 @@
+---
+complexity: medium
+created_at: "2026-07-13T13:12:00Z"
+depends_on:
+    - B044
+estimate_hours: 3
+id: B046
+priority: medium
+status: pending
+tags:
+    - audio
+    - ducking
+    - stt
+title: Duck or pause media during STT capture windows
+updated_at: "2026-07-13T13:12:00Z"
+---
+## Problem
+Background music bleeds into the mic path and energy gate / cloud STT, causing false opens, noisy transcripts, and empty-STT retries (see B012 family).
+
+## Depends on
+B044 — media detection + sink-input identity.
+
+## Design notes
+- During answer-window / ambient post-wake capture (not continuous idle wake Vosk snippets unless config says so):
+  - **Primary**: same sink-input volume duck as TTS (`duck_level`), restored when capture ends.
+  - **Optional**: MPRIS Pause on arm + Play on disarm when `pause_media_during_stt = true` (more invasive; default **off**).
+- Wire near capture arm in `speech` listen paths and ambient listen after wake — not during pure wake-word idle if half-duplex wake is local-only (configurable later).
+- Config:
+  - `duck_media_during_stt` (bool, default true)
+  - reuses `duck_level`
+  - `pause_media_during_stt` (bool, default false)
+- Coordinate with mic mute-during-TTS: duck STT only while **listening**, not while TTS mute context holds.
+- Fail-open + always restore.
+
+## Acceptance
+- [ ] Listen/capture windows duck media volume and restore after end/cancel/timeout
+- [ ] Optional MPRIS pause path is off by default and tested with mocks
+- [ ] Continuous ambient wake idle does not aggressively pause media unless explicitly enabled
+- [ ] Unit tests cover restore-on-exception and config off
+- [ ] No deadlock with mic_mute / overlap_prearm paths

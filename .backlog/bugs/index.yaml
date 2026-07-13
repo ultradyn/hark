@@ -38,3 +38,4 @@ bugs:
     - file: B037-radio-mode-shorter-silence-for.todo
     - file: B038-log-every-stt-upload-request-i.todo
     - file: B039-radio-partials-lag-chunk-poorl.todo
+    - file: B040-mode-a-monitors-miss-ambient-w.todo

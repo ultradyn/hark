@@ -1,0 +1,28 @@
+---
+complexity: medium
+created_at: "2026-07-13T12:45:12Z"
+depends_on: []
+estimate_hours: 1
+id: B040
+priority: high
+status: pending
+tags:
+    - ambient
+    - mode-a
+    - monitor
+    - dogfood
+title: Mode A monitors miss ambient.wake_near_miss; need unified hark monitor feed
+updated_at: "2026-07-13T12:45:12Z"
+---
+## Dogfood
+`ambient.wake_near_miss` events are written to ambient.jsonl / system.jsonl (e.g. \"a clunker\", \"hey player\" while dogfooding clanker) but Mode A agents never saw them because skill asked for:
+- `hark watch --for-monitor` (Herdr only), and/or
+- ad-hoc `tail | grep ambient.prompt` (drops near-miss / learned / error)
+
+## Wanted
+- Single command: `hark monitor --for-monitor` following watch.jsonl + ambient.jsonl
+- Surface all Mode A wake kinds including ambient.wake_near_miss, ambient.prompt, ambient.partial, agent.blocked, …
+- Skill: one persistent Monitor on that command; event-driven idle after each line
+
+## Fix
+Implemented: `hark monitor` + skill update (this bug documents the regression class).

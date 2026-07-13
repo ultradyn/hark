@@ -106,33 +106,41 @@ Exact end phrases still work without you. You are the backup interpreter.
 
 ## Arm the feed (**required**)
 
-**Hard-require:** before waiting for work, arm a **persistent** Herdr watch Monitor. Without it you will **miss `agent.blocked`** even when `hark watch` is logging elsewhere.
+**Hard-require:** arm **one** persistent Monitor on the unified Mode A feed. Do **not** invent separate `tail | grep` pipelines — those miss events (e.g. `ambient.wake_near_miss` was easy to drop).
 
 ```text
-# REQUIRED — always arm this first (persistent)
+# REQUIRED — single Monitor for all Mode A wake events (persistent)
 Monitor({
-  description: "hark herdr watch",
-  command: "hark watch --for-monitor --statuses blocked,done",
+  description: "hark mode-a",
+  command: "hark monitor --for-monitor",
   persistent: true
 })
 ```
 
-**Ambient alone is insufficient.** A Monitor on `ambient.prompt` / ambient.jsonl / system.jsonl does **not** surface Herdr `agent.blocked` or `done`. Those events only arrive via `hark watch --for-monitor`.
+**What it surfaces** (each line wakes you; then stop until the next line):
 
-**No native Monitor tool?** Claude Code and Grok have one built in. On other harnesses, install a plugin that provides the equivalent long-lived background watch:
+| kind | Why |
+|------|-----|
+| `agent.blocked` / `agent.needs_input` / `agent.question_changed` | Speak + answer a Herdr agent |
+| `agent.completed` | Judge done vs false-done |
+| `ambient.prompt` | Final operator voice → **TTS reply** |
+| `ambient.partial` | Radio HOLD only (no full TTS answer) |
+| `ambient.wake_near_miss` | Failed wake; review / learning |
+| `ambient.wake_learned` | Alias auto-learned |
+| `ambient.error` / `ambient.cancelled` / `ambient.reloaded` / `ambient.armed` | Ops / status |
 
-- **Pi** — [`pi-monitor`](https://github.com/clankercode/pi-monitor) (`pi install npm:pi-monitor`): `Monitor` tool that runs a background command and delivers matching stdout into the session.
-- **OpenCode** — [`opencode-monitor-bg`](https://github.com/clankercode/opencode-monitor-bg): `monitor_start` / `monitor_fetch` deliver background output back into the owning session.
+Requires Mode A workers writing state (`./scripts/run-mode-a.sh` or `hark daemon start --workers`): `watch.jsonl` + `ambient.jsonl` under `~/.local/state/hark/`.
 
-Point either at `hark watch --for-monitor --statuses blocked,done`.
+**Do not** replace this with only `hark watch` (misses ambient) or only ambient tails (misses Herdr blocked).
 
-If radio partials / ambient prompts are used, **also** monitor (in addition to the required watch, never instead of it):
+**No native Monitor tool?** Claude Code and Grok have one. Else:
 
-```text
-# OPTIONAL add-on only — ambient.prompt + ambient.partial (and system log mirrors)
-# Does NOT replace the Herdr watch Monitor above.
-tail -n0 -F ~/.local/state/hark/system.jsonl ~/.local/state/hark/ambient.jsonl
-```
+- **Pi** — [`pi-monitor`](https://github.com/clankercode/pi-monitor) (`pi install npm:pi-monitor`)
+- **OpenCode** — [`opencode-monitor-bg`](https://github.com/clankercode/opencode-monitor-bg)
+
+Point either at: `hark monitor --for-monitor`.
+
+Optional: `hark monitor --replay 0` to skip replay; `--full` for uncompacted JSON.
 
 `--for-monitor` lines are compact; use `event_id` + `hark context` for detail.  
 `done` wakes you to **judge**, not to auto-announce.

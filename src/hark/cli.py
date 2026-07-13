@@ -52,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--status", dest="filter_status")
     st.add_argument("--json", action="store_true")
 
-    w = sub.add_parser("watch", help="emit HEP events")
+    w = sub.add_parser("watch", help="emit HEP events from Herdr only")
     w.add_argument("--session", action="append", dest="sessions")
     w.add_argument("--statuses", default=None)
     w.add_argument("--for-monitor", action="store_true")
@@ -63,6 +63,37 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=True,
         help="read question excerpts before emitting blocked events (default)",
+    )
+
+    mon = sub.add_parser(
+        "monitor",
+        help=(
+            "unified Mode A feed (watch + ambient JSONL): agent.blocked, "
+            "ambient.prompt, ambient.wake_near_miss, … — single Monitor command"
+        ),
+    )
+    mon.add_argument(
+        "--for-monitor",
+        action="store_true",
+        default=True,
+        help="compact HEP lines for harness Monitors (default on)",
+    )
+    mon.add_argument(
+        "--full",
+        action="store_true",
+        help="emit full event objects (disable --for-monitor compaction)",
+    )
+    mon.add_argument(
+        "--replay",
+        type=int,
+        default=5,
+        metavar="N",
+        help="replay last N matching events before follow (default 5; 0=none)",
+    )
+    mon.add_argument(
+        "--kinds",
+        default=None,
+        help="comma-separated kind filter (default: Mode A wake set)",
     )
 
     ctx = sub.add_parser("context", help="read pane context")
@@ -341,6 +372,20 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
             transport=args.transport,
             once=bool(args.once),
             read_questions=bool(args.read_questions),
+        )
+    if cmd == "monitor":
+        from hark.monitor_feed import MODE_A_WAKE_KINDS, run_monitor
+
+        kinds = MODE_A_WAKE_KINDS
+        if getattr(args, "kinds", None):
+            kinds = frozenset(
+                s.strip() for s in str(args.kinds).split(",") if s.strip()
+            )
+        for_monitor = bool(args.for_monitor) and not bool(getattr(args, "full", False))
+        return run_monitor(
+            for_monitor=for_monitor,
+            kinds=kinds,
+            replay=int(getattr(args, "replay", 0) or 0),
         )
     if cmd == "context":
         return cmd_context(args, cfg)

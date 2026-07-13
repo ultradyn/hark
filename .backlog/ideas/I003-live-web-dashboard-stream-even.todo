@@ -1,0 +1,50 @@
+---
+complexity: high
+created_at: "2026-07-13T09:41:41Z"
+depends_on: []
+estimate_hours: 16
+id: I003
+priority: high
+status: pending
+tags:
+    - dashboard
+    - ui
+    - realtime
+    - herdr
+    - dogfood
+    - mic
+title: 'Live web dashboard: stream events, Herdr state, chatlogs + mic dictation'
+updated_at: "2026-07-13T09:41:41Z"
+---
+## Vision
+A comprehensive live web dashboard for Hark / Mode A operators. One place to see everything the voice bridge knows, in real time, and to inject speech without leaving the browser.
+
+## Streaming surfaces (cover everything useful)
+- **HEP / syslog event stream** — all kinds (`agent.blocked`, `agent.completed`, `agent.needs_input`, ambient.*, speech.*, watch.*, conference holds, empty STT, near-miss wakes, etc.) with filters, search, severity, and pause/resume of the live tail
+- **Herdr state** — sessions, panes/agents, status (blocked/done/working), fingerprints/revisions, multi-session map (local + SSH)
+- **Chat / pane context** — recent chatlogs, blocked questions, menu options, trailing text used for false-done detection
+- **Voice pipeline** — TTS/STT activity, mute ring, ambient wake vs listen, mic lease, conference-hold status
+- **Queue / delivery** — pending replies, submit status, stale-safe delivery outcomes
+- **Config snapshot** — activation phrases, end mode, providers (redacted secrets), doctor health
+- **Usage / metrics** — empty STT rate, wake near-miss groups, session activity heat
+
+## Dictation control
+- **Mic button** to start browser capture (or drive local `hark` listen via local bridge)
+- **Stop / Submit** button ends capture, runs STT, and submits the prompt into the active Mode A / ambient / Herdr target (operator-selected session/pane)
+- Clear visual state: idle → recording → transcribing → submitted / failed
+- Optional: live partials while recording (radio-style)
+
+## Architecture notes (planning)
+- Prefer SSE/WebSocket over JSONL tails for the UI; backend can be thin (Node/Python) reading `~/.local/state/hark/*.jsonl` + Herdr socket/API
+- Auth/local-only default (localhost or tailnet); no cloud requirement for dashboard itself
+- Align event schema with existing `hark.event.v1` / fixtures
+- Site may live under hark.xk.io path or separate local app; not necessarily GitHub Pages-only
+
+## Acceptance sketch
+- [ ] Live event stream with kind filters + full history window
+- [ ] Herdr multi-session state + per-pane chat/context view
+- [ ] Mic → stop/submit dictation path that delivers a prompt
+- [ ] Surfaces blocked / false-done / conference-hold clearly
+- [ ] Docs + security notes (local bind, no secret leakage)
+
+Related: I001 (marketing site), Mode A watch/ambient, B016 false-done, B017 conference, B019 near-miss.

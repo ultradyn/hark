@@ -6,6 +6,12 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Voice Herdr agent control (I005 / B055–B059): resolve coding CLIs with safe alias
+  preference (`cc`/`cx`/`gk`/`cr` when PATH-safe), `HerdrClient` session ensure +
+  `agent start`, CLI `hark session list|ensure` and `hark agent-start` (optional
+  kickoff `--prompt`), Mode A skill playbook (clarify session/space with short
+  options; one audio question at a time), `[agents]` config + doctor coding-CLI
+  readiness.
 - Site (B054): replace footer SPEC link with `llms.txt`; add `site/llms.txt`
   (llmstxt.org-style map of Hark docs for AI crawlers).
 

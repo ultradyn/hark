@@ -39,11 +39,26 @@ KNOWN_TOP_KEYS = frozenset(
         "tts",
         "confirm",
         "safety",
+        "agents",
     }
 )
 
 KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
     "herdr": frozenset({"sessions"}),
+    "agents": frozenset(
+        {
+            "prefer_aliases",
+            "claude",
+            "codex",
+            "grok",
+            "cursor_agent",
+            "cursor-agent",
+            "opencode",
+            "pi",
+            "agy",
+            "cli",
+        }
+    ),
     "watch": frozenset({
         "statuses",
         "debounce_ms",
@@ -368,6 +383,15 @@ class SafetyConfig:
 
 
 @dataclass
+class AgentsConfig:
+    """Coding CLI overrides for voice spawn (I005 / B055–B059)."""
+
+    prefer_aliases: bool = True
+    # agent key → command string or first PATH token (absolute path OK)
+    cli: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class HarkConfig:
     version: int = 1
     sessions: list[SessionConfig] = field(default_factory=list)
@@ -379,6 +403,7 @@ class HarkConfig:
     tts: TtsConfig = field(default_factory=TtsConfig)
     confirm: ConfirmConfig = field(default_factory=ConfirmConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
+    agents: AgentsConfig = field(default_factory=AgentsConfig)
     path: Path | None = None
     warnings: list[str] = field(default_factory=list)
 
@@ -542,6 +567,16 @@ post_wake_no_open_nudge = true
 config_watch = true
 config_watch_poll_ms = 1000
 config_watch_debounce_ms = 400
+
+# Coding CLI resolution for voice spawn (I005 / B055–B059)
+# Prefer short aliases (cc/cx/gk/cr) when they are *safe* PATH binaries — not
+# gcc-as-cc or CodeRabbit-as-cr. Override with absolute path or command token.
+# [agents]
+# prefer_aliases = true
+# claude = "claude"          # or path to a cc shim
+# codex = "codex"
+# grok = "gk"
+# cursor_agent = "cursor-agent"
 # Env override: HARK_CONFIG_WATCH=0 to disable, =1 to force on.
 
 [stt]
@@ -1085,9 +1120,47 @@ def load_config(path: Path | None = None) -> HarkConfig:
         safety=SafetyConfig(
             deny_patterns=_as_list_str(safety_raw.get("deny_patterns"), [])
         ),
+        agents=_build_agents_config(
+            raw.get("agents") if isinstance(raw.get("agents"), dict) else {}
+        ),
         path=cfg_path if cfg_path.is_file() else None,
         warnings=warnings,
     )
+
+
+def _build_agents_config(agents_raw: dict[str, Any]) -> AgentsConfig:
+    """Parse ``[agents]`` CLI overrides for voice spawn."""
+    prefer = bool(agents_raw.get("prefer_aliases", True))
+    cli: dict[str, str] = {}
+
+    def _store(key: str, value: Any) -> None:
+        if value is None:
+            return
+        val = str(value).strip()
+        if not val:
+            return
+        k = str(key).strip()
+        if k.replace("-", "_") == "cursor_agent":
+            k = "cursor-agent"
+        cli[k] = val
+
+    nested = agents_raw.get("cli")
+    if isinstance(nested, dict):
+        for k, v in nested.items():
+            _store(str(k), v)
+    for flat in (
+        "claude",
+        "codex",
+        "grok",
+        "opencode",
+        "pi",
+        "agy",
+        "cursor_agent",
+        "cursor-agent",
+    ):
+        if flat in agents_raw:
+            _store(flat, agents_raw[flat])
+    return AgentsConfig(prefer_aliases=prefer, cli=cli)
 
 
 def resolve_session_socket(session: SessionConfig) -> Path:
@@ -1225,6 +1298,10 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "max_chars": cfg.tts.max_chars,
         },
         "confirm": {"mode": cfg.confirm.mode},
+        "agents": {
+            "prefer_aliases": cfg.agents.prefer_aliases,
+            "cli": dict(cfg.agents.cli),
+        },
     }
 
 

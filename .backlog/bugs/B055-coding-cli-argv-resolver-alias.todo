@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T14:29:10Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T14:34:32Z"
 complexity: medium
 created_at: "2026-07-13T14:26:23Z"
 depends_on: []
+duration_minutes: 5.3690897775
 estimate_hours: 2
 id: B055
 priority: medium
 started_at: "2026-07-13T14:29:10Z"
-status: in_progress
+status: done
 tags: []
 title: Coding CLI argv resolver (aliases + ad-hoc + reject list)
-updated_at: "2026-07-13T14:29:10Z"
+updated_at: "2026-07-13T14:34:32Z"
 ---
 ## Problem
 Mode A / hark need a **deterministic** way to pick argv for coding agents: prefer short aliases (`cc`, `cx`, `gk`, `cr`) when safe, else canonical CLI (`claude`, `codex`, `grok`, `cursor-agent`). Ad-hoc CLIs must work without a catalog entry. Naive PATH lookup is wrong on real hosts (`cc` → gcc; `cr` → CodeRabbit).

@@ -1,6 +1,6 @@
 # Hark static site
 
-Marketing / docs landing for [clankercode/hark](https://github.com/clankercode/hark).
+Marketing / docs landing for [ultradyn/hark](https://github.com/ultradyn/hark).
 
 ## Design system
 

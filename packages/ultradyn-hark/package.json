@@ -22,11 +22,11 @@
   "homepage": "https://hark.xk.io",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/clankercode/hark.git",
+    "url": "git+https://github.com/ultradyn/hark.git",
     "directory": "packages/ultradyn-hark"
   },
   "bugs": {
-    "url": "https://github.com/clankercode/hark/issues"
+    "url": "https://github.com/ultradyn/hark/issues"
   },
   "files": [
     "skills",

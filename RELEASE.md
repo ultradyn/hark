@@ -88,14 +88,20 @@ repo’s **release** workflow (no long-lived token):
 1. Open <https://www.npmjs.com/package/@ultradyn/hark/access>
    (package → **Settings** → **Trusted Publishing**).
 2. Add a **GitHub Actions** publisher:
-   - Organization / user: `clankercode` *(or `ultradyn` after repo move)*
+   - Organization / user: **must match the actual GitHub remote that runs this
+     workflow** — still `clankercode` until the org transfer completes; switch
+     (or add) `ultradyn` after `ultradyn/hark` is the live remote. Public
+     install/docs URLs may already say `ultradyn/hark`; OIDC does **not**
+     follow those links — it binds to the repo that executed Actions.
    - Repository: `hark`
    - Workflow filename: **`release.yml`** (must match exactly)
    - Environment: *(leave blank unless you add a GitHub Environment)*
 
 Operator status: trusted publisher for `@ultradyn/hark` via `release.yml` is
-expected to be configured. If publish fails with OIDC / provenance errors,
-re-check the publisher org/repo/workflow name against the live GitHub remote.
+expected to be configured against the **current** GitHub owner. If publish
+fails with OIDC / provenance errors, re-check org/repo/workflow against
+`git remote -v` / the Actions run URL — not against marketing URLs alone.
+See [`docs/REPO_TRANSFER.md`](docs/REPO_TRANSFER.md).
 
 ---
 

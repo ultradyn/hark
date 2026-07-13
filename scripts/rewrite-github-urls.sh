@@ -122,6 +122,8 @@ for rel in "${TARGETS[@]}"; do
   tmp="$(mktemp)"
   # Portable in-place substitute (no sed -i differences).
   # Also flip install.sh default HARK_GITHUB_REPO when rewriting to new owner.
+  # Capture python exit under set -e (exit 2 = no net change after dual-allowlist restore).
+  set +e
   python3 - "$path" "$tmp" "$FROM_REPO" "$TO_REPO" <<'PY'
 import sys
 from pathlib import Path
@@ -174,6 +176,7 @@ Path(dst).write_text(out, encoding="utf-8")
 sys.exit(0 if out != text else 2)
 PY
   py_rc=$?
+  set -e
   if [[ $py_rc -eq 2 ]]; then
     rm -f "$tmp"
     skipped=$((skipped + 1))

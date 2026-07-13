@@ -2,12 +2,12 @@
 # Hark one-line installer (CLI + agent skills)
 #
 # Recommended (inspect first, then run):
-#   curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh -o /tmp/hark-install.sh
+#   curl -fsSL https://raw.githubusercontent.com/ultradyn/hark/master/install.sh -o /tmp/hark-install.sh
 #   less /tmp/hark-install.sh
 #   bash /tmp/hark-install.sh
 #
 # One-liner (HTTPS only; trust the repo):
-#   curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ultradyn/hark/master/install.sh | bash
 #
 # Options / env:
 #   --ref REF          Git branch/tag/commit (default: master; env HARK_REF)
@@ -30,9 +30,10 @@ set -euo pipefail
 
 # Canonical GitHub path (owner/repo). Override without rewriting this file:
 #   HARK_GITHUB_REPO=owner/name bash install.sh
-# Default is the public GitHub path; flip via scripts/rewrite-github-urls.sh after transfer
-# (see docs/REPO_TRANSFER.md). Known-origin lists accept current + legacy remotes.
-GITHUB_REPO="${HARK_GITHUB_REPO:-clankercode/hark}"
+# Default is the public GitHub path (ultradyn/hark). Known-origin lists accept
+# current + legacy remotes so pre-transfer clones still auto-fetch
+# (see docs/REPO_TRANSFER.md).
+GITHUB_REPO="${HARK_GITHUB_REPO:-ultradyn/hark}"
 REPO_HTTPS="https://github.com/${GITHUB_REPO}.git"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}"
 # Known remotes we may auto-fetch (current + post-transfer). SSH variants left unchanged.

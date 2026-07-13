@@ -1,20 +1,20 @@
 # Repository transfer: `clankercode/hark` → `ultradyn/hark`
 
-**Status (prep only):** code is transfer-ready. The GitHub org move is a **human/operator** action. Do **not** flip production install URLs until `ultradyn/hark` exists and redirects work.
+**Status:** in-repo install/docs/site/npm URLs were flipped to `ultradyn/hark` (**B025**). The GitHub org move itself is still a **human/operator** action — if `ultradyn/hark` is not live yet, raw/GitHub pages may 404 until transfer or until you override with `HARK_GITHUB_REPO=clankercode/hark`.
 
-Related backlog: **B024**.
+Related backlog: **B024** (prep + tooling), **B025** (URL flip).
 
 ## Why this doc
 
-GitHub will host the canonical repo at `ultradyn/hark`. Until the transfer completes, public one-liners and docs must keep pointing at `clankercode/hark` so `curl | bash` install does not break.
+Canonical public path is **`ultradyn/hark`**. The physical GitHub repository may still live under `clankercode/hark` until transfer; GitHub redirects usually cover clone/browse once transfer completes. npm **Trusted Publisher** OIDC must track the **actual** Actions remote (see RELEASE.md), not only marketing URLs.
 
 This repo includes:
 
 | Artifact | Role |
 | --- | --- |
-| `install.sh` `HARK_GITHUB_REPO` / `GITHUB_REPO` | Override clone + raw URL base without rewriting the file (`HARK_GITHUB_REPO=ultradyn/hark`) |
-| `scripts/rewrite-github-urls.sh` | Bulk `clankercode/hark` → `ultradyn/hark` across docs/site/npm (dry-run default) |
-| This file | Operator checklist |
+| `install.sh` `HARK_GITHUB_REPO` / `GITHUB_REPO` | Default `ultradyn/hark`; override without rewrite (`HARK_GITHUB_REPO=clankercode/hark` during transition) |
+| `scripts/rewrite-github-urls.sh` | Bulk `clankercode/hark` → `ultradyn/hark` across docs/site/npm (dry-run default; already applied for B025) |
+| This file | Operator checklist (keeps both old and new paths on purpose) |
 
 ---
 
@@ -57,9 +57,9 @@ git remote rename origin old-clanker
 git remote add origin https://github.com/ultradyn/hark.git
 ```
 
-### 4. Rewrite in-repo URLs (after transfer is live)
+### 4. Rewrite in-repo URLs
 
-From a clean branch off updated `master`:
+**B025 applied** the rewrite so live docs/install/site/npm metadata default to `ultradyn/hark`. Re-run only if a new path regression lands:
 
 ```bash
 # Preview
@@ -70,7 +70,7 @@ From a clean branch off updated `master`:
 
 git diff
 git add -A
-git commit -m "chore: point GitHub URLs at ultradyn/hark after transfer"
+git commit -m "chore: point GitHub URLs at ultradyn/hark"
 git push origin HEAD
 ```
 
@@ -92,7 +92,11 @@ GITHUB_REPO="${HARK_GITHUB_REPO:-ultradyn/hark}"
 
 and keeps both `clankercode/hark` and `ultradyn/hark` in the installer’s known-origin allowlist so pre-transfer clones still auto-fetch.
 
-**Do not run `--apply` on production-facing default branch before the GitHub repo exists.**
+Hand-fixes still needed after the script (bare owner strings, not `owner/repo`):
+
+- `site/index.html` `data-repo-owner`
+- `site/js/main.js` default `repoOwner`
+- `RELEASE.md` / workflow comments for **Trusted Publisher** (actual remote ≠ docs URL)
 
 ### 5. GitHub Pages / custom domain
 
@@ -102,11 +106,11 @@ and keeps both `clankercode/hark` and `ultradyn/hark` in the installer’s known
 - [ ] Force a deploy: push a no-op under `site/` or **Actions → Deploy site to GitHub Pages → Run workflow**.
 - [ ] Verify `https://hark.xk.io` and HTTPS certificate.
 
-### 6. Actions / secrets
+### 6. Actions / secrets / npm Trusted Publisher
 
 - [ ] Re-check org/repo Actions permissions after transfer.
-- [ ] npm publish workflow (`.github/workflows/npm-publish.yml`): re-validate trusted publisher / `NPM_TOKEN` for `ultradyn/hark`.
-- [ ] Re-run a `workflow_dispatch` smoke if secrets were recreated.
+- [ ] npm Trusted Publisher (`.github/workflows/release.yml`): OIDC **must** list the org/user that **actually hosts** the workflow run. Before transfer that is often still `clankercode`; after transfer update to `ultradyn`. Do not assume docs URLs imply the publisher binding.
+- [ ] Re-run a `workflow_dispatch` smoke if secrets/publisher were recreated.
 
 ### 7. npm package `@ultradyn/hark`
 
@@ -146,26 +150,24 @@ Optional banner (site or README) for one release cycle:
 
 ---
 
-## Immediate workaround (before rewrite lands)
+## Immediate workaround (if `ultradyn/hark` is not live yet)
 
-Clone or install against the new owner without waiting for a docs commit:
+In-repo defaults already say `ultradyn/hark`. If the GitHub tree is still only under `clankercode`, override for install/clone:
 
 ```bash
-HARK_GITHUB_REPO=ultradyn/hark bash install.sh
-# or from curl once raw URL serves the new tree:
-curl -fsSL https://raw.githubusercontent.com/ultradyn/hark/master/install.sh \
-  | HARK_GITHUB_REPO=ultradyn/hark bash
+HARK_GITHUB_REPO=clankercode/hark bash install.sh
+# or:
+curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh \
+  | HARK_GITHUB_REPO=clankercode/hark bash
 ```
-
-Until default branch points `GITHUB_REPO` at `ultradyn/hark`, the env override is the supported escape hatch.
 
 ---
 
-## What this prep commit deliberately does **not** do
+## What transfer prep / URL flip deliberately does **not** do
 
-- Does **not** transfer the GitHub repository.
-- Does **not** change live README/site/npm install URLs to `ultradyn/hark` while `clankercode/hark` is still the only public tree.
+- Does **not** transfer the GitHub repository (operator UI action).
 - Does **not** change the operator’s global `git remote` outside this worktree.
+- Does **not** auto-update npm Trusted Publisher org (must match actual remote; see RELEASE.md).
 
 ## Verification commands (post-transfer)
 

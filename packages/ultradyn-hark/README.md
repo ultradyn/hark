@@ -12,7 +12,7 @@ This package ships the **`hark`** and **`handsfree`** agent skills (Mode A). Loa
 | **Skills** | `hark` · alias `handsfree` |
 | **CLI** | Separate Python package (see [Install the CLI](#install-the-cli-hark-binary)) |
 | **Requires** | [Herdr](https://herdr.dev/) ≥ 0.7.1 · `hark` CLI on `PATH` for Mode A |
-| **Source** | [github.com/clankercode/hark](https://github.com/clankercode/hark) *(moving to `ultradyn/hark`)* |
+| **Source** | [github.com/ultradyn/hark](https://github.com/ultradyn/hark) |
 
 ---
 
@@ -21,13 +21,13 @@ This package ships the **`hark`** and **`handsfree`** agent skills (Mode A). Loa
 ### Skills CLI (recommended)
 
 ```bash
-npx skills add clankercode/hark -g -y
+npx skills add ultradyn/hark -g -y
 ```
 
 Pick agents explicitly:
 
 ```bash
-npx skills add clankercode/hark -g -a claude-code -a opencode -y
+npx skills add ultradyn/hark -g -a claude-code -a opencode -y
 ```
 
 ### This package (npm / pnpm / bun)
@@ -89,13 +89,13 @@ Skills need the **Python `hark` CLI** on your machine (not bundled in this npm p
 **One-liner** (CLI + skills into `~/.claude/skills`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ultradyn/hark/master/install.sh | bash
 ```
 
 Safer (inspect, then run):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh -o /tmp/hark-install.sh
+curl -fsSL https://raw.githubusercontent.com/ultradyn/hark/master/install.sh -o /tmp/hark-install.sh
 less /tmp/hark-install.sh
 bash /tmp/hark-install.sh
 ```
@@ -108,7 +108,7 @@ hark doctor
 
 From a monorepo checkout: `uv sync && uv run hark doctor`.
 
-Full docs, ambient wake (`hey hark`), and architecture: **[hark.xk.io](https://hark.xk.io)** · **[GitHub](https://github.com/clankercode/hark)**.
+Full docs, ambient wake (`hey hark`), and architecture: **[hark.xk.io](https://hark.xk.io)** · **[GitHub](https://github.com/ultradyn/hark)**.
 
 ---
 
@@ -148,9 +148,9 @@ Skills are synced from the monorepo on pack (`npm pack` / publish).
 ## Links
 
 - Site: [hark.xk.io](https://hark.xk.io)
-- Source: [clankercode/hark](https://github.com/clankercode/hark)
+- Source: [ultradyn/hark](https://github.com/ultradyn/hark)
 - Herdr: [herdr.dev](https://herdr.dev/)
-- Issues: [github.com/clankercode/hark/issues](https://github.com/clankercode/hark/issues)
+- Issues: [github.com/ultradyn/hark/issues](https://github.com/ultradyn/hark/issues)
 
 ---
 

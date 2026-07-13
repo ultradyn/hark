@@ -19,7 +19,7 @@
   const root = document.querySelector("[data-install-picker]");
   if (!root) return;
 
-  const owner = root.dataset.repoOwner || "clankercode";
+  const owner = root.dataset.repoOwner || "ultradyn";
   const name = root.dataset.repoName || "hark";
   const ref = root.dataset.repoRef || "master";
   const npmPackage = root.dataset.npmPackage || "@ultradyn/hark";

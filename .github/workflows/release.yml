@@ -1,11 +1,13 @@
 name: Release
 
 # Publishes @ultradyn/hark to npm and cuts a GitHub Release when a version tag
-# is pushed. See RELEASE.md. Trusted publisher on npm must list:
-#   org/user: clankercode  (until repo moves to ultradyn)
-#   repository: hark
-#   workflow filename: release.yml
-#   environment: (blank)
+# is pushed. See RELEASE.md.
+# npm Trusted Publisher OIDC must match the *actual* GitHub remote that runs
+# this workflow (org/user + repo + release.yml). Until the GitHub transfer
+# completes that may still be org "clankercode" repo "hark"; after transfer,
+# org "ultradyn" repo "hark". Public code/docs URLs point at ultradyn (see
+# docs/REPO_TRANSFER.md). (Avoid the old owner/repo slash form here so
+# scripts/rewrite-github-urls.sh does not clobber this note on re-run.)
 on:
   push:
     tags:
@@ -93,6 +95,7 @@ jobs:
 
       # No NODE_AUTH_TOKEN secret: OIDC trusted publishing.
       # A 404 here usually means Trusted Publisher org/repo/workflow mismatch
-      # (must be clankercode/hark + release.yml while the git remote is there).
+      # (must match the actual GitHub remote running this workflow + release.yml;
+      # org may still be "clankercode" until transfer — not just docs URLs).
       - name: Publish @ultradyn/hark to npm
         run: npm publish --access public

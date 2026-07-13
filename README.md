@@ -72,13 +72,13 @@ The verse is playful; **routing and confirmation are not.**
 ### One-liner (CLI + skills)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ultradyn/hark/master/install.sh | bash
 ```
 
 Safer (inspect, then run):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh -o /tmp/hark-install.sh
+curl -fsSL https://raw.githubusercontent.com/ultradyn/hark/master/install.sh -o /tmp/hark-install.sh
 less /tmp/hark-install.sh
 bash /tmp/hark-install.sh
 ```
@@ -103,7 +103,7 @@ From a local checkout: `./install.sh` (uses that tree; no re-clone).
 ### Skills only (`npx skills`)
 
 ```bash
-npx skills add clankercode/hark -g -y
+npx skills add ultradyn/hark -g -y
 # pick agents: -a claude-code -a opencode
 ```
 

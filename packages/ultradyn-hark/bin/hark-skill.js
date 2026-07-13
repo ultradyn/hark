@@ -43,12 +43,12 @@ Usage:
   hark-skill help
 
 Install skills into agents (recommended):
-  npx skills add clankercode/hark -g -y
+  npx skills add ultradyn/hark -g -y
   # or from this package after npm i -g @ultradyn/hark:
   npx skills add "$(hark-skill path | head -1)/.." -g -y
 
 CLI (separate Python package):
-  See https://github.com/clankercode/hark and https://hark.xk.io
+  See https://github.com/ultradyn/hark and https://hark.xk.io
 `);
   process.exit(0);
 }

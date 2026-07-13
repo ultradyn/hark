@@ -127,3 +127,10 @@ onsets must not be clipped when the gate lags true speech start.
 
 ~5 h continuous ring + scorer hop; +~1 h pre-roll path and tests → **~6 h**.
 Can ship continuous ambient first and pre-roll as follow-up commit in same branch.
+
+
+## Enrollment (I006)
+
+Same continuous hold-open is ideal for wake enrollment sessions (beep-paced
+5–10 takes) so the OS mic indicator stays steady for the whole enroll loop.
+Not required for B079 acceptance; share stream design when I006 implements.

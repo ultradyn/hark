@@ -1,0 +1,28 @@
+---
+complexity: medium
+created_at: "2026-07-13T14:19:10Z"
+depends_on:
+    - B055
+    - B056
+estimate_hours: 3
+id: B057
+priority: medium
+status: pending
+tags:
+    - dashboard
+    - webui
+    - herdr
+title: 'Dashboard: Herdr state map + pane chat/context surfaces'
+updated_at: "2026-07-13T14:19:10Z"
+---
+## Scope
+Multi-session Herdr view per docs/plans/I003-dashboard.md.
+
+- Sessions/panes/agents map (local + SSH): status (blocked/working/done), friendly names, fingerprints/revisions
+- Per-pane context view: recent chatlog/trailing text (hark context path), blocked question + menu options, false-done evidence (B016), conference-hold status (B017)
+- Blocked / needs_input / false-done / conference states visually unmistakable
+
+## Acceptance
+- [ ] Multi-session map reflects live watch state
+- [ ] Pane drill-in shows context + current question/choices
+- [ ] blocked vs needs_input (false done) vs conference-hold clearly distinguished

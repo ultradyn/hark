@@ -212,3 +212,17 @@ after the discard window is kept as usual.
 
 - Wake snippets processed locally; not uploaded.  
 - Delete raw audio after STT unless debug capture enabled.  
+
+## Conference hold vs media ducking
+
+When a **conference** app is active (Zoom/Teams/Meet/…), **B017 conference hold**
+wins: full TTS is held/chimed/queued (`hold_during_conference`) rather than
+fighting the call with ducking. Media ducking (I002 / B044–B047) applies only
+when conference hold does **not** take the path — i.e. music/podcasts and other
+non-call sink-inputs.
+
+Detection lives in `hark.audio.media` (`is_media_active` → `MediaMatch`): Pulse/
+PipeWire **sink-inputs** (RUNNING / Corked=no; excludes Hark’s own ffplay/paplay
+streams) plus optional MPRIS (`playerctl`). Fail-open if `pactl` is missing.
+Conference streams may still appear in the match; callers must prefer B017 hold
+over duck. Design detail: [plans/I002-media-ducking.md](plans/I002-media-ducking.md).

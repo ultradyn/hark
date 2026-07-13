@@ -6,6 +6,14 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Media detection (B044 / I002 foundation): `hark.audio.media` detects active
+  non-Hark playback via Pulse/PipeWire sink-inputs (index, volume, mute, corked,
+  application.name) plus optional MPRIS (`playerctl`). Public API:
+  `MediaMatch`, `is_media_active`, `detect_media`, duckable index/volume helpers
+  for B045/B046. Excludes Hark TTS/cue streams (ffplay/paplay/…); fail-open when
+  tools are missing. **Conference hold (B017) still wins over duck** — see
+  `docs/AUDIO_DESIGN.md` and `docs/plans/I002-media-ducking.md`. Detection only;
+  no volume changes yet.
 - Skill: document Herdr **local / SSH / mixed** multi-session setup (`[[herdr.sessions]]`
   with optional per-session `ssh`) for Mode A agents — see `skill/hark/SKILL.md`.
 - Site homepage (B043): sticky nav chrome spans full viewport width (content still

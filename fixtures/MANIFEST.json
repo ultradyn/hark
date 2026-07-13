@@ -1,17 +1,62 @@
 {
   "schema": "hark.fixtures.manifest.v1",
-  "generated_at": "2026-07-13T12:08:22Z",
-  "count": 47,
+  "generated_at": "2026-07-13T14:40:29Z",
+  "count": 56,
   "files": [
     {
       "path": "README.md",
-      "bytes": 3185,
-      "sha256": "abbae19976e613a39b91709d882a12e5de5ca6c476578fb1cfb3466dd1973484"
+      "bytes": 3493,
+      "sha256": "0b55ea1b5512af7abf04a6834393dfd61781a80d892419787cb08fb4b59fd25e"
+    },
+    {
+      "path": "dashboard/actions.jsonl",
+      "bytes": 2281,
+      "sha256": "88411800cb191818ec175d669153671cf2264f55758cc2552d171996e334abda"
+    },
+    {
+      "path": "dashboard/config.json",
+      "bytes": 1065,
+      "sha256": "aa011d6ea52447cb9f73736af4247e2917d788d07de9caaf99d0ece703768b3c"
+    },
+    {
+      "path": "dashboard/context.json",
+      "bytes": 435,
+      "sha256": "cd0457ca5554d64d65e31fa0a814eabf52e7d1afd47e12185989307b066c1e4a"
+    },
+    {
+      "path": "dashboard/deliveries.json",
+      "bytes": 636,
+      "sha256": "149fbe1eedc48a1332cba26323b0d4723d42faf9b374474122eafcd4eed48da1"
+    },
+    {
+      "path": "dashboard/events-page.json",
+      "bytes": 553,
+      "sha256": "ae4d6c3936637b89655b133ab03085a99d7bb589808bcd7ab499d847518300df"
+    },
+    {
+      "path": "dashboard/health.json",
+      "bytes": 836,
+      "sha256": "48d393345f0775a50775963e5d6725289616ed3d64a2af8a2e528b86711def86"
+    },
+    {
+      "path": "dashboard/herdr-sessions.json",
+      "bytes": 1452,
+      "sha256": "eb2ec247c48725ba90e6b5a4d0df0d5d515e212992a2606d5a1754bf89306765"
+    },
+    {
+      "path": "dashboard/stream.jsonl",
+      "bytes": 3492,
+      "sha256": "fffb4ee5dea2c07d2d07647411ba8c716a58954bc554a3c61715f24a04bbd2c9"
+    },
+    {
+      "path": "dashboard/usage.json",
+      "bytes": 1139,
+      "sha256": "d24ff3e5230c23fd65b99a28c7f4abffd378a2bf1cecd91d3532cc402985efda"
     },
     {
       "path": "events/hep/agent_blocked.json",
       "bytes": 691,
-      "sha256": "5ec1dca9919b53c6aeca089d63790ce500b0e045641ddfe12dac4277664b300a"
+      "sha256": "47a966e9c9ab496bcf4f44667208ba684775656897cb47264762f317207eaaa9"
     },
     {
       "path": "events/hep/agent_completed.json",
@@ -140,8 +185,8 @@
     },
     {
       "path": "text/radio_end.jsonl",
-      "bytes": 2452,
-      "sha256": "6e5abc1ee52be88728aef741de3ed209d861d3ff54779428ba04e0f64424ee46"
+      "bytes": 4062,
+      "sha256": "f31deb3cbafe17cefe4647f0352451c587aa70d63d2cdec89c31f5b89e425acd"
     },
     {
       "path": "text/risk.jsonl",
@@ -150,13 +195,13 @@
     },
     {
       "path": "text/wake_match.jsonl",
-      "bytes": 1964,
-      "sha256": "27f92b004af8572c8ababe860cae29b975057213b0b3bfc95abeff418a50d8c0"
+      "bytes": 3115,
+      "sha256": "74d245b3e02328b7d3ecf4e75056ad91c30bcc942fbad1fb6792781760640b99"
     },
     {
       "path": "usage/sample.jsonl",
-      "bytes": 4899,
-      "sha256": "0315f4cb877d3b71dc476c49dd04cadd22ce758248dd533268683117a2142e61"
+      "bytes": 4722,
+      "sha256": "5e33e00f596e1ddbf12adc439d7cbe83ea5607ed99142ba0b960b8fae8d30a7a"
     },
     {
       "path": "voice/README.md",

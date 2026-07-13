@@ -105,3 +105,68 @@ def test_run_doctor_json_media_duck(monkeypatch):
     assert report["media_duck"]["status"] == "ready"
     # Soft warnings must not flip overall herdr/ok solely for playerctl
     assert report["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# dashboard report (B066)
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_report_localhost_ok(monkeypatch):
+    from hark.config import DashboardConfig
+    from hark.doctor import _dashboard_report
+
+    monkeypatch.setattr("hark.doctor.shutil.which", lambda name: f"/usr/bin/{name}")
+    cfg = HarkConfig(sessions=[], dashboard=DashboardConfig())
+    report = _dashboard_report(cfg)
+    assert report["status"] == "ok"
+    assert report["localhost"] is True and not report["errors"]
+
+
+def test_dashboard_report_remote_without_token_errors(monkeypatch):
+    from hark.config import DashboardConfig
+    from hark.doctor import _dashboard_report
+
+    monkeypatch.setattr("hark.doctor.shutil.which", lambda name: f"/usr/bin/{name}")
+    cfg = HarkConfig(sessions=[], dashboard=DashboardConfig(host="0.0.0.0"))
+    report = _dashboard_report(cfg)
+    assert report["status"] == "error"
+    assert any("refuse" in e for e in report["errors"])
+    # remote + no tls also warns about secure-context features
+    assert any("tailscale serve" in w for w in report["warnings"])
+
+
+def test_dashboard_report_remote_token_tls_ok(monkeypatch):
+    from hark.config import DashboardConfig
+    from hark.doctor import _dashboard_report
+
+    monkeypatch.setattr("hark.doctor.shutil.which", lambda name: f"/usr/bin/{name}")
+    cfg = HarkConfig(
+        sessions=[],
+        dashboard=DashboardConfig(host="100.64.0.5", token="t", tls_terminated=True),
+    )
+    report = _dashboard_report(cfg)
+    assert report["status"] == "ok"
+
+
+def test_dashboard_report_ffmpeg_missing_warns(monkeypatch):
+    from hark.config import DashboardConfig
+    from hark.doctor import _dashboard_report
+
+    monkeypatch.setattr("hark.doctor.shutil.which", lambda name: None)
+    cfg = HarkConfig(sessions=[], dashboard=DashboardConfig())
+    report = _dashboard_report(cfg)
+    assert report["status"] == "warn"
+    assert any("ffmpeg" in w for w in report["warnings"])
+
+
+def test_run_doctor_flags_dashboard_error(monkeypatch):
+    from hark.config import DashboardConfig
+
+    monkeypatch.setattr("hark.doctor.shutil.which", lambda name: f"/usr/bin/{name}")
+    cfg = HarkConfig(sessions=[], dashboard=DashboardConfig(host="0.0.0.0"))
+    out = io.StringIO()
+    run_doctor(cfg, as_json=True, out=out, err=io.StringIO())
+    report = json.loads(out.getvalue())
+    assert report["dashboard"]["status"] == "error"
+    assert report["ok"] is False

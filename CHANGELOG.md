@@ -6,6 +6,20 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- **Live web dashboard** (I003 / B060–B067): `hark serve` — REST + SSE backend
+  implementing the new versioned `hark.dashboard.v1` contract
+  ([docs/DASHBOARD.md](docs/DASHBOARD.md), `schemas/dashboard-v1/`,
+  `fixtures/dashboard/`; fixture-driven for Rust-port parity) and a bundled
+  static webui (Vite + preact, dark mono operator console): live event tail
+  with filters/search/pause, Herdr multi-session map with pane context and
+  bound answers (one-tap menu choices + typed), voice-pipeline/queue/usage/
+  health panels, and mic dictation (browser MediaRecorder with ffmpeg
+  transcode, or host mic via the existing listen flow) with review-then-submit
+  through the safe delivery path. Localhost by default; token→cookie auth for
+  remote; `tailscale serve` TLS documented for phone use; new `[dashboard]`
+  config section and `hark doctor` posture checks; webui ships in the wheel
+  via `scripts/build-webui.sh`.
+
 - Defaults: wake names **iris**, **mercury**, **hark**, **herald** (persona
   pairing Iris→TTS **eve**, Mercury→**leo**); guided setup / Sherpa chooser
   folded into B070; enrollment sampling idea I006. Skill: cancel radio on

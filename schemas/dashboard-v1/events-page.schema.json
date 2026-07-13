@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hark.xk.io/schemas/dashboard-v1/events-page.schema.json",
+  "title": "GET /api/v1/events response",
+  "type": "object",
+  "required": ["schema", "ok", "events", "cursor", "complete"],
+  "properties": {
+    "schema": { "const": "hark.dashboard.v1" },
+    "ok": { "type": "boolean" },
+    "events": {
+      "type": "array",
+      "items": { "$ref": "stream.schema.json" }
+    },
+    "cursor": { "$ref": "stream.schema.json#/$defs/compositeCursor" },
+    "complete": { "type": "boolean" }
+  }
+}

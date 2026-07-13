@@ -39,6 +39,7 @@ KNOWN_TOP_KEYS = frozenset(
         "tts",
         "confirm",
         "safety",
+        "dashboard",
         "agents",
     }
 )
@@ -164,6 +165,14 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
     "tts": frozenset({"provider", "voice", "language", "max_chars", "allow_espeak_fallback"}),
     "confirm": frozenset({"mode"}),
     "safety": frozenset({"deny_patterns"}),
+    "dashboard": frozenset({
+        "host",
+        "port",
+        "token",
+        "require_token",
+        "tls_terminated",
+        "history_limit",
+    }),
 }
 KNOWN_SESSION_KEYS = frozenset({"id", "socket", "ssh", "herdr_bin", "label", "remote_socket"})
 
@@ -389,6 +398,16 @@ class SafetyConfig:
 
 
 @dataclass
+class DashboardConfig:
+    host: str = "127.0.0.1"
+    port: int = 4136
+    token: str | None = None
+    require_token: bool = False
+    tls_terminated: bool = False
+    history_limit: int = 2000
+
+
+@dataclass
 class AgentsConfig:
     """Coding CLI overrides for voice spawn (I005 / B055–B059)."""
 
@@ -409,6 +428,7 @@ class HarkConfig:
     tts: TtsConfig = field(default_factory=TtsConfig)
     confirm: ConfirmConfig = field(default_factory=ConfirmConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     path: Path | None = None
     warnings: list[str] = field(default_factory=list)
@@ -602,6 +622,15 @@ mode = "auto"
 
 [safety]
 deny_patterns = []
+
+[dashboard]
+# Live web dashboard (`hark serve`) — see docs/DASHBOARD.md
+host = "127.0.0.1"           # non-localhost requires a token
+port = 4136
+# token = ""                 # generate: hark serve --print-token
+# require_token = false      # force auth even on localhost
+# tls_terminated = false     # true behind `tailscale serve` (Secure cookies)
+# history_limit = 2000       # backfill window per source
 """
 
 
@@ -925,6 +954,7 @@ def load_config(path: Path | None = None) -> HarkConfig:
     tts_raw = raw.get("tts") if isinstance(raw.get("tts"), dict) else {}
     confirm_raw = raw.get("confirm") if isinstance(raw.get("confirm"), dict) else {}
     safety_raw = raw.get("safety") if isinstance(raw.get("safety"), dict) else {}
+    dashboard_raw = raw.get("dashboard") if isinstance(raw.get("dashboard"), dict) else {}
 
     stt_provider = os.environ.get("HARK_STT_PROVIDER") or str(
         stt_raw.get("provider", "auto")
@@ -1129,6 +1159,22 @@ def load_config(path: Path | None = None) -> HarkConfig:
         safety=SafetyConfig(
             deny_patterns=_as_list_str(safety_raw.get("deny_patterns"), [])
         ),
+        dashboard=DashboardConfig(
+            host=str(dashboard_raw.get("host", "127.0.0.1")),
+            port=int(dashboard_raw.get("port", 4136)),
+            token=(
+                str(dashboard_raw["token"])
+                if dashboard_raw.get("token")
+                else os.environ.get("HARK_DASHBOARD_TOKEN")
+            ),
+            require_token=_as_bool(
+                dashboard_raw.get("require_token"), default=False
+            ),
+            tls_terminated=_as_bool(
+                dashboard_raw.get("tls_terminated"), default=False
+            ),
+            history_limit=int(dashboard_raw.get("history_limit", 2000)),
+        ),
         agents=_build_agents_config(
             raw.get("agents") if isinstance(raw.get("agents"), dict) else {}
         ),
@@ -1308,6 +1354,15 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "max_chars": cfg.tts.max_chars,
         },
         "confirm": {"mode": cfg.confirm.mode},
+        "dashboard": {
+            "host": cfg.dashboard.host,
+            "port": cfg.dashboard.port,
+            # never the token itself (docs/DASHBOARD.md redaction contract)
+            "token_configured": bool(cfg.dashboard.token),
+            "require_token": cfg.dashboard.require_token,
+            "tls_terminated": cfg.dashboard.tls_terminated,
+            "history_limit": cfg.dashboard.history_limit,
+        },
         "agents": {
             "prefer_aliases": cfg.agents.prefer_aliases,
             "cli": dict(cfg.agents.cli),

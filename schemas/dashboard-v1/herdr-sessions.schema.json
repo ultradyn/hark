@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hark.xk.io/schemas/dashboard-v1/herdr-sessions.schema.json",
+  "title": "GET /api/v1/herdr/sessions response",
+  "type": "object",
+  "required": ["schema", "ok", "sessions"],
+  "properties": {
+    "schema": { "const": "hark.dashboard.v1" },
+    "ok": { "type": "boolean" },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["session_id", "ok", "agents"],
+        "properties": {
+          "session_id": { "type": "string" },
+          "ok": { "type": "boolean" },
+          "label": { "type": ["string", "null"] },
+          "version": { "type": ["string", "null"] },
+          "protocol": { "type": ["integer", "null"] },
+          "socket": { "type": ["string", "null"] },
+          "ssh": { "type": ["string", "null"] },
+          "agent_count": { "type": "integer" },
+          "error": { "type": ["string", "null"] },
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["session_id", "pane_id", "status"],
+              "properties": {
+                "session_id": { "type": "string" },
+                "pane_id": { "type": "string" },
+                "agent": { "type": ["string", "null"] },
+                "status": { "type": "string" },
+                "revision": { "type": "integer" },
+                "workspace_id": { "type": ["string", "null"] },
+                "tab_id": { "type": ["string", "null"] },
+                "terminal_id": { "type": ["string", "null"] },
+                "cwd": { "type": ["string", "null"] },
+                "focused": { "type": "boolean" },
+                "friendly_name": { "type": ["string", "null"] },
+                "pending_event_id": {
+                  "description": "Newest pending bound event for this pane, when known.",
+                  "type": ["string", "null"]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

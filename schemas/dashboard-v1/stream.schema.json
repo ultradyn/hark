@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hark.xk.io/schemas/dashboard-v1/stream.schema.json",
+  "title": "hark.dashboard.v1 stream envelope",
+  "type": "object",
+  "required": ["schema", "type", "source", "cursor", "payload"],
+  "properties": {
+    "schema": { "const": "hark.dashboard.v1" },
+    "type": { "enum": ["hello", "event"] },
+    "source": {
+      "description": "Consumers MUST tolerate unknown sources.",
+      "type": "string",
+      "minLength": 1
+    },
+    "cursor": { "$ref": "#/$defs/compositeCursor" },
+    "payload": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "source": { "enum": ["watch", "ambient"] }, "type": { "const": "event" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/hepPayload" } } }
+    },
+    {
+      "if": { "properties": { "source": { "const": "system" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/logEventPayload" } } }
+    },
+    {
+      "if": { "properties": { "source": { "const": "usage" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/usageEventPayload" } } }
+    },
+    {
+      "if": { "properties": { "source": { "const": "delivery" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/deliveryPayload" } } }
+    },
+    {
+      "if": { "properties": { "source": { "const": "serve" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/servePayload" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "hello" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/helloPayload" } } }
+    }
+  ],
+  "$defs": {
+    "compositeCursor": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*:[0-9]+(,[a-z][a-z0-9_-]*:[0-9]+)*$"
+    },
+    "hepPayload": {
+      "description": "HEP hark.event.v1 passthrough. Kinds are open (ambient.*/announce.* are not in event-v1's enum); unknown fields flow through.",
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "schema": { "const": "hark.event.v1" },
+        "kind": { "type": "string", "minLength": 1 },
+        "event_id": { "type": "string" },
+        "observed_at": { "type": "string" },
+        "session_id": { "type": "string" }
+      }
+    },
+    "logEventPayload": {
+      "type": "object",
+      "required": ["ts", "level", "component", "event", "message"],
+      "properties": {
+        "ts": { "type": "number" },
+        "seq": { "type": "integer" },
+        "level": { "enum": ["debug", "info", "warn", "error"] },
+        "component": { "type": "string" },
+        "event": { "type": "string" },
+        "message": { "type": "string" },
+        "data": { "type": "object" },
+        "pid": { "type": "integer" }
+      }
+    },
+    "usageEventPayload": {
+      "type": "object",
+      "required": ["kind", "ts", "ok"],
+      "properties": {
+        "kind": { "enum": ["tts", "stt"] },
+        "ts": { "type": "number" },
+        "provider": { "type": ["string", "null"] },
+        "voice": { "type": ["string", "null"] },
+        "ok": { "type": "boolean" },
+        "chars": { "type": "integer" },
+        "words": { "type": "integer" },
+        "audio_ms": { "type": "integer" },
+        "latency_ms": { "type": "integer" },
+        "error": { "type": ["string", "null"] },
+        "meta": { "type": "object" }
+      }
+    },
+    "deliveryPayload": {
+      "type": "object",
+      "required": ["type"],
+      "oneOf": [
+        {
+          "properties": {
+            "type": { "const": "bound" },
+            "event_id": { "type": "string" },
+            "session_id": { "type": "string" },
+            "pane_id": { "type": "string" },
+            "pane_revision": { "type": "integer" },
+            "question_fingerprint": { "type": ["string", "null"] },
+            "question_text": { "type": ["string", "null"] },
+            "risk": { "type": ["string", "null"] },
+            "status": { "type": "string" },
+            "created_at": { "type": "number" }
+          },
+          "required": ["type", "event_id", "session_id", "pane_id"]
+        },
+        {
+          "properties": {
+            "type": { "const": "outcome" },
+            "event_id": { "type": "string" },
+            "status": { "type": "string" },
+            "ts": { "type": "number" }
+          },
+          "required": ["type", "event_id", "status", "ts"]
+        }
+      ]
+    },
+    "servePayload": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "pattern": "^serve\\." }
+      }
+    },
+    "helloPayload": {
+      "type": "object",
+      "required": ["kind", "server", "version", "sources"],
+      "properties": {
+        "kind": { "const": "serve.hello" },
+        "server": { "type": "string" },
+        "version": { "type": "string" },
+        "sources": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

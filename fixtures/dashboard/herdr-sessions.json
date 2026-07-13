@@ -1,0 +1,59 @@
+{
+  "schema": "hark.dashboard.v1",
+  "ok": true,
+  "sessions": [
+    {
+      "session_id": "local",
+      "ok": true,
+      "label": "local herdr",
+      "version": "0.7.2",
+      "protocol": 1,
+      "socket": "/home/op/.config/herdr/herdr.sock",
+      "ssh": null,
+      "agent_count": 2,
+      "error": null,
+      "agents": [
+        {
+          "session_id": "local",
+          "pane_id": "w1:p6",
+          "agent": "claude",
+          "status": "blocked",
+          "revision": 42,
+          "workspace_id": "w1",
+          "tab_id": "w1:t1",
+          "terminal_id": "term_abc",
+          "cwd": "/home/op/src/auth",
+          "focused": false,
+          "friendly_name": "auth reviewer",
+          "pending_event_id": "01JBLOCKED0000000000000001"
+        },
+        {
+          "session_id": "local",
+          "pane_id": "w1:p7",
+          "agent": "codex",
+          "status": "working",
+          "revision": 17,
+          "workspace_id": "w1",
+          "tab_id": "w1:t1",
+          "terminal_id": "term_def",
+          "cwd": "/home/op/src/site",
+          "focused": true,
+          "friendly_name": null,
+          "pending_event_id": null
+        }
+      ]
+    },
+    {
+      "session_id": "workbox",
+      "ok": false,
+      "label": "remote workbox",
+      "version": null,
+      "protocol": null,
+      "socket": null,
+      "ssh": "workbox",
+      "agent_count": 0,
+      "error": "ssh tunnel down",
+      "agents": []
+    }
+  ]
+}

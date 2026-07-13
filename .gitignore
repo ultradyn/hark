@@ -20,6 +20,12 @@ uv.lock
 .vscode/
 *.swp
 
+# webui (B062)
+node_modules/
+.playwright-mcp/
+# packaged webui bundle (built into the wheel by scripts/build-webui.sh)
+src/hark/dashboard/webui_dist/
+
 # Local visual review screenshots
 site/_review/
 

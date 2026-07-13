@@ -36,3 +36,5 @@ Owner-approved delight features, all webui-side (no contract change) — see 'Be
 
 ## Review note
 - PWA install + Web Notifications + phone mic are secure-context APIs: the phone-over-tailnet story requires B066's TLS setup (tailscale serve). Localhost desktop works without it. Acceptance 'PWA installs on phone' is conditional on that setup.
+
+Owner request (2026-07-14): live Fourier transform of the operator's voice while recording in the dictate overlay — vertical bars centered around y=0, x ~ frequency (AnalyserNode getByteFrequencyData -> canvas, mirrored bars). Browser-mic mode only (host-mode audio never reaches the browser).

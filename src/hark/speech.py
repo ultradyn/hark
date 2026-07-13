@@ -199,6 +199,8 @@ def run_tts(
         latency_ms=latency_ms,
         ok=True,
         meta={
+            # dashboard TTS audit trail (B067): what was actually spoken
+            "text_preview": text[:160],
             "from_cache": from_cache,
             "conference": hold_meta,
             "media_duck": duck_meta,

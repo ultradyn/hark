@@ -56,6 +56,7 @@ The verse is playful; **routing and confirmation are not.** Site: **[hark.xk.io]
 | [docs/AUDIO_DESIGN.md](docs/AUDIO_DESIGN.md) | Gate, endpointing, half-duplex |
 | [docs/ENDPOINTING.md](docs/ENDPOINTING.md) | Turn detection eval + Smart Turn seam |
 | [docs/HERDR.md](docs/HERDR.md) | Herdr / multi-session |
+| [docs/DASHBOARD.md](docs/DASHBOARD.md) | Live web dashboard (`hark serve`) — REST + SSE contract |
 | [docs/PROVIDERS.md](docs/PROVIDERS.md) | STT/TTS providers |
 | [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | Build plan |
 | [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | Acceptance criteria |

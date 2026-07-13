@@ -35,3 +35,5 @@ Thin Python implementation of hark.dashboard.v1 (see docs/plans/I003-dashboard.m
 - JSONL tailer: buffer partial trailing lines (readline can return a mid-append line; parse-fail must not drop + advance) and detect inode rotation, not just truncation (monitor_feed.follow_state_files handles truncation only).
 - /answer must register-on-demand from the tailed HEP event (target+fingerprint are in watch.jsonl): DeliveryStore.get() only knows events registered by a live 'hark watch --register-events'.
 - Auth: implement the token->cookie exchange per B060.
+
+Implemented: hark.dashboard.{tailer,server,api} + hark.answering (shared answer core), [dashboard] config, hark serve CLI. 22 new tests; full suite green. Dictation endpoints 501-stubbed until B065.

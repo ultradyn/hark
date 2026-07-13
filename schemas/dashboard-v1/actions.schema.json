@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hark.xk.io/schemas/dashboard-v1/actions.schema.json",
+  "title": "hark.dashboard.v1 action requests/responses",
+  "$defs": {
+    "error": {
+      "type": "object",
+      "required": ["ok", "error"],
+      "properties": {
+        "ok": { "const": false },
+        "error": {
+          "type": "object",
+          "required": ["code"],
+          "properties": {
+            "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+            "message": { "type": "string" }
+          }
+        }
+      }
+    },
+    "authRequest": {
+      "type": "object",
+      "required": ["token"],
+      "properties": { "token": { "type": "string", "minLength": 1 } }
+    },
+    "authResponse": {
+      "type": "object",
+      "required": ["ok"],
+      "properties": { "ok": { "const": true } }
+    },
+    "answerRequest": {
+      "type": "object",
+      "required": ["event_id"],
+      "properties": {
+        "event_id": { "type": "string", "minLength": 1 },
+        "text": { "type": ["string", "null"] },
+        "keys": { "type": ["array", "null"], "items": { "type": "string" } }
+      },
+      "oneOf": [
+        { "required": ["text"], "properties": { "text": { "type": "string" }, "keys": { "type": "null" } } },
+        { "required": ["keys"], "properties": { "keys": { "type": "array" }, "text": { "type": "null" } } }
+      ]
+    },
+    "answerResponse": {
+      "type": "object",
+      "required": ["ok", "event_id", "status"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "event_id": { "type": "string" },
+        "status": { "enum": ["delivered", "rejected", "uncertain"] },
+        "detail": { "type": ["string", "null"] }
+      }
+    },
+    "promptRequest": {
+      "type": "object",
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "session_id": { "type": ["string", "null"] }
+      }
+    },
+    "promptResponse": {
+      "type": "object",
+      "required": ["ok", "event_id"],
+      "properties": {
+        "ok": { "const": true },
+        "event_id": { "type": "string" }
+      }
+    },
+    "transcribeResponse": {
+      "type": "object",
+      "required": ["ok", "text"],
+      "properties": {
+        "ok": { "const": true },
+        "text": { "type": "string" },
+        "provider": { "type": ["string", "null"] },
+        "latency_ms": { "type": "integer" },
+        "audio_ms": { "type": "integer" }
+      }
+    },
+    "dictationStartRequest": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": { "mode": { "enum": ["host"] } }
+    },
+    "dictationControlResponse": {
+      "type": "object",
+      "required": ["ok", "state"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "state": { "enum": ["idle", "recording", "transcribing", "done", "failed", "cancelled"] },
+        "text": { "type": ["string", "null"] }
+      }
+    },
+    "serveDictationEvent": {
+      "description": "serve-source stream payload for host dictation progress.",
+      "type": "object",
+      "required": ["kind", "state"],
+      "properties": {
+        "kind": { "const": "serve.dictation" },
+        "state": { "enum": ["recording", "transcribing", "done", "failed", "cancelled"] },
+        "text": { "type": ["string", "null"] },
+        "error": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

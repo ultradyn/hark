@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hark.xk.io/schemas/dashboard-v1/health.schema.json",
+  "title": "GET /api/v1/health response",
+  "type": "object",
+  "required": ["schema", "ok", "server", "doctor"],
+  "properties": {
+    "schema": { "const": "hark.dashboard.v1" },
+    "ok": { "type": "boolean" },
+    "server": {
+      "type": "object",
+      "required": ["name", "version", "started_at"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "started_at": { "type": "string" },
+        "bind": { "type": "string" },
+        "auth_required": { "type": "boolean" },
+        "tls_terminated": { "type": "boolean" },
+        "ffmpeg": { "type": "boolean" }
+      }
+    },
+    "doctor": {
+      "description": "hark doctor JSON report (loose; additive).",
+      "type": "object",
+      "required": ["ok"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "herdr_ok": { "type": "boolean" },
+        "speech_ok": { "type": "boolean" },
+        "hark_version": { "type": "string" }
+      }
+    }
+  }
+}

@@ -8,6 +8,36 @@ same webui bundle unmodified. Design rationale: [plans/I003-dashboard.md](plans/
 Schemas: `schemas/dashboard-v1/` · Fixtures: `fixtures/dashboard/` ·
 Related: [PROTOCOL.md](PROTOCOL.md) (HEP) · [SAFETY.md](SAFETY.md)
 
+## Quickstart
+
+```bash
+hark serve                     # http://127.0.0.1:4136 — no auth on localhost
+hark serve --port 5000
+hark doctor                    # includes a `dashboard:` posture line
+```
+
+Everything Mode A writes (watch, ambient, syslog, usage, deliveries) streams
+live; arm workers with `./scripts/run-mode-a.sh` and the feed lights up.
+Dictate (◉) captures via the browser mic (needs HTTPS or localhost; server
+needs `ffmpeg`) or the host mic (existing listen flow), then submits only
+after review — as a bound answer to a pending event or as an operator prompt.
+
+**Phone / remote (tailnet):** set a token, terminate TLS, then open the
+`https://…ts.net` URL:
+
+```bash
+hark serve --print-token       # → [dashboard].token in config.toml
+tailscale serve 4136           # TLS on your *.ts.net name
+# config.toml: [dashboard] host = "127.0.0.1"; tls_terminated = true
+```
+
+PWA install, notifications, and phone-mic capture are secure-context APIs —
+they do not work over plain `http://100.x.y.z` (see Security below).
+
+Webui development: `cd webui && npm run dev` (proxies `/api` to a local
+`hark serve`) or `npm run dev:fixtures` (replays the golden contract fixtures,
+no backend). Ship it with `scripts/build-webui.sh` (staged into the wheel).
+
 ## Transport
 
 - **REST + SSE** over HTTP/1.1. All payloads are JSON (UTF-8).

@@ -118,6 +118,12 @@ def run_doctor(
     # Media ducking readiness (B047 / I002) — soft warnings only; never hard-fail
     report["media_duck"] = _media_duck_report(cfg)
 
+    # Dashboard / hark serve posture (B066) — misconfig that would refuse
+    # startup is an error; TLS/ffmpeg gaps are advisory
+    report["dashboard"] = _dashboard_report(cfg)
+    if report["dashboard"]["errors"]:
+        report["ok"] = False
+
     if as_json:
         out.write(json.dumps(report, indent=2) + "\n")
     else:
@@ -170,6 +176,49 @@ def _media_duck_report(cfg: HarkConfig) -> dict[str, Any]:
         "duck_level": float(audio.duck_level),
         "media_check_mpris": bool(audio.media_check_mpris),
         "warnings": warnings,
+    }
+
+
+LOCALHOST_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _dashboard_report(cfg: HarkConfig) -> dict[str, Any]:
+    """`hark serve` readiness: bind/token/TLS posture (docs/DASHBOARD.md)."""
+    dash = cfg.dashboard
+    is_local = dash.host in LOCALHOST_HOSTS
+    warnings: list[str] = []
+    errors: list[str] = []
+    if not is_local and not dash.token:
+        errors.append(
+            f"[dashboard].host = {dash.host!r} without a token — "
+            "hark serve will refuse to start (set token; hark serve --print-token)"
+        )
+    if not is_local and not dash.tls_terminated:
+        warnings.append(
+            "remote bind without TLS: browsers block PWA install, notifications "
+            "and mic capture on plain http — use `tailscale serve` and set "
+            "[dashboard].tls_terminated = true"
+        )
+    if dash.require_token and not dash.token:
+        errors.append("[dashboard].require_token is set but no token configured")
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        warnings.append(
+            "ffmpeg missing — browser-mic dictation unavailable "
+            "(host mic + wav uploads still work)"
+        )
+    status = "error" if errors else ("warn" if warnings else "ok")
+    return {
+        "status": status,
+        "host": dash.host,
+        "port": dash.port,
+        "localhost": is_local,
+        "token_configured": bool(dash.token),
+        "require_token": dash.require_token,
+        "tls_terminated": dash.tls_terminated,
+        "ffmpeg_ok": bool(ffmpeg),
+        "warnings": warnings,
+        "errors": errors,
     }
 
 
@@ -234,6 +283,20 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
             file=out,
         )
         for w in md.get("warnings") or []:
+            print(f"  warn: {w}", file=out)
+    dash = report.get("dashboard") or {}
+    if dash:
+        print(
+            f"  dashboard: {dash.get('status', '?')} "
+            f"(bind={dash.get('host')}:{dash.get('port')} "
+            f"token={_on_off(dash.get('token_configured'))} "
+            f"tls={_on_off(dash.get('tls_terminated'))} "
+            f"ffmpeg={'ok' if dash.get('ffmpeg_ok') else 'missing'})",
+            file=out,
+        )
+        for e in dash.get("errors") or []:
+            print(f"  ERROR: {e}", file=out)
+        for w in dash.get("warnings") or []:
             print(f"  warn: {w}", file=out)
     print(
         "  overall: "

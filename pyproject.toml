@@ -38,6 +38,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hark"]
+# webui bundle staged by scripts/build-webui.sh (gitignored; ship it anyway)
+artifacts = ["src/hark/dashboard/webui_dist/**"]
 
 [tool.uv]
 package = true

@@ -28,6 +28,17 @@ The **npm package version** lives in `packages/ultradyn-hark/package.json`.
 The Python CLI version is in root `pyproject.toml` and may differ until
 aligned deliberately.
 
+### Python wheel: dashboard webui
+
+`hark serve` ships the dashboard webui inside the wheel. Before building a
+Python distribution, stage the bundle (gitignored; hatch packs it via
+`artifacts`):
+
+```bash
+./scripts/build-webui.sh   # npm ci + vite build → src/hark/dashboard/webui_dist/
+uv build
+```
+
 ---
 
 ## Cutting a release

@@ -579,6 +579,15 @@ mode = "auto"
 
 [safety]
 deny_patterns = []
+
+[dashboard]
+# Live web dashboard (`hark serve`) — see docs/DASHBOARD.md
+host = "127.0.0.1"           # non-localhost requires a token
+port = 4136
+# token = ""                 # generate: hark serve --print-token
+# require_token = false      # force auth even on localhost
+# tls_terminated = false     # true behind `tailscale serve` (Secure cookies)
+# history_limit = 2000       # backfill window per source
 """
 
 

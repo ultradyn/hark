@@ -14,6 +14,9 @@
 #   ~/.local/state/hark/mode-a.pids
 # Busy marker (while user is recording):
 #   ~/.local/state/hark/busy.lock
+#
+# Single-instance: before start, previous Mode A workers (pidfile + orphans)
+# are stopped; the pidfile is always rewritten from scratch with only live PIDs.
 
 set -euo pipefail
 
@@ -36,8 +39,106 @@ STOP_GRACE="${HARK_STOP_GRACE_S:-120}"
 # reason: stop | restart — written so ambient can TTS the right line
 stage_shutdown_reason() {
   local reason="${1:-stop}"
-  echo "$reason" > "$STATE/shutdown_reason"
+  echo "$reason" >"$STATE/shutdown_reason"
   export HARK_SHUTDOWN_REASON="$reason"
+}
+
+pid_alive() {
+  local pid="${1:-}"
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+}
+
+# True if /proc/PID is a Mode A worker: `hark ambient` or `hark watch`
+# (uv wrapper or python entrypoint). Avoids pgrep -f self-match and does not
+# match this script, shells that only mention ambient logs, or pgrep/pkill.
+is_mode_a_worker() {
+  local pid="${1:-}"
+  local role="${2:-}" # optional: ambient | watch
+  local cmdfile="/proc/${pid}/cmdline"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  [[ -r "$cmdfile" ]] || return 1
+
+  local -a args=()
+  mapfile -d '' -t args <"$cmdfile" || true
+  ((${#args[@]} > 0)) || return 1
+
+  local exe base a has_hark=0 role_found=""
+  exe="${args[0]}"
+  base="${exe##*/}"
+  case "$base" in
+    pgrep | pkill | pidof | kill | killall) return 1 ;;
+  esac
+
+  for a in "${args[@]}"; do
+    case "$a" in
+      *run-mode-a*) return 1 ;;
+    esac
+    if [[ "$a" == "hark" || "$a" == */hark ]]; then
+      has_hark=1
+    fi
+    if [[ "$a" == "ambient" || "$a" == "watch" ]]; then
+      role_found="$a"
+    fi
+  done
+
+  [[ $has_hark -eq 1 && -n "$role_found" ]] || return 1
+  if [[ -n "$role" && "$role_found" != "$role" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+# Unique live PIDs: pidfile entries that still exist + /proc scan for workers.
+# Does not use pgrep -f (self-match / loose substring pitfalls).
+collect_mode_a_pids() {
+  {
+    local line pid cmdfile
+    if [[ -f "$PIDFILE" ]]; then
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        # trim whitespace
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        if pid_alive "$line"; then
+          printf '%s\n' "$line"
+        fi
+      done <"$PIDFILE"
+    fi
+    for cmdfile in /proc/[0-9]*/cmdline; do
+      [[ -e "$cmdfile" ]] || continue
+      pid="${cmdfile%/cmdline}"
+      pid="${pid#/proc/}"
+      [[ "$pid" == "$$" ]] && continue
+      if is_mode_a_worker "$pid"; then
+        printf '%s\n' "$pid"
+      fi
+    done
+  } | sort -n -u
+}
+
+# Rewrite pidfile from scratch with only live PIDs; remove when empty.
+write_pidfile() {
+  local -a live=()
+  local p
+  for p in "$@"; do
+    if pid_alive "$p"; then
+      live+=("$p")
+    fi
+  done
+  if ((${#live[@]} == 0)); then
+    rm -f "$PIDFILE"
+    return 0
+  fi
+  printf '%s\n' "${live[@]}" >"$PIDFILE"
+}
+
+signal_pids() {
+  local sig="$1"
+  shift
+  local p
+  for p in "$@"; do
+    kill "-${sig}" "$p" 2>/dev/null || true
+  done
 }
 
 graceful_stop() {
@@ -45,61 +146,67 @@ graceful_stop() {
   local reason="${2:-stop}"
   stage_shutdown_reason "$reason"
 
-  if [[ ! -f "$PIDFILE" ]]; then
-    echo "no pidfile at $PIDFILE"
-    pkill -TERM -f 'hark watch --session' 2>/dev/null || true
-    pkill -TERM -f 'hark ambient' 2>/dev/null || true
-    return 0
+  local -a pids=()
+  mapfile -t pids < <(collect_mode_a_pids) || true
+  # Drop empty line if collect printed nothing
+  if ((${#pids[@]} == 1)) && [[ -z "${pids[0]}" ]]; then
+    pids=()
   fi
 
-  mapfile -t PIDS < "$PIDFILE" || true
-  if [[ ${#PIDS[@]} -eq 0 ]]; then
+  if ((${#pids[@]} == 0)); then
+    echo "no Mode A processes running"
     rm -f "$PIDFILE"
     return 0
   fi
 
-  echo "sending SIGTERM (graceful, reason=$reason) to: ${PIDS[*]}"
-  for pid in "${PIDS[@]}"; do
-    # Pass reason via process environment is already set for children only;
-    # ambient reads $STATE/shutdown_reason on exit.
-    kill -TERM "$pid" 2>/dev/null || true
-  done
+  echo "sending SIGTERM (graceful, reason=$reason) to: ${pids[*]}"
+  signal_pids TERM "${pids[@]}"
 
-  # If recording, wait until busy.lock clears (or processes exit)
+  # If recording, wait until busy.lock clears (or processes exit).
+  # Re-scan each tick so orphaned python children of a dead uv parent are tracked.
   local waited=0
+  local -a still=()
   while [[ $waited -lt $STOP_GRACE ]]; do
-    local any_alive=0
-    for pid in "${PIDS[@]}"; do
-      if kill -0 "$pid" 2>/dev/null; then
-        any_alive=1
-        break
-      fi
-    done
-    if [[ $any_alive -eq 0 ]]; then
+    mapfile -t still < <(collect_mode_a_pids) || true
+    if ((${#still[@]} == 1)) && [[ -z "${still[0]:-}" ]]; then
+      still=()
+    fi
+
+    if ((${#still[@]} == 0)); then
       echo "all Mode A processes exited cleanly (${waited}s)"
       rm -f "$PIDFILE" "$BUSY"
       return 0
     fi
-    if [[ -f "$BUSY" ]]; then
-      if [[ $((waited % 5)) -eq 0 ]]; then
-        echo "waiting for active recording to finish… (${waited}s / ${STOP_GRACE}s)"
-        cat "$BUSY" 2>/dev/null || true
-      fi
+
+    # Keep pidfile honest while waiting (no stale dead entries)
+    write_pidfile "${still[@]}"
+
+    if [[ -f "$BUSY" ]] && [[ $((waited % 5)) -eq 0 ]]; then
+      echo "waiting for active recording to finish… (${waited}s / ${STOP_GRACE}s)"
+      cat "$BUSY" 2>/dev/null || true
     fi
     sleep 1
     waited=$((waited + 1))
   done
 
+  mapfile -t still < <(collect_mode_a_pids) || true
+  if ((${#still[@]} == 1)) && [[ -z "${still[0]:-}" ]]; then
+    still=()
+  fi
+
   if [[ "$force" -eq 1 ]]; then
-    echo "force-killing remaining processes"
-    for pid in "${PIDS[@]}"; do
-      kill -KILL "$pid" 2>/dev/null || true
-    done
+    if ((${#still[@]} > 0)); then
+      echo "force-killing remaining processes: ${still[*]}"
+      signal_pids KILL "${still[@]}"
+    else
+      echo "force-killing remaining processes: none"
+    fi
     rm -f "$PIDFILE" "$BUSY"
     return 0
   fi
 
   echo "warning: still running after ${STOP_GRACE}s; use --force to SIGKILL" >&2
+  write_pidfile "${still[@]}"
   return 1
 }
 
@@ -121,8 +228,8 @@ while [[ $# -gt 0 ]]; do
       graceful_stop "$FORCE" "stop"
       exit $?
       ;;
-    -h|--help)
-      sed -n '2,18p' "$0" | sed 's/^# \?//'
+    -h | --help)
+      sed -n '2,20p' "$0" | sed 's/^# \?//'
       exit 0
       ;;
     *) echo "unknown: $1" >&2; exit 1 ;;
@@ -132,21 +239,37 @@ done
 cd "$ROOT"
 HARK=(uv run hark)
 
-# stop previous mode-a gracefully before restart (distinct TTS: "Hark restarting.")
+# Always replace previous Mode A (pidfile and/or orphan ambient/watch workers)
+# so partial restarts cannot leave duplicate ambients.
+prev_count=0
 if [[ -f "$PIDFILE" ]]; then
-  echo "restarting previous Mode A (graceful)…"
+  prev_count=1
+fi
+mapfile -t _prev < <(collect_mode_a_pids) || true
+if ((${#_prev[@]} == 1)) && [[ -z "${_prev[0]}" ]]; then
+  _prev=()
+fi
+if ((${#_prev[@]} > 0)); then
+  prev_count=${#_prev[@]}
+fi
+
+if [[ $prev_count -gt 0 ]]; then
+  echo "restarting previous Mode A (graceful, ${#_prev[@]} pid(s))…"
   graceful_stop 0 "restart" || graceful_stop 1 "restart"
   # Allow ambient to finish shutdown TTS after recording
   sleep 0.5
 fi
 
-: > "$PIDFILE"
+# Fresh pidfile: only live processes from this start will be recorded
+rm -f "$PIDFILE"
+
+started=()
 
 if [[ "$DO_WATCH" -eq 1 ]]; then
   echo "starting watch → $WATCH_LOG (session=$SESSION)"
   nohup "${HARK[@]}" watch --session "$SESSION" --for-monitor --statuses blocked,done \
     >>"$WATCH_LOG" 2>&1 &
-  echo $! >>"$PIDFILE"
+  started+=("$!")
 fi
 
 if [[ "$DO_AMBIENT" -eq 1 ]]; then
@@ -162,11 +285,30 @@ print("  say: " + " / ".join(ps[:10]) + (" …" if len(ps) > 10 else ""))
   echo "$PHRASE_LINE"
   nohup "${HARK[@]}" ambient \
     >>"$AMBIENT_LOG" 2>&1 &
-  echo $! >>"$PIDFILE"
+  started+=("$!")
 fi
 
 sleep 1
-echo "PIDs: $(tr '\n' ' ' < "$PIDFILE")"
+
+# Prefer full discovery (uv + python children) so the pidfile is complete;
+# fall back to $! list if scan is empty (race before exec).
+mapfile -t live < <(collect_mode_a_pids) || true
+if ((${#live[@]} == 1)) && [[ -z "${live[0]}" ]]; then
+  live=()
+fi
+if ((${#live[@]} > 0)); then
+  write_pidfile "${live[@]}"
+elif ((${#started[@]} > 0)); then
+  write_pidfile "${started[@]}"
+else
+  rm -f "$PIDFILE"
+fi
+
+if [[ -f "$PIDFILE" ]]; then
+  echo "PIDs: $(tr '\n' ' ' <"$PIDFILE")"
+else
+  echo "PIDs: (none — nothing started or already exited)"
+fi
 echo "tail logs:"
 echo "  uv run hark logs -f"
 echo "  tail -f $SYSTEM_LOG"

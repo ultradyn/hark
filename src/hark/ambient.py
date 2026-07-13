@@ -9,13 +9,15 @@ from dataclasses import dataclass
 from typing import Any, TextIO
 
 from hark.audio.capture import MicBusyError, MicLease, record_seconds
-from hark.config import HarkConfig
+from hark.config import HarkConfig, load_config
 from hark.debug_snips import purge_old_debug_snips, save_wake_snippet
 from hark.events import new_event_id, utc_now_iso
 from hark.lifecycle import (
+    clear_reload_request,
     clear_shutdown_reason,
     get_shutdown_reason,
     install_signal_handlers,
+    reload_requested,
     shutdown_phrase,
     shutdown_requested,
 )
@@ -60,6 +62,9 @@ def _wait_for_wake(
     snips_since_purge = 0
     while time.monotonic() < deadline:
         if shutdown_requested():
+            return None
+        # SIGHUP / config reload: exit wait so the loop can re-read config
+        if reload_requested():
             return None
         # Bound listen/ask requested the mic — yield until they clear pause
         if ambient_pause_requested():
@@ -297,6 +302,51 @@ def run_ambient(
     return complete_after_wake(cfg, hit, announce=announce, out=out)
 
 
+def apply_config_reload(
+    cfg: HarkConfig,
+    backend: WakeBackend,
+) -> tuple[HarkConfig, WakeBackend, dict[str, Any]]:
+    """Re-read config from disk and hot-apply ambient wake settings.
+
+    Phrase changes update ``backend.phrases`` in place so vosk keeps its
+    loaded model. Engine/model_path changes rebuild the backend.
+    """
+    path = cfg.path
+    new_cfg = load_config(path)
+    # Stay armed while the ambient loop is running
+    new_cfg.ambient.enabled = True
+
+    phrases = list(new_cfg.ambient.activation_phrases)
+    engine_changed = (new_cfg.ambient.engine or "").lower() != (
+        cfg.ambient.engine or ""
+    ).lower()
+    model_changed = new_cfg.ambient.model_path != cfg.ambient.model_path
+
+    info: dict[str, Any] = {
+        "phrases": phrases,
+        "engine": new_cfg.ambient.engine,
+        "model_path": new_cfg.ambient.model_path,
+        "rebuilt_backend": False,
+        "path": str(path) if path else None,
+    }
+
+    if engine_changed or model_changed:
+        if not new_cfg.ambient.model_path and new_cfg.ambient.engine == "vosk":
+            raise RuntimeError(
+                "ambient.engine=vosk requires model_path — run ./scripts/setup-ambient.sh"
+            )
+        backend = build_wake_backend(
+            new_cfg.ambient.engine,
+            phrases=phrases,
+            model_path=new_cfg.ambient.model_path,
+        )
+        info["rebuilt_backend"] = True
+    elif hasattr(backend, "phrases"):
+        backend.phrases = phrases
+
+    return new_cfg, backend, info
+
+
 def ambient_event_line(result: AmbientResult) -> dict[str, Any]:
     if result.activated and result.text and not (
         result.listen and result.listen.get("cancelled")
@@ -339,6 +389,49 @@ def ambient_event_line(result: AmbientResult) -> dict[str, Any]:
     return base
 
 
+def _emit_reload_event(
+    out: TextIO,
+    info: dict[str, Any],
+    *,
+    error: str | None = None,
+) -> None:
+    if error:
+        line = {
+            "schema": "hark.event.v1",
+            "kind": "ambient.error",
+            "event_id": new_event_id(),
+            "observed_at": utc_now_iso(),
+            "error": f"config reload: {error}",
+        }
+    else:
+        line = {
+            "schema": "hark.event.v1",
+            "kind": "ambient.reloaded",
+            "event_id": new_event_id(),
+            "observed_at": utc_now_iso(),
+            "phrases": info.get("phrases"),
+            "engine": info.get("engine"),
+            "model_path": info.get("model_path"),
+            "rebuilt_backend": info.get("rebuilt_backend"),
+            "path": info.get("path"),
+            "instructions": (
+                "Config reloaded (SIGHUP). Activation phrases and ambient "
+                "settings now match disk. Prefer kill -HUP <pid> after editing "
+                "config.toml; full restart still works."
+            ),
+        }
+    out.write(json.dumps(line, separators=(",", ":")) + "\n")
+    out.flush()
+    syslog(
+        "ambient.reloaded" if not error else "ambient.reload_error",
+        component="ambient",
+        level="info" if not error else "warn",
+        phrases=info.get("phrases") if not error else None,
+        error=error,
+        rebuilt_backend=info.get("rebuilt_backend") if not error else None,
+    )
+
+
 def run_ambient_loop(
     cfg: HarkConfig,
     *,
@@ -350,6 +443,10 @@ def run_ambient_loop(
 
     SIGTERM during an active listen does not abort mid-recording: we finish the
     current wake→STT cycle, emit the event, then exit.
+
+    SIGHUP re-reads config (custom activation phrases, etc.) without stopping
+    the process. Phrase-only changes hot-update the backend; engine/model
+    changes rebuild it.
     """
     out = out or sys.stdout
     cfg.ambient.enabled = True
@@ -398,8 +495,10 @@ def run_ambient_loop(
         "phrases": list(cfg.ambient.activation_phrases),
         "snippet_s": cfg.ambient.snippet_s,
         "instructions": (
-            "Ambient armed. Say hey hark / hey herald, then your prompt. "
-            "Mic mutes during TTS. Energy-gated vosk (quiet frames skipped)."
+            "Ambient armed. Say an activation phrase (defaults: hey hark / "
+            "hey herald; see ambient.activation_phrases / extra_trigger_phrases), "
+            "then your prompt. SIGHUP reloads config. Mic mutes during TTS. "
+            "Energy-gated vosk (quiet frames skipped)."
         ),
     }
     out.write(json.dumps(boot, separators=(",", ":")) + "\n")
@@ -435,6 +534,15 @@ def run_ambient_loop(
     last_idle = time.monotonic()
     try:
         while not shutdown_requested():
+            if reload_requested():
+                clear_reload_request()
+                try:
+                    cfg, backend, info = apply_config_reload(cfg, backend)
+                    _emit_reload_event(out, info)
+                except Exception as exc:
+                    _emit_reload_event(out, {}, error=str(exc)[:200])
+                continue
+
             result = run_ambient(
                 cfg,
                 once=True,
@@ -443,6 +551,11 @@ def run_ambient_loop(
                 backend=backend,
                 out=out,
             )
+
+            # Wake wait aborted for SIGHUP — apply reload, skip timeout event
+            if reload_requested() and not result.activated:
+                continue
+
             # Always emit if we got something useful; skip pure timeouts when shutting down
             if result.activated or not shutdown_requested():
                 line = ambient_event_line(result)

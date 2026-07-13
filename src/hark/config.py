@@ -259,6 +259,8 @@ max_listen_s = 300
 # Custom trigger / wake phrases (any of these):
 #   activation_phrases / trigger_phrases  — full list (replaces defaults if set)
 #   extra_activation_phrases / extra_trigger_phrases — appended to base list
+# After edit: kill -HUP <ambient-pid> reloads phrases without full restart
+# (see docs/CUSTOM_WAKE.md). Restart also works.
 #
 # Examples:
 #   extra_trigger_phrases = ["start prompt", "begin dictation"]

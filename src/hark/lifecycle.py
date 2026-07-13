@@ -14,6 +14,7 @@ from hark.syslog import log as syslog
 _lock = threading.Lock()
 _shutdown = False
 _shutdown_reason = "stop"  # stop | restart
+_reload = False
 _busy_depth = 0
 _handlers_installed = False
 
@@ -91,22 +92,53 @@ def request_shutdown(signum: int | None = None, reason: str | None = None) -> No
     )
 
 
+def request_reload(signum: int | None = None) -> None:
+    """Ask ambient (or other long-running loops) to re-read config.
+
+    Used by SIGHUP. Does not stop the process; the next safe point should
+    call ``clear_reload_request`` after applying the new config.
+    """
+    global _reload
+    _reload = True
+    syslog(
+        "lifecycle.reload_requested",
+        component="lifecycle",
+        signal=signum,
+        busy=_busy_depth > 0,
+    )
+
+
+def reload_requested() -> bool:
+    return _reload
+
+
+def clear_reload_request() -> None:
+    global _reload
+    _reload = False
+
+
 def shutdown_phrase(reason: str | None = None) -> str:
     r = reason or get_shutdown_reason()
     return PHRASE_RESTART if r == "restart" else PHRASE_SHUTDOWN
 
 
 def install_signal_handlers() -> None:
-    """Install SIGTERM/SIGINT handlers (idempotent)."""
+    """Install SIGTERM/SIGINT (stop) and SIGHUP (config reload) handlers."""
     global _handlers_installed
     if _handlers_installed:
         return
 
-    def _handler(signum: int, _frame: object) -> None:
+    def _stop_handler(signum: int, _frame: object) -> None:
         request_shutdown(signum)
 
-    signal.signal(signal.SIGTERM, _handler)
-    signal.signal(signal.SIGINT, _handler)
+    def _hup_handler(signum: int, _frame: object) -> None:
+        request_reload(signum)
+
+    signal.signal(signal.SIGTERM, _stop_handler)
+    signal.signal(signal.SIGINT, _stop_handler)
+    # SIGHUP: reload config (custom wake phrases, etc.) without full restart
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _hup_handler)
     _handlers_installed = True
 
 

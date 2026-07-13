@@ -3,7 +3,10 @@ from hark.lifecycle import (
     PHRASE_RESTART,
     PHRASE_SHUTDOWN,
     busy_path,
+    clear_reload_request,
     get_shutdown_reason,
+    reload_requested,
+    request_reload,
     request_shutdown,
     set_shutdown_reason,
     shutdown_phrase,
@@ -53,3 +56,12 @@ def test_set_shutdown_reason_file(tmp_path, monkeypatch):
     assert get_shutdown_reason() == "restart"
     set_shutdown_reason("stop")
     assert get_shutdown_reason() == "stop"
+
+
+def test_reload_request_flag():
+    clear_reload_request()
+    assert reload_requested() is False
+    request_reload(signum=1)
+    assert reload_requested() is True
+    clear_reload_request()
+    assert reload_requested() is False

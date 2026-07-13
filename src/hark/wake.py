@@ -107,11 +107,21 @@ def match_activation(
             if norm.endswith(" " + p):
                 return WakeHit(phrase=p, remainder="", raw=raw, backend="text")
 
-    # Fuzzy: hey/okay + hark-like / herald-like token
-    fuzzy = _match_fuzzy_wake(norm)
-    if fuzzy is not None:
-        return fuzzy
+    # Fuzzy hey/okay + hark|herald mishears only when the active phrase list
+    # still includes a product wake (defaults or explicit). A full replace with
+    # only custom phrases (e.g. trigger_phrases = ["start prompt"]) stays exclusive.
+    if _phrases_allow_product_fuzzy(ordered):
+        fuzzy = _match_fuzzy_wake(norm)
+        if fuzzy is not None:
+            return fuzzy
     return None
+
+
+def _phrases_allow_product_fuzzy(normalized_phrases: list[str]) -> bool:
+    for p in normalized_phrases:
+        if "hark" in p or "herald" in p:
+            return True
+    return False
 
 
 def _match_fuzzy_wake(norm: str) -> WakeHit | None:

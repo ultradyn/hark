@@ -58,7 +58,8 @@ Always address **`session_id/pane_id`**. Prefer bound **`event_id`** from watch 
 - **R2/R3** (permissions, destructive): always confirm. **R0/R1**: confirm only when unsure.  
 - **Listen end:** default silence/Smart Turn. If `[listen] end_mode = "radio"`, keep listening through long pauses until a **product-scoped** end phrase (`okay hark send`, `end prompt`, `hark over`). Cancel: `hark cancel` (not casual “cancel that”).  
 - **Partials (radio only):** you may receive `ambient.partial` / `partial=true` with interim text, HOLD warnings, and **`agent_control`**. You **MUST NOT** deliver to a pane until `final=true` / `ambient.prompt` for that `stream_id` — but you **MAY** end capture early (below).  
-- **Ambient:** optional `[ambient]` wake via local short snippets; cloud STT after activation. Defaults include `hey hark` / `hey herald`. Custom wakes: set `trigger_phrases` / `activation_phrases` (replace list) or `extra_trigger_phrases` (append), e.g. `extra_trigger_phrases = ["start prompt"]`.  
+- **Ambient:** optional `[ambient]` wake via local short snippets; cloud STT after activation. Defaults include `hey hark` / `hey herald`. Custom wakes: set `trigger_phrases` / `activation_phrases` (replace list) or `extra_trigger_phrases` (append), e.g. `extra_trigger_phrases = ["start prompt"]`. After editing config, **SIGHUP** the ambient process to reload phrases without full restart (`kill -HUP <pid>`); restart also works. See docs/CUSTOM_WAKE.md in the hark repo.  
+
 
 ## Dogfooding (always on)
 

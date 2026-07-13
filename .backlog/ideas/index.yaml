@@ -8,8 +8,15 @@ ideas:
       status: done
       tags: []
       title: Static marketing/docs site for Hark (GitHub Pages)
-    - file: I002-tts-stt-ducking-when-music-or.todo
+    - complexity: medium
+      depends_on: []
+      estimate_hours: 10
+      file: I002-tts-stt-ducking-when-music-or.todo
       id: I002
+      priority: medium
+      status: in_progress
+      tags: []
+      title: TTS/STT ducking when music or other media is playing
     - file: I003-live-web-dashboard-stream-even.todo
       id: I003
     - file: I004-add-support-for-local-models-l.todo

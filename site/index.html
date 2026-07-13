@@ -57,22 +57,25 @@
       <div class="atmosphere__grid"></div>
     </div>
 
-    <header class="shell">
-      <nav class="nav" data-nav>
-        <a class="nav__brand" href="#top">
-          <span class="nav__mark" aria-hidden="true"></span>
-          Hark
-        </a>
-        <ul class="nav__links">
-          <li><a href="#why">Why</a></li>
-          <li><a href="#use">Use</a></li>
-          <li><a href="#supports">Supports</a></li>
-          <li><a href="#safety">Safety</a></li>
-          <li><a href="#install">Install</a></li>
-          <li><a href="https://github.com/ultradyn/hark">GitHub</a></li>
-        </ul>
-        <a class="nav__mobile-cta" href="https://github.com/ultradyn/hark">GitHub</a>
-      </nav>
+    <!-- Full-viewport sticky bar; inner shell aligns brand/links with page content -->
+    <header class="site-header" data-nav>
+      <div class="shell site-header__inner">
+        <nav class="nav" aria-label="Primary">
+          <a class="nav__brand" href="#top">
+            <span class="nav__mark" aria-hidden="true"></span>
+            Hark
+          </a>
+          <ul class="nav__links">
+            <li><a href="#why">Why</a></li>
+            <li><a href="#use">Use</a></li>
+            <li><a href="#supports">Supports</a></li>
+            <li><a href="#safety">Safety</a></li>
+            <li><a href="#install">Install</a></li>
+            <li><a href="https://github.com/ultradyn/hark">GitHub</a></li>
+          </ul>
+          <a class="nav__mobile-cta" href="https://github.com/ultradyn/hark">GitHub</a>
+        </nav>
+      </div>
     </header>
 
     <main id="top">
@@ -92,9 +95,9 @@
             <a class="btn btn--ghost" href="https://github.com/ultradyn/hark">Open the repo</a>
           </div>
           <div class="hero__meta">
-            <span class="pill pill--live">Handsfree Mode A</span>
-            <span class="pill">Herd · fleet · multi-session</span>
-            <span class="pill pill--risk">R2/R3 always confirm</span>
+            <span class="pill pill--live">Speak when agents block</span>
+            <span class="pill">Fleet · multi-session</span>
+            <span class="pill pill--risk">Risky actions always confirm</span>
           </div>
         </div>
         <div>

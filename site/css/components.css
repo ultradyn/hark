@@ -2,11 +2,37 @@
 
 /* --- Shell / nav --- */
 .shell {
-  width: min(var(--max), 100% - 2 * var(--gutter));
+  width: min(var(--max), calc(100% - 2 * var(--gutter)));
   margin-inline: auto;
-  /* Contain grid children so fr tracks cannot paint past the page edge */
   max-width: 100%;
   box-sizing: border-box;
+  /* Grid/SVG children must shrink inside the shell, not expand it */
+  min-width: 0;
+}
+
+/*
+  Full-bleed sticky header (B043): bar spans 100vw; brand/links sit in .shell
+  so they line up with page content. Previously header.shell clipped the bar.
+*/
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  width: 100%;
+  box-sizing: border-box;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  background: linear-gradient(to bottom, var(--bg-glass), transparent);
+  border-bottom: 1px solid transparent;
+}
+
+.site-header.is-scrolled {
+  border-bottom-color: var(--border);
+  background: var(--bg-glass);
+}
+
+.site-header__inner {
+  /* shell already centers; no extra horizontal padding needed */
 }
 
 .nav {
@@ -15,17 +41,8 @@
   justify-content: space-between;
   gap: var(--s-4);
   padding: var(--s-4) 0;
-  position: sticky;
-  top: 0;
-  z-index: 40;
-  backdrop-filter: blur(14px);
-  background: linear-gradient(to bottom, var(--bg-glass), transparent);
-  border-bottom: 1px solid transparent;
-}
-
-.nav.is-scrolled {
-  border-bottom-color: var(--border);
-  background: var(--bg-glass);
+  width: 100%;
+  min-width: 0;
 }
 
 .nav__brand {
@@ -644,9 +661,12 @@ a.product-link:hover {
 */
 .arch__svg {
   width: 100%;
+  max-width: 100%;
   height: auto;
   display: block;
   aspect-ratio: 560 / 360;
+  /* Kill SVG intrinsic min-content width (was blowing out the hero grid) */
+  min-width: 0;
 }
 
 .arch__svg .node-stroke {

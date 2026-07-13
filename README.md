@@ -3,7 +3,7 @@
 > **When your agents need a word.**
 
 **Hark, the herald agents sing:  
-“Human input, please, we bring.”  
+“Input, please, O human king!”  
 Blocked in Herdr, questions rise;  
 Hark relays your voice replies.**
 

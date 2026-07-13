@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T09:28:02Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T09:31:22Z"
 complexity: medium
 created_at: "2026-07-13T09:20:38Z"
 depends_on: []
+duration_minutes: 3.346994416233333
 estimate_hours: 1
 id: B025
 priority: high
 started_at: "2026-07-13T09:28:02Z"
-status: in_progress
+status: done
 tags: []
 title: Check for any/all references to clankercode and update to ultradyn (eg old gituhb urls or whatever)
-updated_at: "2026-07-13T09:28:02Z"
+updated_at: "2026-07-13T09:31:22Z"
 ---
 
 Check for any/all references to clankercode and update to ultradyn (eg old gituhb urls or whatever)

@@ -39,3 +39,4 @@ bugs:
     - file: B038-log-every-stt-upload-request-i.todo
     - file: B039-radio-partials-lag-chunk-poorl.todo
     - file: B040-mode-a-monitors-miss-ambient-w.todo
+    - file: B041-the-main-binary-should-have-a.todo

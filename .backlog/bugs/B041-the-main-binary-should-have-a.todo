@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-07-13T12:45:47Z"
+depends_on: []
+estimate_hours: 1
+id: B041
+priority: high
+status: pending
+tags: []
+title: the main binary should have a watch-logs subcommand that prints out all the logs live but also has nice colorful (ANSI) logs with timestamps and are generally good for human readability.
+updated_at: "2026-07-13T12:45:47Z"
+---
+
+the main binary should have a watch-logs subcommand that prints out all the logs live but also has nice colorful (ANSI) logs with timestamps and are generally good for human readability.

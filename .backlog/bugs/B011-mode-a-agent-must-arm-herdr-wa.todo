@@ -21,3 +21,5 @@ Watch process logged agent.blocked to watch.jsonl, but the orchestrator session 
 - Skill bootstrap hard-requires watch Monitor
 - Optional: hark notify / desktop cue when blocked while agent idle
 - Startup status TTS of already-blocked panes (partially documented)
+
+Merged to master via bl-fix-many subagents. Tests: 155 passed.

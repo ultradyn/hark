@@ -41,6 +41,7 @@ KNOWN_TOP_KEYS = frozenset(
         "safety",
         "dashboard",
         "agents",
+        "update",
     }
 )
 
@@ -203,6 +204,10 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "require_token",
         "tls_terminated",
         "history_limit",
+    }),
+    "update": frozenset({
+        "enabled",
+        "repo",
     }),
 }
 KNOWN_SESSION_KEYS = frozenset({"id", "socket", "ssh", "herdr_bin", "label", "remote_socket"})
@@ -477,6 +482,15 @@ class DashboardConfig:
 
 
 @dataclass
+class UpdateConfig:
+    """GitHub release self-update check (B088). Notice only — no auto-install."""
+
+    enabled: bool = True
+    # owner/repo for https://api.github.com/repos/{repo}/releases/latest
+    repo: str = "ultradyn/hark"
+
+
+@dataclass
 class AgentsConfig:
     """Coding CLI overrides for voice spawn (I005 / B055–B059)."""
 
@@ -498,6 +512,7 @@ class HarkConfig:
     confirm: ConfirmConfig = field(default_factory=ConfirmConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    update: UpdateConfig = field(default_factory=UpdateConfig)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     path: Path | None = None
     warnings: list[str] = field(default_factory=list)
@@ -737,6 +752,12 @@ port = 4136
 # require_token = false      # force auth even on localhost
 # tls_terminated = false     # true behind `tailscale serve` (Secure cookies)
 # history_limit = 2000       # backfill window per source
+
+[update]
+# GitHub release self-update check (B088) — notice only, never auto-installs
+enabled = true
+# repo = "ultradyn/hark"     # owner/repo for releases/latest
+# disable: enabled = false, or env HARK_UPDATE_CHECK=0
 """
 
 
@@ -1125,6 +1146,7 @@ def load_config(path: Path | None = None) -> HarkConfig:
     confirm_raw = raw.get("confirm") if isinstance(raw.get("confirm"), dict) else {}
     safety_raw = raw.get("safety") if isinstance(raw.get("safety"), dict) else {}
     dashboard_raw = raw.get("dashboard") if isinstance(raw.get("dashboard"), dict) else {}
+    update_raw = raw.get("update") if isinstance(raw.get("update"), dict) else {}
 
     stt_provider = os.environ.get("HARK_STT_PROVIDER") or str(
         stt_raw.get("provider", "auto")
@@ -1403,12 +1425,26 @@ def load_config(path: Path | None = None) -> HarkConfig:
             ),
             history_limit=int(dashboard_raw.get("history_limit", 2000)),
         ),
+        update=_build_update_config(update_raw),
         agents=_build_agents_config(
             raw.get("agents") if isinstance(raw.get("agents"), dict) else {}
         ),
         path=cfg_path if cfg_path.is_file() else None,
         warnings=warnings,
     )
+
+
+def _build_update_config(update_raw: dict[str, Any]) -> UpdateConfig:
+    """Parse ``[update]`` (B088 GitHub release check)."""
+    enabled = _as_bool(update_raw.get("enabled"), default=True)
+    env_en = os.environ.get("HARK_UPDATE_CHECK")
+    if env_en is not None:
+        enabled = env_en.strip().lower() not in ("0", "false", "no", "off", "disabled")
+    repo = str(update_raw.get("repo") or "ultradyn/hark").strip() or "ultradyn/hark"
+    env_repo = os.environ.get("HARK_UPDATE_REPO")
+    if env_repo and env_repo.strip():
+        repo = env_repo.strip()
+    return UpdateConfig(enabled=enabled, repo=repo.lstrip("/"))
 
 
 def _build_agents_config(agents_raw: dict[str, Any]) -> AgentsConfig:
@@ -1609,6 +1645,10 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "require_token": cfg.dashboard.require_token,
             "tls_terminated": cfg.dashboard.tls_terminated,
             "history_limit": cfg.dashboard.history_limit,
+        },
+        "update": {
+            "enabled": cfg.update.enabled,
+            "repo": cfg.update.repo,
         },
         "agents": {
             "prefer_aliases": cfg.agents.prefer_aliases,

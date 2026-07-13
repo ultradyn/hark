@@ -30,6 +30,28 @@
         "speech_ok": { "type": "boolean" },
         "hark_version": { "type": "string" }
       }
+    },
+    "pipeline": {
+      "description": "Live voice-pipeline coordination state (additive).",
+      "type": "object"
+    },
+    "update": {
+      "description": "GitHub release self-update check (B088). Advisory only.",
+      "type": "object",
+      "properties": {
+        "current_version": { "type": "string" },
+        "latest_version": { "type": ["string", "null"] },
+        "update_available": { "type": "boolean" },
+        "html_url": { "type": ["string", "null"] },
+        "tag_name": { "type": ["string", "null"] },
+        "checked_at": { "type": ["number", "null"] },
+        "checked_at_iso": { "type": ["string", "null"] },
+        "from_cache": { "type": "boolean" },
+        "stale": { "type": "boolean" },
+        "disabled": { "type": "boolean" },
+        "error": { "type": ["string", "null"] },
+        "repo": { "type": "string" }
+      }
     }
   }
 }

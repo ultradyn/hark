@@ -100,6 +100,21 @@ export type Payload = HepPayload | LogPayload | UsagePayload | DeliveryPayload |
 
 // ---- snapshots ----
 
+export interface UpdateInfo {
+  current_version?: string;
+  latest_version?: string | null;
+  update_available?: boolean;
+  html_url?: string | null;
+  tag_name?: string | null;
+  checked_at?: number | null;
+  checked_at_iso?: string | null;
+  from_cache?: boolean;
+  stale?: boolean;
+  disabled?: boolean;
+  error?: string | null;
+  repo?: string;
+}
+
 export interface HealthResponse {
   schema: string;
   ok: boolean;
@@ -113,6 +128,7 @@ export interface HealthResponse {
     ffmpeg?: boolean;
   };
   doctor: Record<string, unknown> & { ok: boolean };
+  update?: UpdateInfo;
 }
 
 export interface ConfigResponse {

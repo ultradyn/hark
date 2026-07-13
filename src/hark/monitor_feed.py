@@ -362,6 +362,17 @@ def run_monitor(
 ) -> int:
     """Entry for ``hark monitor``."""
     out = out or sys.stdout
+    try:
+        from hark.config import load_config
+        from hark.update_check import maybe_print_update_notice
+
+        cfg = load_config()
+        maybe_print_update_notice(
+            enabled=bool(getattr(cfg.update, "enabled", True)),
+            repo=getattr(cfg.update, "repo", None),
+        )
+    except Exception:  # pragma: no cover — never block monitor on update check
+        pass
     kinds = kinds if kinds is not None else MODE_A_WAKE_KINDS
     paths = paths or default_feed_paths()
     if replay:

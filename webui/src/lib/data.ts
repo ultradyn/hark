@@ -75,6 +75,11 @@ export function usePoll(name: keyof typeof fetchers, intervalMs: number): void {
   }, [name, intervalMs]);
 }
 
+/** Kick a one-shot health poll (update banner, etc.). */
+export function ensureHealthOnce(): void {
+  void refresh("health");
+}
+
 // event-driven refreshes + conference hold tracking (module init, once)
 let wired = false;
 export function wireDataRefreshes(): void {

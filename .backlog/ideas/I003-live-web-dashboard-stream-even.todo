@@ -53,3 +53,5 @@ Feasibility: HIGH — all data surfaces already exist (state JSONLs, hark monito
 Design: contract-first for Rust forward-compat. Versioned hark.dashboard.v1 (REST + SSE, WS reserved, transport-agnostic messages) + standalone static webui (Vite+TS) that only speaks the contract; Python 'hark serve' implements it now, Rust port reimplements against the same schemas/fixtures later and embeds the same bundle. Full design: docs/plans/I003-dashboard.md.
 
 Concrete tasks created: B054 (contract) -> B055 (backend) + B056 (webui) -> B057 (herdr surfaces), B058 (panels), B059 (dictation) -> B060 (security/packaging), B061 (beyond-parity polish: PWA/notifications/one-tap answers/palette/scrubber/heatmaps). ~24h total.
+
+Correction after independent review: total ~27h (task-table sum incl. B061). Phone PWA/notifications/browser-mic require TLS for remote use (tailscale serve; secure-context APIs) — folded into B060/B059/B061. Stream contract uses a discriminated envelope + per-source cursors (system/usage/deliveries are not HEP). Review fixes appended to B054/B055/B059/B060/B061; full design: docs/plans/I003-dashboard.md.

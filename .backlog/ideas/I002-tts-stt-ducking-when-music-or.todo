@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T13:05:58Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T13:16:05Z"
 complexity: medium
 created_at: "2026-07-13T07:48:13Z"
 depends_on: []
+duration_minutes: 10.125857656483333
 estimate_hours: 10
 id: I002
 priority: medium
 started_at: "2026-07-13T13:05:58Z"
-status: in_progress
+status: done
 tags: []
 title: TTS/STT ducking when music or other media is playing
-updated_at: "2026-07-13T13:12:00Z"
+updated_at: "2026-07-13T13:16:05Z"
 ---
 
 # Original Idea

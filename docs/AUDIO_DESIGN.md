@@ -186,6 +186,22 @@ After unmute, `audio.mute_edge_pad_ms` (default 300) discards a short settle
 window and does not count it as user silence. Operator can speak after the
 post-TTS arm cue with the full timeout remaining.
 
+#### Mute desync recovery (B086)
+
+Half-duplex mute can leave Pulse/ALSA or in-process hold state wrong after
+interrupted TTS, failed `pactl` unmute, or hardware unmute mid-hold.
+
+| Mechanism | Behavior |
+|-----------|----------|
+| Outermost `mic_muted_during_tts` exit | Unmutes **Pulse and ALSA** when Hark applied mute |
+| `ensure_unmuted` / `hark mute-sync` | Force-unmutes OS+ALSA **and clears** `tts_mute_depth` (so B084 clocks unfreeze) |
+| `release_tts_mute_hold` / `force_clear_tts_mute_hold` | Full hold drop + unmute |
+| Post-`run_tts` `repair_tts_mute_after_play` | Asserts depth 0; if source still muted after we applied mute, unmutes + logs `mic.mute_desync` |
+
+Recovery CLI: `hark mute-sync` (one-shot ensure) or `--watch` for HW unmute edges.
+If listen still sees `peak_rms=0` after TTS, run `hark mute-sync` once and check
+syslog for `mic.mute_desync` / `mic.mute_hold_cleared`.
+
 ### Soft end phrases (default on)
 
 Mode A agents **must** finish a radio capture from partials with

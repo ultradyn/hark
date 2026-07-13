@@ -137,21 +137,23 @@ def set_alsa_mic_capture(on: bool, card: str | int | None = None) -> bool:
 def ensure_unmuted(*, source: str | None = None) -> dict[str, bool | None]:
     """Force OS + ALSA capture unmuted (manual/hardware unmute cascade).
 
+    Also **fully clears** any in-process TTS mute hold (depth + saved state)
+    so B084 listen clocks and future captures are not stuck thinking mute is
+    still held (B086).
+
     Returns which steps succeeded.
     """
+    released = force_clear_tts_mute_hold(reason="ensure_unmuted")
     src = source or default_source()
     result: dict[str, bool | None] = {
         "pulse": None,
         "alsa": None,
-        "released_hark_hold": False,
+        "released_hark_hold": bool(released.get("cleared")),
     }
     if src and _which("pactl"):
         result["pulse"] = set_source_mute(src, False)
     alsa = set_alsa_mic_capture(True)
     result["alsa"] = alsa if find_wave_alsa_card() else None
-    # If TTS still holding mute, drop the hold so we do not re-apply mid-demo
-    if release_tts_mute_hold():
-        result["released_hark_hold"] = True
     try:
         from hark.syslog import log
 
@@ -179,23 +181,141 @@ _saved: MuteState | None = None
 _user_unmuted_override = False
 
 
-def release_tts_mute_hold() -> bool:
-    """Cancel intentional TTS mute hold (user unmuted for a demo)."""
+def force_clear_tts_mute_hold(*, reason: str = "force") -> dict[str, object]:
+    """Fully drop Hark TTS mute hold (depth + saved) and unmute OS+ALSA.
+
+    Used for desync recovery and ``ensure_unmuted``. Nested ``mic_muted_during_tts``
+    finally blocks become no-ops once depth/saved are cleared.
+    """
     global _depth, _saved, _user_unmuted_override
     with _lock:
-        if _depth <= 0 and _saved is None:
-            return False
-        _user_unmuted_override = True
-        # Unmute OS now; leave depth bookkeeping so nested contexts still exit cleanly
-        if _saved and _saved.source:
-            set_source_mute(_saved.source, False)
-        set_alsa_mic_capture(True)
-        return True
+        had_hold = _depth > 0 or _saved is not None
+        depth_before = _depth
+        src = _saved.source if _saved else None
+        applied = bool(_saved.applied) if _saved else False
+        _depth = 0
+        _saved = None
+        _user_unmuted_override = False
+    if not src:
+        src = default_source()
+    pulse_ok: bool | None = None
+    if src and _which("pactl"):
+        pulse_ok = set_source_mute(src, False)
+    alsa_ok = set_alsa_mic_capture(True)
+    out: dict[str, object] = {
+        "cleared": had_hold,
+        "depth_before": depth_before,
+        "source": src,
+        "applied": applied,
+        "pulse": pulse_ok,
+        "alsa": alsa_ok if find_wave_alsa_card() else None,
+        "reason": reason,
+    }
+    if had_hold:
+        try:
+            from hark.syslog import log
+
+            log(
+                "mic.mute_hold_cleared",
+                component="audio",
+                **{k: v for k, v in out.items() if k != "cleared"},
+            )
+        except Exception:
+            pass
+    return out
+
+
+def release_tts_mute_hold() -> bool:
+    """Cancel intentional TTS mute hold (user unmuted for a demo).
+
+    Clears depth fully (B086) so listen no longer freezes on ``tts_mute_depth``.
+    """
+    result = force_clear_tts_mute_hold(reason="release_hold")
+    return bool(result.get("cleared"))
 
 
 def tts_mute_depth() -> int:
     with _lock:
         return _depth
+
+
+def tts_mute_hold_active() -> bool:
+    """True if depth or saved mute state is still held (B086 diagnostics)."""
+    with _lock:
+        return _depth > 0 or _saved is not None
+
+
+def _unmute_after_tts(saved: MuteState, *, reason: str) -> None:
+    """Restore capture after outermost TTS mute context exits."""
+    if saved.source and _which("pactl"):
+        set_source_mute(saved.source, False)
+    # Always clear ALSA Wave path too — Pulse-only unmute left HW desynced (B086)
+    set_alsa_mic_capture(True)
+    try:
+        from hark.syslog import log
+
+        log(
+            "mic.unmuted",
+            component="audio",
+            source=saved.source,
+            reason=reason,
+        )
+    except Exception:
+        pass
+
+
+def repair_tts_mute_after_play(
+    *,
+    mute_was_enabled: bool,
+    mute_applied: bool = False,
+) -> dict[str, object]:
+    """Post-``run_tts`` safety: depth must be 0; source unmuted if we muted.
+
+    Logs ``mic.mute_desync`` when a repair was required. Safe to call when mute
+    was disabled (no-op check for stuck depth from a prior turn).
+    """
+    report: dict[str, object] = {
+        "depth": tts_mute_depth(),
+        "repaired": False,
+        "reasons": [],
+    }
+    reasons: list[str] = []
+
+    if tts_mute_hold_active():
+        force_clear_tts_mute_hold(reason="post_tts_depth")
+        reasons.append("depth_nonzero")
+        report["repaired"] = True
+
+    # If we applied mute (or mute was requested), verify Pulse is not stuck muted.
+    # Do not fight a user who was already muted before TTS (was_muted=True → not applied).
+    if mute_was_enabled and (mute_applied or report["repaired"]):
+        src = default_source()
+        if src and _which("pactl"):
+            muted = source_is_muted(src)
+            if muted is True:
+                set_source_mute(src, False)
+                set_alsa_mic_capture(True)
+                reasons.append("source_still_muted")
+                report["repaired"] = True
+                report["source"] = src
+
+    report["reasons"] = reasons
+    report["depth"] = tts_mute_depth()
+    if report["repaired"]:
+        try:
+            from hark.syslog import log
+
+            log(
+                "mic.mute_desync",
+                component="audio",
+                reasons=reasons,
+                mute_applied=mute_applied,
+                depth=report["depth"],
+                source=report.get("source"),
+            )
+        except Exception:
+            pass
+    return report
 
 
 @contextmanager
@@ -204,7 +324,7 @@ def mic_muted_during_tts(*, enabled: bool = True) -> Iterator[MuteState]:
 
     Only mutes if we are the first nested holder and the source was unmuted
     (or unknown). Always restores to pre-TTS state when the outermost exits,
-    unless the user/hardware unmutes mid-hold (override).
+    unless the user/hardware unmutes mid-hold (override / force-clear).
     """
     state = MuteState(source=None, was_muted=None, applied=False)
     if not enabled or not _which("pactl"):
@@ -254,38 +374,28 @@ def mic_muted_during_tts(*, enabled: bool = True) -> Iterator[MuteState]:
         yield state
     finally:
         with _lock:
-            _depth = max(0, _depth - 1)
+            # force_clear may have already zeroed depth/saved — still safe
+            if _depth > 0:
+                _depth -= 1
+            else:
+                _depth = 0
             if _depth == 0 and _saved is not None:
-                # If user overrode mid-TTS, leave unmuted (demo path)
-                if _user_unmuted_override:
-                    if _saved.source:
-                        set_source_mute(_saved.source, False)
-                    set_alsa_mic_capture(True)
-                    try:
-                        from hark.syslog import log
-
-                        log(
-                            "mic.unmuted",
-                            component="audio",
-                            source=_saved.source,
-                            reason="user_override",
-                        )
-                    except Exception:
-                        pass
-                elif _saved.applied and _saved.source and _saved.was_muted is not True:
-                    set_source_mute(_saved.source, False)
-                    try:
-                        from hark.syslog import log
-
-                        log(
-                            "mic.unmuted",
-                            component="audio",
-                            source=_saved.source,
-                        )
-                    except Exception:
-                        pass
+                saved = _saved
+                override = _user_unmuted_override
                 _saved = None
                 _user_unmuted_override = False
+            else:
+                saved = None
+                override = False
+        if saved is not None:
+            if override:
+                _unmute_after_tts(saved, reason="user_override")
+            elif saved.applied and saved.source and saved.was_muted is not True:
+                _unmute_after_tts(saved, reason="tts_end")
+            elif saved.applied and saved.source:
+                # was already muted before we entered: leave Pulse as-is, but
+                # still clear ALSA if we somehow toggled it
+                pass
 
 
 # ---------------------------------------------------------------------------

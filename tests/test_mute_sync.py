@@ -51,15 +51,17 @@ def test_mute_sync_tick_no_edge(monkeypatch):
 def test_release_tts_mute_hold(monkeypatch):
     monkeypatch.setattr(mm, "set_source_mute", lambda *a, **k: True)
     monkeypatch.setattr(mm, "set_alsa_mic_capture", lambda *a, **k: True)
+    monkeypatch.setattr(mm, "_which", lambda n: n == "pactl")
+    monkeypatch.setattr(mm, "default_source", lambda: "src")
+    monkeypatch.setattr(mm, "find_wave_alsa_card", lambda: None)
     mm._depth = 1
     mm._saved = mm.MuteState(source="src", was_muted=False, applied=True)
     mm._user_unmuted_override = False
     assert mm.release_tts_mute_hold() is True
-    assert mm._user_unmuted_override is True
-    # cleanup
-    mm._depth = 0
-    mm._saved = None
-    mm._user_unmuted_override = False
+    # B086: full clear (depth 0) so listen clocks unfreeze
+    assert mm._depth == 0
+    assert mm._saved is None
+    assert mm._user_unmuted_override is False
 
 
 def test_find_wave_card_parses(monkeypatch):

@@ -26,7 +26,7 @@ from hark.audio.cues import (
     store_cached_tts,
 )
 from hark.audio.media import duck_media
-from hark.audio.mic_mute import mic_muted_during_tts
+from hark.audio.mic_mute import mic_muted_during_tts, repair_tts_mute_after_play
 from hark.audio.playback import play_wav_bytes, write_wav
 from hark.config import HarkConfig
 from hark.confirm_lexicon import classify_confirm_reply
@@ -177,6 +177,7 @@ def run_tts(
 
     play_ms = 0
     mute_applied = False
+    mute_repair: dict[str, Any] | None = None
     duck_meta: dict[str, Any] | None = None
     if play:
         near = (
@@ -188,16 +189,26 @@ def run_tts(
         # Mic mute and media duck are independent; duck before play so media
         # is quiet before TTS starts. Conference skip already returned above —
         # when speaking after hold frees, duck as normal (exclude_conference).
-        with mic_muted_during_tts(enabled=do_mute) as mute_state:
-            mute_applied = mute_state.applied
-            with duck_media(cfg, enabled=do_duck, exclude_conference=True) as duck_state:
-                duck_meta = duck_state.as_meta()
-                pr = play_wav_bytes(
-                    audio_bytes,
-                    on_near_end=on_near_end,
-                    near_end_ms=near if on_near_end else 0,
+        try:
+            with mic_muted_during_tts(enabled=do_mute) as mute_state:
+                mute_applied = mute_state.applied
+                with duck_media(cfg, enabled=do_duck, exclude_conference=True) as duck_state:
+                    duck_meta = duck_state.as_meta()
+                    pr = play_wav_bytes(
+                        audio_bytes,
+                        on_near_end=on_near_end,
+                        near_end_ms=near if on_near_end else 0,
+                    )
+                    play_ms = pr.duration_ms
+        finally:
+            # B086: never leave depth>0 or Pulse stuck muted after TTS
+            try:
+                mute_repair = repair_tts_mute_after_play(
+                    mute_was_enabled=bool(do_mute),
+                    mute_applied=mute_applied,
                 )
-                play_ms = pr.duration_ms
+            except Exception:
+                mute_repair = None
 
     store.record_tts(
         text=text,
@@ -233,6 +244,8 @@ def run_tts(
         result["conference"] = hold_meta
     if duck_meta is not None:
         result["media_duck"] = duck_meta
+    if mute_repair is not None and mute_repair.get("repaired"):
+        result["mute_repaired"] = mute_repair
     return result
 
 

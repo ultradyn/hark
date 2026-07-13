@@ -1,19 +1,18 @@
 ---
+claimed_at: "2026-07-13T14:54:59Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T14:51:46Z"
 depends_on: []
 estimate_hours: 6
 id: B069
 priority: high
-status: pending
-tags:
-    - stt
-    - wake
-    - vosk
-    - research
-    - i004
+started_at: "2026-07-13T14:54:59Z"
+status: in_progress
+tags: []
 title: Investigate light/fast local STT (and wake ASR) alternatives — Vosk is weak
-updated_at: "2026-07-13T14:51:46Z"
+updated_at: "2026-07-13T14:54:59Z"
 ---
 ## Problem
 Dogfood quality for speech recognition is not good enough:

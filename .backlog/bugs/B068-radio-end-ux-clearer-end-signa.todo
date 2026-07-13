@@ -1,18 +1,18 @@
 ---
+claimed_at: "2026-07-13T14:54:59Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T14:49:29Z"
 depends_on: []
 estimate_hours: 4
 id: B068
 priority: high
-status: pending
-tags:
-    - radio
-    - listen
-    - mode-a
-    - ux
+started_at: "2026-07-13T14:54:59Z"
+status: in_progress
+tags: []
 title: 'Radio end UX: clearer end signals + Mode A ends capture on ''over''/done'
-updated_at: "2026-07-13T14:49:29Z"
+updated_at: "2026-07-13T14:54:59Z"
 ---
 ## Problem
 Radio-mode capture is hard to end confidently:

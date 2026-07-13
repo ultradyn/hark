@@ -20,14 +20,35 @@
 #   --no-skills        Skip copying skill files
 #   --no-cli           Skip CLI install (skills only)
 #   --force            Reinstall CLI even if present
+#   HARK_GITHUB_REPO   owner/name for clone + raw URLs (default below;
+#                      see docs/REPO_TRANSFER.md)
 #   -h, --help         Show help
 #
 # Safe defaults: no sudo, no silent destructive ops, HTTPS git only, idempotent.
 
 set -euo pipefail
 
-REPO_HTTPS="https://github.com/clankercode/hark.git"
-RAW_BASE="https://raw.githubusercontent.com/clankercode/hark"
+# Canonical GitHub path (owner/repo). Override without rewriting this file:
+#   HARK_GITHUB_REPO=owner/name bash install.sh
+# Default is the public GitHub path; flip via scripts/rewrite-github-urls.sh after transfer
+# (see docs/REPO_TRANSFER.md). Known-origin lists accept current + legacy remotes.
+GITHUB_REPO="${HARK_GITHUB_REPO:-clankercode/hark}"
+REPO_HTTPS="https://github.com/${GITHUB_REPO}.git"
+RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}"
+# Known remotes we may auto-fetch (current + post-transfer). SSH variants left unchanged.
+KNOWN_ORIGIN_HTTPS=(
+  "https://github.com/${GITHUB_REPO}.git"
+  "https://github.com/${GITHUB_REPO}"
+  "https://github.com/clankercode/hark.git"
+  "https://github.com/clankercode/hark"
+  "https://github.com/ultradyn/hark.git"
+  "https://github.com/ultradyn/hark"
+)
+KNOWN_ORIGIN_SSH=(
+  "git@github.com:${GITHUB_REPO}.git"
+  "git@github.com:clankercode/hark.git"
+  "git@github.com:ultradyn/hark.git"
+)
 
 REF="${HARK_REF:-master}"
 PREFIX="${PREFIX:-${HOME}/.local}"
@@ -55,10 +76,10 @@ if [[ -n "$SCRIPT_PATH" && "$SCRIPT_PATH" != "bash" && "$SCRIPT_PATH" != "-" && 
 fi
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
 Hark one-line installer (CLI + agent skills)
 
-  curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh | bash
+  curl -fsSL ${RAW_BASE}/master/install.sh | bash
 
 Options / env:
   --ref REF          Git branch/tag/commit (default: master; env HARK_REF)
@@ -71,11 +92,36 @@ Options / env:
   --no-skills        Skip copying skill files
   --no-cli           Skip CLI install (skills only)
   --force            Reinstall CLI even if present
+  HARK_GITHUB_REPO   owner/name (default: ${GITHUB_REPO})
   -h, --help         Show help
 
 Safe defaults: no sudo, HTTPS git only, idempotent.
 EOF
   exit "${1:-0}"
+}
+
+origin_is_known() {
+  local origin="$1" u
+  for u in "${KNOWN_ORIGIN_HTTPS[@]}" "${KNOWN_ORIGIN_SSH[@]}"; do
+    [[ "$origin" == "$u" ]] && return 0
+  done
+  return 1
+}
+
+origin_is_known_https() {
+  local origin="$1" u
+  for u in "${KNOWN_ORIGIN_HTTPS[@]}"; do
+    [[ "$origin" == "$u" ]] && return 0
+  done
+  return 1
+}
+
+origin_is_known_ssh() {
+  local origin="$1" u
+  for u in "${KNOWN_ORIGIN_SSH[@]}"; do
+    [[ "$origin" == "$u" ]] && return 0
+  done
+  return 1
 }
 
 log()  { printf '==> %s\n' "$*"; }
@@ -164,15 +210,12 @@ ensure_repo() {
       if git -C "$SRC_DIR" remote get-url origin >/dev/null 2>&1; then
         local origin
         origin="$(git -C "$SRC_DIR" remote get-url origin 2>/dev/null || true)"
-        case "$origin" in
-          https://github.com/clankercode/hark.git|https://github.com/clankercode/hark|git@github.com:clankercode/hark.git)
-            log "fetching updates for ref $REF (best-effort)"
-            git -C "$SRC_DIR" fetch --tags --force origin "$REF" 2>/dev/null || warn "git fetch failed (offline?); using current tree"
-            ;;
-          *)
-            warn "origin is '${origin:-none}' — not auto-fetching; using tree as-is"
-            ;;
-        esac
+        if origin_is_known "$origin"; then
+          log "fetching updates for ref $REF (best-effort)"
+          git -C "$SRC_DIR" fetch --tags --force origin "$REF" 2>/dev/null || warn "git fetch failed (offline?); using current tree"
+        else
+          warn "origin is '${origin:-none}' — not auto-fetching; using tree as-is"
+        fi
       fi
     fi
     return 0
@@ -186,18 +229,13 @@ ensure_repo() {
     # Prefer HTTPS remote for safety of future fetches from this script
     local origin
     origin="$(git -C "$SRC_DIR" remote get-url origin 2>/dev/null || true)"
-    case "$origin" in
-      https://github.com/clankercode/hark.git|https://github.com/clankercode/hark)
-        ;;
-      git@github.com:clankercode/hark.git)
-        warn "origin uses SSH; leaving remote unchanged"
-        ;;
-      *)
-        if [[ -n "$origin" ]]; then
-          warn "origin is '$origin' (expected clankercode/hark); continuing with fetch of $REF"
-        fi
-        ;;
-    esac
+    if origin_is_known_https "$origin"; then
+      :
+    elif origin_is_known_ssh "$origin"; then
+      warn "origin uses SSH; leaving remote unchanged"
+    elif [[ -n "$origin" ]]; then
+      warn "origin is '$origin' (expected ${GITHUB_REPO}); continuing with fetch of $REF"
+    fi
     git -C "$SRC_DIR" fetch --tags --force origin "$REF"
     if git -C "$SRC_DIR" rev-parse --verify "refs/remotes/origin/$REF" >/dev/null 2>&1; then
       git -C "$SRC_DIR" checkout -q -B "hark-install/$REF" "origin/$REF"

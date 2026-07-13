@@ -52,21 +52,37 @@ engine = "sherpa_kws"
 
 ## Optional local full-STT (post-wake / offline) — not default
 
-Documented for later (B072); **do not** replace cloud STT as product default:
+**B072 landed** — optional utterance STT behind the existing provider interface.
+Cloud remains product default (`stt.provider = "auto"`, ADR-004). **Do not** use
+Whisper-family models for continuous ambient wake (name mangling + always-on cost).
+
+```bash
+pip install 'hark[local-stt]'   # faster-whisper
+```
+
+```toml
+[stt]
+provider = "faster_whisper"   # or "local" / "moonshine"
+local_model = "tiny.en"       # or base.en
+local_fail_open = true        # → cloud when model/dep missing
+```
+
+Env: `HARK_STT_PROVIDER`, `HARK_STT_LOCAL_MODEL`, `HARK_STT_LOCAL_FAIL_OPEN`.
+Details and B069 RTF notes: [docs/PROVIDERS.md](../../docs/PROVIDERS.md).
 
 | Option | Role |
 |--------|------|
-| **faster-whisper** `tiny.en` / `base.en` int8 | Offline prompt STT candidate |
-| **Moonshine** tiny/streaming | Edge short-form latency |
-| **whisper.cpp** | CLI/subprocess ops |
-
-Wake is **not** a good fit for Whisper-family batch ASR (name mangling + always-on cost). See B069.
+| **faster-whisper** `tiny.en` / `base.en` int8 | Primary local full-STT (CPU) |
+| **Moonshine** | Stretch / experimental path |
+| **whisper.cpp** | Ops alternative (not first-class in hark yet) |
 
 ---
 
 ## Comparison snapshot (B069 probe)
 
-On current live wake fixtures (N=7): Vosk/Whisper mangle `hark`→hook/hawk; **Sherpa KWS** hit/miss-separated product phrases without alias tables. Treat as indicative — expand eval in B071.
+On early live wake fixtures: Vosk/Whisper mangle `hark`→hook/hawk; **Sherpa KWS**
+hit/miss-separated product phrases without alias tables. Expand eval with
+`scripts/eval-wake-fixtures.py` (B071).
 
 ---
 
@@ -75,7 +91,7 @@ On current live wake fixtures (N=7): Vosk/Whisper mangle `hark`→hook/hawk; **S
 | ID | Topic |
 |----|--------|
 | B069 | Survey (done) |
-| B070 | Sherpa backend + setup (this work) |
-| B071 | Wake eval harness |
-| B072 | Optional local full-STT provider |
-| B073 | Larger Vosk model docs |
+| B070 | Sherpa backend + setup (done) |
+| B071 | Wake eval harness (done) |
+| B072 | Optional local full-STT (done) |
+| B073 | Larger Vosk model docs (done) |

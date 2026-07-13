@@ -1189,11 +1189,23 @@ class SherpaKwsWakeBackend:
         self.rebuild_keywords(self.policy)
 
     def rebuild_keywords(self, policy: WakePolicy | None = None) -> None:
-        """Regenerate keywords file + KeywordSpotter from policy (config reload)."""
+        """Regenerate keywords file + KeywordSpotter from policy (config reload).
+
+        No-op when the keyword graph signature is unchanged and a spotter is
+        already loaded — continuous ambient must not reload ONNX every hop.
+        """
         if policy is not None:
             self.policy = policy
             self.phrases = policy.display_phrases()
         specs = kws_keyword_specs(self.policy, phrases=self.phrases)
+        sig = tuple(specs)
+        if (
+            sig == getattr(self, "_keyword_sig", None)
+            and self._spotter is not None
+            and self.keywords_path.is_file()
+        ):
+            return
+        self._keyword_sig = sig
         self._keyword_ids = [kid for _s, kid, _b, _t in specs]
         encode_kws_keywords_file(
             specs,

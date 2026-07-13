@@ -212,3 +212,50 @@ def test_rebuild_keywords_on_policy_change(tmp_path, sherpa_backend):
     # Quiet empty should not wake
     quiet = b"\x00\x00" * 1600
     assert sherpa_backend.score_snippet(quiet, 16000) is None
+
+
+def test_rebuild_keywords_noop_when_signature_unchanged(monkeypatch, tmp_path):
+    """Same keyword graph must not null the spotter / re-encode (B070×B079)."""
+    from hark.wake import SherpaKwsWakeBackend
+
+    backend = object.__new__(SherpaKwsWakeBackend)
+    backend.policy = WakePolicy(mode="names", names=["iris", "mercury"])
+    backend.phrases = backend.policy.display_phrases()
+    backend._files = {
+        "bpe": tmp_path / "bpe.model",
+        "tokens": tmp_path / "tokens.txt",
+        "encoder": tmp_path / "e.onnx",
+        "decoder": tmp_path / "d.onnx",
+        "joiner": tmp_path / "j.onnx",
+    }
+    backend.keywords_path = tmp_path / "keywords.txt"
+    backend._spotter = None
+    backend._keyword_sig = None
+    backend._keyword_ids = []
+    backend.energy_floor = 0.003
+    backend.num_threads = 1
+    backend.last_text = ""
+    backend.last_rms = 0.0
+
+    encodes: list[int] = []
+
+    def _fake_encode(specs, **kwargs):
+        encodes.append(len(specs))
+        Path(kwargs["dest"]).write_text("fake\n", encoding="utf-8")
+
+    monkeypatch.setattr("hark.wake.encode_kws_keywords_file", _fake_encode)
+
+    backend.rebuild_keywords(backend.policy)
+    assert len(encodes) == 1
+    assert backend._spotter is None  # first rebuild clears for lazy load
+    sentinel = object()
+    backend._spotter = sentinel
+
+    backend.rebuild_keywords(backend.policy)
+    assert len(encodes) == 1, "identical policy must not re-encode"
+    assert backend._spotter is sentinel, "identical policy must keep spotter"
+
+    # Real change → rebuild
+    backend.rebuild_keywords(WakePolicy(mode="names", names=["alice"]))
+    assert len(encodes) == 2
+    assert backend._spotter is None

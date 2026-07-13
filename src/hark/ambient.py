@@ -374,9 +374,16 @@ def _wait_for_wake(
                 )
                 return hit
 
-            # Hot-reload learned aliases written by other processes / previous cycles
+            # Hot-reload learned aliases only when the on-disk file changes.
+            # Applying every hop would thrash Sherpa KWS (rebuild_keywords →
+            # null KeywordSpotter + full ONNX reload) under continuous ambient.
+            prev_learned = learned_state
             learned_state = load_learned_if_changed(learned_state)
-            if learned_state is not None and pol.learn:
+            if (
+                pol.learn
+                and learned_state is not None
+                and learned_state is not prev_learned
+            ):
                 pol = pol.merge_learned(
                     name_aliases=learned_state.name_aliases,
                     phrase_aliases=learned_state.phrase_aliases,

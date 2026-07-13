@@ -28,3 +28,4 @@ bugs:
     - file: B027-run-docs-audit-and-fix.todo
     - file: B028-investigate-recent-ci-runs-and.todo
     - file: B029-must-detect-self-if-running-fr.todo
+    - file: B030-add-og-social-tags-and-images.todo

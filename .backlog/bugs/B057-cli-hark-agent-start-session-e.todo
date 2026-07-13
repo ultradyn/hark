@@ -1,4 +1,7 @@
 ---
+claimed_at: "2026-07-13T14:29:42Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T14:26:24Z"
 depends_on:
@@ -6,14 +9,11 @@ depends_on:
 estimate_hours: 3
 id: B057
 priority: medium
-status: pending
-tags:
-    - I005
-    - cli
-    - agents
-    - voice
+started_at: "2026-07-13T14:29:42Z"
+status: in_progress
+tags: []
 title: 'CLI: hark agent-start / session ensure + optional kickoff prompt'
-updated_at: "2026-07-13T14:26:24Z"
+updated_at: "2026-07-13T14:29:42Z"
 ---
 ## Problem
 Mode A must call a **stable CLI** rather than freestyling `herdr agent start` shell. Need user-facing commands that resolve CLIs (B055), ensure session + start (B056), and optionally inject a kickoff prompt.

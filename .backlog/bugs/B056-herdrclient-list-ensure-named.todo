@@ -1,4 +1,7 @@
 ---
+claimed_at: "2026-07-13T14:29:42Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T14:26:23Z"
 depends_on:
@@ -6,13 +9,11 @@ depends_on:
 estimate_hours: 3
 id: B056
 priority: medium
-status: pending
-tags:
-    - I005
-    - herdr
-    - agents
+started_at: "2026-07-13T14:29:42Z"
+status: in_progress
+tags: []
 title: 'HerdrClient: list/ensure named session + agent start'
-updated_at: "2026-07-13T14:26:23Z"
+updated_at: "2026-07-13T14:29:42Z"
 ---
 ## Problem
 `HerdrClient` can list agents, send text/keys, and read panes, but cannot **start** agents or manage **named Herdr sessions**. Voice control needs library methods wrapping:

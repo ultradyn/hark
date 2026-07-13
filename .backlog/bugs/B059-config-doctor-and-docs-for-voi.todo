@@ -1,4 +1,7 @@
 ---
+claimed_at: "2026-07-13T14:29:42Z"
+claimed_by: cli-user
+completed_at: null
 complexity: low
 created_at: "2026-07-13T14:26:24Z"
 depends_on:
@@ -7,14 +10,11 @@ depends_on:
 estimate_hours: 2
 id: B059
 priority: medium
-status: pending
-tags:
-    - I005
-    - docs
-    - doctor
-    - config
+started_at: "2026-07-13T14:29:42Z"
+status: in_progress
+tags: []
 title: Config, doctor, and docs for voice Herdr agent control
-updated_at: "2026-07-13T14:26:24Z"
+updated_at: "2026-07-13T14:29:42Z"
 ---
 ## Problem
 Operators need discoverability: which CLIs resolve, how aliases work, and how voice spawn fits Mode A. Doctor should surface readiness.

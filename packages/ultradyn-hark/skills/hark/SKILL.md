@@ -113,8 +113,8 @@ Full contract: [docs/HERDR.md](../../docs/HERDR.md).
 
 ## Preconditions
 
-1. `hark` available — while developing: `uv run hark` from latest checkout, or `uv tool install -e .` (not a stale non-editable `uv tool` install).  
-2. `hark doctor` healthy (Herdr, **tunnels for any `ssh` sessions**, Grok OAuth / keys, mic).  
+1. `hark` available — while developing: `uv run hark` from latest checkout, or `uv tool install -e . --force` (not a stale non-editable `uv tool` install).  
+2. `hark doctor` healthy (Herdr, **tunnels for any `ssh` sessions**, Grok OAuth / keys, mic). If doctor reports **`install: stale`** / missing cmds vs the checkout, reinstall editable before arming handsfree.  
 3. STT/TTS: xAI via **Grok Build OAuth** preferred; OpenAI / Google / MiniMax as configured.  
 
 ## Hard rules
@@ -148,16 +148,22 @@ When you hit a problem (mic busy, missed alert, empty STT, skill gap, confusing 
 3. **Fix now** if small and unblocks the operator; otherwise file and continue, then pick up when free.  
 4. Prefer fixes that help the *next* Hark agent, not only this turn.
 
-**CLI must match the checkout.** A stale `uv tool install hark` (site-packages) can lag behind `master` (e.g. answer-window arm beep). Prefer one of:
+**CLI must match the checkout.** A non-editable `uv tool install` freezes
+site-packages and can lag `master` (missing `start`/`stop`/`restart`, arm-cue
+fixes, …) while `uv run hark` works. **`hark doctor`** shows `install: stale|frozen`
+and a reinstall hint (B100). Prefer one of:
 
 ```bash
-# from this repo (editable; picks up speech.py fixes immediately)
-uv tool install -e .
+# from this repo (editable; git pull updates PATH hark)
+uv tool install -e . --force
 # or run without installing:
 uv run hark …
+# installer is editable by default:
+./install.sh
 ```
 
-Do **not** dogfood Hark against an old global tool when validating listen/TTS handoff.  
+Do **not** dogfood Hark against an old global tool when validating listen/TTS handoff
+or Mode A workers. If PATH rejects `hark start`, reinstall editable before pkill.  
 
 ## Streaming mode (`[ambient].streaming`) — B098
 

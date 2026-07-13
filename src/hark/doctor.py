@@ -235,6 +235,9 @@ def run_doctor(
     # GitHub release self-update check (B088) — advisory only
     report["update"] = _update_report(cfg)
 
+    # PATH / uv-tool install freshness vs local source tree (B100) — soft only
+    report["install"] = _install_report()
+
     # TTS play queue (B099) — auto-heal abandoned tickets; soft warn only
     report["tts_play_queue"] = _tts_play_queue_report()
 
@@ -416,6 +419,23 @@ def _update_report(cfg: HarkConfig) -> dict[str, Any]:
         return {"error": str(exc), "update_available": False, "disabled": False}
 
 
+def _install_report() -> dict[str, Any]:
+    """PATH/tool install vs local source tree (B100). Soft; never fails doctor."""
+    try:
+        from hark.install_check import install_status_for_api
+
+        return install_status_for_api()
+    except Exception as exc:  # pragma: no cover — defensive
+        return {
+            "ok": False,
+            "status": "error",
+            "stale": False,
+            "error": str(exc),
+            "warnings": [f"install check failed: {exc}"],
+            "hints": [],
+        }
+
+
 def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
     print(f"hark doctor  v{report['hark_version']}", file=out)
     print(f"  config: {report['config_path']}"
@@ -552,6 +572,52 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
             print(f"  update: check failed ({upd.get('error')})", file=out)
         else:
             print("  update: no release data yet", file=out)
+    inst = report.get("install") or {}
+    if inst:
+        mode = inst.get("mode") or "?"
+        st = inst.get("status") or "?"
+        ver = inst.get("package_version") or inst.get("hark_version") or "?"
+        src = inst.get("compared_source") or inst.get("install_source_path") or ""
+        src_bit = f" source={src}" if src else ""
+        editable = "editable" if inst.get("editable") else "non-editable"
+        print(
+            f"  install: {st}  ({editable} mode={mode} v{ver}{src_bit})",
+            file=out,
+        )
+        if inst.get("which_hark"):
+            print(f"    which: {inst['which_hark']}", file=out)
+        ph = inst.get("path_hark") or {}
+        lag_path = ph.get("path")
+        if (
+            lag_path
+            and not ph.get("same_as_running")
+            and lag_path != inst.get("which_hark")
+        ):
+            print(
+                f"    tool:  {lag_path} "
+                f"(≠ this process; cmds={len(ph.get('commands') or [])})",
+                file=out,
+            )
+        elif lag_path and not ph.get("same_as_running") and inst.get("stale"):
+            print(
+                f"    tool:  {lag_path} "
+                f"(≠ this process; cmds={len(ph.get('commands') or [])})",
+                file=out,
+            )
+        cmp = inst.get("path_comparison") or inst.get("comparison") or {}
+        if (inst.get("comparison") or {}).get("git_describe"):
+            print(f"    git:  {inst['comparison']['git_describe']}", file=out)
+        elif cmp.get("git_describe"):
+            print(f"    git:  {cmp['git_describe']}", file=out)
+        missing = cmp.get("missing_commands") or []
+        if not missing and (inst.get("comparison") or {}).get("missing_commands"):
+            missing = inst["comparison"]["missing_commands"]
+        if missing:
+            print(f"    missing cmds: {', '.join(missing)}", file=out)
+        for w in inst.get("warnings") or []:
+            print(f"  warn: {w}", file=out)
+        for h in inst.get("hints") or []:
+            print(f"  hint: {h}", file=out)
     tq = report.get("tts_play_queue") or {}
     if tq:
         print(

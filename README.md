@@ -95,7 +95,7 @@ bash /tmp/hark-install.sh
 The installer is **idempotent** and HTTPS-only. It:
 
 - Clones or updates the repo under `~/.local/share/hark/src` (override with `HARK_HOME` / `--dir`)
-- Installs the `hark` CLI via **uv** (`uv tool install`) or **pip** (`--method pip`)
+- Installs the `hark` CLI via **uv** (`uv tool install --editable`) or **pip** (`--method pip`)
 - Copies agent skills to `~/.claude/skills/{hark,handsfree}` (override with `HARK_SKILLS_DIR`)
 - Supports `PREFIX` / `DESTDIR`, `HARK_REF` (branch/tag/commit), `--with-wake`, `--no-skills`, `--no-cli`
 
@@ -108,6 +108,16 @@ hark doctor
 ```
 
 From a local checkout: `./install.sh` (uses that tree; no re-clone).
+
+**Dogfood / developing on master:** keep PATH current with an **editable** tool install
+so `git pull` updates `~/.local/bin/hark` (avoids missing `start`/`stop` after new
+subcommands land). `hark doctor` warns when a non-editable tool copy lags the source
+tree (`install: stale|frozen`).
+
+```bash
+cd /path/to/hark && uv tool install -e . --force
+# or: uv run hark …
+```
 
 ### Skills only (`npx skills`)
 

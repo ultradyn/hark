@@ -22,9 +22,31 @@ Schema version lives in code as `SETUP_SCHEMA_VERSION` (`hark.setup_flow`).
 
 ---
 
+## CLI must match the checkout (dogfood)
+
+PATH `hark` from a **non-editable** `uv tool install` freezes site-packages. After
+`git pull` / new subcommands on master (`start`/`stop`/`restart`, …), PATH can lag
+while `uv run hark` works. **`hark doctor`** reports `install: stale|frozen` with a
+reinstall hint (B100).
+
+Prefer one of:
+
+```bash
+# from the checkout you dogfood (editable — pulls update the CLI)
+uv tool install -e . --force
+# or always run from the tree:
+uv run hark …
+# or re-run the installer (editable by default):
+./install.sh
+```
+
+If `hark start` is “invalid choice”, reinstall editable before debugging Mode A.
+
 ## Question order (canonical)
 
 1. **Health** — `hark doctor` (text OK). Fix Herdr / tunnels / speech keys if red.
+   Check **install:** — if `stale` / `frozen` / missing cmds, reinstall editable first
+   (see above).
 2. **Herdr sessions** — local / SSH / mix  
    Write `[[herdr.sessions]]` (local without `ssh`, remote with `ssh = "…"`).  
    See SKILL.md **Herdr sessions**.

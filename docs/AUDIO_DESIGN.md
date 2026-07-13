@@ -38,9 +38,11 @@ trimmed from STT content.
 With arm cue on, speech-open only logs (`listen.speech_opened`); it does **not**
 double-beep. With arm cue off, record-start still plays once when speech opens.
 
-**Dogfood:** use the checkout (`uv run hark`) or `uv tool install -e .` so the
-CLI matches repo arm-cue behaviour; a stale `uv tool` site-packages install can
-still wait for speech before beeping.
+**Dogfood:** use the checkout (`uv run hark`) or `uv tool install -e . --force` so the
+CLI matches repo arm-cue behaviour; a stale non-editable `uv tool` site-packages
+install can still wait for speech before beeping (and may lack newer subcommands
+such as `start`/`stop`). `hark doctor` reports `install: stale|frozen` when the
+PATH tool lags a local source tree (B100).
 
 ## Ambient pipeline (not answering a blocked agent)
 

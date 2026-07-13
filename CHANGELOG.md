@@ -6,6 +6,9 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- **Install freshness (B100):** `hark doctor` reports PATH / `uv tool` install vs
+  local source (`install: stale|frozen|editable`), missing cmds (e.g. `start`/`stop`),
+  and reinstall hint `uv tool install -e . --force`. Skill SETUP + dogfood notes.
 - **Handsfree workers (B089):** `hark start` / `stop` / `restart` for ambient +
   `watch --for-monitor` (idempotent start, SIGTERM then SIGKILL, `mode-a.pids`);
   preferred over `./scripts/run-mode-a.sh`. `hark start --status` for running state.

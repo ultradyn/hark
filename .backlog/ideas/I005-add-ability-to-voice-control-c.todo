@@ -1,16 +1,19 @@
 ---
+claimed_at: "2026-07-13T14:24:47Z"
+claimed_by: cli-user
+completed_at: "2026-07-13T14:27:36Z"
 complexity: medium
 created_at: "2026-07-13T11:00:50Z"
 depends_on: []
+duration_minutes: 2.8323405963
 estimate_hours: 10
 id: I005
 priority: medium
-status: pending
-tags:
-    - idea
-    - planning
+started_at: "2026-07-13T14:24:47Z"
+status: done
+tags: []
 title: 'Add ability to voice control creating herdr sessions and initializing new agents and kicking them off etc. should support claude code, codex, grok, `cursor-agent`, and other coding clis (must be able to be done ad-hoc). For the supported ones, we should see if we have aliases for them: cc for claude, cx for codex, gk for grok. cr for cursor-agent. If we have the 2 letter alias present, we should use that, otherwise we should use the normal cli command to start a session.'
-updated_at: "2026-07-13T11:00:50Z"
+updated_at: "2026-07-13T14:27:36Z"
 ---
 
 # Original Idea
@@ -19,22 +22,47 @@ Add ability to voice control creating herdr sessions and initializing new agents
 
 ## Planning Task (Equivalent of /plan-task)
 
-- Run `/plan-task I005` to decompose this idea into actionable work.
-- Confirm placement in the current backlog hierarchy before creating work items.
+- [x] Recon live `herdr` CLI (`agent start`, `session list`, workspace/tab) and Mode A ambient → skill path.
+- [x] Confirm backlog hierarchy: flat **bugs** + **ideas** only (no phase/milestone/epic tree).
+- [x] Design note: `docs/plans/I005-voice-herdr-agent-control.md`.
+- [x] Decompose into B055–B059 with AC + dependencies.
+- [x] Record alias pitfalls (gcc-as-`cc`, CodeRabbit-as-`cr`, fish functions invisible to herdr).
 
-## Ingest Plan Into backlog
+## Design summary
 
-- Create implementation items with `backlog add` and related hierarchy commands (`backlog add-epic`, `backlog add-milestone`, `backlog add-phase`) as needed.
-- Create follow-up defects with `backlog bug` when bug-style work is identified.
-- Record all created IDs below and wire dependencies.
+**Feasible now.** Herdr already supports named sessions and `agent start … -- <argv>`. Mode A already receives `ambient.prompt` and can run tools. Missing pieces: safe **CLI argv resolution** (prefer aliases only when PATH-safe), **HerdrClient + hark CLI** wrappers for session ensure / agent start / kickoff prompt, and a **Mode A skill playbook** so voice phrases map to those tools with confirms and TTS acks.
+
+Precedence for known agents: safe short alias (`cc`/`cx`/`gk`/`cr`) → canonical binary → config override. Reject known collisions. Ad-hoc CLIs pass through without a catalog entry. Spawn stays outside Herdr (Mode A on the host); kickoff uses existing send_text + Enter.
+
+**Audio UX:** if Herdr session or space is unclear, Mode A asks for clarification with a brief suggested-options list (no guessing). **One audio question at a time** for the whole spawn flow.
+
+## Hierarchy placement
+
+- Repo backlog is **bugs + ideas** only.
+- Implementation tracked as medium-priority **bugs** B055–B059 (same style as I002 → B044–B047).
+- No new phase/epic required.
 
 ## Created Work Items
 
-- Add created task IDs
-- Add created bug IDs (if any)
+| ID | Title | Est | Depends |
+|----|-------|-----|---------|
+| **B055** | Coding CLI argv resolver (aliases + ad-hoc + reject list) | 2h | — |
+| **B056** | HerdrClient: list/ensure named session + agent start | 3h | B055 |
+| **B057** | CLI: `hark agent-start` / session ensure + optional kickoff | 3h | B056 |
+| **B058** | Mode A skill: voice playbook for session + agent spawn | 2h | B057 |
+| **B059** | Config, doctor, and docs for voice Herdr agent control | 2h | B057, B058 |
+
+### Suggested implement order
+
+1. B055 pure resolver + unit tests  
+2. B056 client methods (mocked herdr)  
+3. B057 CLI for Mode A tools  
+4. B058 skill playbook (+ package skill copies)  
+5. B059 config / doctor / HERDR docs  
 
 ## Completion Criteria
 
-- Idea has been decomposed into concrete backlog work items.
-- New items include clear acceptance criteria and dependencies.
-- This idea intake is updated with created IDs and marked done.
+- [x] Idea decomposed into concrete backlog work items.
+- [x] New items include clear acceptance criteria and dependencies.
+- [x] This idea intake updated with created IDs and design summary.
+- [ ] Mark idea done (parent agent after merge).

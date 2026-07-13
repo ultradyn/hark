@@ -52,6 +52,12 @@ bugs:
     - file: B051-footer-now-goes-all-the-way-to.todo
     - file: B052-supports-section-fix-orchestra.todo
     - file: B053-update-the-npm-facing-readme-t.todo
+    - file: B054-remove-spec-from-footer-but-ad.todo
+    - file: B055-coding-cli-argv-resolver-alias.todo
+    - file: B056-herdrclient-list-ensure-named.todo
+    - file: B057-cli-hark-agent-start-session-e.todo
+    - file: B058-mode-a-skill-voice-playbook-fo.todo
+    - file: B059-config-doctor-and-docs-for-voi.todo
     - file: B060-dashboard-api-contract-v1-hark.todo
     - file: B061-dashboard-backend-hark-serve-r.todo
     - file: B062-dashboard-webui-scaffold-live.todo

@@ -6,8 +6,8 @@ phases: []
 project: hark
 stats:
     blocked: 0
-    done: 40
-    in_progress: 1
+    done: 51
+    in_progress: 2
     pending: 11
-    total_tasks: 52
+    total_tasks: 64
 timeline_weeks: 12

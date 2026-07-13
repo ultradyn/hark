@@ -1,0 +1,37 @@
+---
+claimed_at: "2026-07-13T14:29:10Z"
+claimed_by: cli-user
+completed_at: null
+complexity: medium
+created_at: "2026-07-13T14:26:23Z"
+depends_on: []
+estimate_hours: 2
+id: B055
+priority: medium
+started_at: "2026-07-13T14:29:10Z"
+status: in_progress
+tags: []
+title: Coding CLI argv resolver (aliases + ad-hoc + reject list)
+updated_at: "2026-07-13T14:29:10Z"
+---
+## Problem
+Mode A / hark need a **deterministic** way to pick argv for coding agents: prefer short aliases (`cc`, `cx`, `gk`, `cr`) when safe, else canonical CLI (`claude`, `codex`, `grok`, `cursor-agent`). Ad-hoc CLIs must work without a catalog entry. Naive PATH lookup is wrong on real hosts (`cc` → gcc; `cr` → CodeRabbit).
+
+## Scope (I005 / B055)
+Resolver only — no herdr spawn yet.
+
+## Design
+- Module e.g. `hark.agents.resolve` (or `hark.cli_resolve`).
+- Built-in catalog for: claude (`cc`), codex (`cx`), grok (`gk`), cursor-agent (`cr`); also known peers (opencode, pi, agy) without requiring short aliases.
+- For each agent: try preferred aliases then canonical name; accept first `shutil.which` hit that passes **reject** checks.
+- Reject: basename `cc` that is gcc/cc→gcc; basename `cr` that is coderabbit; other non-coding collisions as needed.
+- **Ad-hoc**: free-form argv list / command string → normalized `list[str]` with no alias magic (optional shell-split rules: simple, no full shell).
+- Config hooks later (B059); resolver should accept optional override map in API for tests.
+- Public API sketch: `resolve_agent_argv(name_or_alias: str, *, extra_args=(), overrides=None) -> ResolvedCli` with fields `agent_key`, `argv`, `source` (`alias`|`canonical`|`override`|`adhoc`).
+
+## Acceptance
+- [ ] Unit tests: prefer alias when safe; fall back to canonical; reject gcc-as-cc and coderabbit-as-cr
+- [ ] Ad-hoc argv path works without catalog entry
+- [ ] Override map wins when provided
+- [ ] No dependency on interactive fish/zsh functions
+- [ ] Documented pitfalls in module docstring (link plan I005)

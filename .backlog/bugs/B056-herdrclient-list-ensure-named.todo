@@ -1,0 +1,39 @@
+---
+complexity: medium
+created_at: "2026-07-13T14:26:23Z"
+depends_on:
+    - B055
+estimate_hours: 3
+id: B056
+priority: medium
+status: pending
+tags:
+    - I005
+    - herdr
+    - agents
+title: 'HerdrClient: list/ensure named session + agent start'
+updated_at: "2026-07-13T14:26:23Z"
+---
+## Problem
+`HerdrClient` can list agents, send text/keys, and read panes, but cannot **start** agents or manage **named Herdr sessions**. Voice control needs library methods wrapping:
+
+- `herdr session list [--json]`
+- create/use named session (`herdr --session <name>` / documented ensure path)
+- `herdr agent start <name> [--cwd PATH] [--workspace ID] [--tab ID] [--split right|down] [--focus|--no-focus] -- <argv...>`
+
+## Scope (I005 / B056)
+Client methods + tests with mocked `run_raw` / `run_json`. Uses B055 resolver for argv unless caller passes explicit argv.
+
+## Design
+- `list_sessions() -> list[SessionInfo]` from `session list --json`
+- `ensure_session(name: str) -> SessionInfo` — if missing, start/create via the least-surprising herdr path documented in HERDR.md (probe live `herdr` during implement); if already running, return it
+- `start_agent(*, name, argv, cwd=None, workspace_id=None, tab_id=None, split=None, focus=False) -> AgentInfo | start result` — build CLI, run, parse JSON / re-list to return pane identity
+- Errors → `HerdrError` with actionable messages
+- Multi-session: method runs against `self.session` socket / `HERDR_SESSION` env already set by client
+
+## Acceptance
+- [ ] `list_sessions` parses live JSON shape (fixture if capture available)
+- [ ] `ensure_session` is idempotent for existing sessions
+- [ ] `start_agent` builds correct argv after `--` and surfaces pane/target on success
+- [ ] Unit tests mock herdr subprocess; no live spawn required in CI
+- [ ] Docs note in HERDR.md client section (or deferred to B059 with stub comments)

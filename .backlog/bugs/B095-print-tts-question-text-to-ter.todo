@@ -1,17 +1,18 @@
 ---
+claimed_at: "2026-07-13T19:08:28Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T18:08:00Z"
 depends_on: []
 estimate_hours: 1
 id: B095
 priority: medium
-status: pending
-tags:
-    - tts
-    - ux
-    - mode-a
+started_at: "2026-07-13T19:08:28Z"
+status: in_progress
+tags: []
 title: Print TTS question text to terminal when Mode A / hark ask speaks so operator has a visual quick reference
-updated_at: "2026-07-13T18:08:00Z"
+updated_at: "2026-07-13T19:08:28Z"
 ---
 ## Problem
 

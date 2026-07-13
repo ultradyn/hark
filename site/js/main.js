@@ -32,7 +32,7 @@
   const commands = {
     skills: {
       cmd: `npx skills add ${skillsRepo} -g -y`,
-      hint: "# agent skills only · still need hark CLI (bash install or uv) for Mode A",
+      hint: "# agent skills only · still need hark CLI (bash install or uv) for handsfree",
       title: "skills · npx",
     },
     bash: {

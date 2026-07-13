@@ -6,16 +6,18 @@
   margin-inline: auto;
 }
 
-.nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-4);
-  padding: var(--s-4) 0;
+/* Full-bleed sticky chrome; content stays in .shell via .nav__inner */
+.site-header {
   position: sticky;
   top: 0;
   z-index: 40;
+  width: 100%;
+}
+
+.nav {
+  width: 100%;
   backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   background: linear-gradient(to bottom, var(--bg-glass), transparent);
   border-bottom: 1px solid transparent;
 }
@@ -23,6 +25,14 @@
 .nav.is-scrolled {
   border-bottom-color: var(--border);
   background: var(--bg-glass);
+}
+
+.nav__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding: var(--s-4) 0;
 }
 
 .nav__brand {
@@ -126,6 +136,7 @@ a.product-link:hover {
 /* --- Eyebrow / kicker --- */
 .eyebrow {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--s-2);
   font-family: var(--font-mono);
@@ -134,6 +145,7 @@ a.product-link:hover {
   text-transform: uppercase;
   color: var(--herald);
   margin-bottom: var(--s-4);
+  max-width: 100%;
 }
 
 .eyebrow__dot {

@@ -4,6 +4,12 @@ All notable changes to **Hark** and the **`@ultradyn/hark`** npm skills package.
 
 Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package version in `packages/ultradyn-hark/package.json`.
 
+## Unreleased
+
+- Optional TTS/listen overlap pre-arm (`audio.overlap_prearm`, `overlap_discard_ms`): start
+  capture near TTS end while discarding audio until TTS ends + residual (B004). Half-duplex
+  remains the default.
+
 ## 0.1.3
 
 - Skills discovery: monorepo `skills/` symlinks for `npx skills`; internal skill shim.

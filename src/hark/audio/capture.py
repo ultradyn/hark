@@ -129,6 +129,27 @@ class CaptureResult:
         return write_wav_bytes(self.pcm16, self.sample_rate)
 
 
+def _still_discarding(
+    *,
+    open_mono: float,
+    discard_leading_ms: int,
+    audio_ok_after: Callable[[], float | None] | None,
+) -> bool:
+    """True while leading audio should be dropped (overlap pre-arm echo guard).
+
+    ``audio_ok_after`` returns a monotonic deadline (or None while TTS is still
+    playing). Fixed ``discard_leading_ms`` applies from stream open.
+    """
+    now = time.monotonic()
+    if audio_ok_after is not None:
+        ok_at = audio_ok_after()
+        if ok_at is None or now < ok_at:
+            return True
+    if discard_leading_ms > 0 and now < open_mono + discard_leading_ms / 1000.0:
+        return True
+    return False
+
+
 def capture_utterance(
     *,
     sample_rate: int = 16000,
@@ -146,6 +167,9 @@ def capture_utterance(
     should_stop: Callable[[bytes, float], bool] | None = None,
     on_opened: Callable[[], None] | None = None,
     post_tts_guard_s: float = 0.0,
+    # Drop leading frames (fixed window from open and/or until audio_ok_after)
+    discard_leading_ms: int = 0,
+    audio_ok_after: Callable[[], float | None] | None = None,
 ) -> CaptureResult:
     """Energy-gated capture until end silence or should_stop or max.
 
@@ -155,6 +179,10 @@ def capture_utterance(
     is confirmed — use it for the record-start cue / stream arming.
 
     should_stop(pcm_so_far, elapsed_s) → True to end (e.g. agent listen-end).
+
+    Overlap pre-arm: open the stream early and discard frames while
+    ``audio_ok_after()`` is None or before its deadline (TTS still ending /
+    residual echo). Gate timeout clocks start only after discard completes.
     """
     _require_sd()
     if post_tts_guard_s > 0:
@@ -177,8 +205,9 @@ def capture_utterance(
     chunks: list[np.ndarray] = []
     # Short ring of recent frames while waiting for speech (discarded if timeout)
     preroll: deque[np.ndarray] = deque(maxlen=preroll_blocks)
-    start = time.monotonic()
     wait_speech_ms = 0
+    # Safety cap for discard phase (TTS tail + residual + long mute)
+    discard_max_s = max(30.0, initial_timeout_s)
 
     with sd.InputStream(
         samplerate=sample_rate,
@@ -187,6 +216,23 @@ def capture_utterance(
         blocksize=block,
         device=device,
     ) as stream:
+        open_mono = time.monotonic()
+        # Phase 0: drop leading audio (overlap pre-arm / fixed discard window)
+        if discard_leading_ms > 0 or audio_ok_after is not None:
+            while _still_discarding(
+                open_mono=open_mono,
+                discard_leading_ms=discard_leading_ms,
+                audio_ok_after=audio_ok_after,
+            ):
+                if time.monotonic() - open_mono > discard_max_s:
+                    raise TimeoutError(
+                        "overlap discard window exceeded before audio became usable"
+                    )
+                data, overflowed = stream.read(block)
+                del overflowed, data
+
+        # Gate clock starts only after discard so TTS tail does not burn timeout
+        start = time.monotonic()
         for i in range(max_blocks):
             data, overflowed = stream.read(block)
             del overflowed

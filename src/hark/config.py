@@ -41,6 +41,8 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "half_duplex",
         "post_tts_guard_ms",
         "listen_pre_arm_ms",
+        "overlap_prearm",
+        "overlap_discard_ms",
         "mute_mic_during_tts",
         "sync_hw_unmute",
         "cue_volume",
@@ -105,6 +107,10 @@ class AudioConfig:
     post_tts_guard_ms: int = 100
     # Fire near-end callback this many ms before TTS finishes (pre-arm signal)
     listen_pre_arm_ms: int = 300
+    # Optional true overlap: start capture near TTS end (default off = half-duplex)
+    overlap_prearm: bool = False
+    # When overlap_prearm: drop audio until TTS ends + this many ms (echo guard)
+    overlap_discard_ms: int = 150
     # Mute system default capture during TTS (Wave ring white→red via pactl)
     mute_mic_during_tts: bool = True
     # Watch Wave/ALSA/Pulse mute edges; hardware unmute → force OS unmute
@@ -220,6 +226,8 @@ poll_ms = 1000
 half_duplex = true
 post_tts_guard_ms = 100      # after TTS ends → start listen (tight handoff)
 listen_pre_arm_ms = 300      # signal ~0.3s before TTS ends
+overlap_prearm = false       # true: start capture near TTS end (still drops echo)
+overlap_discard_ms = 150     # with overlap_prearm: drop audio until TTS ends + this
 mute_mic_during_tts = true   # pactl mute → Elgato Wave ring red while speaking
 sync_hw_unmute = true        # Wave/ALSA unmute button → force OS/Pulse unmute
 cue_volume = 0.22            # generated start/stop beep volume (0–1)
@@ -485,6 +493,8 @@ def load_config(path: Path | None = None) -> HarkConfig:
             half_duplex=bool(audio_raw.get("half_duplex", True)),
             post_tts_guard_ms=int(audio_raw.get("post_tts_guard_ms", 100)),
             listen_pre_arm_ms=int(audio_raw.get("listen_pre_arm_ms", 300)),
+            overlap_prearm=bool(audio_raw.get("overlap_prearm", False)),
+            overlap_discard_ms=int(audio_raw.get("overlap_discard_ms", 150)),
             mute_mic_during_tts=bool(audio_raw.get("mute_mic_during_tts", True)),
             sync_hw_unmute=bool(audio_raw.get("sync_hw_unmute", True)),
             cue_volume=float(
@@ -620,6 +630,8 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "half_duplex": cfg.audio.half_duplex,
             "post_tts_guard_ms": cfg.audio.post_tts_guard_ms,
             "listen_pre_arm_ms": cfg.audio.listen_pre_arm_ms,
+            "overlap_prearm": cfg.audio.overlap_prearm,
+            "overlap_discard_ms": cfg.audio.overlap_discard_ms,
             "mute_mic_during_tts": cfg.audio.mute_mic_during_tts,
             "sync_hw_unmute": cfg.audio.sync_hw_unmute,
             "cue_volume": cfg.audio.cue_volume,

@@ -86,16 +86,16 @@ Prefer voice after the skill loads (`hark tts`, `hark ask`, `hark listen`).
 
 Skills need the **Python `hark` CLI** on your machine (not bundled in this npm package).
 
-**One-liner** (CLI + skills into `~/.claude/skills`):
+**One-liner** (CLI + skills into `~/.claude/skills`) — script hosted on the site:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh | bash
+curl -fsSL https://hark.xk.io/install.sh | bash
 ```
 
 Safer (inspect, then run):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh -o /tmp/hark-install.sh
+curl -fsSL https://hark.xk.io/install.sh -o /tmp/hark-install.sh
 less /tmp/hark-install.sh
 bash /tmp/hark-install.sh
 ```

@@ -120,7 +120,7 @@ and keeps both `clankercode/hark` and `ultradyn/hark` in the installer’s known
 
 - [ ] `npx skills add ultradyn/hark -g -y` (new path) — confirm after transfer.
 - [ ] Old path `npx skills add clankercode/hark` may work via GitHub redirect; document preferred path as `ultradyn/hark`.
-- [ ] Site + README install one-liner should use `raw.githubusercontent.com/ultradyn/hark/...` only after rewrite commit is on default branch.
+- [ ] Public bash one-liner stays **`https://hark.xk.io/install.sh`** (Pages artifact on each version tag). GitHub clone URLs may still move to `ultradyn/hark`.
 
 ### 9. Tags / release notes
 
@@ -153,7 +153,7 @@ Clone or install against the new owner without waiting for a docs commit:
 ```bash
 HARK_GITHUB_REPO=ultradyn/hark bash install.sh
 # or from curl once raw URL serves the new tree:
-curl -fsSL https://raw.githubusercontent.com/ultradyn/hark/master/install.sh \
+curl -fsSL https://hark.xk.io/install.sh \
   | HARK_GITHUB_REPO=ultradyn/hark bash
 ```
 

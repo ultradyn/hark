@@ -71,14 +71,16 @@ The verse is playful; **routing and confirmation are not.**
 
 ### One-liner (CLI + skills)
 
+Hosted at **[hark.xk.io/install.sh](https://hark.xk.io/install.sh)** (published with each version tag via GitHub Pages).
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh | bash
+curl -fsSL https://hark.xk.io/install.sh | bash
 ```
 
 Safer (inspect, then run):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh -o /tmp/hark-install.sh
+curl -fsSL https://hark.xk.io/install.sh -o /tmp/hark-install.sh
 less /tmp/hark-install.sh
 bash /tmp/hark-install.sh
 ```

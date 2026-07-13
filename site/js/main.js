@@ -13,7 +13,8 @@
 /**
  * Install picker — segmented control (bash | npm | pnpm | bun).
  * Configurable via data attributes on [data-install-picker]:
- *   data-repo-owner, data-repo-name, data-repo-ref, data-npm-package, data-skills-repo
+ *   data-install-url (bash one-liner source; default https://hark.xk.io/install.sh)
+ *   data-repo-owner, data-repo-name, data-npm-package, data-skills-repo
  */
 (function () {
   const root = document.querySelector("[data-install-picker]");
@@ -21,17 +22,18 @@
 
   const owner = root.dataset.repoOwner || "clankercode";
   const name = root.dataset.repoName || "hark";
-  const ref = root.dataset.repoRef || "master";
   const npmPackage = root.dataset.npmPackage || "@ultradyn/hark";
   const skillsRepo = root.dataset.skillsRepo || `${owner}/${name}`;
-  const rawBase = `https://raw.githubusercontent.com/${owner}/${name}/${ref}`;
+  // Hosted on the static site (copied into Pages artifact on each version tag).
+  const installUrl =
+    root.dataset.installUrl || "https://hark.xk.io/install.sh";
 
   /** @type {Record<string, { cmd: string, hint: string, title: string }>} */
   const commands = {
     bash: {
-      cmd: `curl -fsSL ${rawBase}/install.sh | bash`,
-      hint: "# installs CLI + skills to ~/.claude/skills",
-      title: "bash · install.sh",
+      cmd: `curl -fsSL ${installUrl} | bash`,
+      hint: "# installs CLI + skills to ~/.claude/skills · script from hark.xk.io",
+      title: "bash · hark.xk.io",
     },
     npm: {
       cmd: `npm i -g ${npmPackage}`,

@@ -31,5 +31,13 @@ cd site && python3 -m http.server 8765
 
 ## Deploy
 
-GitHub Actions (`.github/workflows/pages.yml`) publishes `site/` to GitHub Pages.
+GitHub Actions (`.github/workflows/pages.yml`) publishes the site on **version tags only**
+(`v*`, same cadence as npm releases). The artifact is:
+
+- contents of `site/`
+- plus root **`install.sh`** → served as **https://hark.xk.io/install.sh**
+
+So the bash one-liner always matches the tagged release tree. Manual redeploy:
+Actions → “Deploy site to GitHub Pages” → Run workflow.
+
 Enable Pages → Source: **GitHub Actions** in repo settings if needed.

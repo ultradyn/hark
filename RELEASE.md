@@ -1,21 +1,32 @@
 # Release process — Hark / `@ultradyn/hark`
 
-Releases are automated by CI. Pushing a `vX.Y.Z` tag triggers
-[`.github/workflows/release.yml`](.github/workflows/release.yml), which:
+Releases are automated by CI. Pushing a `vX.Y.Z` tag triggers:
+
+1. [`.github/workflows/release.yml`](.github/workflows/release.yml) — npm package + GitHub Release
+2. [`.github/workflows/pages.yml`](.github/workflows/pages.yml) — **site + hosted install.sh**
+
+### `release.yml`
 
 1. Syncs monorepo `skill/` into `packages/ultradyn-hark/skills/`
 2. Verifies the tag matches `packages/ultradyn-hark/package.json` `version`
-3. Runs the Python test gate (`pytest`)
+3. Validates package contents (`npm pack --dry-run`)
 4. Publishes **`@ultradyn/hark`** to npm via **OIDC trusted publishing**
    (no `NPM_TOKEN`; build provenance attached automatically)
 5. Creates a GitHub Release with auto-generated notes
 
+### `pages.yml` (version tags only)
+
+Deploys `site/` **and** root `install.sh` so the public one-liner is always:
+
+```bash
+curl -fsSL https://hark.xk.io/install.sh | bash
+```
+
+The Pages artifact is rebuilt **only** on `v*` tags (or manual `workflow_dispatch`), not on every `master` push. That keeps the hosted installer aligned with releases.
+
 The **npm package version** lives in `packages/ultradyn-hark/package.json`.
 The Python CLI version is in root `pyproject.toml` and may differ until
 aligned deliberately.
-
-Site deploys separately via [`.github/workflows/pages.yml`](.github/workflows/pages.yml)
-on pushes that touch `site/`.
 
 ---
 

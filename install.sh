@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Hark one-line installer (CLI + agent skills)
 #
+# Hosted install URL (static site; redeployed on each version tag):
+#   https://hark.xk.io/install.sh
+#
 # Recommended (inspect first, then run):
-#   curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh -o /tmp/hark-install.sh
+#   curl -fsSL https://hark.xk.io/install.sh -o /tmp/hark-install.sh
 #   less /tmp/hark-install.sh
 #   bash /tmp/hark-install.sh
 #
-# One-liner (HTTPS only; trust the repo):
-#   curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh | bash
+# One-liner (HTTPS only; trust hark.xk.io / the release that published it):
+#   curl -fsSL https://hark.xk.io/install.sh | bash
 #
 # Options / env:
 #   --ref REF          Git branch/tag/commit (default: master; env HARK_REF)
@@ -79,7 +82,7 @@ usage() {
   cat <<EOF
 Hark one-line installer (CLI + agent skills)
 
-  curl -fsSL ${RAW_BASE}/master/install.sh | bash
+  curl -fsSL https://hark.xk.io/install.sh | bash
 
 Options / env:
   --ref REF          Git branch/tag/commit (default: master; env HARK_REF)

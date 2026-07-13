@@ -13,9 +13,14 @@ from hark.exitcodes import HERDR, OK
 from hark.herdr.client import HerdrClient
 from hark.paths import (
     cache_dir,
+    codex_auth_path,
     config_dir,
     default_config_path,
     grok_auth_path,
+    legacy_minimax_path,
+    mmx_config_path,
+    opencode_auth_path,
+    pi_agent_auth_path,
     state_dir,
 )
 from hark.providers.auth import all_provider_status
@@ -43,6 +48,16 @@ def run_doctor(
             "cache_dir": str(cache_dir()),
             "grok_auth": str(grok_auth_path()),
             "grok_auth_exists": grok_auth_path().is_file(),
+            "codex_auth": str(codex_auth_path()),
+            "codex_auth_exists": codex_auth_path().is_file(),
+            "opencode_auth": str(opencode_auth_path()),
+            "opencode_auth_exists": opencode_auth_path().is_file(),
+            "pi_agent_auth": str(pi_agent_auth_path()),
+            "pi_agent_auth_exists": pi_agent_auth_path().is_file(),
+            "mmx_config": str(mmx_config_path()),
+            "mmx_config_exists": mmx_config_path().is_file(),
+            "legacy_minimax": str(legacy_minimax_path()),
+            "legacy_minimax_exists": legacy_minimax_path().exists(),
         },
         "listen": {
             "end_mode": cfg.listen.end_mode,

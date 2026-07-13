@@ -14,10 +14,10 @@
 | Provider | STT | TTS | Streaming STT | Auth for this project | Notes |
 |----------|-----|-----|---------------|----------------------|--------|
 | **xAI Grok** | Yes — REST + WS | Yes — REST + WS | **Yes** (Smart Turn) | **Grok Build OAuth** (`~/.grok/auth.json`) preferred; `XAI_API_KEY` fallback | **Default primary** |
-| **OpenAI** | Yes — transcriptions + Realtime Whisper | Yes | Yes | `OPENAI_API_KEY` / ChatGPT API key | Strong fallback |
+| **OpenAI** | Yes — transcriptions + Realtime Whisper | Yes | Yes | `OPENAI_API_KEY`; also Codex / OpenCode / Pi CLI stores | Strong fallback |
 | **Anthropic** | **No public STT API** as of plan time | Product voice / TTS not a general TTS API for this | N/A | Claude Code Max is UI voice (`/voice`) | **Orchestrator**, not STT engine. Provider stub: status `unsupported` with message; optional experimental browser/product bridge later |
 | **Google (Gemini / Antigravity)** | **Yes** — Gemini audio understanding (file → transcript); Cloud STT if GCP | Yes — Gemini TTS / Cloud TTS | Partial (Live API / Cloud streaming) | `GOOGLE_API_KEY` / `GEMINI_API_KEY` / ADC | Good batch path after VAD segment |
-| **MiniMax** | **ASR not clearly public** on main API docs | **Yes** — T2A (`/v1/t2a_v2`) | TTS streaming yes | `MINIMAX_API_KEY` | Use for **TTS**; STT = probe + stub until official ASR endpoint confirmed |
+| **MiniMax** | **ASR not clearly public** on main API docs | **Yes** — T2A (`/v1/t2a_v2`) | TTS streaming yes | `MINIMAX_API_KEY`; also `mmx` CLI / Pi / OpenCode / legacy `~/.minimax` | Use for **TTS**; STT = probe + stub until official ASR endpoint confirmed |
 
 **Principle:** implement every *documented* speech API we can; for missing STT (Anthropic, MiniMax ASR), ship a provider module that `hark doctor` reports as **unavailable** with a clear reason, not a silent fallback.
 
@@ -89,7 +89,14 @@ https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
 | Streaming STT | Realtime API / gpt-realtime-whisper |
 | TTS | `POST /v1/audio/speech` |
 
-Auth: `OPENAI_API_KEY`.
+Auth discovery (env first, then CLI stores — fail-open):
+
+1. `OPENAI_API_KEY`
+2. Codex CLI `~/.codex/auth.json` (`OPENAI_API_KEY` field, else `tokens.access_token`; honors `CODEX_HOME`)
+3. OpenCode `$XDG_DATA_HOME/opencode/auth.json` (default `~/.local/share/opencode/auth.json`) — `openai` entry
+4. Pi agent `~/.pi/agent/auth.json` — `openai` / `openai-codex` entries
+
+Never log the token. ChatGPT OAuth access tokens may not work for all `api.openai.com` audio routes; prefer API keys when available.
 
 ---
 
@@ -150,7 +157,13 @@ Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY` (and document ADC for Cloud STT if us
 
 - `POST https://api.minimax.io/v1/t2a_v2` (region variants: `minimaxi.chat`, `api-uw.minimax.io`)  
 - Models such as `speech-2.8-hd` / current Speech lineup — pin via config  
-- Auth: `MINIMAX_API_KEY` + any required GroupId header if their API still needs it (verify against live docs at implement time)
+- Auth discovery (env first, then CLI stores — fail-open):
+  1. `MINIMAX_API_KEY` (+ optional `MINIMAX_GROUP_ID` header when required)
+  2. MiniMax CLI **`mmx`**: `~/.mmx/config.json` (`api_key` or `oauth.access_token`; honors `MMX_CONFIG_DIR`)
+  3. Pi agent `~/.pi/agent/auth.json` — `minimax` key
+  4. OpenCode auth — `minimax*` / `minimax-coding-plan` keys
+  5. Legacy `~/.minimax` (raw key file or dir with `config.json` / `api_key`)
+- Never log the token. Interactive login: `mmx auth login`.
 
 ### STT
 
@@ -185,9 +198,14 @@ Public docs emphasize **T2A (text→audio)**, not ASR. Community notes suggest A
 |--------|-----|
 | `~/.grok/auth.json` | xAI OAuth (preferred) |
 | `XAI_API_KEY` | xAI fallback |
-| `OPENAI_API_KEY` | OpenAI |
+| `OPENAI_API_KEY` | OpenAI (preferred explicit) |
+| `~/.codex/auth.json` | OpenAI via Codex CLI |
+| `~/.local/share/opencode/auth.json` | OpenAI / MiniMax via OpenCode |
+| `~/.pi/agent/auth.json` | OpenAI / MiniMax via Pi agent |
+| `MINIMAX_API_KEY` | MiniMax TTS (preferred explicit) |
+| `~/.mmx/config.json` | MiniMax via **`mmx`** CLI |
+| `~/.minimax` | Legacy MiniMax key file/dir |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Google |
-| `MINIMAX_API_KEY` | MiniMax TTS |
 | Anthropic keys | Not required for voice I/O; used by orchestrator host |
 
 ---

@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-import os
-
 import httpx
 
+from hark.providers.auth import resolve_openai_api_key
 from hark.providers.base import ProviderError, SynthResult, Transcript, provider_operation
 
 API = "https://api.openai.com/v1"
 
 
 def _key() -> str:
-    k = os.environ.get("OPENAI_API_KEY")
+    k = resolve_openai_api_key()
     if not k:
-        raise ProviderError("OPENAI_API_KEY not set")
+        raise ProviderError(
+            "OpenAI auth missing — set OPENAI_API_KEY or use codex/opencode/pi login"
+        )
     return k
 
 

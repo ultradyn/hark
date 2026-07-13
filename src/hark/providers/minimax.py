@@ -6,6 +6,7 @@ import os
 
 import httpx
 
+from hark.providers.auth import resolve_minimax_api_key
 from hark.providers.base import (
     ProviderError,
     ProviderUnsupported,
@@ -18,9 +19,12 @@ T2A_URL = "https://api.minimax.io/v1/t2a_v2"
 
 
 def _key() -> str:
-    k = os.environ.get("MINIMAX_API_KEY")
+    k = resolve_minimax_api_key()
     if not k:
-        raise ProviderError("MINIMAX_API_KEY not set")
+        raise ProviderError(
+            "MiniMax auth missing — set MINIMAX_API_KEY or run: mmx auth login "
+            "(also checks Pi/OpenCode minimax keys and ~/.minimax)"
+        )
     return k
 
 

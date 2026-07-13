@@ -14,29 +14,45 @@ tags: []
 title: TTS/STT ducking when music or other media is playing
 updated_at: "2026-07-13T13:05:58Z"
 ---
-
 # Original Idea
 
 TTS/STT ducking when music or other media is playing
 
-## Planning Task (Equivalent of /plan-task)
+## Design summary
 
-- Run `/plan-task I002` to decompose this idea into actionable work.
-- Confirm placement in the current backlog hierarchy before creating work items.
+When music or other media is playing, Hark should temporarily lower (duck)
+non-Hark Pulse/PipeWire sink-input volumes so TTS is audible and STT capture
+is cleaner—then always restore. Detection is fail-open (no pactl → behave as
+today). Conference hold (B017) stays first-class: when conference hold applies,
+do not fight it with ducking. Optional MPRIS pause during STT is off by default.
 
-## Ingest Plan Into backlog
+Reuse/extend audio stream listing patterns in `src/hark/conference.py` and
+apply ducking around TTS play and listen capture windows in `speech` / ambient.
 
-- Create implementation items with `backlog add` and related hierarchy commands (`backlog add-epic`, `backlog add-milestone`, `backlog add-phase`) as needed.
-- Create follow-up defects with `backlog bug` when bug-style work is identified.
-- Record all created IDs below and wire dependencies.
+## Decomposition (plan-task)
+
+| Order | ID | Title | Depends |
+|------:|----|-------|---------|
+| 1 | **B044** | Detect active media playback (Pulse/PipeWire + optional MPRIS) | — |
+| 2 | **B045** | Duck other media volume during TTS playback | B044 |
+| 3 | **B046** | Duck or pause media during STT capture windows | B044 |
+| 4 | **B047** | Config, docs, and doctor checks for media ducking | B045, B046 |
+
+B045 ∥ B046 after B044; B047 finishes the operator surface.
 
 ## Created Work Items
 
-- Add created task IDs
-- Add created bug IDs (if any)
+### Bugs
+- **B044** — Detect active media playback (Pulse/PipeWire sink-inputs + optional MPRIS)
+- **B045** — Duck other media volume during TTS playback *(depends: B044)*
+- **B046** — Duck or pause media during STT capture windows *(depends: B044)*
+- **B047** — Config, docs, and doctor checks for media ducking *(depends: B045, B046)*
+
+### Tasks
+- (none — implementation tracked as bugs)
 
 ## Completion Criteria
 
-- Idea has been decomposed into concrete backlog work items.
-- New items include clear acceptance criteria and dependencies.
-- This idea intake is updated with created IDs and marked done.
+- [x] Idea decomposed into concrete backlog work items (B044–B047)
+- [x] Items include acceptance criteria and dependencies
+- [x] This idea intake updated with created IDs

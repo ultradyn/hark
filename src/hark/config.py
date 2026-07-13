@@ -60,6 +60,9 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
     "ambient": frozenset({
         "enabled",
         "activation_phrases",
+        "trigger_phrases",  # alias of activation_phrases
+        "extra_activation_phrases",  # append to defaults (or to base list)
+        "extra_trigger_phrases",  # alias of extra_activation_phrases
         "engine",
         "model_path",
         "snippet_s",
@@ -248,6 +251,14 @@ max_listen_s = 300
 # Ambient: when NOT replying to a blocked agent question
 # Local 2–3s snippets scan for activation; cloud STT only after wake.
 # Setup: ./scripts/setup-ambient.sh
+#
+# Custom trigger / wake phrases (any of these):
+#   activation_phrases / trigger_phrases  — full list (replaces defaults if set)
+#   extra_activation_phrases / extra_trigger_phrases — appended to base list
+#
+# Examples:
+#   extra_trigger_phrases = ["start prompt", "begin dictation"]
+#   trigger_phrases = ["start prompt"]   # ONLY this wake (no hey hark)
 [ambient]
 enabled = false
 activation_phrases = [
@@ -258,6 +269,7 @@ activation_phrases = [
   "okay hark",
   "ok hark",
 ]
+# extra_trigger_phrases = ["start prompt"]
 engine = "vosk"              # vosk | text_probe (tests)
 # model_path = "~/.local/share/hark/models/vosk-model-small-en-us-0.15"
 snippet_s = 2.5
@@ -291,6 +303,55 @@ def _as_list_str(value: Any, default: list[str]) -> list[str]:
     if isinstance(value, str):
         return [p.strip() for p in value.split(",") if p.strip()]
     return list(default)
+
+
+def _dedupe_phrases(phrases: list[str]) -> list[str]:
+    """Preserve order, drop empty/duplicate (case-insensitive)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in phrases:
+        s = str(p).strip()
+        if not s:
+            continue
+        key = s.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+    return out
+
+
+def resolve_activation_phrases(ambient_raw: dict[str, Any]) -> list[str]:
+    """Build ambient wake/trigger phrase list from config.
+
+    Keys (any combination):
+      activation_phrases / trigger_phrases — replace defaults when set
+      extra_activation_phrases / extra_trigger_phrases — append always
+
+    Example — keep defaults and add a custom wake::
+
+        [ambient]
+        extra_trigger_phrases = ["start prompt", "begin dictation"]
+
+    Example — only custom wakes (no hey hark)::
+
+        [ambient]
+        trigger_phrases = ["start prompt", "begin recording"]
+    """
+    primary = ambient_raw.get("activation_phrases")
+    if primary is None:
+        primary = ambient_raw.get("trigger_phrases")
+    if primary is None:
+        base = list(DEFAULT_ACTIVATION_PHRASES)
+    else:
+        base = _as_list_str(primary, [])
+
+    extras: list[str] = []
+    for key in ("extra_activation_phrases", "extra_trigger_phrases"):
+        if key in ambient_raw and ambient_raw[key] is not None:
+            extras.extend(_as_list_str(ambient_raw[key], []))
+
+    return _dedupe_phrases(base + extras)
 
 
 def _warn_unknown_keys(
@@ -453,9 +514,8 @@ def load_config(path: Path | None = None) -> HarkConfig:
         ),
         ambient=AmbientConfig(
             enabled=ambient_enabled,
-            activation_phrases=_as_list_str(
-                ambient_raw.get("activation_phrases"),
-                list(DEFAULT_ACTIVATION_PHRASES),
+            activation_phrases=resolve_activation_phrases(
+                ambient_raw if isinstance(ambient_raw, dict) else {}
             ),
             engine=str(ambient_raw.get("engine", "vosk")),
             model_path=_resolve_vosk_model_path(

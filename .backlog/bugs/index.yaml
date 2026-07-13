@@ -19,3 +19,4 @@ bugs:
     - file: B018-reply-send-text-must-submit-wi.todo
     - file: B019-surface-plausible-failed-wake.todo
     - file: B020-test-custom-activation-phrase.todo
+    - file: B021-add-install-sh-for-one-line-co.todo

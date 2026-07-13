@@ -1,0 +1,29 @@
+---
+complexity: medium
+created_at: "2026-07-13T08:47:05Z"
+depends_on: []
+estimate_hours: 1
+id: B021
+priority: high
+status: pending
+tags:
+    - install
+    - dx
+    - dogfood
+title: Add install.sh for one-line copy-paste install
+updated_at: "2026-07-13T08:47:05Z"
+---
+## Goal
+One-line install people can copy-paste, following common OSS patterns (curl|bash / raw GitHub).
+
+## Acceptance
+- [ ] `install.sh` at repo root (or `scripts/install.sh` with root symlink/docs)
+- [ ] Idempotent: install/update hark CLI (uv/pipx/cargo path TBD), skill files, optional ambient deps
+- [ ] Safe defaults: non-destructive, clear error if missing curl/git/python
+- [ ] Documented one-liner in README + site install section, e.g.
+      `curl -fsSL https://raw.githubusercontent.com/clankercode/hark/master/install.sh | bash`
+- [ ] Supports prefix/DESTDIR or XDG paths; prints next steps (`hark doctor`, run skill)
+- [ ] Follow best practices: pin or track branch/tag, checksum/HTTPS only, no silent sudo unless needed
+
+## Notes
+Align with how Mode A is actually shipped (Python uv package + skill under skill/hark).

@@ -101,6 +101,11 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "duck_level",
         "duck_exclude_apps",
         "media_check_mpris",
+        # B097: defer TTS play/mute while operator listen/radio is capturing
+        "defer_tts_while_listening",
+        "defer_tts_max_wait_s",
+        "defer_tts_poll_ms",
+        "defer_tts_quiet_ms",
     }),
     "listen": frozenset({
         "end_mode",
@@ -309,6 +314,14 @@ class AudioConfig:
     duck_exclude_apps: list[str] = field(default_factory=list)
     # Secondary media signal via playerctl / MPRIS
     media_check_mpris: bool = True
+    # B097: if listen/radio is capturing user speech, defer TTS play + mic mute
+    # until the stream finalizes (or max wait). Prevents cutting off mid-utterance.
+    defer_tts_while_listening: bool = True
+    # Cap so TTS cannot hang forever (0 = wait until capture ends, no cap)
+    defer_tts_max_wait_s: float = 45.0
+    defer_tts_poll_ms: int = 100
+    # After capture clears, settle this long before speaking (trailing quiet pad)
+    defer_tts_quiet_ms: int = 200
 
 
 @dataclass
@@ -581,6 +594,11 @@ pause_media_during_stt = true   # true: MPRIS Pause during STT (dogfood default 
 duck_level = 0.15               # fraction of prior per-stream volume (0.0–1.0); not 0.2
 # duck_exclude_apps = ["easyeffects"]  # optional app name / binary substrings
 media_check_mpris = true        # secondary media signal via playerctl
+# B097: do not play TTS / mute mic while operator listen/radio is open
+defer_tts_while_listening = true
+defer_tts_max_wait_s = 45       # then speak anyway; 0 = wait until capture ends
+defer_tts_poll_ms = 100
+defer_tts_quiet_ms = 200        # settle after stream finalizes before speaking
 
 # Bound answer windows — how spoken replies end
 # Defaults are product-scoped so normal speech does not trigger control.
@@ -1337,6 +1355,15 @@ def load_config(path: Path | None = None) -> HarkConfig:
                 audio_raw.get("media_check_mpris"),
                 default=_env_bool("HARK_MEDIA_CHECK_MPRIS", True),
             ),
+            defer_tts_while_listening=_as_bool(
+                audio_raw.get("defer_tts_while_listening"),
+                default=True,
+            ),
+            defer_tts_max_wait_s=float(
+                audio_raw.get("defer_tts_max_wait_s", 45.0)
+            ),
+            defer_tts_poll_ms=int(audio_raw.get("defer_tts_poll_ms", 100)),
+            defer_tts_quiet_ms=int(audio_raw.get("defer_tts_quiet_ms", 200)),
         ),
         listen=ListenConfig(
             end_mode=end_mode,
@@ -1571,6 +1598,10 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "duck_level": cfg.audio.duck_level,
             "duck_exclude_apps": list(cfg.audio.duck_exclude_apps),
             "media_check_mpris": cfg.audio.media_check_mpris,
+            "defer_tts_while_listening": cfg.audio.defer_tts_while_listening,
+            "defer_tts_max_wait_s": cfg.audio.defer_tts_max_wait_s,
+            "defer_tts_poll_ms": cfg.audio.defer_tts_poll_ms,
+            "defer_tts_quiet_ms": cfg.audio.defer_tts_quiet_ms,
         },
         "listen": {
             "end_mode": cfg.listen.end_mode,

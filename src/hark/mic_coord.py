@@ -10,6 +10,10 @@ need exclusive access. Cooperative protocol:
 
 Max wait for ambient to yield is one hop (~0.5–1 s of 20 ms reads) plus poll
 time — not a full snippet open/close cycle.
+
+B097: TTS must not mute/play over an open listen/radio capture. Helpers below
+detect active user capture and let ``run_tts`` defer playback until the stream
+finalizes (or a max-wait cap elapses).
 """
 
 from __future__ import annotations
@@ -18,8 +22,9 @@ import json
 import os
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Callable, Iterator
 
 from hark.audio.capture import MicBusyError, MicLease
 from hark.paths import state_dir
@@ -28,6 +33,13 @@ from hark.syslog import log as syslog
 DEFAULT_YIELD_TIMEOUT_S = 15.0
 _POLL_S = 0.05
 
+# ambient.pause reasons that mean bound speech capture (not wake-enroll etc.)
+_LISTEN_PAUSE_REASONS = frozenset({"listen", "ask", "tts-listen", "radio"})
+
+DEFAULT_DEFER_MAX_WAIT_S = 45.0
+DEFAULT_DEFER_POLL_MS = 100
+DEFAULT_DEFER_QUIET_MS = 200
+
 
 def pause_path() -> Path:
     return state_dir() / "ambient.pause"
@@ -35,6 +47,17 @@ def pause_path() -> Path:
 
 def ambient_pause_requested() -> bool:
     return pause_path().is_file()
+
+
+def read_ambient_pause() -> dict[str, Any] | None:
+    """Parse ``state/ambient.pause`` if present."""
+    path = pause_path()
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def request_ambient_pause(
@@ -104,3 +127,292 @@ def pause_ambient_for_mic(
         yield
     finally:
         clear_ambient_pause()
+
+
+def _pid_alive(pid: int | None) -> bool:
+    """True if *pid* is missing (unknown) or still a live process."""
+    if pid is None:
+        return True
+    try:
+        pid_i = int(pid)
+    except (TypeError, ValueError):
+        return True
+    if pid_i <= 0:
+        return True
+    try:
+        os.kill(pid_i, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Exists but not signalable by us — treat as alive.
+        return True
+    except OSError:
+        return False
+
+
+def _is_own_pid(pid: Any, me: int | None) -> bool:
+    if me is None or pid is None:
+        return False
+    try:
+        return int(pid) == int(me)
+    except (TypeError, ValueError):
+        return False
+
+
+def _listen_like_reason(reason: str | None) -> bool:
+    r = (reason or "").strip().lower()
+    if not r:
+        return False
+    if r in _LISTEN_PAUSE_REASONS:
+        return True
+    # e.g. "listen-radio", "listen_ask"
+    return r.startswith("listen")
+
+
+@dataclass(frozen=True)
+class UserCaptureState:
+    """Whether bound user speech capture is open (listen/radio)."""
+
+    active: bool
+    reason: str | None = None
+    sources: tuple[str, ...] = ()
+    stream_id: str | None = None
+    mode: str | None = None
+    pid: int | None = None
+
+    def as_meta(self) -> dict[str, Any]:
+        return {
+            "active": self.active,
+            "reason": self.reason,
+            "sources": list(self.sources),
+            "stream_id": self.stream_id,
+            "mode": self.mode,
+            "pid": self.pid,
+        }
+
+
+def user_capture_active(*, ignore_own_pid: bool = True) -> UserCaptureState:
+    """Detect open listen/radio capture that TTS must not interrupt (B097).
+
+    Signals (any):
+      - ``state/listen/active.json`` with a live (or unknown) owner PID
+      - ``state/ambient.pause`` with a listen-like reason and live owner PID
+
+    Same-process capture is ignored when ``ignore_own_pid`` is True so in-listen
+    nudge TTS (``run_listen`` → ``run_tts``) does not wait on itself forever.
+    Dead PIDs are fail-open (stale markers do not block speech).
+    """
+    me = os.getpid() if ignore_own_pid else None
+    sources: list[str] = []
+    reason: str | None = None
+    stream_id: str | None = None
+    mode: str | None = None
+    owner_pid: int | None = None
+
+    try:
+        from hark.listen_control import read_active
+
+        active = read_active()
+    except Exception:
+        active = None
+
+    if active:
+        raw_pid = active.get("pid")
+        try:
+            pid = int(raw_pid) if raw_pid is not None else None
+        except (TypeError, ValueError):
+            pid = None
+        if not _is_own_pid(pid, me) and _pid_alive(pid):
+            sources.append("listen.active")
+            stream_id = str(active.get("stream_id") or "") or None
+            mode = str(active.get("mode") or "") or None
+            owner_pid = pid
+            reason = f"listen:{mode or 'unknown'}"
+            if stream_id:
+                reason = f"{reason}:{stream_id}"
+
+    pause = read_ambient_pause()
+    if pause and _listen_like_reason(str(pause.get("reason") or "")):
+        raw_pid = pause.get("pid")
+        try:
+            pid = int(raw_pid) if raw_pid is not None else None
+        except (TypeError, ValueError):
+            pid = None
+        if not _is_own_pid(pid, me) and _pid_alive(pid):
+            sources.append("ambient.pause")
+            if owner_pid is None:
+                owner_pid = pid
+            pr = str(pause.get("reason") or "listen")
+            if reason is None:
+                reason = f"ambient.pause:{pr}"
+
+    if not sources:
+        return UserCaptureState(active=False)
+    return UserCaptureState(
+        active=True,
+        reason=reason,
+        sources=tuple(sources),
+        stream_id=stream_id,
+        mode=mode,
+        pid=owner_pid,
+    )
+
+
+@dataclass
+class DeferResult:
+    """Outcome of waiting for user capture to end before TTS play."""
+
+    deferred: bool = False
+    wait_ms: int = 0
+    timed_out: bool = False
+    reason: str | None = None
+    sources: list[str] = field(default_factory=list)
+
+    def as_meta(self) -> dict[str, Any]:
+        return {
+            "deferred": self.deferred,
+            "wait_ms": self.wait_ms,
+            "timed_out": self.timed_out,
+            "reason": self.reason,
+            "sources": list(self.sources),
+        }
+
+
+def wait_until_user_capture_idle(
+    *,
+    max_wait_s: float = DEFAULT_DEFER_MAX_WAIT_S,
+    poll_ms: int = DEFAULT_DEFER_POLL_MS,
+    quiet_ms: int = DEFAULT_DEFER_QUIET_MS,
+    ignore_own_pid: bool = True,
+    sleep_fn: Callable[[float], None] | None = None,
+    monotonic_fn: Callable[[], float] | None = None,
+    probe_fn: Callable[[], UserCaptureState] | None = None,
+) -> DeferResult:
+    """Block until listen/radio capture ends (or *max_wait_s* elapses).
+
+    When capture is active, TTS play and mic-mute should wait so half-duplex
+    mute does not cut off the operator mid-utterance (B097). After the stream
+    clears, optionally settle *quiet_ms* (trailing quiet / race pad) and
+    re-check in case a new capture opened.
+
+    ``max_wait_s <= 0`` means wait with no time cap (still poll; not recommended).
+    On timeout, returns ``timed_out=True`` and the caller should speak anyway.
+    """
+    sleep = sleep_fn or time.sleep
+    mono = monotonic_fn or time.monotonic
+    probe = probe_fn or (
+        lambda: user_capture_active(ignore_own_pid=ignore_own_pid)
+    )
+    poll_s = max(0.02, float(poll_ms) / 1000.0)
+    quiet_s = max(0.0, float(quiet_ms) / 1000.0)
+    cap = float(max_wait_s)
+    t0 = mono()
+    deadline = None if cap <= 0 else t0 + cap
+
+    first = probe()
+    if not first.active:
+        return DeferResult(deferred=False, wait_ms=0)
+
+    first_reason = first.reason
+    first_sources = list(first.sources)
+    syslog(
+        "tts.defer_listen",
+        component="tts",
+        level="info",
+        reason=first_reason,
+        sources=first_sources,
+        stream_id=first.stream_id,
+        mode=first.mode,
+        max_wait_s=cap if cap > 0 else None,
+        message="deferring TTS play until user capture ends",
+    )
+
+    while True:
+        state = probe()
+        if not state.active:
+            if quiet_s > 0:
+                # Trailing quiet / stream-finalize pad; re-open aborts pad.
+                quiet_deadline = mono() + quiet_s
+                while mono() < quiet_deadline:
+                    if deadline is not None and mono() >= deadline:
+                        wait_ms = int(1000 * (mono() - t0))
+                        syslog(
+                            "tts.defer_listen_timeout",
+                            component="tts",
+                            level="warn",
+                            reason=first_reason,
+                            wait_ms=wait_ms,
+                            message="max defer wait elapsed during quiet pad; speaking",
+                        )
+                        return DeferResult(
+                            deferred=True,
+                            wait_ms=wait_ms,
+                            timed_out=True,
+                            reason=first_reason,
+                            sources=first_sources,
+                        )
+                    reopened = probe()
+                    if reopened.active:
+                        first_reason = reopened.reason or first_reason
+                        first_sources = list(
+                            dict.fromkeys(first_sources + list(reopened.sources))
+                        )
+                        break
+                    sleep(min(poll_s, max(0.01, quiet_deadline - mono())))
+                else:
+                    # Quiet pad completed without re-open
+                    wait_ms = int(1000 * (mono() - t0))
+                    syslog(
+                        "tts.defer_listen_done",
+                        component="tts",
+                        level="info",
+                        reason=first_reason,
+                        wait_ms=wait_ms,
+                        sources=first_sources,
+                    )
+                    return DeferResult(
+                        deferred=True,
+                        wait_ms=wait_ms,
+                        timed_out=False,
+                        reason=first_reason,
+                        sources=first_sources,
+                    )
+                continue
+
+            wait_ms = int(1000 * (mono() - t0))
+            syslog(
+                "tts.defer_listen_done",
+                component="tts",
+                level="info",
+                reason=first_reason,
+                wait_ms=wait_ms,
+                sources=first_sources,
+            )
+            return DeferResult(
+                deferred=True,
+                wait_ms=wait_ms,
+                timed_out=False,
+                reason=first_reason,
+                sources=first_sources,
+            )
+
+        if deadline is not None and mono() >= deadline:
+            wait_ms = int(1000 * (mono() - t0))
+            syslog(
+                "tts.defer_listen_timeout",
+                component="tts",
+                level="warn",
+                reason=state.reason or first_reason,
+                wait_ms=wait_ms,
+                sources=list(state.sources) or first_sources,
+                message="max defer wait elapsed; speaking despite open listen",
+            )
+            return DeferResult(
+                deferred=True,
+                wait_ms=wait_ms,
+                timed_out=True,
+                reason=state.reason or first_reason,
+                sources=list(state.sources) or first_sources,
+            )
+        sleep(poll_s)

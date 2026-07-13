@@ -48,7 +48,7 @@ from hark.listen_control import (
 )
 from hark.endpointing import EndpointStrategy, build_endpoint_strategy
 from hark.listen_end import EndMode, evaluate_radio_transcript, parse_end_mode
-from hark.mic_coord import pause_ambient_for_mic
+from hark.mic_coord import pause_ambient_for_mic, wait_until_user_capture_idle
 from hark.partial import make_partial_event, new_stream_id
 from hark.providers.base import ProviderError
 from hark.providers.resolve import resolve_stt, resolve_tts
@@ -410,6 +410,7 @@ def run_tts(
     mute_applied = False
     mute_repair: dict[str, Any] | None = None
     duck_meta: dict[str, Any] | None = None
+    defer_meta: dict[str, Any] | None = None
     near = (
         near_end_ms
         if near_end_ms is not None
@@ -493,6 +494,34 @@ def run_tts(
                     if len(chunks) > 1:
                         next_fut = pool.submit(_synth_one, chunks[1])
 
+                    # B097: if operator listen/radio is open, defer play + mic mute
+                    # until capture ends (or max wait). Synth may already be done;
+                    # same-PID capture is ignored so in-listen nudges still speak.
+                    if bool(getattr(cfg.audio, "defer_tts_while_listening", True)):
+                        defer = wait_until_user_capture_idle(
+                            max_wait_s=float(
+                                getattr(cfg.audio, "defer_tts_max_wait_s", 45.0)
+                            ),
+                            poll_ms=int(
+                                getattr(cfg.audio, "defer_tts_poll_ms", 100)
+                            ),
+                            quiet_ms=int(
+                                getattr(cfg.audio, "defer_tts_quiet_ms", 200)
+                            ),
+                        )
+                        defer_meta = defer.as_meta()
+                        if defer.deferred:
+                            surface_tts_event(
+                                "tts.deferred_for_listen",
+                                **defer_meta,
+                                instructions=(
+                                    "TTS play waited for operator listen/radio to "
+                                    "finish so mic mute would not cut off capture. "
+                                    "Set [audio].defer_tts_while_listening = false "
+                                    "to disable."
+                                ),
+                            )
+
                     with exclusive_playback(ticket=play_ticket):
                         with mic_muted_during_tts(enabled=do_mute) as mute_state:
                             mute_applied = mute_state.applied
@@ -575,6 +604,7 @@ def run_tts(
             "from_cache": from_cache,
             "conference": hold_meta,
             "media_duck": duck_meta,
+            "listen_defer": defer_meta,
             "chunked": chunked,
             "chunks": len(chunks),
         },
@@ -601,6 +631,8 @@ def run_tts(
         result["conference"] = hold_meta
     if duck_meta is not None:
         result["media_duck"] = duck_meta
+    if defer_meta is not None:
+        result["listen_defer"] = defer_meta
     if mute_repair is not None and mute_repair.get("repaired"):
         result["mute_repaired"] = mute_repair
     return result

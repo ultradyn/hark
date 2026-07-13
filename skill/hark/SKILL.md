@@ -64,8 +64,8 @@ Always address **`session_id/pane_id`**. Prefer bound **`event_id`** from watch 
   1. **Name-based** (default): `[ambient] wake_mode = "names"`, `names = ["hark", "herald"]`, optional `extra_names`. Greating+name and bare name; seed mishears for hark/herald.
   2. **Full-phrase:** `wake_mode = "phrases"`, `trigger_phrases = ["start prompt", …]` (no name fuzzy).
   - **Learning:** failed wake near-misses auto-expand alternates into `~/.local/state/hark/wake_learned.json` **without restart** (`ambient.wake_learned`). Names mode learns name tokens; phrases mode learns full phrases. Disable with `learn_from_near_misses = false`.
-  - After **config.toml** edits: **SIGHUP** ambient (`kill -HUP <pid>`) or restart Mode A. Learning does not need HUP.
-  - When the operator asks you to reconfigure wake: choose names vs phrases, edit the right keys, SIGHUP, confirm with a spoken test wake.
+  - After **config.toml** edits: ambient **file-watch** (default) live-reloads the same path as SIGHUP — no HUP required. Optional: `kill -HUP <pid>` for immediate reload, or restart Mode A. Learning needs neither. Disable with `[ambient] config_watch = false` or `HARK_CONFIG_WATCH=0`.
+  - When the operator asks you to reconfigure wake: choose names vs phrases, edit the right keys, wait for `ambient.reloaded` (or SIGHUP), confirm with a spoken test wake.
 
 
 ## Dogfooding (always on)

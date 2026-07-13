@@ -6,6 +6,13 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Config.toml live-reload (B036): ambient Mode A watches the active config path
+  (`HARK_CONFIG` / `~/.config/hark/config.toml`) by mtime poll + debounce and applies
+  the same `apply_config_reload` path as SIGHUP (phrases, names, `listen.end_mode`,
+  `surface_timeouts`, etc.). Emits `ambient.reloaded` with `source` (`config_watch`
+  or `sighup`). Defaults: `ambient.config_watch = true`, `config_watch_poll_ms = 1000`,
+  `config_watch_debounce_ms = 400`; env `HARK_CONFIG_WATCH=0|1`. See
+  `docs/CUSTOM_WAKE.md` (file-watch vs SIGHUP vs restart).
 - Radio partial cadence (B037): radio mode uses a shorter, radio-only
   `listen.radio_partial_silence_s` (default **0.6 s**) to cut segments for
   interim STT / `ambient.partial` updates. Does **not** finalize the turn

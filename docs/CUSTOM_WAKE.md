@@ -85,16 +85,30 @@ Edit `~/.config/hark/config.toml` (or `HARK_CONFIG` / `hark --config …`).
 
 `hark config show` / doctor report active mode, names, and display phrases.
 
-## Apply config edits: SIGHUP vs restart
+## Apply config edits: file-watch vs SIGHUP vs restart
 
 | Method | When | What happens |
 |--------|------|----------------|
 | **Learning** | Near-miss while ambient runs | Writes `wake_learned.json`; applies next snippet |
-| **SIGHUP** | You edited config.toml | Re-reads config; updates policy in place. Emits `ambient.reloaded` |
+| **File-watch** (default) | You save `config.toml` | mtime poll + debounce → same reload path as SIGHUP. Emits `ambient.reloaded` with `source: "config_watch"` |
+| **SIGHUP** | You want an immediate reload | Send SIGHUP to the ambient process → same `apply_config_reload`. Emits `ambient.reloaded` with `source: "sighup"` |
 | **Restart** | Always safe | Full process restart |
 
+**File-watch defaults** (`[ambient]`):
+
+| Key | Default | Role |
+|-----|---------|------|
+| `config_watch` | `true` | Enable mtime poll on the active config path (`HARK_CONFIG` / `~/.config/hark/config.toml` / `--config`) |
+| `config_watch_poll_ms` | `1000` | How often to `stat` the file |
+| `config_watch_debounce_ms` | `400` | Require mtime stable this long before reload (rapid editor writes) |
+
+Env: `HARK_CONFIG_WATCH=0` disables; `=1` forces on (overrides TOML).
+
+Both file-watch and SIGHUP call the same `apply_config_reload` (phrases, names, `listen.end_mode`, `surface_timeouts`, etc.). Phrase-only changes hot-update the backend; engine/model changes rebuild it.
+
 ```bash
-kill -HUP "$(pgrep -f 'hark.*ambient' | head -1)"
+# Optional: force reload without waiting for the next poll (PID from Mode A / hark daemon)
+kill -HUP <ambient-pid>
 ```
 
 ## Debug snips
@@ -111,13 +125,13 @@ When the operator asks to change how they wake Hark, the Mode A skill should:
 
 1. Ask **name-based** vs **full-phrase** if unclear.
 2. Edit the right keys (table above); do not invent CLI flags that do not exist.
-3. SIGHUP ambient after config edits; mention that **learning** does not need HUP.
+3. After config.toml edits: file-watch applies automatically (default); SIGHUP still works for immediate reload. Mention that **learning** needs neither.
 4. Optionally inspect `wake_learned.json` and promote stable aliases into config.
 
 ## Tests
 
 ```bash
-uv run pytest tests/test_wake_policy.py tests/test_custom_triggers.py tests/test_custom_wake_e2e.py -q
+uv run pytest tests/test_wake_policy.py tests/test_custom_triggers.py tests/test_custom_wake_e2e.py tests/test_config_watch.py -q
 ```
 
 ## Related
@@ -125,5 +139,6 @@ uv run pytest tests/test_wake_policy.py tests/test_custom_triggers.py tests/test
 - `src/hark/wake.py` — `WakePolicy`, match, near-miss, learn suggest
 - `src/hark/wake_learn.py` — persist/load learned aliases
 - `src/hark/config.py` — `resolve_wake_policy`
-- `src/hark/ambient.py` — loop, learn hot-apply, SIGHUP
+- `src/hark/ambient.py` — loop, learn hot-apply, SIGHUP / file-watch reload
+- `src/hark/config_watch.py` — mtime poll + debounce → `request_reload`
 - Skill: `skill/hark/SKILL.md` (Ambient + wake config)

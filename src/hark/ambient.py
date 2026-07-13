@@ -12,15 +12,18 @@ from hark.audio.capture import MicBusyError, MicLease, record_seconds
 from hark.config import HarkConfig, load_config
 from hark.debug_snips import purge_old_debug_snips, save_wake_snippet
 from hark.events import new_event_id, utc_now_iso
+from hark.config_watch import start_config_watcher
 from hark.lifecycle import (
     clear_reload_request,
     clear_shutdown_reason,
     get_shutdown_reason,
     install_signal_handlers,
     reload_requested,
+    reload_source,
     shutdown_phrase,
     shutdown_requested,
 )
+from hark.paths import default_config_path
 from hark.mic_coord import ambient_pause_requested
 from hark.partial import make_final_event, new_stream_id
 from hark.speech import run_listen, run_tts
@@ -211,7 +214,7 @@ def _wait_for_wake(
     while time.monotonic() < deadline:
         if shutdown_requested():
             return None
-        # SIGHUP / config reload: exit wait so the loop can re-read config
+        # SIGHUP / config file-watch: exit wait so the loop can re-read config
         if reload_requested():
             return None
         # Bound listen/ask requested the mic — yield until they clear pause
@@ -641,6 +644,10 @@ def apply_config_reload(
         "model_path": new_cfg.ambient.model_path,
         "rebuilt_backend": False,
         "path": str(path) if path else None,
+        "end_mode": getattr(new_cfg.listen, "end_mode", None),
+        "surface_timeouts": getattr(new_cfg.ambient, "surface_timeouts", None),
+        "snippet_s": getattr(new_cfg.ambient, "snippet_s", None),
+        "timeout_s": getattr(new_cfg.ambient, "timeout_s", None),
     }
 
     if engine_changed or model_changed:
@@ -711,7 +718,9 @@ def _emit_reload_event(
     info: dict[str, Any],
     *,
     error: str | None = None,
+    source: str | None = None,
 ) -> None:
+    src = source or info.get("source") or "unknown"
     if error:
         line = {
             "schema": "hark.event.v1",
@@ -719,6 +728,7 @@ def _emit_reload_event(
             "event_id": new_event_id(),
             "observed_at": utc_now_iso(),
             "error": f"config reload: {error}",
+            "source": src,
         }
     else:
         line = {
@@ -731,10 +741,15 @@ def _emit_reload_event(
             "model_path": info.get("model_path"),
             "rebuilt_backend": info.get("rebuilt_backend"),
             "path": info.get("path"),
+            "end_mode": info.get("end_mode"),
+            "surface_timeouts": info.get("surface_timeouts"),
+            "source": src,
             "instructions": (
-                "Config reloaded (SIGHUP). Activation phrases and ambient "
-                "settings now match disk. Prefer kill -HUP <pid> after editing "
-                "config.toml; full restart still works."
+                "Config reloaded. Activation phrases, listen settings "
+                "(e.g. end_mode), and ambient knobs now match disk. "
+                "File-watch (default mtime poll on config.toml) and "
+                "SIGHUP (kill -HUP <pid>) share this path; full restart "
+                "always works. See docs/CUSTOM_WAKE.md."
             ),
         }
     out.write(json.dumps(line, separators=(",", ":")) + "\n")
@@ -746,6 +761,8 @@ def _emit_reload_event(
         phrases=info.get("phrases") if not error else None,
         error=error,
         rebuilt_backend=info.get("rebuilt_backend") if not error else None,
+        source=src,
+        end_mode=info.get("end_mode") if not error else None,
     )
 
 
@@ -761,9 +778,10 @@ def run_ambient_loop(
     SIGTERM during an active listen does not abort mid-recording: we finish the
     current wake→STT cycle, emit the event, then exit.
 
-    SIGHUP re-reads config (custom activation phrases, etc.) without stopping
-    the process. Phrase-only changes hot-update the backend; engine/model
-    changes rebuild it.
+    Config reloads (SIGHUP **or** config.toml file-watch) re-read config
+    (custom activation phrases, listen end_mode, surface_timeouts, etc.)
+    without stopping the process. Phrase-only changes hot-update the backend;
+    engine/model changes rebuild it.
     """
     out = out or sys.stdout
     cfg.ambient.enabled = True
@@ -840,8 +858,9 @@ def run_ambient_loop(
             "Ambient armed. Wake mode is name-based (defaults: hark/herald; "
             "say hey/hello/yo/sup + name, or bare herald/harold) or full-phrase "
             "(trigger_phrases). Near-misses auto-learn alternates without restart "
-            "(wake_learned.json). Config: docs/CUSTOM_WAKE.md. SIGHUP reloads "
-            "config. Mic mutes during TTS. Energy-gated vosk (quiet frames skipped)."
+            "(wake_learned.json). Config: docs/CUSTOM_WAKE.md. config.toml "
+            "file-watch (default) or SIGHUP reloads config. Mic mutes during "
+            "TTS. Energy-gated vosk (quiet frames skipped)."
         ),
     }
     out.write(json.dumps(boot, separators=(",", ":")) + "\n")
@@ -881,15 +900,24 @@ def run_ambient_loop(
             out.flush()
 
     last_idle = time.monotonic()
+    watch_path = cfg.path or default_config_path()
+    config_watcher = start_config_watcher(
+        watch_path,
+        enabled=bool(getattr(cfg.ambient, "config_watch", True)),
+        poll_ms=int(getattr(cfg.ambient, "config_watch_poll_ms", 1000)),
+        debounce_ms=int(getattr(cfg.ambient, "config_watch_debounce_ms", 400)),
+    )
     try:
         while not shutdown_requested():
             if reload_requested():
+                src = reload_source()
                 clear_reload_request()
                 try:
                     cfg, backend, info = apply_config_reload(cfg, backend)
-                    _emit_reload_event(out, info)
+                    info["source"] = src
+                    _emit_reload_event(out, info, source=src)
                 except Exception as exc:
-                    _emit_reload_event(out, {}, error=str(exc)[:200])
+                    _emit_reload_event(out, {}, error=str(exc)[:200], source=src)
                 continue
 
             result = run_ambient(
@@ -902,7 +930,7 @@ def run_ambient_loop(
                 near_miss_acc=near_miss_acc,
             )
 
-            # Wake wait aborted for SIGHUP — apply reload, skip timeout event
+            # Wake wait aborted for config reload — apply next loop, skip timeout
             if reload_requested() and not result.activated:
                 continue
 
@@ -941,6 +969,12 @@ def run_ambient_loop(
             time.sleep(0.25)
     except KeyboardInterrupt:
         pass
+    finally:
+        if config_watcher is not None:
+            try:
+                config_watcher.stop()
+            except Exception:
+                pass
 
     reason = get_shutdown_reason()
     phrase = shutdown_phrase(reason)

@@ -130,6 +130,10 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "post_wake_timeout_s",
         "post_wake_no_open_nudge",
         "post_wake_no_open_tts",
+        # Live-reload config.toml (B036) — mtime poll; same path as SIGHUP
+        "config_watch",
+        "config_watch_poll_ms",
+        "config_watch_debounce_ms",
     }),
     "stt": frozenset({"provider"}),
     "tts": frozenset({"provider", "voice", "language", "max_chars", "allow_espeak_fallback"}),
@@ -306,6 +310,11 @@ class AmbientConfig:
     # After no-open exhausted: optional TTS before ambient.error (and as last nudge)
     post_wake_no_open_nudge: bool = True
     post_wake_no_open_tts: str = "I heard the wake but not your prompt."
+    # Live-reload config.toml while ambient runs (B036). Default on; same apply
+    # path as SIGHUP. Env HARK_CONFIG_WATCH=0|1 overrides.
+    config_watch: bool = True
+    config_watch_poll_ms: int = 1000
+    config_watch_debounce_ms: int = 400
     # Full wake policy (names/phrases + learned aliases); set by load_config
     wake_policy: Any = None
 
@@ -466,7 +475,8 @@ no_open_nudge = true         # TTS then re-listen once more on no-open
 #      trigger_phrases = ["start prompt", "begin dictation"]
 #
 # Legacy: activation_phrases / extra_trigger_phrases still work.
-# Config edits: kill -HUP <ambient-pid>. Learning needs neither HUP nor restart.
+# Config edits: auto-reloaded by mtime file-watch (default) or kill -HUP.
+# Learning needs neither HUP nor restart.
 [ambient]
 enabled = false
 wake_mode = "names"
@@ -495,6 +505,11 @@ post_wake_arm_cue = true     # record-start beep when listen arms (operator feed
 post_wake_timeout_s = 15     # gate-open wait after wake (faster nudge than answer windows)
 post_wake_no_open_nudge = true
 # post_wake_no_open_tts = "I heard the wake but not your prompt."
+# Live-reload this file while ambient runs (B036). Same apply path as SIGHUP.
+config_watch = true
+config_watch_poll_ms = 1000
+config_watch_debounce_ms = 400
+# Env override: HARK_CONFIG_WATCH=0 to disable, =1 to force on.
 
 [stt]
 provider = "auto"
@@ -612,6 +627,11 @@ def _build_ambient_config(
                 "post_wake_no_open_tts",
                 "I heard the wake but not your prompt.",
             )
+        ),
+        config_watch=_as_bool(ambient_raw.get("config_watch"), default=True),
+        config_watch_poll_ms=int(ambient_raw.get("config_watch_poll_ms", 1000)),
+        config_watch_debounce_ms=int(
+            ambient_raw.get("config_watch_debounce_ms", 400)
         ),
         wake_policy=policy,
     )
@@ -1107,6 +1127,9 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "post_wake_timeout_s": cfg.ambient.post_wake_timeout_s,
             "post_wake_no_open_nudge": cfg.ambient.post_wake_no_open_nudge,
             "post_wake_no_open_tts": cfg.ambient.post_wake_no_open_tts,
+            "config_watch": cfg.ambient.config_watch,
+            "config_watch_poll_ms": cfg.ambient.config_watch_poll_ms,
+            "config_watch_debounce_ms": cfg.ambient.config_watch_debounce_ms,
         },
         "stt": {"provider": cfg.stt.provider},
         "tts": {

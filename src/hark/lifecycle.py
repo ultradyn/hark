@@ -15,6 +15,7 @@ _lock = threading.Lock()
 _shutdown = False
 _shutdown_reason = "stop"  # stop | restart
 _reload = False
+_reload_source: str | None = None
 _busy_depth = 0
 _handlers_installed = False
 
@@ -92,18 +93,36 @@ def request_shutdown(signum: int | None = None, reason: str | None = None) -> No
     )
 
 
-def request_reload(signum: int | None = None) -> None:
+def request_reload(
+    signum: int | None = None,
+    *,
+    source: str | None = None,
+) -> None:
     """Ask ambient (or other long-running loops) to re-read config.
 
-    Used by SIGHUP. Does not stop the process; the next safe point should
-    call ``clear_reload_request`` after applying the new config.
+    Used by SIGHUP and by the config.toml file-watch poller. Does not stop
+    the process; the next safe point should call ``clear_reload_request``
+    after applying the new config.
+
+    *source* labels the requester (``"sighup"``, ``"config_watch"``, …) for
+    syslog and ``ambient.reloaded``.
     """
-    global _reload
+    global _reload, _reload_source
     _reload = True
+    if source:
+        src = source
+    elif signum is not None and hasattr(signal, "SIGHUP") and signum == signal.SIGHUP:
+        src = "sighup"
+    elif signum is not None:
+        src = f"signal:{signum}"
+    else:
+        src = "manual"
+    _reload_source = src
     syslog(
         "lifecycle.reload_requested",
         component="lifecycle",
         signal=signum,
+        source=src,
         busy=_busy_depth > 0,
     )
 
@@ -112,9 +131,15 @@ def reload_requested() -> bool:
     return _reload
 
 
+def reload_source() -> str | None:
+    """Who asked for the pending reload (``config_watch``, ``sighup``, …)."""
+    return _reload_source
+
+
 def clear_reload_request() -> None:
-    global _reload
+    global _reload, _reload_source
     _reload = False
+    _reload_source = None
 
 
 def shutdown_phrase(reason: str | None = None) -> str:
@@ -132,7 +157,7 @@ def install_signal_handlers() -> None:
         request_shutdown(signum)
 
     def _hup_handler(signum: int, _frame: object) -> None:
-        request_reload(signum)
+        request_reload(signum, source="sighup")
 
     signal.signal(signal.SIGTERM, _stop_handler)
     signal.signal(signal.SIGINT, _stop_handler)

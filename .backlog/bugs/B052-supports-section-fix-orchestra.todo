@@ -1,10 +1,12 @@
 ---
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T13:41:39Z"
 depends_on: []
 estimate_hours: 1
 id: B052
 priority: high
+started_at: null
 status: pending
 tags: []
 title: 'Supports section: fix orchestrator logos + table copy (Antigravity, Grok Build, Monitor→Support)'
@@ -12,3 +14,41 @@ updated_at: "2026-07-13T13:41:39Z"
 ---
 
 Supports section: fix orchestrator logos + table copy (Antigravity, Grok Build, Monitor→Support)
+
+
+## Problem
+Homepage Supports section (`#supports`) has wrong logos and several copy/structure issues.
+
+### Logos (current monochrome placeholders are wrong)
+| Agent | Issue / correct source |
+|-------|------------------------|
+| **Claude Code** | Icon is wrong |
+| **Grok** | Icon is wrong — use official mark from **grok.com** |
+| **Pi** | Icon is wrong — use official mark from **pi.dev** |
+| **OpenCode** | Icon is wrong — search web for official/brand mark |
+| **Codex** | Icon is wrong — search web for official OpenAI Codex mark |
+| **Antigravity** | Icon is wrong — search web for official Google Antigravity mark |
+
+Replace assets under `site/assets/logos/` (or equivalent). Prefer local SVGs, dark-bg friendly, correct brand recognition, alt text. Respect trademark/brand guidelines (simple official monochrome or simplified marks as allowed).
+
+### Table / strip copy & order
+1. **Antigravity higher in the list** — among primary orchestrators (not last/muted).
+2. **Name:** **Antigravity** only — do **not** show “agy” / aka / logo-strip hint.
+3. **Grok row:** **“Grok Build”** only (no “/ Grok CLI”).
+4. **Antigravity notes:** remove “see B049 / docs” and similar internal refs.
+5. **Column rename:** Monitor → **Support**.
+6. **Support cell values:**
+   - Claude Code, Grok Build: **`Native / Monitor`**
+   - Antigravity: **`Native / AgentAPI`**
+7. **Pi & OpenCode:** frame our plugins as **examples** of Monitor plugins — any plugin offering Monitor on `hark monitor --for-monitor` works equally well.
+
+### Acceptance
+- [ ] Logos match recognizable official marks for listed agents
+- [ ] Antigravity order among primary tier; no “agy” in UI
+- [ ] “Grok Build” only; Support column + Native/Monitor & Native/AgentAPI wording
+- [ ] Pi/OpenCode notes are example-plugins, not exclusive
+- [ ] No backlog IDs in marketing copy; CHANGELOG + visual check
+
+### Files
+- `site/index.html` (`#supports`), `site/assets/logos/*`, CSS as needed
+- CLI binary name `agy` may remain in `docs/AGY.md` only

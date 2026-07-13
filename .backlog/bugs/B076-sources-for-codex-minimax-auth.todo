@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-07-13T15:42:22Z"
+depends_on: []
+estimate_hours: 1
+id: B076
+priority: high
+status: pending
+tags: []
+title: sources for codex/minimax auth should include the codex cli auth, opencode auth, pi agent auth, minimax cli auth
+updated_at: "2026-07-13T15:42:22Z"
+---
+
+sources for codex/minimax auth should include the codex cli auth, opencode auth, pi agent auth, minimax cli auth

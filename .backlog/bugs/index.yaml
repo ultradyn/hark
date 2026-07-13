@@ -98,3 +98,4 @@ bugs:
     - file: B097-tts-plays-while-operator-still.todo
     - file: B098-ambient-streaming-mode-keep-mi.todo
     - file: B099-tts-play-queue-stall-blocks-am.todo
+    - file: B100-path-hark-tool-install-stays-s.todo

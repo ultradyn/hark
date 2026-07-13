@@ -1,0 +1,29 @@
+---
+complexity: medium
+created_at: "2026-07-13T19:58:09Z"
+depends_on: []
+estimate_hours: 1
+id: B100
+priority: high
+status: pending
+tags: []
+title: PATH hark tool install stays stale after master gains subcommands (e.g. start/stop)
+updated_at: "2026-07-13T19:58:09Z"
+---
+## Dogfood (2026-07-14)
+After B089 landed on master (`hark start`/`stop`/`restart`), the PATH install
+(`uv tool` → `~/.local/bin/hark`, reported as v0.1.0) still rejected `start`
+as an invalid choice. Repo venv / `uv run hark` had the commands.
+
+## Expected
+Dogfooding master features works from the same `hark` on PATH, or doctor clearly
+warns that the tool install is behind git HEAD / package version.
+
+## Actual
+Silent lag: agents call `hark start` and fail; ambient was restarted via ad-hoc
+pkill instead.
+
+## Ideas
+- `hark doctor` compare installed version / git describe / entrypoints
+- Document `uv tool install -e .` as the dogfood path in SETUP / skill
+- Related historical: B078 (stale arm-cue install)

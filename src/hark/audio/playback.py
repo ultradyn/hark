@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import atexit
 import io
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -13,7 +15,7 @@ import wave
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 
 import numpy as np
 
@@ -31,9 +33,22 @@ class PlayResult:
 
 # Cross-process FIFO speaker: synth may run in parallel; play is serial (B092).
 # Ticket is claimed at *launch* (before synth) so N concurrent jobs keep order.
+# B099: holders track pid+claim time so dead processes cannot stall the queue.
 _play_tls = threading.local()
 _play_lock_name = "tts_play.lock"
 _play_queue_name = "tts_play_queue.json"
+
+# After this many seconds waiting for a head with no holder (legacy/killed
+# pre-B099), treat the head as abandoned. Live PIDs are never aged out here —
+# long multi-chunk TTS can hold the speaker for minutes.
+_MISSING_HOLDER_GRACE_S = 8.0
+# Absolute safety: abandon a holder whose claim is older than this *and* whose
+# PID is dead (redundant with pid check) — kept for documentation/tests.
+_STALE_HOLDER_AGE_S = 600.0
+
+_our_tickets: set[int] = set()
+_our_tickets_lock = threading.Lock()
+_cleanup_hooks_installed = False
 
 
 def tts_play_lock_path() -> Path:
@@ -48,6 +63,62 @@ def tts_play_queue_path() -> Path:
     return state_dir() / _play_queue_name
 
 
+def _pid_alive(pid: int) -> bool:
+    """True if *pid* looks like a live (non-zombie) process."""
+    if pid <= 0:
+        return False
+    try:
+        from hark.daemon import pid_alive
+
+        return bool(pid_alive(pid))
+    except Exception:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+        return True
+
+
+def _syslog_tts_queue(event: str, **fields: Any) -> None:
+    try:
+        from hark.syslog import log as syslog
+
+        syslog(event, component="tts", level=fields.pop("level", "warn"), **fields)
+    except Exception:
+        pass
+
+
+def _empty_queue_state() -> dict[str, object]:
+    return {"next": 0, "serving": 0, "cancelled": [], "holders": {}}
+
+
+def _normalize_holders(raw: object) -> dict[str, dict[str, object]]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, object]] = {}
+    for k, v in raw.items():
+        try:
+            ticket_s = str(int(k))
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(v, dict):
+            continue
+        try:
+            pid = int(v.get("pid", 0) or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        try:
+            claimed_at = float(v.get("claimed_at", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            claimed_at = 0.0
+        out[ticket_s] = {"pid": pid, "claimed_at": claimed_at}
+    return out
+
+
 def _queue_read(path: Path) -> dict[str, object]:
     import json
 
@@ -58,9 +129,10 @@ def _queue_read(path: Path) -> dict[str, object]:
             "next": int(data.get("next", 0)),
             "serving": int(data.get("serving", 0)),
             "cancelled": [int(x) for x in cancelled],
+            "holders": _normalize_holders(data.get("holders")),
         }
     except Exception:
-        return {"next": 0, "serving": 0, "cancelled": []}
+        return _empty_queue_state()
 
 
 def _queue_write(path: Path, state: dict[str, object]) -> None:
@@ -70,16 +142,32 @@ def _queue_write(path: Path, state: dict[str, object]) -> None:
     # Drop cancelled tickets already behind the head
     serving = int(state["serving"])
     cancelled = [c for c in cancelled if c >= serving]
+    holders = _normalize_holders(state.get("holders"))
+    # Drop holders already behind the head
+    holders = {k: v for k, v in holders.items() if int(k) >= serving}
     path.write_text(
         json.dumps(
             {
                 "next": int(state["next"]),
                 "serving": serving,
                 "cancelled": cancelled,
+                "holders": holders,
             }
         ),
         encoding="utf-8",
     )
+
+
+def _drop_holder(st: dict[str, object], ticket: int) -> None:
+    holders = _normalize_holders(st.get("holders"))
+    holders.pop(str(int(ticket)), None)
+    st["holders"] = holders
+
+
+def _set_holder(st: dict[str, object], ticket: int, *, pid: int, claimed_at: float) -> None:
+    holders = _normalize_holders(st.get("holders"))
+    holders[str(int(ticket))] = {"pid": int(pid), "claimed_at": float(claimed_at)}
+    st["holders"] = holders
 
 
 def _skip_cancelled_heads(st: dict[str, object]) -> dict[str, object]:
@@ -88,6 +176,7 @@ def _skip_cancelled_heads(st: dict[str, object]) -> dict[str, object]:
     serving = int(st["serving"])
     while serving in cancelled:
         cancelled.discard(serving)
+        _drop_holder(st, serving)
         serving += 1
     st["serving"] = serving
     st["cancelled"] = sorted(cancelled)
@@ -96,8 +185,124 @@ def _skip_cancelled_heads(st: dict[str, object]) -> dict[str, object]:
 
 def _advance_serving(st: dict[str, object]) -> dict[str, object]:
     """Move serving past the current head and any following cancelled tickets."""
-    st["serving"] = int(st["serving"]) + 1
+    serving = int(st["serving"])
+    _drop_holder(st, serving)
+    st["serving"] = serving + 1
     return _skip_cancelled_heads(st)
+
+
+def _holder_abandoned(
+    holder: dict[str, object] | None,
+    *,
+    missing_as_abandoned: bool,
+    now: float,
+) -> str | None:
+    """Return abandon reason or None if the holder still owns the ticket."""
+    if holder is None:
+        return "missing_holder" if missing_as_abandoned else None
+    try:
+        pid = int(holder.get("pid", 0) or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    if pid > 0 and not _pid_alive(pid):
+        # Prefer dead_pid; stale_age only when claim timestamp is ancient
+        try:
+            claimed_at = float(holder.get("claimed_at", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            claimed_at = 0.0
+        if claimed_at > 0 and (now - claimed_at) > _STALE_HOLDER_AGE_S:
+            return "stale_age"
+        return "dead_pid"
+    if pid <= 0:
+        return "missing_holder" if missing_as_abandoned else None
+    # Live PID: never age-out (long multi-chunk play is legitimate).
+    return None
+
+
+def _heal_abandoned_locked(
+    st: dict[str, object],
+    *,
+    missing_as_abandoned: bool = False,
+    now: float | None = None,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """Advance serving past cancelled + abandoned heads. Caller holds flock."""
+    now = time.time() if now is None else now
+    st = _skip_cancelled_heads(st)
+    healed: list[dict[str, object]] = []
+    holders = _normalize_holders(st.get("holders"))
+    st["holders"] = holders
+
+    while int(st["serving"]) < int(st["next"]):
+        serving = int(st["serving"])
+        holder = holders.get(str(serving))
+        reason = _holder_abandoned(
+            holder, missing_as_abandoned=missing_as_abandoned, now=now
+        )
+        if reason is None:
+            break
+        entry: dict[str, object] = {
+            "ticket": serving,
+            "reason": reason,
+            "pid": int((holder or {}).get("pid", 0) or 0) if holder else 0,
+        }
+        healed.append(entry)
+        holders.pop(str(serving), None)
+        st["holders"] = holders
+        st["serving"] = serving + 1
+        st = _skip_cancelled_heads(st)
+        holders = _normalize_holders(st.get("holders"))
+        st["holders"] = holders
+
+    # Prune holders behind head
+    serving = int(st["serving"])
+    st["holders"] = {k: v for k, v in holders.items() if int(k) >= serving}
+    return st, healed
+
+
+def _track_our_ticket(ticket: int) -> None:
+    with _our_tickets_lock:
+        _our_tickets.add(int(ticket))
+    _ensure_cleanup_hooks()
+
+
+def _untrack_our_ticket(ticket: int) -> None:
+    with _our_tickets_lock:
+        _our_tickets.discard(int(ticket))
+
+
+def _abandon_our_tickets() -> None:
+    """Best-effort abandon of tickets still claimed by this process (B099)."""
+    with _our_tickets_lock:
+        tickets = list(_our_tickets)
+    for ticket in tickets:
+        try:
+            abandon_tts_play_ticket(ticket)
+        except Exception:
+            pass
+
+
+def _ensure_cleanup_hooks() -> None:
+    """Install atexit + SIGTERM chain so claimed tickets are abandoned on exit."""
+    global _cleanup_hooks_installed
+    if _cleanup_hooks_installed:
+        return
+    _cleanup_hooks_installed = True
+    atexit.register(_abandon_our_tickets)
+    try:
+        prev = signal.getsignal(signal.SIGTERM)
+
+        def _on_sigterm(signum: int, frame: object) -> None:
+            _abandon_our_tickets()
+            if callable(prev) and prev not in (signal.SIG_DFL, signal.SIG_IGN):
+                prev(signum, frame)  # type: ignore[operator]
+            else:
+                signal.signal(signal.SIGTERM, signal.SIG_DFL)
+                os.kill(os.getpid(), signal.SIGTERM)
+
+        signal.signal(signal.SIGTERM, _on_sigterm)
+    except Exception:
+        # Restricted environments / non-main thread — atexit + PID heal remain.
+        pass
 
 
 def claim_tts_play_ticket() -> int:
@@ -106,6 +311,9 @@ def claim_tts_play_ticket() -> int:
     Call once per outer utterance (not per multi-chunk). Then
     :func:`exclusive_playback` with that ticket. On failure before play, call
     :func:`abandon_tts_play_ticket` so the queue cannot stall.
+
+    Records ``pid`` + ``claimed_at`` on the ticket (B099) so other waiters can
+    advance past a dead holder.
     """
     import fcntl
 
@@ -116,11 +324,24 @@ def claim_tts_play_ticket() -> int:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         st = _queue_read(queue_path)
+        # Opportunistic heal of clearly dead heads before taking a new ticket
+        st, healed = _heal_abandoned_locked(st, missing_as_abandoned=False)
+        if healed:
+            for h in healed:
+                _syslog_tts_queue(
+                    "tts.play_queue_healed",
+                    ticket=h.get("ticket"),
+                    reason=h.get("reason"),
+                    pid=h.get("pid"),
+                    where="claim",
+                )
         ticket = int(st["next"])
         st["next"] = ticket + 1
         if int(st["serving"]) > int(st["next"]):
             st["serving"] = ticket
+        _set_holder(st, ticket, pid=os.getpid(), claimed_at=time.time())
         _queue_write(queue_path, st)
+        _track_our_ticket(ticket)
         return ticket
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
@@ -128,9 +349,10 @@ def claim_tts_play_ticket() -> int:
 
 
 def abandon_tts_play_ticket(ticket: int) -> None:
-    """Drop a claimed ticket without playing (synth error / early return)."""
+    """Drop a claimed ticket without playing (synth error / early return / exit)."""
     import fcntl
 
+    ticket = int(ticket)
     lock_path = tts_play_lock_path()
     queue_path = tts_play_queue_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,27 +360,123 @@ def abandon_tts_play_ticket(ticket: int) -> None:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         st = _queue_read(queue_path)
+        _drop_holder(st, ticket)
         if int(st["serving"]) == ticket:
             _queue_write(queue_path, _advance_serving(st))
         else:
             cancelled = list(st.get("cancelled") or [])
             if ticket not in cancelled:
-                cancelled.append(int(ticket))
+                cancelled.append(ticket)
             st["cancelled"] = cancelled
             # If cancelled ticket is somehow at head, skip it
             _queue_write(queue_path, _skip_cancelled_heads(st))
     finally:
+        _untrack_our_ticket(ticket)
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 
 
+def heal_tts_play_queue(*, missing_as_abandoned: bool = True) -> dict[str, Any]:
+    """Detect abandoned tickets and advance ``serving`` (B099).
+
+    *missing_as_abandoned*: treat tickets with no holder record (legacy queue or
+    crash before holder write) as abandoned. Safe for doctor/ambient startup;
+    waiters use a grace period before enabling this.
+
+    Returns a status dict suitable for doctor / syslog.
+    """
+    import fcntl
+
+    lock_path = tts_play_lock_path()
+    queue_path = tts_play_queue_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    before = _queue_read(queue_path) if queue_path.is_file() else _empty_queue_state()
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        st = _queue_read(queue_path)
+        st, healed = _heal_abandoned_locked(
+            st, missing_as_abandoned=missing_as_abandoned
+        )
+        if healed or int(st["serving"]) != int(before.get("serving", 0)):
+            _queue_write(queue_path, st)
+        for h in healed:
+            _syslog_tts_queue(
+                "tts.play_queue_healed",
+                ticket=h.get("ticket"),
+                reason=h.get("reason"),
+                pid=h.get("pid"),
+                where="heal",
+                level="warn",
+            )
+        stuck = int(st["serving"]) < int(st["next"])
+        return {
+            "path": str(queue_path),
+            "serving": int(st["serving"]),
+            "next": int(st["next"]),
+            "pending": max(0, int(st["next"]) - int(st["serving"])),
+            "cancelled": list(st.get("cancelled") or []),
+            "holders": _normalize_holders(st.get("holders")),
+            "healed": healed,
+            "healed_count": len(healed),
+            "stuck": stuck and not healed,
+            "ok": True,
+        }
+    except Exception as exc:  # pragma: no cover - defensive
+        return {
+            "path": str(queue_path),
+            "ok": False,
+            "error": str(exc)[:200],
+            "healed": [],
+            "healed_count": 0,
+            "stuck": False,
+        }
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        os.close(fd)
+
+
+def inspect_tts_play_queue() -> dict[str, Any]:
+    """Read queue status without healing (tests / diagnostics)."""
+    queue_path = tts_play_queue_path()
+    if not queue_path.is_file():
+        st = _empty_queue_state()
+    else:
+        st = _queue_read(queue_path)
+    pending = max(0, int(st["next"]) - int(st["serving"]))
+    return {
+        "path": str(queue_path),
+        "serving": int(st["serving"]),
+        "next": int(st["next"]),
+        "pending": pending,
+        "cancelled": list(st.get("cancelled") or []),
+        "holders": _normalize_holders(st.get("holders")),
+        "exists": queue_path.is_file(),
+    }
+
+
 @contextmanager
-def exclusive_playback(ticket: int | None = None) -> Iterator[None]:
+def exclusive_playback(
+    ticket: int | None = None,
+    *,
+    wait_timeout_s: float | None = None,
+) -> Iterator[None]:
     """Hold the global TTS speaker for *ticket* (FIFO). Re-entrant same thread.
 
     Prefer claiming with :func:`claim_tts_play_ticket` **before** synthesize so
     five concurrent ``hark tts`` keep launch order even if synth finishes out
     of order. If *ticket* is None, claim now (play-time claim).
+
+    While waiting for our turn, dead-PID heads are auto-healed (B099). After
+    :data:`_MISSING_HOLDER_GRACE_S`, heads with no holder record are also
+    skipped (legacy abandoned tickets).
+
+    *wait_timeout_s*: if set, raise ``TimeoutError`` after this many seconds
+    waiting for the speaker (ticket is abandoned so the queue does not stall).
+    Use a short timeout for ambient boot TTS so wake arming is never blocked.
     """
     depth = int(getattr(_play_tls, "depth", 0) or 0)
     if depth > 0:
@@ -179,14 +497,50 @@ def exclusive_playback(ticket: int | None = None) -> Iterator[None]:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
     advanced = False
+    wait_start = time.monotonic()
     try:
         # Wait until we are head of line, then hold lock through playback
         while True:
             fcntl.flock(fd, fcntl.LOCK_EX)
-            st = _skip_cancelled_heads(_queue_read(queue_path))
+            elapsed = time.monotonic() - wait_start
+            missing = elapsed >= _MISSING_HOLDER_GRACE_S
+            st = _queue_read(queue_path)
+            st, healed = _heal_abandoned_locked(
+                st, missing_as_abandoned=missing
+            )
+            st = _skip_cancelled_heads(st)
+            if healed:
+                for h in healed:
+                    _syslog_tts_queue(
+                        "tts.play_queue_healed",
+                        ticket=h.get("ticket"),
+                        reason=h.get("reason"),
+                        pid=h.get("pid"),
+                        where="wait",
+                        waiter=ticket,
+                    )
             _queue_write(queue_path, st)
             if int(st["serving"]) == ticket:
                 break
+            if wait_timeout_s is not None and elapsed >= wait_timeout_s:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                try:
+                    abandon_tts_play_ticket(ticket)
+                except Exception:
+                    pass
+                advanced = True  # abandon already advanced/cancelled
+                _syslog_tts_queue(
+                    "tts.play_queue_wait_timeout",
+                    ticket=ticket,
+                    wait_timeout_s=wait_timeout_s,
+                    serving=int(st["serving"]),
+                    next=int(st["next"]),
+                    level="warn",
+                )
+                raise TimeoutError(
+                    f"tts play queue wait exceeded {wait_timeout_s}s "
+                    f"(ticket={ticket}, serving={st['serving']})"
+                )
             fcntl.flock(fd, fcntl.LOCK_UN)
             time.sleep(0.03)
 
@@ -199,6 +553,7 @@ def exclusive_playback(ticket: int | None = None) -> Iterator[None]:
             if int(st["serving"]) == ticket:
                 _queue_write(queue_path, _advance_serving(st))
                 advanced = True
+            _untrack_our_ticket(ticket)
             fcntl.flock(fd, fcntl.LOCK_UN)
     except BaseException:
         if not advanced:

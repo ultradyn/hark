@@ -9,6 +9,10 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 - **Handsfree workers (B089):** `hark start` / `stop` / `restart` for ambient +
   `watch --for-monitor` (idempotent start, SIGTERM then SIGKILL, `mode-a.pids`);
   preferred over `./scripts/run-mode-a.sh`. `hark start --status` for running state.
+- fix(tts, B099): abandoned play-queue tickets no longer stall ambient boot —
+  holders track PID + claim time; dead/missing heads are auto-healed; ambient
+  boot TTS heals then waits at most 15s; doctor heals + warns; atexit/SIGTERM
+  abandon claimed tickets.
 
 ## 0.1.7
 

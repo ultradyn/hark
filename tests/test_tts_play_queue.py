@@ -1,19 +1,29 @@
-"""B092: exclusive playback lock + pipelined synth."""
+"""B092: exclusive playback lock + pipelined synth. B099: abandoned ticket heal."""
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from types import SimpleNamespace
+
+import pytest
 
 from hark.audio import playback as pb
 from hark.config import HarkConfig
 from hark.speech import run_tts
 
 
+def _queue_paths(tmp_path, monkeypatch):
+    lock = tmp_path / "tts_play.lock"
+    queue = tmp_path / "tts_play_queue.json"
+    monkeypatch.setattr(pb, "tts_play_lock_path", lambda: lock)
+    monkeypatch.setattr(pb, "tts_play_queue_path", lambda: queue)
+    return lock, queue
+
+
 def test_exclusive_playback_serializes_fifo(tmp_path, monkeypatch):
-    monkeypatch.setattr(pb, "tts_play_lock_path", lambda: tmp_path / "tts_play.lock")
-    monkeypatch.setattr(pb, "tts_play_queue_path", lambda: tmp_path / "tts_play_queue.json")
+    _queue_paths(tmp_path, monkeypatch)
     order: list[str] = []
 
     def worker(name: str, hold: float, delay_before: float = 0.0) -> None:
@@ -39,8 +49,7 @@ def test_exclusive_playback_serializes_fifo(tmp_path, monkeypatch):
 
 def test_five_tickets_play_in_launch_order(tmp_path, monkeypatch):
     """5 concurrent jobs: reverse synth finish order must still play 0..4."""
-    monkeypatch.setattr(pb, "tts_play_lock_path", lambda: tmp_path / "tts_play.lock")
-    monkeypatch.setattr(pb, "tts_play_queue_path", lambda: tmp_path / "tts_play_queue.json")
+    _queue_paths(tmp_path, monkeypatch)
     play_order: list[int] = []
     # Claim in launch order (main thread), like sequential process starts
     tickets = [pb.claim_tts_play_ticket() for _ in range(5)]
@@ -62,11 +71,135 @@ def test_five_tickets_play_in_launch_order(tmp_path, monkeypatch):
 
 
 def test_exclusive_playback_reentrant(tmp_path, monkeypatch):
-    monkeypatch.setattr(pb, "tts_play_lock_path", lambda: tmp_path / "tts_play.lock")
-    monkeypatch.setattr(pb, "tts_play_queue_path", lambda: tmp_path / "tts_play_queue.json")
+    _queue_paths(tmp_path, monkeypatch)
     with pb.exclusive_playback():
         with pb.exclusive_playback():
             pass  # no deadlock
+
+
+def test_claim_records_holder_pid(tmp_path, monkeypatch):
+    _, queue = _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    st = json.loads(queue.read_text(encoding="utf-8"))
+    holders = st.get("holders") or {}
+    h = holders.get(str(ticket))
+    assert h is not None
+    assert int(h["pid"]) == __import__("os").getpid()
+    assert float(h["claimed_at"]) > 0
+    pb.abandon_tts_play_ticket(ticket)
+
+
+def test_heal_dead_pid_advances_serving(tmp_path, monkeypatch):
+    """Dogfood case: serving < next with dead holder PIDs → heal advances."""
+    _, queue = _queue_paths(tmp_path, monkeypatch)
+    # Simulate abandoned tickets 75, 76 (dead PIDs) like the real incident
+    queue.write_text(
+        json.dumps(
+            {
+                "next": 77,
+                "serving": 75,
+                "cancelled": [],
+                "holders": {
+                    "75": {"pid": 999_999_991, "claimed_at": time.time() - 60},
+                    "76": {"pid": 999_999_992, "claimed_at": time.time() - 50},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pb, "_pid_alive", lambda pid: False)
+    report = pb.heal_tts_play_queue(missing_as_abandoned=False)
+    assert report["healed_count"] == 2
+    assert report["serving"] == 77
+    assert report["next"] == 77
+    assert report["pending"] == 0
+    st = json.loads(queue.read_text(encoding="utf-8"))
+    assert st["serving"] == 77
+
+
+def test_heal_missing_holders_legacy_queue(tmp_path, monkeypatch):
+    """Pre-B099 queue JSON without holders still heals when missing_as_abandoned."""
+    _, queue = _queue_paths(tmp_path, monkeypatch)
+    queue.write_text(
+        json.dumps({"next": 77, "serving": 75, "cancelled": []}),
+        encoding="utf-8",
+    )
+    report = pb.heal_tts_play_queue(missing_as_abandoned=True)
+    assert report["healed_count"] >= 2
+    assert report["serving"] == 77
+
+
+def test_heal_preserves_live_holder(tmp_path, monkeypatch):
+    _queue_paths(tmp_path, monkeypatch)
+    t0 = pb.claim_tts_play_ticket()
+    t1 = pb.claim_tts_play_ticket()
+    assert t1 == t0 + 1
+    report = pb.heal_tts_play_queue(missing_as_abandoned=True)
+    # Our live tickets must not be skipped
+    assert report["serving"] == t0
+    assert report["healed_count"] == 0
+    pb.abandon_tts_play_ticket(t0)
+    pb.abandon_tts_play_ticket(t1)
+
+
+def test_exclusive_playback_skips_dead_head(tmp_path, monkeypatch):
+    """Waiter auto-advances past a dead-PID head without waiting forever."""
+    _, queue = _queue_paths(tmp_path, monkeypatch)
+    dead_pid = 999_999_993
+    queue.write_text(
+        json.dumps(
+            {
+                "next": 1,
+                "serving": 0,
+                "cancelled": [],
+                "holders": {
+                    "0": {"pid": dead_pid, "claimed_at": time.time() - 30},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        pb, "_pid_alive", lambda pid: pid != dead_pid and pid > 0
+    )
+    # Claim ticket 1; exclusive should heal past 0 and play
+    ticket = pb.claim_tts_play_ticket()
+    assert ticket == 1
+    t0 = time.monotonic()
+    with pb.exclusive_playback(ticket=ticket, wait_timeout_s=3.0):
+        pass
+    assert time.monotonic() - t0 < 2.0
+    st = json.loads(queue.read_text(encoding="utf-8"))
+    assert st["serving"] == 2  # advanced past our ticket after play
+
+
+def test_exclusive_playback_wait_timeout_abandons(tmp_path, monkeypatch):
+    """wait_timeout_s raises and abandons so the queue does not stall (boot path)."""
+    _queue_paths(tmp_path, monkeypatch)
+    # Live "other" holder blocks us
+    head = pb.claim_tts_play_ticket()
+    waiter = pb.claim_tts_play_ticket()
+    # Pretend head holder is still alive forever (default pid_alive for us)
+    t0 = time.monotonic()
+    with pytest.raises(TimeoutError):
+        with pb.exclusive_playback(ticket=waiter, wait_timeout_s=0.25):
+            raise AssertionError("should not enter play")
+    assert time.monotonic() - t0 < 1.5
+    # Waiter abandoned → cancelled or skipped; head still serving
+    st = pb.inspect_tts_play_queue()
+    assert st["serving"] == head
+    assert waiter in st["cancelled"] or st["serving"] > waiter
+    pb.abandon_tts_play_ticket(head)
+
+
+def test_abandon_on_exit_hook_clears_ticket(tmp_path, monkeypatch):
+    _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    assert ticket in pb._our_tickets
+    pb._abandon_our_tickets()
+    st = pb.inspect_tts_play_queue()
+    assert st["serving"] == ticket + 1 or ticket in st["cancelled"]
+    assert ticket not in pb._our_tickets
 
 
 def test_run_tts_pipelines_next_chunk_synth(monkeypatch):
@@ -131,7 +264,7 @@ def test_run_tts_pipelines_next_chunk_synth(monkeypatch):
     from contextlib import contextmanager
 
     @contextmanager
-    def _fake_exclusive(ticket=None):
+    def _fake_exclusive(ticket=None, *, wait_timeout_s=None):
         yield
 
     monkeypatch.setattr("hark.speech.exclusive_playback", _fake_exclusive)

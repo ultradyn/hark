@@ -309,6 +309,7 @@ def run_tts(
     near_end_ms: int | None = None,
     conference_policy: str | None = None,
     use_cache: bool = True,
+    play_wait_timeout_s: float | None = None,
 ) -> dict[str, Any]:
     """Synthesize and optionally play TTS.
 
@@ -320,6 +321,10 @@ def run_tts(
 
     ``use_cache``: when False, skip on-disk TTS phrase cache lookup and store
     (one-shot announces such as wake-label live-reload).
+
+    ``play_wait_timeout_s`` (B099): max seconds to wait for the exclusive play
+    queue turn. On timeout the ticket is abandoned and ``TimeoutError`` is raised.
+    Ambient boot uses a short timeout so a stuck queue never blocks wake arming.
 
     Long text (B091): speak the full agent reply by default.
 
@@ -522,7 +527,10 @@ def run_tts(
                                 ),
                             )
 
-                    with exclusive_playback(ticket=play_ticket):
+                    with exclusive_playback(
+                        ticket=play_ticket,
+                        wait_timeout_s=play_wait_timeout_s,
+                    ):
                         with mic_muted_during_tts(enabled=do_mute) as mute_state:
                             mute_applied = mute_state.applied
                             with duck_media(

@@ -65,6 +65,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="read question excerpts before emitting blocked events (default)",
     )
 
+    srv = sub.add_parser(
+        "serve",
+        help="live web dashboard (REST + SSE, hark.dashboard.v1)",
+    )
+    srv.add_argument("--host", default=None, help="bind host (default: [dashboard].host)")
+    srv.add_argument("--port", type=int, default=None, help="bind port (default: [dashboard].port)")
+    srv.add_argument(
+        "--print-token",
+        action="store_true",
+        help="generate a token for [dashboard].token and exit",
+    )
+
     mon = sub.add_parser(
         "monitor",
         help=(
@@ -524,6 +536,17 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
             kinds=kinds,
             replay=int(getattr(args, "replay", 0) or 0),
         )
+    if cmd == "serve":
+        if getattr(args, "print_token", False):
+            import secrets as _secrets
+
+            token = _secrets.token_urlsafe(32)
+            print(token)
+            eprint('add to ~/.config/hark/config.toml:\n[dashboard]\ntoken = "%s"' % token)
+            return OK
+        from hark.dashboard.server import run_serve
+
+        return run_serve(cfg, host=args.host, port=args.port)
     if cmd == "context":
         return cmd_context(args, cfg)
     if cmd == "reply":
@@ -1048,6 +1071,19 @@ def cmd_keys(args: argparse.Namespace, cfg) -> int:
     return OK
 
 
+_ANSWER_REJECT_HINTS = {
+    "bad_request": "require exactly one of --text / --keys",
+    "unknown_event": "unknown event_id (not in store); events are registered by `hark watch`; or use reply/keys",
+    "already_delivered": "already delivered (idempotent refuse)",
+    "missing_question_fingerprint": "bound event has no question fingerprint",
+    "pane_gone": "pane no longer present",
+    "not_blocked": "agent is no longer blocked",
+    "stale_revision": "stale pane revision",
+    "fingerprint_mismatch": "question fingerprint mismatch (stale)",
+    "fingerprint_unavailable": "unable to verify question fingerprint",
+}
+
+
 def cmd_answer(args: argparse.Namespace, cfg) -> int:
     if not args.text and not args.keys:
         eprint("hark answer: require --text or --keys")
@@ -1056,78 +1092,28 @@ def cmd_answer(args: argparse.Namespace, cfg) -> int:
         eprint("hark answer: use either --text or --keys")
         return USAGE
 
-    store = DeliveryStore()
-    bound = store.get(args.event_id)
-    if bound is None:
-        eprint(f"hark answer: unknown event_id {args.event_id} (not in store)")
-        eprint("hint: events are registered by `hark watch`; or use reply/keys")
-        return ABORT
-    if store.already_delivered(args.event_id):
-        eprint("hark answer: already delivered (idempotent refuse)")
-        return ABORT
-    if bound.status != "pending":
-        eprint(f"hark answer: event is no longer pending ({bound.status})")
-        return ABORT
+    from hark.answering import answer_bound_event
 
-    fingerprint = (
-        bound.question_fingerprint.strip()
-        if isinstance(bound.question_fingerprint, str)
-        else ""
+    result = answer_bound_event(
+        args.event_id,
+        text=args.text,
+        keys=list(args.keys) if args.keys else None,
+        store=DeliveryStore(),
+        client_for=lambda session_id: _client_for(cfg, session_id),
     )
-    if not fingerprint:
-        store.mark(args.event_id, "rejected", reason="missing_question_fingerprint")
-        eprint("hark answer: bound event has no question fingerprint")
-        return ABORT
-
-    has_revision = isinstance(bound.pane_revision, int) and bound.pane_revision > 0
-
-    client = _client_for(cfg, bound.session_id)
-    live = client.get_agent(bound.pane_id)
-    if live is None:
-        store.mark(args.event_id, "rejected", reason="pane_gone")
-        eprint("hark answer: pane no longer present")
-        return ABORT
-    if live.status != "blocked":
-        store.mark(args.event_id, "rejected", reason="not_blocked")
-        eprint(f"hark answer: agent is no longer blocked (live status: {live.status})")
-        return ABORT
-    if has_revision and live.revision != bound.pane_revision:
-        store.mark(args.event_id, "rejected", reason="stale_revision")
-        eprint(
-            f"hark answer: stale revision "
-            f"(expected {bound.pane_revision}, live {live.revision})"
+    if result.status == "rejected":
+        hint = _ANSWER_REJECT_HINTS.get(
+            result.reason or "", result.reason or "rejected"
         )
+        eprint(f"hark answer: {hint}")
         return ABORT
-
-    if fingerprint:
-        try:
-            text = client.read_pane(bound.pane_id, lines=40)
-            from hark.events import extract_question_excerpt
-
-            excerpt = extract_question_excerpt(text)
-            live_fp = question_fingerprint(excerpt)
-            if live_fp != fingerprint:
-                store.mark(args.event_id, "rejected", reason="fingerprint_mismatch")
-                eprint("hark answer: question fingerprint mismatch (stale)")
-                return ABORT
-        except HerdrError:
-            store.mark(args.event_id, "rejected", reason="fingerprint_unavailable")
-            eprint("hark answer: unable to verify question fingerprint")
-            return ABORT
-
-    if args.keys:
-        client.send_keys(bound.pane_id, list(args.keys))
-        store.mark(args.event_id, "delivered", keys=list(args.keys))
-    else:
-        client.send_text(bound.pane_id, args.text)
-        store.mark(args.event_id, "delivered", text=args.text)
-
     print(
         json.dumps(
             {
-                "ok": True,
-                "event_id": args.event_id,
-                "target": f"{bound.session_id}/{bound.pane_id}",
+                "ok": result.ok,
+                "event_id": result.event_id,
+                "target": result.target,
+                **({"status": result.status} if result.status != "delivered" else {}),
             }
         )
     )

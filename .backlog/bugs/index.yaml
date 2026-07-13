@@ -55,3 +55,4 @@ bugs:
     - file: B054-remove-spec-from-footer-but-ad.todo
     - file: B055-coding-cli-argv-resolver-alias.todo
     - file: B056-herdrclient-list-ensure-named.todo
+    - file: B057-cli-hark-agent-start-session-e.todo

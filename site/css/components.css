@@ -929,7 +929,7 @@ a.product-link:hover {
   margin: 0;
 }
 
-/* --- Footer (full-bleed bar; content in .footer__inner shell) --- */
+/* --- Footer (full-bleed bar; content in .footer__inner) --- */
 .footer {
   width: 100%;
   box-sizing: border-box;
@@ -947,11 +947,20 @@ a.product-link:hover {
   );
 }
 
+/*
+  Content column: same usable width as .shell, with explicit gutter padding so
+  text/links never sit flush to the viewport (full-bleed chrome stays on .footer).
+  width = content max + 2*gutter; padding-inline = gutter; border-box → content
+  tracks min(var(--max), 100% - 2*gutter) like other sections.
+*/
 .footer__inner {
-  overflow: visible;
-  /* Match hero glow budget so brand type / links aren't hard-clipped */
-  padding-inline: clamp(0.5rem, 1.5vw, 1rem);
+  width: 100%;
+  max-width: calc(var(--max) + 2 * var(--gutter));
+  margin-inline: auto;
+  padding-inline: var(--gutter);
   box-sizing: border-box;
+  overflow: visible;
+  min-width: 0;
 }
 
 .footer__row {

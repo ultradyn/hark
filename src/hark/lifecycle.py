@@ -13,27 +13,87 @@ from hark.syslog import log as syslog
 
 _lock = threading.Lock()
 _shutdown = False
+_shutdown_reason = "stop"  # stop | restart
 _busy_depth = 0
 _handlers_installed = False
+
+# Spoken cues (short, cacheable)
+PHRASE_SHUTDOWN = "Hark shutting down."
+PHRASE_RESTART = "Hark restarting."
 
 
 def busy_path() -> Path:
     return state_dir() / "busy.lock"
 
 
+def shutdown_reason_path() -> Path:
+    return state_dir() / "shutdown_reason"
+
+
 def shutdown_requested() -> bool:
     return _shutdown
 
 
-def request_shutdown(signum: int | None = None) -> None:
+def get_shutdown_reason() -> str:
+    """Return stop|restart from memory, env, or state file."""
+    global _shutdown_reason
+    env = (os.environ.get("HARK_SHUTDOWN_REASON") or "").strip().lower()
+    if env in ("stop", "restart", "shutdown"):
+        return "restart" if env == "restart" else "stop"
+    try:
+        p = shutdown_reason_path()
+        if p.is_file():
+            raw = p.read_text(encoding="utf-8").strip().lower()
+            if raw in ("stop", "restart", "shutdown"):
+                return "restart" if raw == "restart" else "stop"
+    except OSError:
+        pass
+    return _shutdown_reason if _shutdown_reason in ("stop", "restart") else "stop"
+
+
+def set_shutdown_reason(reason: str) -> None:
+    global _shutdown_reason
+    r = (reason or "stop").strip().lower()
+    if r == "shutdown":
+        r = "stop"
+    if r not in ("stop", "restart"):
+        r = "stop"
+    _shutdown_reason = r
+    try:
+        path = shutdown_reason_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(r + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_shutdown_reason() -> None:
+    try:
+        shutdown_reason_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def request_shutdown(signum: int | None = None, reason: str | None = None) -> None:
     global _shutdown
+    if reason:
+        set_shutdown_reason(reason)
+    else:
+        # Prefer reason already staged by the stop/restart script
+        set_shutdown_reason(get_shutdown_reason())
     _shutdown = True
     syslog(
         "lifecycle.shutdown_requested",
         component="lifecycle",
         signal=signum,
+        reason=get_shutdown_reason(),
         busy=_busy_depth > 0,
     )
+
+
+def shutdown_phrase(reason: str | None = None) -> str:
+    r = reason or get_shutdown_reason()
+    return PHRASE_RESTART if r == "restart" else PHRASE_SHUTDOWN
 
 
 def install_signal_handlers() -> None:

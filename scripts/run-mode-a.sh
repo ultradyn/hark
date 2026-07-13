@@ -33,8 +33,18 @@ SESSION="${HARK_SESSION:-default}"
 # Max wait for an in-flight recording (seconds)
 STOP_GRACE="${HARK_STOP_GRACE_S:-120}"
 
+# reason: stop | restart — written so ambient can TTS the right line
+stage_shutdown_reason() {
+  local reason="${1:-stop}"
+  echo "$reason" > "$STATE/shutdown_reason"
+  export HARK_SHUTDOWN_REASON="$reason"
+}
+
 graceful_stop() {
   local force="$1"
+  local reason="${2:-stop}"
+  stage_shutdown_reason "$reason"
+
   if [[ ! -f "$PIDFILE" ]]; then
     echo "no pidfile at $PIDFILE"
     pkill -TERM -f 'hark watch --session' 2>/dev/null || true
@@ -48,8 +58,10 @@ graceful_stop() {
     return 0
   fi
 
-  echo "sending SIGTERM (graceful) to: ${PIDS[*]}"
+  echo "sending SIGTERM (graceful, reason=$reason) to: ${PIDS[*]}"
   for pid in "${PIDS[@]}"; do
+    # Pass reason via process environment is already set for children only;
+    # ambient reads $STATE/shutdown_reason on exit.
     kill -TERM "$pid" 2>/dev/null || true
   done
 
@@ -106,7 +118,7 @@ while [[ $# -gt 0 ]]; do
           *) break ;;
         esac
       done
-      graceful_stop "$FORCE"
+      graceful_stop "$FORCE" "stop"
       exit $?
       ;;
     -h|--help)
@@ -120,11 +132,12 @@ done
 cd "$ROOT"
 HARK=(uv run hark)
 
-# stop previous mode-a gracefully before restart
+# stop previous mode-a gracefully before restart (distinct TTS: "Hark restarting.")
 if [[ -f "$PIDFILE" ]]; then
-  echo "stopping previous Mode A (graceful)…"
-  graceful_stop 0 || graceful_stop 1
-  sleep 0.3
+  echo "restarting previous Mode A (graceful)…"
+  graceful_stop 0 "restart" || graceful_stop 1 "restart"
+  # Allow ambient to finish shutdown TTS after recording
+  sleep 0.5
 fi
 
 : > "$PIDFILE"

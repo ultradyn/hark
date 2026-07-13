@@ -196,6 +196,8 @@ COMMON_PHRASES: tuple[str, ...] = (
     "Okay.",
     "Ready.",
     "Sorry, I didn't catch that.",
+    "Hark shutting down.",
+    "Hark restarting.",
 )
 
 

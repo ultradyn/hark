@@ -12,7 +12,13 @@ from hark.audio.capture import MicLease, record_seconds
 from hark.config import HarkConfig
 from hark.debug_snips import purge_old_debug_snips, save_wake_snippet
 from hark.events import new_event_id, utc_now_iso
-from hark.lifecycle import install_signal_handlers, shutdown_requested
+from hark.lifecycle import (
+    clear_shutdown_reason,
+    get_shutdown_reason,
+    install_signal_handlers,
+    shutdown_phrase,
+    shutdown_requested,
+)
 from hark.partial import make_final_event, new_stream_id
 from hark.speech import run_listen, run_tts
 from hark.syslog import log as syslog
@@ -437,14 +443,38 @@ def run_ambient_loop(
     except KeyboardInterrupt:
         pass
 
+    reason = get_shutdown_reason()
+    phrase = shutdown_phrase(reason)
+    # Speak after any in-flight recording finished (we only get here post-cycle)
+    if announce:
+        try:
+            run_tts(cfg, phrase, play=True)
+        except Exception as exc:
+            syslog(
+                "ambient.shutdown_tts_error",
+                component="ambient",
+                level="warn",
+                error=str(exc)[:160],
+                reason=reason,
+            )
+
     stop = {
         "schema": "hark.event.v1",
         "kind": "ambient.stopped",
         "event_id": new_event_id(),
         "observed_at": utc_now_iso(),
         "graceful": True,
+        "reason": reason,
+        "phrase": phrase,
     }
     out.write(json.dumps(stop, separators=(",", ":")) + "\n")
     out.flush()
-    syslog("ambient.stopped", component="ambient", graceful=True)
+    syslog(
+        "ambient.stopped",
+        component="ambient",
+        graceful=True,
+        reason=reason,
+        phrase=phrase,
+    )
+    clear_shutdown_reason()
     return 0

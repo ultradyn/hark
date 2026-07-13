@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T11:07:50Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T11:29:55Z"
 complexity: medium
 created_at: "2026-07-13T10:52:59Z"
 depends_on: []
+duration_minutes: 22.090121674533332
 estimate_hours: 1
 id: B029
 priority: high
 started_at: "2026-07-13T11:07:50Z"
-status: in_progress
+status: done
 tags: []
 title: Must detect self if running from within herdr and NOT forward or react to events from the hark agent's session.
-updated_at: "2026-07-13T11:07:50Z"
+updated_at: "2026-07-13T11:29:55Z"
 ---
 
 Must detect self if running from within herdr and NOT forward or react to events from the hark agent's session.

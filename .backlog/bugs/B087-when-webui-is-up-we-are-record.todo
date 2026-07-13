@@ -1,14 +1,18 @@
 ---
+claimed_at: "2026-07-13T19:11:31Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T17:17:32Z"
 depends_on: []
 estimate_hours: 1
 id: B087
 priority: high
-status: pending
+started_at: "2026-07-13T19:11:31Z"
+status: in_progress
 tags: []
 title: when webui is up + we are recording audio preparing to upload it for STT, we shoudl stream fourier analysis frequencies of the voice to the webui with as little latency as possible so that it can update at 60fps+ and show us the frequencies live. It should be a visually obvious section that appears when the mic is recording. We could do this all the time so that the feed is always there and we can collapse or exapnd the section (autoexpands while recording prompts / answers to questions unless the user has deliberately collapsed it during these poeriods before)
-updated_at: "2026-07-13T17:17:32Z"
+updated_at: "2026-07-13T19:11:31Z"
 ---
 
 when webui is up + we are recording audio preparing to upload it for STT, we shoudl stream fourier analysis frequencies of the voice to the webui with as little latency as possible so that it can update at 60fps+ and show us the frequencies live. It should be a visually obvious section that appears when the mic is recording. We could do this all the time so that the feed is always there and we can collapse or exapnd the section (autoexpands while recording prompts / answers to questions unless the user has deliberately collapsed it during these poeriods before)

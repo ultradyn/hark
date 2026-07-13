@@ -36,6 +36,11 @@ def command_path(stream_id: str | None = None) -> Path:
     return listen_control_dir() / "command"
 
 
+def voice_activity_path() -> Path:
+    """Operator speech energy marker for streaming TTS quiet gate (B105)."""
+    return listen_control_dir() / "voice.json"
+
+
 def register_active_listen(stream_id: str, *, mode: str = "radio") -> Path:
     """Mark a listen session active so agents can target it."""
     d = listen_control_dir()
@@ -53,6 +58,8 @@ def register_active_listen(stream_id: str, *, mode: str = "radio") -> Path:
     }
     path = active_path()
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    # Fresh capture: clear prior voice activity so quiet is measured from start.
+    clear_voice_activity()
     return path
 
 
@@ -62,6 +69,7 @@ def clear_active_listen(stream_id: str | None = None) -> None:
         if active.is_file():
             if stream_id is None:
                 active.unlink(missing_ok=True)
+                clear_voice_activity()
             else:
                 try:
                     data = json.loads(active.read_text(encoding="utf-8"))
@@ -69,11 +77,86 @@ def clear_active_listen(stream_id: str | None = None) -> None:
                     data = {}
                 if data.get("stream_id") == stream_id or not data.get("stream_id"):
                     active.unlink(missing_ok=True)
+                    clear_voice_activity()
         if stream_id:
             command_path(stream_id).unlink(missing_ok=True)
         command_path(None).unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def clear_voice_activity() -> None:
+    try:
+        voice_activity_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def touch_voice_activity(*, stream_id: str | None = None) -> None:
+    """Record that operator speech energy was heard (B105 streaming quiet gate).
+
+    Safe to call frequently; writers should throttle (≈10 Hz) in the capture loop.
+    """
+    d = listen_control_dir()
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        payload: dict[str, Any] = {
+            "last_voice_at": now,
+            "updated_at": now,
+        }
+        if stream_id:
+            payload["stream_id"] = stream_id
+        else:
+            active = read_active()
+            if active and active.get("stream_id"):
+                payload["stream_id"] = active["stream_id"]
+        voice_activity_path().write_text(
+            json.dumps(payload, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def read_voice_activity() -> dict[str, Any] | None:
+    path = voice_activity_path()
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def operator_quiet_s(*, now: float | None = None) -> float | None:
+    """Seconds of operator quiet while a listen capture is active (B105).
+
+    Returns ``None`` when no active listen. Prefers ``voice.json`` last speech
+    energy time; if speech has not opened yet, uses ``active.started_at`` so
+    pre-open silence counts as quiet.
+    """
+    active = read_active()
+    if not active:
+        return None
+    t = float(now if now is not None else time.time())
+    voice = read_voice_activity()
+    sid = str(active.get("stream_id") or "") or None
+    last: float | None = None
+    if voice:
+        vsid = str(voice.get("stream_id") or "") or None
+        if vsid is None or sid is None or vsid == sid:
+            raw = voice.get("last_voice_at")
+            try:
+                last = float(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                last = None
+    if last is None:
+        try:
+            last = float(active.get("started_at") or t)
+        except (TypeError, ValueError):
+            last = t
+    return max(0.0, t - last)
 
 
 def read_active() -> dict[str, Any] | None:

@@ -292,6 +292,12 @@ def compact_mode_a_event(event: dict[str, Any]) -> dict[str, Any]:
                 "instructions": partial_compact_instructions(streaming=streaming),
             }
         )
+        # B105: surface quiet gate when streaming
+        if streaming and event.get("ack_min_quiet_s") is not None:
+            try:
+                compact["ack_min_quiet_s"] = float(event["ack_min_quiet_s"])
+            except (TypeError, ValueError):
+                compact["ack_min_quiet_s"] = 2.0
     elif kind == "ambient.wake_near_miss":
         attempts = event.get("attempts") or []
         texts = []

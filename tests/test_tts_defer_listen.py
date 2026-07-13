@@ -362,7 +362,7 @@ def test_run_tts_defers_play_until_capture_clears(monkeypatch, tmp_path):
         yield
 
     monkeypatch.setattr(
-        "hark.speech.wait_until_user_capture_idle", fake_wait
+        "hark.speech.wait_until_tts_play_allowed", fake_wait
     )
     monkeypatch.setattr("hark.speech.resolve_tts", lambda *a, **k: FakeTts())
     monkeypatch.setattr("hark.speech.lookup_cached_tts", lambda *a, **k: None)
@@ -438,7 +438,7 @@ def test_run_tts_skips_defer_when_disabled(monkeypatch, tmp_path):
     def _fake_exclusive(ticket=None, wait_timeout_s=None, **_kw):
         yield
 
-    monkeypatch.setattr("hark.speech.wait_until_user_capture_idle", fake_wait)
+    monkeypatch.setattr("hark.speech.wait_until_tts_play_allowed", fake_wait)
     monkeypatch.setattr("hark.speech.resolve_tts", lambda *a, **k: FakeTts())
     monkeypatch.setattr("hark.speech.lookup_cached_tts", lambda *a, **k: None)
     monkeypatch.setattr("hark.speech.store_cached_tts", lambda *a, **k: None)

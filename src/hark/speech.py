@@ -45,10 +45,11 @@ from hark.listen_control import (
     consume_listen_action,
     poll_listen_action,
     register_active_listen,
+    touch_voice_activity,
 )
 from hark.endpointing import EndpointStrategy, build_endpoint_strategy
 from hark.listen_end import EndMode, evaluate_radio_transcript, parse_end_mode
-from hark.mic_coord import pause_ambient_for_mic, wait_until_user_capture_idle
+from hark.mic_coord import pause_ambient_for_mic, wait_until_tts_play_allowed
 from hark.partial import make_partial_event, new_stream_id
 from hark.providers.base import ProviderError
 from hark.providers.resolve import resolve_stt, resolve_tts
@@ -499,11 +500,26 @@ def run_tts(
                     if len(chunks) > 1:
                         next_fut = pool.submit(_synth_one, chunks[1])
 
-                    # B097: if operator listen/radio is open, defer play + mic mute
-                    # until capture ends (or max wait). Synth may already be done;
-                    # same-PID capture is ignored so in-listen nudges still speak.
+                    # B097 / B105: if operator listen/radio is open, defer play +
+                    # mic mute. HOLD mode waits until capture ends; streaming mode
+                    # waits for streaming_ack_min_quiet_s of operator quiet (or
+                    # stream end) so short acks do not barge into continuous speech.
+                    # Synth may already be done; same-PID capture is ignored so
+                    # in-listen nudges still speak.
                     if bool(getattr(cfg.audio, "defer_tts_while_listening", True)):
-                        defer = wait_until_user_capture_idle(
+                        ambient_cfg = getattr(cfg, "ambient", None)
+                        streaming_ack = bool(
+                            getattr(ambient_cfg, "streaming", False)
+                        )
+                        min_quiet = float(
+                            getattr(
+                                ambient_cfg, "streaming_ack_min_quiet_s", 2.0
+                            )
+                            or 2.0
+                        )
+                        defer = wait_until_tts_play_allowed(
+                            streaming=streaming_ack,
+                            min_quiet_s=min_quiet,
                             max_wait_s=float(
                                 getattr(cfg.audio, "defer_tts_max_wait_s", 45.0)
                             ),
@@ -516,15 +532,27 @@ def run_tts(
                         )
                         defer_meta = defer.as_meta()
                         if defer.deferred:
-                            surface_tts_event(
-                                "tts.deferred_for_listen",
-                                **defer_meta,
-                                instructions=(
+                            if streaming_ack and defer.gate == "quiet":
+                                instructions = (
+                                    "TTS play waited for operator quiet "
+                                    f"(≥{min_quiet:g}s) or listen end so "
+                                    "streaming acks do not barge into continuous "
+                                    "speech (B105). "
+                                    "Set [audio].defer_tts_while_listening = false "
+                                    "to disable; [ambient].streaming_ack_min_quiet_s "
+                                    "tunes the quiet gate."
+                                )
+                            else:
+                                instructions = (
                                     "TTS play waited for operator listen/radio to "
                                     "finish so mic mute would not cut off capture. "
                                     "Set [audio].defer_tts_while_listening = false "
                                     "to disable."
-                                ),
+                                )
+                            surface_tts_event(
+                                "tts.deferred_for_listen",
+                                **defer_meta,
+                                instructions=instructions,
                             )
 
                     with exclusive_playback(
@@ -1102,9 +1130,14 @@ def run_listen(
     stream_partials = mode is EndMode.RADIO and getattr(
         cfg.listen, "stream_partials", True
     )
-    # B098: ambient.streaming flips partial HEP policy (HOLD vs short live TTS)
+    # B098/B105: ambient.streaming flips partial HEP policy (HOLD vs short live
+    # TTS); streaming_ack_min_quiet_s is the play gate for those acks.
     ambient_streaming = bool(
         getattr(getattr(cfg, "ambient", None), "streaming", False)
+    )
+    streaming_ack_min_quiet_s = float(
+        getattr(getattr(cfg, "ambient", None), "streaming_ack_min_quiet_s", 2.0)
+        or 2.0
     )
     recording_cued = False
 
@@ -1204,6 +1237,7 @@ def run_listen(
                             end_silence_s=end_silence,
                             post_tts_guard_s=0,
                             on_opened=on_open,
+                            on_voice=lambda: touch_voice_activity(stream_id=stream),
                             should_stop=_agent_wants_stop,
                             discard_leading_ms=lead_discard,
                             audio_ok_after=lead_ok,
@@ -1482,6 +1516,7 @@ def run_listen(
                         initial_timeout_s=seg_timeout,
                         post_tts_guard_s=0,
                         on_opened=_on_speech_opened,
+                        on_voice=lambda: touch_voice_activity(stream_id=stream),
                         should_stop=_agent_wants_stop,
                         discard_leading_ms=seg_discard,
                         audio_ok_after=seg_ok_after,
@@ -1744,6 +1779,11 @@ def run_listen(
                             fragment=frag,
                             prev_text=prev_body,
                             streaming=ambient_streaming,
+                            ack_min_quiet_s=(
+                                streaming_ack_min_quiet_s
+                                if ambient_streaming
+                                else None
+                            ),
                         )
                         ev["stt_seq"] = stt_seq
                         try:

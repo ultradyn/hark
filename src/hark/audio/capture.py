@@ -528,6 +528,9 @@ def capture_utterance(
     device: int | str | None = None,
     should_stop: Callable[[bytes, float], bool] | None = None,
     on_opened: Callable[[], None] | None = None,
+    # B105: called (throttled ≈10 Hz) while speech energy is present so TTS can
+    # measure operator quiet for streaming acks. Optional; ignore if None.
+    on_voice: Callable[[], None] | None = None,
     post_tts_guard_s: float = 0.0,
     # Drop leading frames (fixed window from open and/or until audio_ok_after)
     discard_leading_ms: int = 0,
@@ -656,6 +659,20 @@ def capture_utterance(
             mute_pad_blocks = 0
             was_tts_muted = False
             edge_pad_blocks = max(0, int(float(mute_edge_pad_ms) / 20.0))
+            last_voice_cb = 0.0  # monotonic; throttle on_voice (B105)
+
+            def _emit_voice() -> None:
+                nonlocal last_voice_cb
+                if on_voice is None:
+                    return
+                t = time.monotonic()
+                if t - last_voice_cb < 0.1:
+                    return
+                last_voice_cb = t
+                try:
+                    on_voice()
+                except Exception:
+                    pass
 
             def _tts_muted() -> bool:
                 try:
@@ -717,6 +734,7 @@ def capture_utterance(
                                 chunks.extend(preroll)
                                 preroll.clear()
                             wait_speech_ms = int(1000 * (time.monotonic() - start))
+                            _emit_voice()
                             if on_opened is not None:
                                 try:
                                     on_opened()
@@ -737,6 +755,7 @@ def capture_utterance(
                     if open_thresh is not None and db >= open_thresh - 4:
                         silent_blocks = 0
                         speech_blocks += 1
+                        _emit_voice()
                         if endpointer is not None:
                             endpointer.on_speech()
                     else:

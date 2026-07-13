@@ -31,20 +31,25 @@ HOLD_INSTRUCTIONS = (
 )
 
 # B098: ambient.streaming = true — short live TTS allowed; pane delivery still waits.
+# B105: hark holds play until operator quiet ≥ streaming_ack_min_quiet_s (~2s).
 STREAMING_WARNING = (
     "PARTIAL TRANSCRIPT — not complete. More speech may still be captured. "
-    "Streaming mode is ON: you MAY speak short, interruptible live acks or "
-    "brief interim replies as understanding firms up. Do NOT deliver to a "
-    "Herdr pane or treat this as the final operator prompt. Wait for the "
-    "matching final event (same stream_id, partial=false / final=true) for "
-    "full answers and pane delivery."
+    "Streaming mode is ON: you MAY request short, interruptible live acks or "
+    "brief interim replies as understanding firms up. Hark holds TTS play until "
+    "the operator has been quiet ~2s (streaming_ack_min_quiet_s) or the stream "
+    "ends — continuous speech is not stepped on. Do NOT deliver to a Herdr pane "
+    "or treat this as the final operator prompt. Wait for the matching final "
+    "event (same stream_id, partial=false / final=true) for full answers and "
+    "pane delivery."
 )
 
 STREAMING_INSTRUCTIONS = (
-    "STREAMING PARTIAL — short live reply allowed. "
-    "You MAY TTS a brief ack or interim answer while the operator may still "
-    "be talking (e.g. 'got it', 'looking that up', one short clarifying question). "
-    "Keep replies short and interruptible; prefer not talking over continuous speech. "
+    "STREAMING PARTIAL — short live reply allowed (pause-gated). "
+    "You MAY request a brief TTS ack or interim answer (e.g. 'got it', "
+    "'looking that up', one short clarifying question). Prefer HOLD while the "
+    "operator is mid-sentence or talking continuously — do not stack many acks. "
+    "Hark defers play until operator quiet ≥ ack_min_quiet_s (~2s) or listen ends "
+    "(B105); mute-during-TTS still applies in that quiet window. "
     "Do NOT deliver to a Herdr pane yet. Do NOT treat this as the final prompt. "
     "If the cumulative text (or fragment) clearly ends with a done/stop signal "
     "and capture is still active, you MUST run agent_control.end_recording "
@@ -68,7 +73,8 @@ HOLD_COMPACT_INSTRUCTIONS = (
 )
 
 STREAMING_COMPACT_INSTRUCTIONS = (
-    "STREAMING PARTIAL — short live TTS ok (acks / brief interim). "
+    "STREAMING PARTIAL — short live TTS ok after ~2s operator quiet (B105 gate). "
+    "Prefer HOLD during continuous speech; do not stack acks. "
     "Use fragment for the new slice; text is cumulative. "
     "Do NOT deliver to a pane; full answer still waits for final. "
     "MUST: if text clearly ends with a done signal (over, okay hark send, "
@@ -122,6 +128,7 @@ def make_partial_event(
     fragment: str | None = None,
     prev_text: str | None = None,
     streaming: bool = False,
+    ack_min_quiet_s: float | None = None,
 ) -> dict[str, Any]:
     from hark.listen_control import agent_control_block
 
@@ -130,7 +137,10 @@ def make_partial_event(
         frag = partial_fragment(prev_text, text)
 
     streaming = bool(streaming)
-    return {
+    # B105: surface quiet gate duration on streaming partials (default 2s).
+    if streaming and ack_min_quiet_s is None:
+        ack_min_quiet_s = 2.0
+    ev: dict[str, Any] = {
         "schema": "hark.event.v1",
         "kind": kind,
         "event_id": event_id or new_event_id(),
@@ -149,6 +159,9 @@ def make_partial_event(
         "instructions": partial_instructions(streaming=streaming),
         "agent_control": agent_control_block(stream_id),
     }
+    if streaming and ack_min_quiet_s is not None:
+        ev["ack_min_quiet_s"] = float(ack_min_quiet_s)
+    return ev
 
 
 def make_final_event(

@@ -142,6 +142,7 @@ Env: `HARK_LISTEN_END_MODE=radio`. Disable soft end with
 | `radio_end_silence_s` | legacy | 2.5 s | Kept for config BC; segment cadence is `radio_partial_silence_s` |
 | `stream_partials` | radio | `true` | Emit interim events when segment text grows |
 | `ambient.streaming` | ambient | `false` | When true, `ambient.partial` instructions allow short live TTS (B098); default HOLD |
+| `ambient.streaming_ack_min_quiet_s` | ambient | `2.0` | B105: when streaming, TTS play waits for this many seconds of operator quiet (or listen end) |
 
 Radio does **not** finalize on short silence alone. After each short quiet
 (`radio_partial_silence_s`), Hark runs STT on accumulated audio: if an
@@ -156,18 +157,22 @@ partials for the orchestrator; raise it (e.g. 1.0–1.5) to cut STT cost when pa
 long. Do **not** lower `end_silence_s` to chase radio partials — that would
 change normal silence-mode answer windows.
 
-#### Ambient streaming mode (B098)
+#### Ambient streaming mode (B098 + B105 quiet gate)
 
 ```toml
 [ambient]
-# streaming = false   # default: HOLD on ambient.partial (no live TTS)
-# streaming = true    # short live TTS acks allowed on partials; pane still waits for final
+# streaming = false                 # default: HOLD on ambient.partial (no live TTS)
+# streaming = true                  # short live TTS acks allowed on partials; pane still waits for final
+# streaming_ack_min_quiet_s = 2.0   # B105: hold play until operator quiet ≥ this (or listen ends)
 ```
 
-Policy is carried on each `ambient.partial` as `streaming` + `warning` /
-`instructions` (see [PROTOCOL.md](PROTOCOL.md)). This is **agent policy**, not
-full-duplex audio: half-duplex mute-during-TTS and post-TTS guard still apply;
-barge-in / TTS-defer-while-user-speaking are separate (B097+).
+Policy is carried on each `ambient.partial` as `streaming` + optional
+`ack_min_quiet_s` + `warning` / `instructions` (see [PROTOCOL.md](PROTOCOL.md)).
+When streaming is on, `hark tts` **enforces** the quiet gate: capture publishes
+operator speech energy; play + mic mute wait until quiet ≥
+`streaming_ack_min_quiet_s` (default 2s) or the listen ends, so continuous speech
+is not barged into. HOLD mode still waits for capture idle (B097). Half-duplex
+mute-during-TTS still applies in the allowed quiet window.
 
 #### Radio segment boundary pad (B075) + ring overlap (B085)
 

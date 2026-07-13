@@ -6,6 +6,12 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- fix(tts/streaming, B105): pause-gate live streaming TTS acks — when
+  `[ambient].streaming` is on, `hark tts` waits for operator quiet ≥
+  `streaming_ack_min_quiet_s` (default **2.0 s**) or listen end before play +
+  mic mute, so continuous speech is not barged into. Voice energy is published
+  during capture; HOLD mode still waits for capture idle (B097). Partial HEP /
+  skill note the quiet gate; config sample documents default-on once dogfooded.
 - fix(monitor, B102): singleflight lock on `hark monitor` (`monitor.pid` + flock)
   so a second consumer refuses instead of duplicating HEP wakes; skill documents
   arm-once; `hark start --status` reports monitor holder; `--allow-multiple` debug only.

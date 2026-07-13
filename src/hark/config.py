@@ -181,6 +181,8 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "config_watch_debounce_ms",
         # Ambient streaming mode (B098): short live TTS on partials allowed
         "streaming",
+        # B105: min operator quiet before streaming TTS play (seconds)
+        "streaming_ack_min_quiet_s",
     }),
     "stt": frozenset({
         "provider",
@@ -449,8 +451,12 @@ class AmbientConfig:
     # Streaming mode (B098): when true, ambient.partial HEP instructions allow
     # short live TTS acks/interim replies (not hard HOLD-only). Default false
     # keeps classic radio HOLD until ambient.prompt / final.
-    # Full duplex barge-in / TTS-defer-while-speaking are separate (B097+).
+    # Full duplex barge-in is separate; B105 gates play on operator quiet.
     streaming: bool = False
+    # B105: when streaming, live TTS play waits until operator has been quiet
+    # this many seconds (or listen ends). Continuous speech without the pause
+    # keeps acks deferred so half-duplex mute does not barge mid-thought.
+    streaming_ack_min_quiet_s: float = 2.0
     # Full wake policy (names/phrases + learned aliases); set by load_config
     wake_policy: Any = None
 
@@ -737,10 +743,12 @@ config_watch = true
 config_watch_poll_ms = 1000
 config_watch_debounce_ms = 400
 # Streaming mode (B098): short live TTS on ambient.partial (default OFF = HOLD).
-# When true, partial HEP instructions allow brief interruptible acks while the
-# operator is still speaking; pane delivery and full answers still wait for final.
+# When true, partial HEP instructions allow brief interruptible acks; hark holds
+# play until operator quiet ≥ streaming_ack_min_quiet_s (B105, default 2s) or
+# listen ends — continuous speech without that pause is not stepped on.
 # streaming = false
-# Barge-in / TTS-defer-while-speaking are separate work (B097+).
+# streaming_ack_min_quiet_s = 2.0
+# Once the quiet gate is dogfooded safe, operators may leave streaming = true.
 
 # Coding CLI resolution for voice spawn (I005 / B055–B059)
 # Prefer short aliases (cc/cx/gk/cr) when they are *safe* PATH binaries — not
@@ -944,6 +952,9 @@ def _build_ambient_config(
             ambient_raw.get("config_watch_debounce_ms", 400)
         ),
         streaming=_as_bool(ambient_raw.get("streaming"), default=False),
+        streaming_ack_min_quiet_s=float(
+            ambient_raw.get("streaming_ack_min_quiet_s", 2.0)
+        ),
         wake_policy=policy,
     )
 
@@ -1672,6 +1683,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "config_watch_poll_ms": cfg.ambient.config_watch_poll_ms,
             "config_watch_debounce_ms": cfg.ambient.config_watch_debounce_ms,
             "streaming": cfg.ambient.streaming,
+            "streaming_ack_min_quiet_s": cfg.ambient.streaming_ack_min_quiet_s,
         },
         "stt": {
             "provider": cfg.stt.provider,

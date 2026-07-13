@@ -159,21 +159,24 @@ uv run hark …
 
 Do **not** dogfood Hark against an old global tool when validating listen/TTS handoff.  
 
-## Streaming mode (`[ambient].streaming`) — B098
+## Streaming mode (`[ambient].streaming`) — B098 + B105
 
 Config (default **off** = classic radio HOLD):
 
 ```toml
 [ambient]
-streaming = false   # true → short live TTS on ambient.partial allowed
+streaming = false                 # true → short live TTS on ambient.partial allowed
+streaming_ack_min_quiet_s = 2.0   # B105: hark holds play until operator quiet ≥ this
 ```
 
 | Flag | On each `ambient.partial` |
 |------|---------------------------|
 | `streaming=false` (default) | **HOLD** — think privately; **no** TTS full answer; no pane delivery |
-| `streaming=true` | **Short live TTS ok** — brief acks / interim replies (`got it`, `looking that up`); still **no** pane delivery; full answer waits for `final=true` |
+| `streaming=true` | **Short live TTS ok (pause-gated)** — brief acks / interim replies; still **no** pane delivery; full answer waits for `final=true` |
 
-Event fields: `streaming` (bool) + `warning` / `instructions` (policy strings). Monitor compact lines use the same split. This is **agent policy**, not full-duplex audio — mute-during-TTS and post-TTS guard still apply; barge-in / TTS-defer-while-speaking are separate (B097+).
+Event fields: `streaming` (bool), `ack_min_quiet_s` when streaming, + `warning` / `instructions`. Monitor compact lines use the same split.
+
+**Quiet gate (B105, enforced by `hark tts`):** when streaming is on and listen/radio is still capturing, play + mic mute wait until the operator has been quiet ≥ `streaming_ack_min_quiet_s` (default **2 s**) **or** the stream ends. Continuous talk without that pause must **not** get interim TTS barging in — prefer HOLD; one short ack after a real pause is enough. Half-duplex mute-during-TTS still applies in the quiet window. After the gate is dogfooded safe, operators may leave `streaming = true` always on.
 
 ## Agent-controlled end of recording (radio partials) — hard rule
 

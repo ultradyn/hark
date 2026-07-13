@@ -225,4 +225,14 @@ Detection lives in `hark.audio.media` (`is_media_active` → `MediaMatch`): Puls
 PipeWire **sink-inputs** (RUNNING / Corked=no; excludes Hark’s own ffplay/paplay
 streams) plus optional MPRIS (`playerctl`). Fail-open if `pactl` is missing.
 Conference streams may still appear in the match; callers must prefer B017 hold
-over duck. Design detail: [plans/I002-media-ducking.md](plans/I002-media-ducking.md).
+over duck.
+
+**TTS ducking (B045):** when `audio.duck_media_during_tts` is true (default),
+`run_tts` wraps playback with `duck_media(...)`: snapshot non-Hark sink-input
+volumes → lower each to `prior * duck_level` (default **0.15**) via
+`pactl set-sink-input-volume` → always restore in `finally`. Optional
+`pause_media_during_tts` pauses Playing MPRIS players (`playerctl -p NAME pause`)
+then ducks remaining sources, and resumes those players on exit. Kill-switch:
+`duck_media_during_tts = false`. Does **not** change default sink / master volume.
+STT-window ducking is B046 (same `duck_media` primitive). Design detail:
+[plans/I002-media-ducking.md](plans/I002-media-ducking.md).

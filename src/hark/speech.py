@@ -17,6 +17,7 @@ from hark.audio.cues import (
     play_record_stop,
     store_cached_tts,
 )
+from hark.audio.media import duck_media
 from hark.audio.mic_mute import mic_muted_during_tts
 from hark.audio.playback import play_wav_bytes, write_wav
 from hark.config import HarkConfig
@@ -164,20 +165,27 @@ def run_tts(
 
     play_ms = 0
     mute_applied = False
+    duck_meta: dict[str, Any] | None = None
     if play:
         near = (
             near_end_ms
             if near_end_ms is not None
             else int(cfg.audio.listen_pre_arm_ms)
         )
+        do_duck = bool(getattr(cfg.audio, "duck_media_during_tts", True))
+        # Mic mute and media duck are independent; duck before play so media
+        # is quiet before TTS starts. Conference skip already returned above —
+        # when speaking after hold frees, duck as normal (exclude_conference).
         with mic_muted_during_tts(enabled=do_mute) as mute_state:
             mute_applied = mute_state.applied
-            pr = play_wav_bytes(
-                audio_bytes,
-                on_near_end=on_near_end,
-                near_end_ms=near if on_near_end else 0,
-            )
-            play_ms = pr.duration_ms
+            with duck_media(cfg, enabled=do_duck, exclude_conference=True) as duck_state:
+                duck_meta = duck_state.as_meta()
+                pr = play_wav_bytes(
+                    audio_bytes,
+                    on_near_end=on_near_end,
+                    near_end_ms=near if on_near_end else 0,
+                )
+                play_ms = pr.duration_ms
 
     store.record_tts(
         text=text,
@@ -186,7 +194,11 @@ def run_tts(
         audio_ms=play_ms,
         latency_ms=latency_ms,
         ok=True,
-        meta={"from_cache": from_cache, "conference": hold_meta},
+        meta={
+            "from_cache": from_cache,
+            "conference": hold_meta,
+            "media_duck": duck_meta,
+        },
     )
     result: dict[str, Any] = {
         "ok": True,
@@ -201,9 +213,12 @@ def run_tts(
         "latency_ms": latency_ms,
         "mic_muted": mute_applied,
         "from_cache": from_cache,
+        "media_ducked": bool(duck_meta.get("media_ducked")) if duck_meta else False,
     }
     if hold_meta is not None:
         result["conference"] = hold_meta
+    if duck_meta is not None:
+        result["media_duck"] = duck_meta
     return result
 
 

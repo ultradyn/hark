@@ -371,6 +371,27 @@ def test_run_tts_holds_then_speaks(monkeypatch):
             type("M", (), {"applied": False})()
         ),
     )
+    monkeypatch.setattr(
+        "hark.speech.duck_media",
+        lambda *a, **k: __import__("contextlib").nullcontext(
+            type(
+                "D",
+                (),
+                {
+                    "applied": False,
+                    "as_meta": lambda self: {
+                        "media_ducked": False,
+                        "duck_level": 0.15,
+                        "duck_count": 0,
+                        "duck_indices": [],
+                        "mpris_paused": [],
+                        "duck_error": None,
+                        "duck_nested": False,
+                    },
+                },
+            )()
+        ),
+    )
     monkeypatch.setattr("hark.speech.store_cached_tts", lambda *a, **k: None)
 
     # UsageStore.record_tts no-op

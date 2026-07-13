@@ -1,25 +1,31 @@
-"""Detect active non-Hark media playback (Pulse/PipeWire + optional MPRIS).
+"""Detect and duck active non-Hark media (Pulse/PipeWire + optional MPRIS).
 
-Foundation for I002 ducking (B044): **detection only** — no volume changes.
+I002 foundation: B044 detection + B045 TTS ducking. B046 reuses
+:func:`duck_media` for STT capture windows.
 
-Precedence for callers (B045/B046):
+Precedence for callers:
 
   conference active + hold_during_conference?
     yes → B017 hold / chime / queue (no media duck fight)
     no  → media ducking if enabled and duckable sink-inputs present
 
-Fail-open: missing ``pactl`` / parse errors → media inactive (TTS/STT as today).
-Conference streams may appear in the match; conference hold remains first-class
-for callers — do not duck *instead of* holding.
+Fail-open: missing ``pactl`` / parse errors → no duck (TTS/STT as today).
+Always restore prior sink-input volumes (and MPRIS players we paused) in
+``finally``. Do **not** change default sink / master volume — only per-input.
+
+Conference streams: prefer ``exclude_conference=True`` when building duck
+lists so Zoom/Teams are not volume-fought; conference hold stays authoritative.
 """
 
 from __future__ import annotations
 
 import re
 import subprocess
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from shutil import which
-from typing import TYPE_CHECKING, Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator
 
 if TYPE_CHECKING:
     from hark.config import AudioConfig, HarkConfig
@@ -523,13 +529,12 @@ def is_media_active(
     Unlike ``is_conference_active`` (bool), this returns the full structured
     match so duck helpers can reuse indices/volumes without a second scan.
 
-    Config is optional today (B047 will add duck toggles). ``cfg`` is accepted
-    for forward compatibility; ``getattr`` defaults apply when fields missing.
+    Reads optional ``media_check_mpris`` / ``duck_exclude_apps`` from audio
+    config when present (B045+).
     """
     audio = _audio_cfg(cfg)
     if check_mpris is None:
         check_mpris = bool(getattr(audio, "media_check_mpris", True)) if audio else True
-    # Optional future exclude list
     exclude_apps = None
     if audio is not None:
         raw = getattr(audio, "duck_exclude_apps", None)
@@ -573,3 +578,482 @@ def is_media_active(
                 error=match.error,
             )
     return match
+
+
+# ---------------------------------------------------------------------------
+# Duck during TTS/STT (B045 / B046)
+# ---------------------------------------------------------------------------
+
+# Nestable: only outermost context snapshots + restores (half-duplex rarely nests).
+_duck_lock = threading.Lock()
+_duck_depth = 0
+_duck_saved: "DuckState | None" = None
+
+DEFAULT_DUCK_LEVEL = 0.15
+
+
+@dataclass
+class VolumeSnapshot:
+    """Prior sink-input volume for restore after duck."""
+
+    index: int
+    volume_pct: float
+    volume_raw: str
+    ducked_pct: float | None = None
+    set_ok: bool = False
+    restore_ok: bool | None = None
+
+
+@dataclass
+class DuckState:
+    """Result / bookkeeping for a :func:`duck_media` context."""
+
+    enabled: bool = False
+    applied: bool = False  # True when at least one volume was lowered or player paused
+    level: float = DEFAULT_DUCK_LEVEL
+    snapshots: list[VolumeSnapshot] = field(default_factory=list)
+    paused_players: list[str] = field(default_factory=list)
+    indices: tuple[int, ...] = ()
+    error: str | None = None
+    nested: bool = False
+
+    def as_meta(self) -> dict[str, Any]:
+        """Structured fields for ``run_tts`` meta / syslog."""
+        return {
+            "media_ducked": self.applied,
+            "duck_level": self.level,
+            "duck_count": len(self.indices),
+            "duck_indices": list(self.indices),
+            "mpris_paused": list(self.paused_players),
+            "duck_error": self.error,
+            "duck_nested": self.nested,
+        }
+
+
+def _clamp_level(level: float) -> float:
+    try:
+        v = float(level)
+    except (TypeError, ValueError):
+        return DEFAULT_DUCK_LEVEL
+    if v < 0.0:
+        return 0.0
+    if v > 1.0:
+        return 1.0
+    return v
+
+
+def _run_pactl_cmd(
+    args: list[str],
+    *,
+    timeout: float = 3.0,
+) -> bool:
+    """Run a pactl/playerctl argv; True when exit code 0. Never raises."""
+    try:
+        p = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+        return p.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def set_sink_input_volume(
+    index: int,
+    volume: str | float | int,
+    *,
+    run_cmd: Callable[[list[str]], bool] | None = None,
+) -> bool:
+    """``pactl set-sink-input-volume <index> <volume>``.
+
+    ``volume`` may be a percent (``12`` / ``12%`` / ``12.0``) or raw Pulse
+    integer (``52428`` as str or large int). Fail-open: returns False on error.
+    """
+    if isinstance(volume, float):
+        # Treat floats as percent (ducked level math).
+        vol_arg = f"{max(0, int(round(volume)))}%"
+    elif isinstance(volume, int):
+        # Ambiguous: ints ≤200 treated as percent for convenience;
+        # raw Pulse volumes are typically >> 200 (65536 = 100%).
+        if 0 <= volume <= 200:
+            vol_arg = f"{volume}%"
+        else:
+            vol_arg = str(volume)
+    else:
+        vol_arg = str(volume).strip()
+        if not vol_arg:
+            return False
+        # Bare small digit strings → percent; raw Pulse ints pass through
+        if vol_arg[-1] != "%" and vol_arg.isdigit() and int(vol_arg) <= 200:
+            vol_arg = f"{vol_arg}%"
+
+    cmd = ["pactl", "set-sink-input-volume", str(int(index)), vol_arg]
+    runner = run_cmd or (lambda args: _run_pactl_cmd(args))
+    try:
+        return bool(runner(cmd))
+    except Exception:
+        return False
+
+
+def pause_mpris_players(
+    players: Iterable[str] | None = None,
+    *,
+    run_capture: Callable[[list[str]], str] | None = None,
+    run_cmd: Callable[[list[str]], bool] | None = None,
+    which_fn: Callable[[str], str | None] | None = None,
+) -> list[str]:
+    """Pause MPRIS players that are Playing. Returns names successfully paused.
+
+    When ``players`` is None, discovers via :func:`probe_mpris_playing`.
+    Fail-open: missing tool / errors → [].
+    """
+    if which_fn is not None:
+        if not which_fn("playerctl"):
+            return []
+    elif run_cmd is None and run_capture is None and not which("playerctl"):
+        return []
+
+    names: list[str]
+    if players is not None:
+        names = [p for p in players if p]
+    else:
+        names = probe_mpris_playing(run_capture=run_capture, which_fn=which_fn)
+
+    if not names:
+        return []
+
+    runner = run_cmd or (lambda args: _run_pactl_cmd(args))
+    paused: list[str] = []
+    for name in names:
+        try:
+            ok = bool(runner(["playerctl", "-p", name, "pause"]))
+        except Exception:
+            ok = False
+        if ok:
+            paused.append(name)
+    return paused
+
+
+def resume_mpris_players(
+    players: Iterable[str],
+    *,
+    run_cmd: Callable[[list[str]], bool] | None = None,
+) -> list[str]:
+    """Resume players previously paused by :func:`pause_mpris_players`.
+
+    Returns names successfully resumed. Fail-open on individual failures.
+    """
+    runner = run_cmd or (lambda args: _run_pactl_cmd(args))
+    resumed: list[str] = []
+    for name in players:
+        if not name:
+            continue
+        try:
+            ok = bool(runner(["playerctl", "-p", name, "play"]))
+        except Exception:
+            ok = False
+        if ok:
+            resumed.append(name)
+    return resumed
+
+
+def _snapshot_duckable(
+    *,
+    sink_input_blob: str | None = None,
+    sink_inputs: list[SinkInputInfo] | None = None,
+    exclude_conference: bool = True,
+    exclude_apps: Iterable[str] | None = None,
+    run_capture: Callable[[list[str]], str] | None = None,
+) -> list[VolumeSnapshot]:
+    if sink_inputs is not None:
+        parsed = list(sink_inputs)
+    else:
+        blob = (
+            sink_input_blob
+            if sink_input_blob is not None
+            else list_sink_input_blob(run_capture=run_capture)
+        )
+        parsed = parse_sink_inputs(blob)
+    duckable = filter_duckable(
+        parsed,
+        exclude_conference=exclude_conference,
+        exclude_apps=exclude_apps,
+    )
+    return [
+        VolumeSnapshot(
+            index=s.index,
+            volume_pct=s.volume_pct,
+            volume_raw=s.volume_raw,
+        )
+        for s in duckable
+    ]
+
+
+def _apply_duck_volumes(
+    snapshots: list[VolumeSnapshot],
+    level: float,
+    *,
+    run_cmd: Callable[[list[str]], bool] | None = None,
+) -> int:
+    """Lower each snapshot to ``prior * level``. Mutates snapshots. Returns ok count."""
+    level = _clamp_level(level)
+    ok_count = 0
+    for snap in snapshots:
+        ducked = max(0.0, float(snap.volume_pct) * level)
+        # Integer percent for pactl; keep at least 0
+        ducked_int = int(round(ducked))
+        snap.ducked_pct = float(ducked_int)
+        snap.set_ok = set_sink_input_volume(
+            snap.index, ducked_int, run_cmd=run_cmd
+        )
+        if snap.set_ok:
+            ok_count += 1
+    return ok_count
+
+
+def _restore_volume_arg(snap: VolumeSnapshot) -> str:
+    """Build pactl volume arg for restore (prefer raw Pulse integer)."""
+    raw = str(snap.volume_raw or "").strip()
+    if raw.isdigit():
+        raw_i = int(raw)
+        # Pulse channel volume is typically 0–65536+; small values may be %
+        if raw_i > 200:
+            return raw  # raw integer, no %
+    return f"{int(round(snap.volume_pct))}%"
+
+
+def _restore_duck_volumes(
+    snapshots: list[VolumeSnapshot],
+    *,
+    run_cmd: Callable[[list[str]], bool] | None = None,
+) -> int:
+    """Restore prior volumes. Prefer raw integer when available."""
+    ok_count = 0
+    for snap in snapshots:
+        if not snap.set_ok:
+            snap.restore_ok = None
+            continue
+        vol = _restore_volume_arg(snap)
+        try:
+            ok = set_sink_input_volume(snap.index, vol, run_cmd=run_cmd)
+        except Exception:
+            ok = False
+        snap.restore_ok = ok
+        if ok:
+            ok_count += 1
+        else:
+            try:
+                from hark.syslog import log
+
+                log(
+                    "media.restore_failed",
+                    component="audio",
+                    index=snap.index,
+                    volume=str(vol),
+                    level="warn",
+                )
+            except Exception:
+                pass
+    return ok_count
+
+
+@contextmanager
+def duck_media(
+    cfg: "HarkConfig | AudioConfig | None" = None,
+    *,
+    enabled: bool | None = None,
+    level: float | None = None,
+    pause_players: bool | None = None,
+    exclude_conference: bool = True,
+    exclude_apps: Iterable[str] | None = None,
+    check_mpris: bool | None = None,
+    sink_input_blob: str | None = None,
+    sink_inputs: list[SinkInputInfo] | None = None,
+    mpris_players: list[str] | None = None,
+    run_capture: Callable[[list[str]], str] | None = None,
+    run_cmd: Callable[[list[str]], bool] | None = None,
+    which_fn: Callable[[str], str | None] | None = None,
+) -> Iterator[DuckState]:
+    """Snapshot → optional MPRIS pause → duck volumes → yield → always restore.
+
+    Config (``AudioConfig`` / ``cfg.audio``):
+
+    - ``duck_media_during_tts`` / kill-switch via ``enabled``
+    - ``duck_level`` (0.0–1.0 of prior volume; default 0.15)
+    - ``pause_media_during_tts`` → MPRIS Pause for Playing players + duck rest
+    - ``duck_exclude_apps`` extra app filters
+
+    Fail-open: set failures still allow TTS; restore runs in ``finally``.
+    Nestable: only the outermost context applies and restores.
+
+    Same API is intended for B046 STT windows (pass ``enabled`` from
+    ``duck_media_during_stt`` etc.).
+    """
+    audio = _audio_cfg(cfg)
+    if enabled is None:
+        # Default on when no cfg (B045 product default); cfg kill-switch wins.
+        if audio is not None:
+            enabled = bool(getattr(audio, "duck_media_during_tts", True))
+        else:
+            enabled = True
+    if level is None:
+        level = float(
+            getattr(audio, "duck_level", DEFAULT_DUCK_LEVEL)
+            if audio is not None
+            else DEFAULT_DUCK_LEVEL
+        )
+    level = _clamp_level(level)
+    if pause_players is None:
+        pause_players = bool(
+            getattr(audio, "pause_media_during_tts", False) if audio else False
+        )
+    if exclude_apps is None and audio is not None:
+        raw_ex = getattr(audio, "duck_exclude_apps", None)
+        if raw_ex:
+            exclude_apps = list(raw_ex)
+    if check_mpris is None:
+        check_mpris = bool(
+            getattr(audio, "media_check_mpris", True) if audio else True
+        )
+
+    state = DuckState(enabled=bool(enabled), level=level)
+
+    if not enabled:
+        yield state
+        return
+
+    global _duck_depth, _duck_saved
+    with _duck_lock:
+        _duck_depth += 1
+        if _duck_depth > 1 and _duck_saved is not None:
+            # Nested: report outer state; outer owns restore
+            nested = DuckState(
+                enabled=_duck_saved.enabled,
+                applied=_duck_saved.applied,
+                level=_duck_saved.level,
+                snapshots=list(_duck_saved.snapshots),
+                paused_players=list(_duck_saved.paused_players),
+                indices=_duck_saved.indices,
+                error=_duck_saved.error,
+                nested=True,
+            )
+            state = nested
+            outer_nested = True
+        else:
+            outer_nested = False
+
+    if outer_nested:
+        try:
+            yield state
+        finally:
+            with _duck_lock:
+                _duck_depth = max(0, _duck_depth - 1)
+        return
+
+    errors: list[str] = []
+    try:
+        # 1) Optional native pause (MPRIS)
+        if pause_players and check_mpris:
+            try:
+                paused = pause_mpris_players(
+                    mpris_players,
+                    run_capture=run_capture,
+                    run_cmd=run_cmd,
+                    which_fn=which_fn,
+                )
+                state.paused_players = list(paused)
+            except Exception as exc:  # pragma: no cover - defensive
+                errors.append(f"mpris pause: {exc}")
+
+        # 2) Snapshot + duck sink-input volumes
+        try:
+            snaps = _snapshot_duckable(
+                sink_input_blob=sink_input_blob,
+                sink_inputs=sink_inputs,
+                exclude_conference=exclude_conference,
+                exclude_apps=exclude_apps,
+                run_capture=run_capture,
+            )
+            if snaps:
+                _apply_duck_volumes(snaps, level, run_cmd=run_cmd)
+            state.snapshots = snaps
+            state.indices = tuple(s.index for s in snaps if s.set_ok)
+            ducked_ok = any(s.set_ok for s in snaps)
+            state.applied = ducked_ok or bool(state.paused_players)
+        except Exception as exc:  # pragma: no cover
+            errors.append(f"duck set: {exc}")
+
+        if errors:
+            state.error = "; ".join(errors)
+
+        if state.applied:
+            try:
+                from hark.syslog import log
+
+                log(
+                    "media.ducked",
+                    component="audio",
+                    count=len(state.indices),
+                    duck_level=state.level,
+                    indices=list(state.indices),
+                    mpris_paused=list(state.paused_players),
+                )
+            except Exception:
+                pass
+
+        with _duck_lock:
+            _duck_saved = state
+
+        yield state
+    finally:
+        # Always restore (even on exception / cancel)
+        restore_errors: list[str] = []
+        try:
+            if state.snapshots:
+                _restore_duck_volumes(state.snapshots, run_cmd=run_cmd)
+                failed = [
+                    s.index
+                    for s in state.snapshots
+                    if s.set_ok and s.restore_ok is False
+                ]
+                if failed:
+                    restore_errors.append(f"volume restore failed: {failed}")
+        except Exception as exc:
+            restore_errors.append(f"volume restore: {exc}")
+
+        if state.paused_players:
+            try:
+                resume_mpris_players(state.paused_players, run_cmd=run_cmd)
+            except Exception as exc:
+                restore_errors.append(f"mpris resume: {exc}")
+
+        if state.applied:
+            try:
+                from hark.syslog import log
+
+                log(
+                    "media.restored",
+                    component="audio",
+                    count=len(state.indices),
+                    mpris_resumed=list(state.paused_players),
+                    error="; ".join(restore_errors) if restore_errors else None,
+                )
+            except Exception:
+                pass
+
+        if restore_errors:
+            # Surface on state for callers/tests; do not raise
+            extra = "; ".join(restore_errors)
+            state.error = f"{state.error}; {extra}" if state.error else extra
+
+        with _duck_lock:
+            _duck_depth = max(0, _duck_depth - 1)
+            if _duck_depth == 0:
+                _duck_saved = None
+
+
+# Alias used in I002 plan docs
+duck_media_during = duck_media

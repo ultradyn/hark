@@ -6,14 +6,25 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Media ducking during TTS (B045 / I002): when music/podcasts play, TTS no longer
+  has to fight full volume. `duck_media` / `duck_media_during` snapshots non-Hark
+  sink-input volumes, lowers each to `prior * duck_level` (default **0.15**) via
+  `pactl set-sink-input-volume`, and **always restores** in `finally` (fail-open
+  if set fails). Optional `pause_media_during_tts` uses MPRIS/`playerctl` Pause
+  on Playing players, then ducks remaining sources and resumes on exit.
+  Wired into `run_tts` play path (alongside mic mute); conference skip/hold still
+  wins and duck lists use `exclude_conference=True`. Config: `duck_media_during_tts`
+  (default on), `pause_media_during_tts` (default off), `duck_level`,
+  `duck_exclude_apps`, `media_check_mpris`. Meta: `media_ducked` / `media_duck` on
+  `run_tts` result. STT-window duck is B046 (same primitive). See
+  `docs/AUDIO_DESIGN.md` and `docs/plans/I002-media-ducking.md`.
 - Media detection (B044 / I002 foundation): `hark.audio.media` detects active
   non-Hark playback via Pulse/PipeWire sink-inputs (index, volume, mute, corked,
   application.name) plus optional MPRIS (`playerctl`). Public API:
   `MediaMatch`, `is_media_active`, `detect_media`, duckable index/volume helpers
   for B045/B046. Excludes Hark TTS/cue streams (ffplay/paplay/…); fail-open when
   tools are missing. **Conference hold (B017) still wins over duck** — see
-  `docs/AUDIO_DESIGN.md` and `docs/plans/I002-media-ducking.md`. Detection only;
-  no volume changes yet.
+  `docs/AUDIO_DESIGN.md` and `docs/plans/I002-media-ducking.md`.
 - Site Supports section (B048): local SVG marks under `site/assets/logos/` for
   Claude Code, Grok, Pi, OpenCode, Codex, plus Antigravity (agy) —
   logo strip + table cells, dark-bg friendly, no CDN. See `site/README.md`.

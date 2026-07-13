@@ -54,3 +54,4 @@ bugs:
     - file: B053-update-the-npm-facing-readme-t.todo
     - file: B054-dashboard-api-contract-v1-hark.todo
     - file: B055-dashboard-backend-hark-serve-r.todo
+    - file: B056-dashboard-webui-scaffold-live.todo

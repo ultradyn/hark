@@ -1,0 +1,30 @@
+---
+complexity: high
+created_at: "2026-07-13T14:18:57Z"
+depends_on:
+    - B054
+estimate_hours: 4
+id: B056
+priority: high
+status: pending
+tags:
+    - dashboard
+    - webui
+    - frontend
+    - vite
+title: Dashboard webui scaffold + live event stream view
+updated_at: "2026-07-13T14:18:57Z"
+---
+## Scope
+Standalone static frontend (webui/, Vite + TypeScript; random dev port per repo norms; framework: smallest viable — leaning preact, record decision). Speaks only hark.dashboard.v1; dev mode replays fixtures/dashboard/ with no backend.
+
+- Live event tail: kind filters, text search, severity, pause/resume, backfill scroll
+- Event cards: question, choices, risk, target, disposition
+- Premium dark theme default (light supported); responsive/mobile layout from day one
+- SSE client w/ reconnect + Last-Event-ID resume; data layer transport-agnostic so WS can slot in later (Rust port)
+
+## Acceptance
+- [ ] npm run dev works against fixtures with no backend
+- [ ] Live stream w/ filters/search/pause against hark serve
+- [ ] Bundle is fully static (vite build) and served by backend same-origin
+- [ ] Mobile-usable layout (phone viewport)

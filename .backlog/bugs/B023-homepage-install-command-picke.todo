@@ -32,3 +32,7 @@ Component-style structure (not one-off markup):
 
 ## Notes
 Repo may move to ultradyn/hark; prefer configurable base URLs in the component.
+
+
+## Follow-up
+- Install picker now: skills | bash | npm | pnpm | bun (default skills = npx skills add)

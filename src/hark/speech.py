@@ -62,6 +62,48 @@ class ListenResult:
     meta_command: str | None = None
 
 
+def soft_truncate_text(text: str, max_chars: int) -> str:
+    """Cut *text* to ≤ ``max_chars`` at the last word/sentence boundary if possible."""
+    text = text or ""
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    window = text[:max_chars]
+    for sep in (". ", "? ", "! ", "; ", ", ", " "):
+        cut = window.rfind(sep)
+        if cut >= max(1, max_chars // 4):
+            return window[: cut + len(sep)].rstrip()
+    return window.rstrip()
+
+
+def surface_tts_event(kind: str, **fields: Any) -> None:
+    """Syslog + ambient.jsonl so ``hark monitor`` can surface TTS lifecycle (B091)."""
+    try:
+        from hark.syslog import log
+
+        log(kind, component="tts", **fields)
+    except Exception:
+        pass
+    try:
+        import json
+
+        from hark.events import new_event_id, utc_now_iso
+        from hark.paths import state_dir
+
+        event = {
+            "schema": "hark.event.v1",
+            "kind": kind,
+            "event_id": new_event_id(),
+            "observed_at": utc_now_iso(),
+            **fields,
+        }
+        path = state_dir() / "ambient.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def pack_tts_chunks(text: str, max_chars: int) -> list[str]:
     """Split *text* into ≤ ``max_chars`` pieces at sentence/word boundaries (B091).
 
@@ -150,31 +192,50 @@ def run_tts(
     ``use_cache``: when False, skip on-disk TTS phrase cache lookup and store
     (one-shot announces such as wake-label live-reload).
 
-    Long text (B091): ``tts.max_chars`` is a **per-chunk** synth limit. Full text
-    is packed at sentence/word boundaries and spoken as sequential chunks — no
-    silent mid-word hard truncate of the operator-facing reply.
+    Long text (B091): speak the full agent reply by default.
+
+    - ``tts.max_chars`` (0 = unlimited): optional **total** cap; soft word-boundary
+      cut + ``tts.truncated`` HEP/syslog (monitor-visible) if exceeded.
+    - ``tts.chunk_chars``: per-provider synth size; multi-chunk play under one
+      mute/duck hold so long replies are not mid-word chopped.
     """
     full_text = (text or "").strip()
     if not full_text:
         raise ProviderError("empty TTS text")
 
-    limit = max_chars if max_chars is not None else cfg.tts.max_chars
-    chunks = pack_tts_chunks(full_text, int(limit) if limit else 0)
+    total_limit = max_chars if max_chars is not None else int(cfg.tts.max_chars or 0)
+    chunk_limit = int(getattr(cfg.tts, "chunk_chars", 1500) or 1500)
+    if chunk_limit <= 0:
+        chunk_limit = 1500
+
+    truncated = False
+    original_chars = len(full_text)
+    if total_limit > 0 and len(full_text) > total_limit:
+        full_text = soft_truncate_text(full_text, total_limit)
+        truncated = True
+        surface_tts_event(
+            "tts.truncated",
+            original_chars=original_chars,
+            kept_chars=len(full_text),
+            max_chars=total_limit,
+            text_preview=full_text[:160],
+            instructions=(
+                "TTS text was truncated to tts.max_chars. Full agent text was NOT spoken. "
+                "Set [tts].max_chars = 0 (unlimited) or raise the limit."
+            ),
+        )
+
+    chunks = pack_tts_chunks(full_text, chunk_limit)
     chunked = len(chunks) > 1
     if chunked:
-        try:
-            from hark.syslog import log
-
-            log(
-                "tts.chunked",
-                component="tts",
-                chars=len(full_text),
-                max_chars=limit,
-                n_chunks=len(chunks),
-                chunk_lens=[len(c) for c in chunks],
-            )
-        except Exception:
-            pass
+        surface_tts_event(
+            "tts.chunked",
+            chars=len(full_text),
+            chunk_chars=chunk_limit,
+            n_chunks=len(chunks),
+            chunk_lens=[len(c) for c in chunks],
+            instructions="Long TTS multi-chunk play (informational).",
+        )
 
     # Mode A path (hark tts / ask): hold full question speech during conference.
     hold_meta: dict[str, Any] | None = None
@@ -191,7 +252,7 @@ def run_tts(
                 "ok": True,
                 "provider": "skipped",
                 "voice": voice or cfg.tts.voice or "eve",
-                "truncated": False,
+                "truncated": truncated,
                 "chunked": chunked,
                 "chunks": len(chunks),
                 "chars": len(full_text),
@@ -342,10 +403,11 @@ def run_tts(
         "ok": True,
         "provider": provider_name,
         "voice": used_voice,
-        "truncated": False,
+        "truncated": truncated,
         "chunked": chunked,
         "chunks": len(chunks),
         "chars": len(full_text),
+        "original_chars": original_chars,
         "words": len(full_text.split()),
         "out": out_path,
         "content_type": content_type,

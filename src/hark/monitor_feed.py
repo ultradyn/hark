@@ -38,6 +38,9 @@ MODE_A_WAKE_KINDS: frozenset[str] = frozenset(
         "ambient.cancelled",
         "ambient.reloaded",
         "ambient.armed",
+        # TTS lifecycle (via ambient.jsonl side-channel from speech.run_tts)
+        "tts.truncated",
+        "tts.chunked",
     }
 )
 
@@ -158,6 +161,30 @@ def compact_mode_a_event(event: dict[str, Any]) -> dict[str, Any]:
                 "phrases": event.get("phrases"),
                 "instructions": event.get("instructions")
                 or f"{kind}: informational; continue idle with monitors armed.",
+            }
+        )
+    elif kind == "tts.truncated":
+        compact.update(
+            {
+                "original_chars": event.get("original_chars"),
+                "kept_chars": event.get("kept_chars"),
+                "max_chars": event.get("max_chars"),
+                "text_preview": event.get("text_preview"),
+                "instructions": event.get("instructions")
+                or (
+                    "TTS text was truncated to tts.max_chars. Full agent text was NOT spoken. "
+                    "Raise [tts].max_chars (0=unlimited) or shorten the reply."
+                ),
+            }
+        )
+    elif kind == "tts.chunked":
+        compact.update(
+            {
+                "chars": event.get("chars"),
+                "n_chunks": event.get("n_chunks"),
+                "chunk_chars": event.get("chunk_chars"),
+                "instructions": event.get("instructions")
+                or "Long TTS multi-chunk play (informational).",
             }
         )
     else:

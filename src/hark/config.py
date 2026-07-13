@@ -181,7 +181,16 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "local_fail_open",
         "local_download",
     }),
-    "tts": frozenset({"provider", "voice", "language", "max_chars", "allow_espeak_fallback"}),
+    "tts": frozenset(
+        {
+            "provider",
+            "voice",
+            "language",
+            "max_chars",
+            "chunk_chars",
+            "allow_espeak_fallback",
+        }
+    ),
     "confirm": frozenset({"mode"}),
     "safety": frozenset({"deny_patterns"}),
     "dashboard": frozenset({
@@ -431,7 +440,11 @@ class TtsConfig:
     # Provider voice id (xAI: eve/ara/leo/rex/sal/… — `hark providers voices`)
     voice: str | None = None
     language: str = "en"
-    max_chars: int = 500
+    # Total char cap for one run_tts (0 = unlimited). Soft word-boundary cut +
+    # tts.truncated HEP for monitor if exceeded (B091).
+    max_chars: int = 0
+    # Per provider synth request size; long text is multi-chunk played in full.
+    chunk_chars: int = 1500
     allow_espeak_fallback: bool = False
 
 
@@ -696,7 +709,8 @@ provider = "auto"
 voice = "eve"                # xAI: eve ara leo rex sal … — hark providers voices
 language = "en"
 # voice = "ara"
-max_chars = 500              # per synth chunk; long text is multi-chunk played in full (B091)
+# max_chars = 0                # total cap per TTS call; 0 = unlimited (speak full agent text)
+# chunk_chars = 1500           # per synth request; multi-chunk plays in full (B091)
 
 [confirm]
 mode = "auto"
@@ -1349,7 +1363,8 @@ def load_config(path: Path | None = None) -> HarkConfig:
                 or os.environ.get("HARK_TTS_LANGUAGE")
                 or "en"
             ),
-            max_chars=int(tts_raw.get("max_chars", 500)),
+            max_chars=int(tts_raw.get("max_chars", 0)),
+            chunk_chars=int(tts_raw.get("chunk_chars", 1500)),
             allow_espeak_fallback=bool(tts_raw.get("allow_espeak_fallback", False)),
         ),
         confirm=ConfirmConfig(mode=str(confirm_raw.get("mode", "auto"))),
@@ -1564,6 +1579,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "voice": cfg.tts.voice,
             "language": cfg.tts.language,
             "max_chars": cfg.tts.max_chars,
+            "chunk_chars": cfg.tts.chunk_chars,
         },
         "confirm": {"mode": cfg.confirm.mode},
         "dashboard": {

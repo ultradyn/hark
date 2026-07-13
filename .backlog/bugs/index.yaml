@@ -103,3 +103,4 @@ bugs:
     - file: B102-handsfree-often-arms-two-hark.todo
     - file: B103-hark-ask-radio-soft-end-phrase.todo
     - file: B104-mode-a-ambient-prompt-hep-goes.todo
+    - file: B105-streaming-mode-short-tts-acks.todo

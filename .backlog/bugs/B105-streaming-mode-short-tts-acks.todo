@@ -1,0 +1,41 @@
+---
+complexity: medium
+created_at: "2026-07-13T22:26:49Z"
+depends_on: []
+estimate_hours: 2
+id: B105
+priority: high
+status: pending
+tags:
+    - ambient
+    - streaming
+    - B098
+    - tts
+    - dogfood
+title: 'Streaming mode: short TTS acks barge into speech; need pause-gated live TTS (≈2s quiet) or silence-only play'
+updated_at: "2026-07-13T22:26:49Z"
+---
+## Dogfood (2026-07-14 streaming test)
+
+Operator (after enabling `[ambient].streaming = true`):
+
+> streaming mode should just be on all the time, and as long as I'm talking, either we should be in a period of silence for TTS to play, or it should wait for a significant pause, like at least two seconds, so that I've got enough time to keep making noise if I want to keep it going. Log a bug — this isn't right.
+
+## Expected
+- Streaming default **on** (or operator preference persists) for continuous Mode A dogfood.
+- Live TTS acks on `ambient.partial` only when operator has been **quiet ≥ ~2s** (or configurable), OR only during proven silence windows so speech is not stepped on.
+- Continuous talk without 2s+ pause should **not** get interim TTS (HOLD until pause or final).
+
+## Actual
+- Streaming partials allow short live TTS without requiring a multi-second quiet gate beyond radio partial silence (~1s).
+- Mute-during-TTS / half-duplex can still feel like barge-in or force operator to stop mid-thought.
+- Related: B097 TTS while operator still speaking; B098 streaming policy is agent-side only.
+
+## Ideas
+- Gate streaming TTS on `radio_partial_silence_s` **or higher** `streaming_ack_min_quiet_s` (default 2.0)
+- Or only ack after N partials / on semantic pause
+- Default `streaming = true` in shipped config sample once gate is safe
+- Coordinate with TTS play queue (B099) so deferred acks don't pile up
+
+## Related
+B097, B098, B099, B084 (mute silence)

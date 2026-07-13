@@ -17,7 +17,7 @@ Make the hark (handsfree) skill installable via the npx skills ecosystem, and op
 
 ## Acceptance
 - [ ] Skill packaging compatible with `npx skills` / skills registry conventions (name, SKILL.md layout, discovery)
-- [ ] npm package (e.g. `@clankercode/hark` or agreed name) that installs or points agents at the skill
+- [ ] npm package **`@ultradyn/hark`** (locked name) that installs or points agents at the skill
 - [ ] Automated release pipeline (GitHub Actions + npm publish on tag/release), modeled on pi-* repos if useful
 - [ ] Document: `npx …` / skills install one-liner alongside install.sh
 - [ ] Versioning aligned with hark CLI / skill when possible

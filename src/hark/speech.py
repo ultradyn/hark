@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,7 @@ from hark.audio.cues import (
 )
 from hark.audio.media import duck_media
 from hark.audio.mic_mute import mic_muted_during_tts, repair_tts_mute_after_play
-from hark.audio.playback import play_wav_bytes, write_wav
+from hark.audio.playback import exclusive_playback, play_wav_bytes, write_wav
 from hark.config import HarkConfig
 from hark.confirm_lexicon import classify_confirm_reply
 from hark.exitcodes import ABORT, OK, PROVIDER, TIMEOUT
@@ -312,58 +313,98 @@ def run_tts(
             False,
         )
 
+    # B092: synth may run in parallel across processes; play is exclusive.
+    # First chunk is synthesized *before* taking the speaker lock so a second
+    # `hark tts` started in quick succession can hit xAI while we still play.
+    # Multi-chunk: start synth(i+1) while playing chunk i (pipeline).
+    def _record_synth_fail(piece: str, exc: BaseException) -> None:
+        store.record_tts(
+            text=piece,
+            provider=provider or cfg.tts.provider,
+            voice=voice_id,
+            ok=False,
+            error=str(exc)[:200],
+            latency_ms=int(1000 * (time.monotonic() - t0)),
+        )
+
+    def _apply_synth(
+        audio_bytes: bytes,
+        p_name: str,
+        c_type: str,
+        v_used: str,
+        fc: bool,
+    ) -> bytes:
+        nonlocal provider_name, content_type, used_voice, from_cache
+        provider_name = p_name
+        content_type = c_type
+        used_voice = v_used
+        from_cache = from_cache or fc
+        audio_parts.append(audio_bytes)
+        return audio_bytes
+
     try:
-        # Mic mute + duck wrap all chunks so we don't unmute between parts
         if play:
-            with mic_muted_during_tts(enabled=do_mute) as mute_state:
-                mute_applied = mute_state.applied
-                with duck_media(cfg, enabled=do_duck, exclude_conference=True) as duck_state:
-                    duck_meta = duck_state.as_meta()
-                    for i, piece in enumerate(chunks):
-                        try:
-                            audio_bytes, p_name, c_type, v_used, fc = _synth_one(piece)
-                        except Exception as exc:
-                            store.record_tts(
-                                text=piece,
-                                provider=provider or cfg.tts.provider,
-                                voice=voice_id,
-                                ok=False,
-                                error=str(exc)[:200],
-                                latency_ms=int(1000 * (time.monotonic() - t0)),
-                            )
-                            raise
-                        provider_name = p_name
-                        content_type = c_type
-                        used_voice = v_used
-                        from_cache = from_cache or fc
-                        audio_parts.append(audio_bytes)
-                        # near-end only on last chunk
-                        is_last = i == len(chunks) - 1
-                        pr = play_wav_bytes(
-                            audio_bytes,
-                            on_near_end=on_near_end if is_last else None,
-                            near_end_ms=near if (on_near_end and is_last) else 0,
-                        )
-                        play_ms += pr.duration_ms
-        else:
-            for piece in chunks:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                # Kick first synth outside the play lock
+                fut: Future[tuple[bytes, str, str, str, bool]] = pool.submit(
+                    _synth_one, chunks[0]
+                )
                 try:
-                    audio_bytes, p_name, c_type, v_used, fc = _synth_one(piece)
+                    audio_bytes, p_name, c_type, v_used, fc = fut.result()
                 except Exception as exc:
-                    store.record_tts(
-                        text=piece,
-                        provider=provider or cfg.tts.provider,
-                        voice=voice_id,
-                        ok=False,
-                        error=str(exc)[:200],
-                        latency_ms=int(1000 * (time.monotonic() - t0)),
-                    )
+                    _record_synth_fail(chunks[0], exc)
                     raise
-                provider_name = p_name
-                content_type = c_type
-                used_voice = v_used
-                from_cache = from_cache or fc
-                audio_parts.append(audio_bytes)
+                _apply_synth(audio_bytes, p_name, c_type, v_used, fc)
+
+                # Prefetch chunk 1 before we grab the speaker (if any)
+                next_fut: Future[tuple[bytes, str, str, str, bool]] | None = None
+                if len(chunks) > 1:
+                    next_fut = pool.submit(_synth_one, chunks[1])
+
+                with exclusive_playback():
+                    with mic_muted_during_tts(enabled=do_mute) as mute_state:
+                        mute_applied = mute_state.applied
+                        with duck_media(
+                            cfg, enabled=do_duck, exclude_conference=True
+                        ) as duck_state:
+                            duck_meta = duck_state.as_meta()
+                            for i in range(len(chunks)):
+                                is_last = i == len(chunks) - 1
+                                pr = play_wav_bytes(
+                                    audio_parts[i],
+                                    on_near_end=on_near_end if is_last else None,
+                                    near_end_ms=near
+                                    if (on_near_end and is_last)
+                                    else 0,
+                                    exclusive=False,
+                                )
+                                play_ms += pr.duration_ms
+                                if i + 1 >= len(chunks):
+                                    break
+                                # Resolve prefetched next; kick following while we play
+                                assert next_fut is not None
+                                try:
+                                    ab, pn, ct, vu, fch = next_fut.result()
+                                except Exception as exc:
+                                    _record_synth_fail(chunks[i + 1], exc)
+                                    raise
+                                _apply_synth(ab, pn, ct, vu, fch)
+                                if i + 2 < len(chunks):
+                                    next_fut = pool.submit(
+                                        _synth_one, chunks[i + 2]
+                                    )
+                                else:
+                                    next_fut = None
+        else:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                futs = [pool.submit(_synth_one, piece) for piece in chunks]
+                for piece, f in zip(chunks, futs):
+                    try:
+                        ab, pn, ct, vu, fch = f.result()
+                    except Exception as exc:
+                        _record_synth_fail(piece, exc)
+                        raise
+                    _apply_synth(ab, pn, ct, vu, fch)
     finally:
         if play:
             # B086: never leave depth>0 or Pulse stuck muted after TTS

@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import io
+import os
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
 import wave
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 import numpy as np
 
@@ -25,6 +27,51 @@ except ImportError:  # pragma: no cover
 class PlayResult:
     duration_ms: int
     format: str
+
+
+# Cross-process exclusive speaker: synth may run in parallel; play is serial (B092).
+_play_tls = threading.local()
+_play_lock_name = "tts_play.lock"
+
+
+def tts_play_lock_path() -> Path:
+    from hark.paths import state_dir
+
+    return state_dir() / _play_lock_name
+
+
+@contextmanager
+def exclusive_playback() -> Iterator[None]:
+    """Hold the global TTS speaker (fcntl flock). Re-entrant in the same thread.
+
+    Concurrent ``hark tts`` processes synthesize freely, then block here so
+    audio plays back-to-back without overlap. Nested calls (multi-chunk under
+    one outer hold) do not re-open the file.
+    """
+    depth = int(getattr(_play_tls, "depth", 0) or 0)
+    if depth > 0:
+        _play_tls.depth = depth + 1
+        try:
+            yield
+        finally:
+            _play_tls.depth = depth
+        return
+
+    import fcntl
+
+    path = tts_play_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        _play_tls.depth = 1
+        try:
+            yield
+        finally:
+            _play_tls.depth = 0
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def sniff_audio_format(data: bytes) -> str:
@@ -126,11 +173,39 @@ def play_audio(
     sample_rate: int | None = None,
     on_near_end: Callable[[], None] | None = None,
     near_end_ms: int = 0,
+    exclusive: bool = True,
 ) -> PlayResult:
     """Play audio. Optional on_near_end fires ~near_end_ms before playback ends.
 
     Used so listen can arm ~0.3s before TTS finishes.
+
+    ``exclusive`` (default True): take the cross-process TTS play lock (B092) so
+    concurrent speakers queue. Pass False only when the caller already holds
+    :func:`exclusive_playback`.
     """
+    if exclusive:
+        with exclusive_playback():
+            return _play_audio_unlocked(
+                data,
+                sample_rate=sample_rate,
+                on_near_end=on_near_end,
+                near_end_ms=near_end_ms,
+            )
+    return _play_audio_unlocked(
+        data,
+        sample_rate=sample_rate,
+        on_near_end=on_near_end,
+        near_end_ms=near_end_ms,
+    )
+
+
+def _play_audio_unlocked(
+    data: bytes,
+    *,
+    sample_rate: int | None = None,
+    on_near_end: Callable[[], None] | None = None,
+    near_end_ms: int = 0,
+) -> PlayResult:
     fmt = sniff_audio_format(data)
     duration_ms = estimate_duration_ms(data, sample_rate)
 
@@ -174,12 +249,14 @@ def play_wav_bytes(
     sample_rate: int | None = None,
     on_near_end: Callable[[], None] | None = None,
     near_end_ms: int = 0,
+    exclusive: bool = True,
 ) -> PlayResult:
     return play_audio(
         data,
         sample_rate=sample_rate,
         on_near_end=on_near_end,
         near_end_ms=near_end_ms,
+        exclusive=exclusive,
     )
 
 

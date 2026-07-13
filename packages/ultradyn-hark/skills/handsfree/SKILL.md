@@ -18,7 +18,7 @@ Follow **all** instructions in `skill/hark/SKILL.md`, including:
 - Question → listen → act loop
 - **Required unified Monitor** on skill start: `hark monitor --for-monitor` (`persistent: true`). Ambient-only or watch-only is incomplete.
 - **Antigravity (`agy`):** experimental — no native Monitor; use `hark agentapi register` + `hark agentapi deliver --follow-monitor` (see `docs/AGY.md` and the **Antigravity** section in `skill/hark/SKILL.md`).
-- Radio **partials** + `hark listen-end` when the operator wants to finish without exact end phrases
+- Radio **partials**: **must** `hark listen-end` when partial clearly ends with a done signal (`over`, `okay hark send`, `that's all`, …); remind operators to say over / okay hark send
 - Safe targeting / confirm rules
 - **Dogfooding:** every friction → session todo + `bl bug`; fix now or later, never silent forget
 

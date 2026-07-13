@@ -125,8 +125,8 @@ Full contract: [docs/HERDR.md](../../docs/HERDR.md).
 - One listen at a time; half-duplex (no listen over TTS).  
 - No local Whisper.  
 - **R2/R3** (permissions, destructive): always confirm. **R0/R1**: confirm only when unsure.  
-- **Listen end:** default silence/Smart Turn. If `[listen] end_mode = "radio"`, keep listening through long pauses until a **product-scoped** end phrase (`okay hark send`, `end prompt`, `hark over`). Cancel: `hark cancel` (not casual “cancel that”).  
-- **Partials (radio only):** you may receive `ambient.partial` / `partial=true` with interim text, HOLD warnings, and **`agent_control`**. You **MUST NOT** deliver to a pane until `final=true` / `ambient.prompt` for that `stream_id` — but you **MAY** end capture early (below).  
+- **Listen end:** default silence/Smart Turn. If `[listen] end_mode = "radio"`, keep listening through long pauses until an end phrase. **Product:** `okay hark send`, `end prompt`, `hark over`. **Soft (default on):** sentence-final `over`, `okay over` / `okay, over`, `send it`, `that's all`, `over and out`, `message done`. Cancel: `hark cancel` (not casual “cancel that”).  
+- **Partials (radio only):** you may receive `ambient.partial` / `partial=true` with interim text, HOLD warnings, and **`agent_control`**. You **MUST NOT** deliver to a pane or TTS a full answer until `final=true` / `ambient.prompt` for that `stream_id`. You **MUST** end capture early via `hark listen-end` when a done signal is clear (below).  
 - **Event-driven idle (hard rule) — no polling.** After you finish handling a monitor event (blocked answer delivered, ambient.prompt answered by TTS, done judged, partial HOLD done), **stop**. Do **not** poll logs, spin `sleep`/busy-wait, re-tail files, or re-query “is there more?” in a loop. The **persistent Monitor(s)** will wake you on the next line. Between events your job is to be idle with monitors still armed — not to keep the turn alive.
 - **Ambient:** optional `[ambient]` wake via local short snippets; cloud STT after activation. Defaults: names `hark` / `herald` (say hey/hello/yo/sup + name, or bare herald/harold). **Two customization styles** (pick one) — see [docs/CUSTOM_WAKE.md](../../docs/CUSTOM_WAKE.md):
   1. **Name-based** (default): `[ambient] wake_mode = "names"`, `names = ["hark", "herald"]`, optional `extra_names`. Greating+name and bare name; seed mishears for hark/herald.
@@ -147,22 +147,31 @@ When you hit a problem (mic busy, missed alert, empty STT, skill gap, confusing 
 3. **Fix now** if small and unblocks the operator; otherwise file and continue, then pick up when free.  
 4. Prefer fixes that help the *next* Mode A agent, not only this turn.  
 
-## Agent-controlled end of recording (radio partials)
+## Agent-controlled end of recording (radio partials) — hard rule
 
-Operators often forget exact end phrases (“how do I stop this?”, “okay stop recording”, “that's all, send it”). On each partial:
+Soft/product end phrases often auto-finalize. You are the **required backup** when they do not.
 
-1. Read `text` privately (start thinking if useful). Do **not** TTS a full answer on partials.  
-2. If they **clearly finished or want to stop** without matching an end phrase, run the command from `agent_control`:
+**How operators end radio** (remind them on bootstrap / when stuck): say **`over`** or **`okay hark send`** (also: `okay, over` / `okay over`, `that's all`, `send it`, `hark over`, `end prompt`). Cancel: `hark cancel`.
+
+On **each** `ambient.partial` / radio partial:
+
+1. Read `text` (and `fragment`) privately. Do **not** TTS a full answer on partials.  
+2. **MUST** evaluate whether the operator has **clearly finished**. Done signals include utterance-final:
+   - `over` / `okay over` / `okay, over` / `over and out`
+   - `okay hark send` / `hark over` / `end prompt`
+   - `that's all` / `send it` / `message done`
+   - “stop recording”, “that's all, send it”, “how do I stop this?” (when they want out)
+3. If clearly done **and** the stream is still active → run finish (not cancel):
    ```bash
    hark listen-end --stream-id <stream_id>           # finalize as complete prompt
-   hark listen-end --stream-id <stream_id> --cancel  # abort
+   hark listen-end --stream-id <stream_id> --cancel  # abort only
    ```
-3. Prefer **finish** when they completed a thought; **cancel** only if they abort.  
-4. Do **not** end on ordinary mid-thought speech.  
+   Prefer **finish** when the thought is complete; **cancel** only if they abort.  
+4. **False positives — do NOT end:** mid-clause / non-terminal speech such as “over the weekend”, “turn it over”, “send it to staging”, “that's all I know about X”.  
 5. After you decide (HOLD, or listen-end), **stop this turn** — wait for the Monitor to fire the next partial or the final `ambient.prompt`. No polling for more partials.  
 6. After a **final** arrives (or listen-end produces one), treat that transcript like any other operator prompt (TTS reply).
 
-Exact end phrases still work without you. You are the backup interpreter.
+Exact product/soft end phrases still auto-finish without you when they match. You **must** still listen-end when a done signal is clear and capture remains open.
 
 ## On final `ambient.prompt` (operator voice to you)
 
@@ -248,7 +257,7 @@ Constraints:
 
 1. `hark doctor` (text OK for tools).  
 2. `hark status` + `hark queue --announce` — **announce any already-blocked / pending by TTS**. `hark queue --announce` speaks the waiting count itself when more than one agent is waiting (JSON always carries `count` / `announcement` / distinct `targets`). Hark watch also emits on load; still speak a short rollup so the operator hears it.  
-3. TTS: “Hark is ready. I'll speak from here.”  
+3. TTS: “Hark is ready. I'll speak from here. When you're done talking in radio mode, say over or okay hark send.”  
 4. Voice-ask session targets if not already configured (local / SSH / mix — write `[[herdr.sessions]]` accordingly).  
 5. **Required:** arm **`hark monitor --for-monitor`** (persistent). One feed for Herdr + ambient (includes `wake_near_miss`). Do **not** arm only `hark watch` or only ambient tails.  
 6. Prefer `hark tts --listen "…"` or `hark ask` so recording starts after you speak (start cue on speech). **Ambient auto-pauses** for listen/ask (mic lease yield); no manual kill needed.  
@@ -346,7 +355,8 @@ Use PATH binaries only (Herdr cannot see fish functions). Overrides: `[agents]` 
 | `hark status` / `hark queue` | Snapshot / pending |
 | `hark context` | Bottom buffer |
 | `hark tts` / `tts --listen` / `listen` / `ask` | Voice I/O; `--listen` = speak then auto-record |
-| `hark listen-end` | Agent finish/cancel active radio listen |
+| `hark listen-end` | Agent finish/cancel active radio listen (MUST on clear done-signal partials) |
+| Radio end phrases | Product: `okay hark send`, `hark over`, `end prompt`. Soft: `over`, `okay over`, `send it`, `that's all` |
 | `hark answer` | Bound send (preferred) |
 | `hark reply` / `hark keys` | Freeform / keys |
 | `hark session list\|ensure` | Named Herdr sessions (voice spawn) |
@@ -362,7 +372,7 @@ Use PATH binaries only (Herdr cannot see fish functions). Overrides: `[agents]` 
 | Audio | `hark devices` |
 | Stale answer | re-read context; re-prompt human by voice |
 | False done | prefer `agent.needs_input` from watch; else context judgment; stay quiet if busy |
-| Stuck radio listen | partial → `hark listen-end` if they want out |
+| Stuck radio listen | partial ends with done signal → **must** `hark listen-end`; remind: say over / okay hark send |
 
 ## Not this skill
 

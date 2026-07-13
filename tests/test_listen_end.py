@@ -207,6 +207,31 @@ def test_soft_end_sentence_final_over():
         assert hit.phrase == "over"
 
 
+def test_soft_end_okay_over_without_comma():
+    """B068: STT often drops the comma in 'okay, over' → 'okay over' / 'ok over'."""
+    for text, phrase in (
+        ("long radio turn okay over", "okay over"),
+        ("long radio turn ok over", "ok over"),
+        ("Okay over.", "okay over"),
+        ("ok over", "ok over"),
+        ("ship the branch. okay over", "okay over"),
+    ):
+        hit = evaluate_radio_transcript(text, soft_end_phrases_enabled=True)
+        assert hit is not None, f"expected end for {text!r}"
+        assert hit.kind == "end"
+        assert hit.phrase == phrase
+
+
+def test_soft_end_message_done():
+    hit = evaluate_radio_transcript(
+        "that covers the plan message done",
+        soft_end_phrases_enabled=True,
+    )
+    assert hit is not None
+    assert hit.phrase == "message done"
+    assert "covers" in hit.body
+
+
 def test_soft_end_over_and_out_still_works():
     hit = evaluate_radio_transcript(
         "that covers the plan over and out",
@@ -282,7 +307,7 @@ def test_soft_end_product_phrases_still_win():
 
 def test_soft_end_safe_list_documented():
     soft_norm = {p.lower() for p in DEFAULT_SOFT_END_PHRASES}
-    # B039: bare send it / send that / over are in the soft list
+    # B039/B068: bare send it / send that / over / okay over are in the soft list
     for required in (
         "that's all",
         "end of message",
@@ -291,10 +316,14 @@ def test_soft_end_safe_list_documented():
         "send that",
         "over and out",
         "over",
+        "okay over",
+        "ok over",
+        "message done",
     ):
         assert required in soft_norm
-    # Bare over is sentence-final only
+    # Bare over is sentence-final only; multi-word okay over is not
     assert "over" in SENTENCE_FINAL_SOFT_PHRASES
+    assert "okay over" not in SENTENCE_FINAL_SOFT_PHRASES
     # Still exclude high-risk singles
     unsafe = {
         "done",
@@ -304,6 +333,7 @@ def test_soft_end_safe_list_documented():
         "go",
         "go ahead",
         "cancel that",
+        "stop recording",  # Mode A backup only — mid "don't stop recording"
     }
     assert soft_norm.isdisjoint(unsafe)
 

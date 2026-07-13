@@ -6,6 +6,14 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Radio end UX (B068): clearer operator end signals + Mode A **must** finish
+  capture on done-signal partials. Soft list gains `okay over` / `ok over`
+  (STT of “okay, over” without comma) and `message done`; sentence-final
+  `over` still treats comma as boundary. Partial `HOLD_INSTRUCTIONS`,
+  `agent_control` hints, and compact monitor lines use **MUST**
+  `hark listen-end` language with false-positive guidance. Skill bootstrap
+  reminds: “when you’re done, say over or okay hark send.” Docs:
+  `AUDIO_DESIGN` how-to-end table; PROTOCOL/SPEC/ACCEPTANCE; both skill copies.
 - Ambient live-reload: when the primary wake name/phrase changes (config.toml
   file-watch or SIGHUP), speak a one-shot TTS announce
   (“Wake phrase updated from … to …”) without using the phrase cache

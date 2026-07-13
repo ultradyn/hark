@@ -96,8 +96,10 @@ def compact_mode_a_event(event: dict[str, Any]) -> dict[str, Any]:
                 "instructions": (
                     "RADIO PARTIAL — HOLD. Do not TTS a full answer. "
                     "Use fragment for the new slice; text is cumulative. "
-                    "Optional: hark listen-end --stream-id <id> if they clearly finished. "
-                    "Then STOP; wait for next partial or final ambient.prompt."
+                    "MUST: if text clearly ends with a done signal (over, okay hark send, "
+                    "that's all, send it, stop recording, message done, …) and stream "
+                    "still active → hark listen-end --stream-id <id> (finish, not cancel). "
+                    "No mid-clause false finishes. Then STOP; wait for next partial or final."
                 ),
             }
         )

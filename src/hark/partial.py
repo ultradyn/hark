@@ -18,12 +18,16 @@ HOLD_WARNING = (
 
 HOLD_INSTRUCTIONS = (
     "HOLD RESPONSE. This is an interim radio-mode partial. "
-    "Await ambient.prompt or answer.final with the same stream_id before "
-    "acting or speaking to the operator — unless the operator clearly wants "
-    "to finish/cancel without an exact end phrase. In that case you MAY run "
-    "the agent_control.end_recording or agent_control.cancel_recording command "
-    "for this stream_id (e.g. they said 'how do I stop?', 'okay stop recording', "
-    "'that's all, send it'). Prefer finish when they completed their thought."
+    "Do NOT TTS a full answer or deliver to a pane yet. "
+    "If the cumulative text (or fragment) clearly ends with a done/stop signal "
+    "and capture is still active, you MUST run agent_control.end_recording "
+    "(finish) for this stream_id — e.g. ends with 'over', 'okay over', "
+    "'okay hark send', 'that's all', 'send it', 'stop recording', 'message done'. "
+    "Prefer finish when the thought is complete; use cancel_recording only to abort. "
+    "Do NOT end on mid-clause false positives ('over the weekend', "
+    "'send it to staging', 'that's all I know about X'). "
+    "Otherwise HOLD and wait for the next partial or ambient.prompt "
+    "(same stream_id, final=true)."
 )
 
 

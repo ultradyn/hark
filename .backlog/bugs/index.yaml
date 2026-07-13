@@ -54,3 +54,4 @@ bugs:
     - file: B053-update-the-npm-facing-readme-t.todo
     - file: B054-remove-spec-from-footer-but-ad.todo
     - file: B055-coding-cli-argv-resolver-alias.todo
+    - file: B056-herdrclient-list-ensure-named.todo

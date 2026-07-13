@@ -1,0 +1,42 @@
+---
+complexity: medium
+created_at: "2026-07-13T14:26:24Z"
+depends_on:
+    - B057
+estimate_hours: 2
+id: B058
+priority: medium
+status: pending
+tags:
+    - I005
+    - skill
+    - voice
+    - mode-a
+title: 'Mode A skill: voice playbook for Herdr session + agent spawn'
+updated_at: "2026-07-13T14:26:24Z"
+---
+## Problem
+Even with CLI tools, Mode A will not spawn agents unless the skill teaches **when/how** from ambient speech.
+
+## Scope (I005 / B058)
+Update `skill/hark/SKILL.md` + `skill/handsfree` + packaged copies under `packages/ultradyn-hark/skills/`.
+
+## Playbook
+On `ambient.prompt` intent such as:
+- start / spin up / open / launch {claude|codex|grok|cursor|opencode|…}
+- new / create herdr session {name}
+- start X in {project/path} on {session}
+- …and tell it / with prompt {…}
+
+Agent steps:
+1. Parse agent, cwd, session, kickoff from speech (ask once if cwd/session ambiguous).
+2. Confirm when creating a **new** session or unclear cwd.
+3. Run `hark session ensure` / `hark agent-start …` (prefer CLI over raw herdr).
+4. TTS short ack with agent + cwd + session + target if known.
+5. Do **not** treat spawn as pane delivery; stay outside Herdr as Mode A.
+6. File dogfood bugs if herdr start fails mid-voice.
+
+## Acceptance
+- [ ] Skill section documents phrases, confirm policy, CLI cheatsheet rows
+- [ ] handsfree + npm skill packages stay in sync (same content policy as prior releases)
+- [ ] No requirement for library-side NLU (Mode A judgment owns speech parse)

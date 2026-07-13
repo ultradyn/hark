@@ -56,3 +56,4 @@ bugs:
     - file: B055-coding-cli-argv-resolver-alias.todo
     - file: B056-herdrclient-list-ensure-named.todo
     - file: B057-cli-hark-agent-start-session-e.todo
+    - file: B058-mode-a-skill-voice-playbook-fo.todo

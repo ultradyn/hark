@@ -1,0 +1,205 @@
+# Hark — normative software specification
+
+**Package:** `hark`  
+**CLI:** `hark`  
+**Optional daemon:** `harkd`  
+**Skill:** `hark`  
+**Config:** `~/.config/hark/config.toml`  
+**State:** `~/.local/state/hark/`  
+**Env prefix:** `HARK_`  
+**Min Herdr:** 0.7.1 (protocol ≥ 14 on known hosts)  
+**Event schema:** `hark.event.v1` — [PROTOCOL.md](PROTOCOL.md), `schemas/event-v1.schema.json`
+
+RFC words: **MUST** / **MUST NOT** / **SHOULD** / **MAY**.
+
+---
+
+## 1. Intent
+
+Enable a human within earshot of a microphone to supervise multiple Herdr coding agents by voice. The system surfaces blocked (and optionally completed) agent state, speaks questions, captures deliberate replies, transcribes via **cloud** STT, and delivers text or keys with **auditable, race-safe routing**.
+
+Not a general voice assistant. An LLM is **not** required on the critical path for routing identity (Mode B / library). Mode A uses a supervisory agent for **judgment** (false done, menus, summaries) while still calling library-safe delivery APIs.
+
+## 2. Placement
+
+| Component | Location |
+|-----------|----------|
+| Mode A orchestrator | Local, **outside** Herdr |
+| `hark` CLI + mic/speakers | Local |
+| Herdr server(s) | Local and/or remote (multi-session) |
+| Coding agents | Inside Herdr panes |
+
+## 3. Modes
+
+| Mode | Priority | Description |
+|------|----------|-------------|
+| **A — Agent + tools** | **v1 only path** | Monitor on `hark watch`; agent runs `context` / `ask` / `answer` / `keys` |
+| **B — `harkd`** | **Post-v1** | Same library; full voice loop without orchestrator — **not in v1** |
+| **C — one-shot** | Always | `tts`, `listen`, freeform `reply` for debug |
+
+v1 **MUST** complete Mode A without shipping `harkd`. Library design **SHOULD** leave room for Mode B later.
+
+## 4. CLI (v1 surface)
+
+```
+hark doctor
+hark watch [--session ID]... [--statuses blocked,done] [--for-monitor] [--transport auto|socket|poll]
+hark status [--session ID]... [--status …] [--read-excerpt] [--json]
+hark queue [--json]                    # pending interactions if tracked
+hark context <target> [--lines N] [--source …]
+hark tts …
+hark listen …
+hark ask … [--confirm auto|always|never]
+hark reply <target> …                  # freeform (debug / simple)
+hark keys <target> <key> [key…]
+hark answer <event_id> (--text … | --keys …)   # bound, preferred
+hark skip <event_id>
+hark mute | unmute
+hark devices
+hark providers [test NAME]
+hark config path|init|show
+```
+
+**Target:** `session_id/pane_id` or `--session` + pane.
+
+**Exit codes:** 0 ok · 1 error · 2 usage · 3 Herdr · 4 provider · 5 audio · 6 timeout · 7 abort/stale/policy.
+
+## 5. Library invariants (all modes)
+
+1. At most one mic lease at a time.  
+2. Capture binds to an `event_id` (or explicit freeform flag).  
+3. TTS and mic capture do not overlap (half-duplex).  
+4. A transcript does not retarget because a newer event arrives mid-utterance.  
+5. Delivery checks pane identity, revision, and question fingerprint when bound.  
+6. Uncertain writes reconcile before retry; no blind double-send.  
+7. Pane content is untrusted (see [SAFETY.md](SAFETY.md)).  
+
+## 6. Herdr client
+
+### Startup per session
+
+1. Resolve socket (local path or SSH tunnel).  
+2. `ping` / version gate ≥ 0.7.1.  
+3. Capability probe (`session.snapshot` if available; else `agent list`).  
+4. Subscribe `events.subscribe` when possible; else poll.  
+5. Reconcile already-blocked panes from snapshot before announcing “new.”  
+
+### Subscriptions (when available)
+
+- `pane.agent_status_changed`  
+- `pane.agent_detected`  
+- `pane.closed` / `pane.exited` / `pane.moved`  
+- optional workspace/tab closed  
+
+### Delivery
+
+Prefer `agent.send`; else `pane.send_text` + `send_keys`.  
+Menus: `hark keys` / `answer --keys`.  
+
+### Multi-session
+
+Events always carry `session_id`. See [HERDR.md](HERDR.md).
+
+## 7. Question extraction
+
+On blocked:
+
+1. `agent.read` / `pane.read` (`visible` or `recent-unwrapped`, default 40–80 lines).  
+2. Optional `detection` source if available.  
+3. Strip ANSI; take trailing ask block.  
+4. Classify `question.kind` + `risk` (R0–R3).  
+5. Compute **fingerprint** over normalized question text + choices.  
+6. Speak concise form; keep longer excerpt for `context` / “read verbatim.”  
+
+Agent-specific parsers MAY improve confidence; low confidence → longer verbatim + stricter confirm.
+
+**MUST NOT** use an unconstrained LLM to rewrite permission scope.
+
+## 8. Risk and confirmation
+
+See [SAFETY.md](SAFETY.md).
+
+- R0/R1: confirm **auto** (when unsure).  
+- R2/R3: confirm **always**.  
+
+## 9. Audio
+
+See [AUDIO_DESIGN.md](AUDIO_DESIGN.md). Event-driven answer windows only in MVP. Adaptive gate; post-TTS guard; no continuous cloud streaming of ambient audio.
+
+## 10. Providers
+
+See [PROVIDERS.md](PROVIDERS.md). xAI via Grok OAuth preferred. No local neural STT/TTS. No Playwright as production STT.
+
+## 11. Events
+
+See [PROTOCOL.md](PROTOCOL.md). Dedupe + debounce required. `--for-monitor` compact profile required for Mode A.
+
+## 12. Config (sketch)
+
+```toml
+version = 1
+
+[[herdr.sessions]]
+id = "local"
+
+[[herdr.sessions]]
+id = "work"
+ssh = "workbox"
+
+[watch]
+statuses = ["blocked", "done"]
+debounce_ms = 250
+transport = "auto"
+
+[audio]
+# adaptive gate params — see AUDIO_DESIGN
+half_duplex = true
+post_tts_guard_ms = 350
+
+[stt]
+provider = "auto"
+# xai oauth via ~/.grok/auth.json
+
+[tts]
+provider = "auto"
+max_chars = 500
+
+[confirm]
+mode = "auto"   # for R0/R1; R2/R3 force always
+
+[safety]
+deny_patterns = []  # optional hard blocks
+```
+
+Env: `HARK_CONFIG`, `HARK_STT_PROVIDER`, `XAI_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MINIMAX_API_KEY`, `HERDR_SOCKET_PATH`.
+
+## 13. Performance targets (excluding provider RTT)
+
+| Metric | Target |
+|--------|--------|
+| Idle watch CPU | < 1–2% one core |
+| Idle RSS | < 50 MiB (native); Python prototype higher OK |
+| Normalize blocked event | p95 < 250 ms after receipt |
+| No STT sockets while idle | required |
+
+## 14. Diagnostics
+
+`hark doctor` MUST check: Herdr sessions/tunnels, version, mic, playback, provider auth (Grok OAuth), control permissions, redacted output.
+
+## 15. Dev workflow
+
+Python prototype: always `uv run hark` from latest git checkout.  
+Production: Rust rewrite, same CLI + HEP.
+
+## 16. Definition of done (v1 Mode A)
+
+Without browser automation or local ML models:
+
+1. Multi-session watch with HEP events + monitor profile.  
+2. Context + risk classify + fingerprint.  
+3. Speak/listen via at least xAI (OAuth) and one fallback.  
+4. Bound `hark answer` with stale rejection.  
+5. `hark keys` for menus.  
+6. Done events wake agent; skill forbids blind announce.  
+7. Skill alone runs Mode A.  
+8. Acceptance tests in [ACCEPTANCE.md](ACCEPTANCE.md) pass or skip with documented reasons.  

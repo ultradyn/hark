@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/xertrov/hark/schemas/event-v1.schema.json",
+  "title": "Hark Event v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "event_id",
+    "observed_at",
+    "kind",
+    "priority",
+    "target",
+    "disposition"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hark.event.v1"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 8
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "watch.error",
+        "watch.heartbeat",
+        "watch.armed",
+        "agent.blocked",
+        "agent.question_changed",
+        "agent.completed",
+        "agent.failed",
+        "agent.state_changed",
+        "target.invalidated",
+        "answer.captured",
+        "answer.transcribed",
+        "answer.confirmation_required",
+        "answer.delivered",
+        "answer.delivery_uncertain",
+        "answer.rejected",
+        "bridge.degraded",
+        "bridge.recovered"
+      ]
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "target": {
+      "type": "object",
+      "required": [
+        "server_instance",
+        "workspace_id",
+        "tab_id",
+        "pane_id",
+        "pane_revision"
+      ],
+      "properties": {
+        "server_instance": {
+          "type": "string"
+        },
+        "workspace_id": {
+          "type": "string"
+        },
+        "tab_id": {
+          "type": "string"
+        },
+        "pane_id": {
+          "type": "string"
+        },
+        "pane_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "friendly_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "state": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "from": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "blocked_epoch": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "question": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "free_text",
+            "choice",
+            "permission",
+            "confirmation",
+            "unknown"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "risk": {
+          "type": "string",
+          "enum": [
+            "R0",
+            "R1",
+            "R2",
+            "R3"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "text",
+        "fingerprint"
+      ],
+      "additionalProperties": true
+    },
+    "disposition": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "active",
+        "deferred",
+        "skipped",
+        "answered",
+        "invalidated",
+        "failed"
+      ]
+    },
+    "session_id": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

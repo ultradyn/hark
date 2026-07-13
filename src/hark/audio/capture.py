@@ -11,7 +11,7 @@ import time
 import wave
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 
@@ -116,6 +116,275 @@ def record_seconds(
     return pcm16_mono_bytes(audio.reshape(-1))
 
 
+class PcmRingBuffer:
+    """Fixed-capacity mono PCM16 ring (sample-interleaved int16).
+
+    Used by continuous ambient capture so wake scoring and pre-roll read
+    from a sliding window without reopening the device.
+    """
+
+    BYTES_PER_SAMPLE = 2
+
+    def __init__(self, capacity_s: float, sample_rate: int = 16000) -> None:
+        if sample_rate <= 0:
+            raise ValueError("sample_rate must be positive")
+        capacity_s = max(0.05, float(capacity_s))
+        self.sample_rate = int(sample_rate)
+        self.capacity = max(1, int(capacity_s * self.sample_rate))
+        self._buf = np.zeros(self.capacity, dtype=np.int16)
+        self._write = 0  # next write index
+        self._available = 0  # samples currently held (≤ capacity)
+
+    @property
+    def available_samples(self) -> int:
+        return self._available
+
+    @property
+    def available_s(self) -> float:
+        return self._available / float(self.sample_rate)
+
+    @property
+    def capacity_s(self) -> float:
+        return self.capacity / float(self.sample_rate)
+
+    def clear(self) -> None:
+        self._write = 0
+        self._available = 0
+        self._buf.fill(0)
+
+    def write_samples(self, samples: np.ndarray) -> None:
+        """Append int16 mono samples (overwrites oldest when full)."""
+        if samples.size == 0:
+            return
+        flat = np.ascontiguousarray(samples.reshape(-1), dtype=np.int16)
+        n = int(flat.shape[0])
+        if n >= self.capacity:
+            # Keep only the newest capacity samples
+            self._buf[:] = flat[-self.capacity :]
+            self._write = 0
+            self._available = self.capacity
+            return
+        end = self._write + n
+        if end <= self.capacity:
+            self._buf[self._write : end] = flat
+        else:
+            first = self.capacity - self._write
+            self._buf[self._write :] = flat[:first]
+            self._buf[: n - first] = flat[first:]
+        self._write = (self._write + n) % self.capacity
+        self._available = min(self.capacity, self._available + n)
+
+    def write_pcm16(self, data: bytes) -> None:
+        if not data:
+            return
+        self.write_samples(np.frombuffer(data, dtype=np.int16))
+
+    def write_float32(self, samples: np.ndarray) -> None:
+        if samples.size == 0:
+            return
+        clipped = np.clip(samples.reshape(-1), -1.0, 1.0)
+        self.write_samples((clipped * 32767.0).astype(np.int16))
+
+    def tail_samples(self, n: int) -> np.ndarray:
+        """Return the last *n* samples in chronological order (oldest→newest)."""
+        if n <= 0 or self._available <= 0:
+            return np.zeros(0, dtype=np.int16)
+        n = min(int(n), self._available)
+        end = self._write  # next write = one past newest
+        # Full capacity span: oldest sits at write index
+        if n == self.capacity:
+            return np.concatenate((self._buf[end:], self._buf[:end]))
+        start = (end - n) % self.capacity
+        if start < end:
+            return self._buf[start:end].copy()
+        # Wrapped: [start:] + [:end]
+        return np.concatenate((self._buf[start:], self._buf[:end]))
+
+    def tail(self, duration_s: float) -> bytes:
+        """Last ``duration_s`` of audio as PCM16 bytes."""
+        n = int(max(0.0, float(duration_s)) * self.sample_rate)
+        return self.tail_samples(n).tobytes()
+
+    def tail_ms(self, ms: int) -> bytes:
+        return self.tail(max(0, int(ms)) / 1000.0)
+
+    def window(self, duration_s: float, *, end_offset_s: float = 0.0) -> bytes:
+        """Score window of ``duration_s`` ending ``end_offset_s`` before the tip.
+
+        ``end_offset_s=0`` is the newest audio (same as :meth:`tail`).
+        """
+        end_off = max(0, int(float(end_offset_s) * self.sample_rate))
+        n = max(0, int(float(duration_s) * self.sample_rate))
+        if n <= 0 or self._available <= 0:
+            return b""
+        # Drop end_off newest samples, then take n before that
+        total_from_tip = end_off + n
+        if total_from_tip > self._available:
+            # Not enough history: take what we can before end_off
+            avail_before = max(0, self._available - end_off)
+            n = min(n, avail_before)
+            if n <= 0:
+                return b""
+        samples = self.tail_samples(end_off + n)
+        if end_off > 0:
+            samples = samples[: len(samples) - end_off]
+        return samples.tobytes()
+
+
+def clamp_pre_roll_ms(ms: int | float | None, *, default: int = 300) -> int:
+    """Clamp pre-roll to the B079 target range (250–500 ms)."""
+    if ms is None:
+        return default
+    try:
+        v = int(ms)
+    except (TypeError, ValueError):
+        return default
+    return max(250, min(500, v))
+
+
+def score_window_plan(
+    snippet_s: float,
+    hop_s: float | None = None,
+    *,
+    min_snippet_s: float = 0.8,
+    max_snippet_s: float = 2.5,
+    default_hop_ratio: float = 0.3,
+) -> tuple[float, float]:
+    """Normalize wake window + hop so hop is always strictly less than snippet.
+
+    Default hop ≈ 30% of snippet (e.g. 2.5 s → 0.75 s) for overlapping cuts so
+    a greeting+name rarely straddles non-overlapping boundaries.
+    """
+    snippet = max(min_snippet_s, min(float(snippet_s), max_snippet_s))
+    if hop_s is None:
+        hop = snippet * default_hop_ratio
+    else:
+        hop = float(hop_s)
+    # Keep hop in (0, snippet): at least 100 ms, at most 75% of snippet
+    hop = max(0.1, min(hop, snippet * 0.75))
+    if hop >= snippet:
+        hop = max(0.1, snippet * 0.5)
+    return snippet, hop
+
+
+class ContinuousMicStream:
+    """Hold MicLease + InputStream open; fill a :class:`PcmRingBuffer`.
+
+    Ambient wake keeps one of these for the whole arm (or until pause/yield).
+    Score overlapping windows via :meth:`window_pcm16` without open/close thrash.
+    """
+
+    def __init__(
+        self,
+        *,
+        sample_rate: int = 16000,
+        ring_s: float = 5.0,
+        device: int | str | None = None,
+        lease_name: str = "ambient",
+        block_ms: float = 20.0,
+    ) -> None:
+        self.sample_rate = int(sample_rate)
+        self.ring = PcmRingBuffer(ring_s, self.sample_rate)
+        self.device = device
+        self.lease_name = lease_name
+        self._block = max(1, int(self.sample_rate * (block_ms / 1000.0)))
+        self._lease: MicLease | None = None
+        self._stream: Any = None
+        self._open = False
+
+    @property
+    def available_s(self) -> float:
+        return self.ring.available_s
+
+    @property
+    def is_open(self) -> bool:
+        return self._open
+
+    def open(self) -> ContinuousMicStream:
+        if self._open:
+            return self
+        _require_sd()
+        lease = MicLease(self.lease_name)
+        lease.__enter__()
+        try:
+            stream = sd.InputStream(
+                samplerate=self.sample_rate,
+                channels=1,
+                dtype="float32",
+                blocksize=self._block,
+                device=self.device,
+            )
+            stream.start()
+        except Exception:
+            lease.__exit__(None, None, None)
+            raise
+        self._lease = lease
+        self._stream = stream
+        self._open = True
+        return self
+
+    def close(self) -> None:
+        stream = self._stream
+        self._stream = None
+        lease = self._lease
+        self._lease = None
+        self._open = False
+        if stream is not None:
+            try:
+                stream.stop()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+        if lease is not None:
+            try:
+                lease.__exit__(None, None, None)
+            except Exception:
+                pass
+
+    def __enter__(self) -> ContinuousMicStream:
+        return self.open()
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def read_for(
+        self,
+        duration_s: float,
+        *,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Block while reading ``duration_s`` of audio into the ring.
+
+        Returns False if ``should_stop`` became true before the full duration
+        (caller should check pause/shutdown). Raises if the stream is closed.
+        """
+        if not self._open or self._stream is None:
+            raise RuntimeError("ContinuousMicStream is not open")
+        duration_s = max(0.0, float(duration_s))
+        if duration_s <= 0:
+            return True
+        deadline = time.monotonic() + duration_s
+        while time.monotonic() < deadline:
+            if should_stop is not None and should_stop():
+                return False
+            data, overflowed = self._stream.read(self._block)
+            del overflowed
+            self.ring.write_float32(data.reshape(-1))
+        return True
+
+    def window_pcm16(self, duration_s: float, *, end_offset_s: float = 0.0) -> bytes:
+        return self.ring.window(duration_s, end_offset_s=end_offset_s)
+
+    def tail_ms(self, ms: int) -> bytes:
+        return self.ring.tail_ms(ms)
+
+    def tail(self, duration_s: float) -> bytes:
+        return self.ring.tail(duration_s)
+
+
 @dataclass
 class CaptureResult:
     pcm16: bytes
@@ -164,8 +433,10 @@ def capture_utterance(
     # Absolute floor: speech louder than this opens even if relative margin fails
     abs_open_db: float = -48.0,
     open_confirm_blocks: int = 4,  # ~80 ms
-    # Keep this much audio immediately before speech open (trims long leading silence)
-    preroll_ms: int = 200,
+    # Keep this much audio immediately before speech open (trims long leading silence).
+    # B079: default ≥250 ms so word onsets are not clipped when the gate lags.
+    # Values outside 250–500 are clamped (except 0 which disables pre-roll).
+    preroll_ms: int = 300,
     initial_timeout_s: float = 45.0,
     device: int | str | None = None,
     should_stop: Callable[[bytes, float], bool] | None = None,
@@ -225,13 +496,15 @@ def capture_utterance(
     )
     max_blocks = int(max_s / 0.02)
     timeout_blocks = int(initial_timeout_s / 0.02)
-    preroll_blocks = max(1, int(preroll_ms / 20.0))
+    # 0 disables; otherwise clamp to B079 range so config mistakes stay safe
+    effective_preroll = 0 if preroll_ms <= 0 else clamp_pre_roll_ms(preroll_ms)
+    preroll_blocks = max(1, int(effective_preroll / 20.0)) if effective_preroll > 0 else 0
     peak_db = -120.0
     peak_rms = 0.0
 
     chunks: list[np.ndarray] = []
     # Short ring of recent frames while waiting for speech (discarded if timeout)
-    preroll: deque[np.ndarray] = deque(maxlen=preroll_blocks)
+    preroll: deque[np.ndarray] = deque(maxlen=max(1, preroll_blocks))
     wait_speech_ms = 0
     # Safety cap for discard phase (TTS tail + residual + long mute)
     discard_max_s = max(30.0, initial_timeout_s)
@@ -271,7 +544,8 @@ def capture_utterance(
                 peak_rms = rms
 
             if not opened:
-                preroll.append(samples.copy())
+                if preroll_blocks > 0:
+                    preroll.append(samples.copy())
                 # adapt noise floor while closed (slow attack)
                 noise_floor = 0.98 * noise_floor + 0.02 * rms
                 rel_thresh = 20.0 * np.log10(noise_floor + 1e-12) + open_margin_db
@@ -282,8 +556,9 @@ def capture_utterance(
                         opened = True
                         silent_blocks = 0
                         # Seed buffer with short pre-roll only (not full leading silence)
-                        chunks.extend(preroll)
-                        preroll.clear()
+                        if preroll_blocks > 0:
+                            chunks.extend(preroll)
+                            preroll.clear()
                         wait_speech_ms = int(1000 * (time.monotonic() - start))
                         if on_opened is not None:
                             try:

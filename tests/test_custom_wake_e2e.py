@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import signal
+from collections.abc import Callable
 from pathlib import Path
 
 import hark.ambient as ambient
@@ -19,6 +20,50 @@ from hark.lifecycle import (
 )
 from hark.speech import ListenResult
 from hark.wake import TextProbeBackend, build_wake_backend
+
+
+def _fake_continuous_mic(next_pcm: Callable[[], bytes]):
+    """Stand-in for ContinuousMicStream that yields synthetic score windows."""
+
+    class FakeStream:
+        def __init__(self, *args, **kwargs) -> None:
+            self._last = b"TXT:silence"
+            self._open = False
+
+        def open(self):
+            self._open = True
+            return self
+
+        def close(self) -> None:
+            self._open = False
+
+        def __enter__(self):
+            return self.open()
+
+        def __exit__(self, *a) -> None:
+            self.close()
+
+        @property
+        def is_open(self) -> bool:
+            return self._open
+
+        @property
+        def available_s(self) -> float:
+            return 5.0
+
+        def read_for(self, duration_s: float, *, should_stop=None) -> bool:
+            if should_stop is not None and should_stop():
+                return False
+            self._last = next_pcm()
+            return True
+
+        def window_pcm16(self, duration_s: float, *, end_offset_s: float = 0.0) -> bytes:
+            return self._last
+
+        def tail_ms(self, ms: int) -> bytes:
+            return self._last
+
+    return FakeStream
 
 
 def _write_ambient_config(
@@ -104,7 +149,7 @@ def test_ambient_cycle_custom_phrase_to_prompt(tmp_path, monkeypatch):
 
     snippets = [b"TXT:noise only", b"TXT:start prompt please open the PR"]
 
-    def fake_record(seconds: float, sample_rate: int = 16000) -> bytes:
+    def next_pcm() -> bytes:
         if snippets:
             return snippets.pop(0)
         return b"TXT:silence"
@@ -117,7 +162,7 @@ def test_ambient_cycle_custom_phrase_to_prompt(tmp_path, monkeypatch):
         stream_id="stream-custom",
         partials_emitted=0,
     )
-    monkeypatch.setattr(ambient, "record_seconds", fake_record)
+    monkeypatch.setattr(ambient, "ContinuousMicStream", _fake_continuous_mic(next_pcm))
     monkeypatch.setattr(
         ambient,
         "run_listen",
@@ -292,7 +337,7 @@ def test_ambient_loop_reloads_then_wakes(tmp_path, monkeypatch):
     # then after reload hit custom. We schedule reload before second score.
     phase = {"n": 0, "reloaded_written": False}
 
-    def fake_record(seconds: float, sample_rate: int = 16000) -> bytes:
+    def next_pcm() -> bytes:
         phase["n"] += 1
         if phase["n"] == 1:
             # First wait: no hit; request reload mid-wait
@@ -313,7 +358,7 @@ def test_ambient_loop_reloads_then_wakes(tmp_path, monkeypatch):
         request_shutdown(reason="stop")
         return listened
 
-    monkeypatch.setattr(ambient, "record_seconds", fake_record)
+    monkeypatch.setattr(ambient, "ContinuousMicStream", _fake_continuous_mic(next_pcm))
     monkeypatch.setattr(ambient, "run_listen", fake_listen)
     monkeypatch.setattr(ambient, "run_tts", lambda *a, **k: None)
 

@@ -19,22 +19,37 @@ device
   → resample to 16 kHz mono PCM16
   → adaptive noise-floor (gate closed only)
   → energy gate + hangover
-  → pre-roll
+  → pre-roll (≥250 ms from capture ring; listen.pre_roll_ms)
   → utterance → cloud STT
 ```
 
 ## Ambient pipeline (not answering a blocked agent)
 
+Continuous stream model (**B079**): the mic stays open for the whole ambient
+arm (one `MicLease` + `InputStream` + ring buffer). Wake scoring cuts
+**overlapping** windows out of the ring instead of open→record→close every
+snippet — so the OS mic indicator does not flicker, and a greeting+name that
+straddles a former snippet border still lands in one scored span.
+
 ```text
-device
-  → 2–3 s rolling snippets (local only)
-  → tiny local model / vosk (NO cloud)
+device (held open while armed)
+  → continuous 16 kHz mono → ring buffer (~3–6 s; ambient.ring_s)
+  → every hop_s (< snippet_s): score last snippet_s window (local Vosk / KWS)
   → match activation phrase?
-        no  → discard snippet
-        yes → optional readiness cue
-            → cloud STT for prompt body
+        no  → keep streaming (energy-skip quiet windows for CPU)
+        yes → release stream for exclusive answer path
+            → optional readiness cue
+            → cloud STT for prompt body (with pre-roll)
             → same end_mode as [listen]
+  → on ambient.pause (answer/ask): close stream, yield lease; re-open after clear
 ```
+
+Answer/ask still takes an **exclusive** lease (pause ambient → open listen
+capture). Listen builds its own short ring while waiting for speech open and
+seeds the utterance with `listen.pre_roll_ms` (default 300, clamped 250–500)
+when the gate fires — no cold open at the first phoneme. Sharing the ambient
+ring into a same-process answer buffer is a future refinement; exclusive
+re-open with local pre-roll is the v1 path.
 
 ## Control phrase policy
 
@@ -180,6 +195,8 @@ activation_phrases = ["hey hark", "hey herald", "okay hark"]
 engine = "vosk"          # or text_probe for tests
 # model_path = "/path/to/vosk-model-small-en-us"
 snippet_s = 2.5
+# snippet_hop_s = 0.75   # overlap hop; default ≈ 0.3 * snippet_s (must be < snippet)
+ring_s = 5.0             # continuous capture ring capacity (seconds)
 # One-shot wake wait / continuous idle cycle length (seconds).
 # 0 = wait indefinitely (no ambient.timeout cycle).
 timeout_s = 300
@@ -188,12 +205,20 @@ timeout_s = 300
 # Set false to quiet long-running Mode A (still re-enters the wake wait).
 surface_timeouts = true
 # emit_timeout_events = true  # alias of surface_timeouts
+
+[listen]
+# Pre-speech lead-in when the energy gate opens (B079). Clamped 250–500 ms.
+pre_roll_ms = 300
 ```
 
 | Key | Default | Notes |
 |-----|---------|--------|
+| `snippet_s` | `2.5` | Score window length cut from the continuous ring (clamped ~0.8–2.5 s). |
+| `snippet_hop_s` | `≈0.3×snippet` | Advance between overlapping score windows. Must be **&lt;** `snippet_s` so “hey &lt;name&gt;” is not chopped at non-overlapping borders. |
+| `ring_s` | `5.0` | Continuous PCM ring capacity while ambient is armed (wake windows + headroom). |
 | `timeout_s` | `300` | One-shot: max wait for a wake before `ambient.timeout`. Continuous Mode A: idle cycle length before re-entering the wake wait (and optionally emitting `ambient.timeout`). `0` = no deadline / no timeout event. |
 | `surface_timeouts` | `true` | When **on**, continuous ambient surfaces `ambient.timeout` each idle cycle (monitor NDJSON + syslog) as a heartbeat. When **off**, continuous idle cycles stay quiet (no timeout event) — turn off for noisy long-running Mode A; leave on if you want cache-warmup / liveness visibility. Alias: `emit_timeout_events`. One-shot `hark ambient --once` always emits timeout when nothing is heard. |
+| `listen.pre_roll_ms` | `300` | PCM kept from before speech-open on answer/post-wake capture (clamped **250–500**). Complements radio **post-cut** segment pad (B075). |
 
 CLI: `hark ambient` (forces a wake+listen cycle). Continuous: `hark ambient` without `--once`.
 
@@ -287,7 +312,7 @@ passing **explicit** STT flags (`enabled=duck_media_during_stt`,
 cancel / timeout / exception.
 
 **Not** armed for continuous idle ambient wake (local Vosk half-duplex wake loop
-uses `record_seconds` only — never enters `run_listen`). Independent of
+holds `ContinuousMicStream` only — never enters `run_listen`). Independent of
 `mute_mic_during_tts` (half-duplex: TTS mic mute ends, then listen ducks
 separately). Shared: `duck_level`, `duck_exclude_apps`, `media_check_mpris`,
 `exclude_conference=True`.

@@ -8,7 +8,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, TextIO
 
-from hark.audio.capture import MicBusyError, MicLease, record_seconds
+from hark.audio.capture import (
+    ContinuousMicStream,
+    MicBusyError,
+    score_window_plan,
+)
 from hark.config import HarkConfig, load_config
 from hark.debug_snips import purge_old_debug_snips, save_wake_snippet
 from hark.events import new_event_id, utc_now_iso
@@ -202,17 +206,22 @@ def _wait_for_wake(
     phrases: list[str] | tuple[str, ...] | None = None,
     policy: WakePolicy | None = None,
     learned: LearnedWake | None = None,
+    hop_s: float | None = None,
+    ring_s: float = 5.0,
 ) -> WakeHit | None:
-    """Record short windows until activation or deadline. Reuses backend (no reload).
+    """Score overlapping windows from a continuous mic stream until wake/deadline.
 
-    Mic lease is held **per snippet only**, and ambient yields while
-    ``ambient.pause`` is set so listen/ask can take the mic.
+    Holds :class:`ContinuousMicStream` (MicLease + InputStream + ring) for the
+    whole ambient arm so the OS mic indicator stays steady. Overlapping score
+    windows use hop < snippet so greeting+name rarely splits across cuts.
+    Yields cleanly when ``ambient.pause`` is set (answer/ask) or on shutdown.
 
     Plausible failed activations are grouped and emitted as
     ``ambient.wake_near_miss`` on *out* (see NearMissAccumulator schedule).
     Near-misses may expand learned aliases immediately (no restart).
     """
-    snippet = max(0.8, min(snippet_s, 2.5))
+    snippet, hop = score_window_plan(snippet_s, hop_s)
+    ring_capacity = max(float(ring_s), snippet + 0.5)
     last_debug = 0.0
     snips_since_purge = 0
     acc = near_miss_acc
@@ -223,145 +232,217 @@ def _wait_for_wake(
         if phrases is not None
         else getattr(backend, "phrases", None) or pol.display_phrases()
     )
-    while time.monotonic() < deadline:
-        if shutdown_requested():
-            return None
-        # SIGHUP / config file-watch: exit wait so the loop can re-read config
-        if reload_requested():
-            return None
-        # Bound listen/ask requested the mic — yield until they clear pause
-        if ambient_pause_requested():
-            time.sleep(0.05)
-            continue
-        try:
-            # Short exclusive hold so Mode A listen can interleave between snippets
-            with MicLease("ambient"):
-                if ambient_pause_requested() or shutdown_requested():
+    stream: ContinuousMicStream | None = None
+    # First open fills a full snippet; later ticks only need hop of new audio
+    need_fill_s = snippet
+
+    def _should_yield() -> bool:
+        return (
+            ambient_pause_requested()
+            or shutdown_requested()
+            or reload_requested()
+            or time.monotonic() >= deadline
+        )
+
+    def _close_stream() -> None:
+        nonlocal stream, need_fill_s
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:
+                pass
+            stream = None
+        need_fill_s = snippet
+
+    try:
+        while time.monotonic() < deadline:
+            if shutdown_requested():
+                return None
+            # SIGHUP / config file-watch: exit wait so the loop can re-read config
+            if reload_requested():
+                return None
+            # Bound listen/ask requested the mic — release continuous hold
+            if ambient_pause_requested():
+                _close_stream()
+                time.sleep(0.05)
+                continue
+
+            if stream is None:
+                try:
+                    stream = ContinuousMicStream(
+                        sample_rate=16000,
+                        ring_s=ring_capacity,
+                        lease_name="ambient",
+                    )
+                    stream.open()
+                    need_fill_s = snippet
+                except MicBusyError:
+                    # Another process holds mic — wait and retry
+                    stream = None
+                    time.sleep(0.1)
                     continue
-                pcm = record_seconds(snippet, sample_rate=16000)
-        except MicBusyError:
-            # Another process holds mic — wait and retry
-            time.sleep(0.1)
-            continue
-        except Exception as exc:
-            if out is not None:
-                err = {
-                    "schema": "hark.event.v1",
-                    "kind": "ambient.error",
-                    "event_id": new_event_id(),
-                    "observed_at": utc_now_iso(),
-                    "error": f"record: {exc}",
-                }
-                out.write(json.dumps(err, separators=(",", ":")) + "\n")
-                out.flush()
-            time.sleep(0.5)
-            continue
+                except Exception as exc:
+                    stream = None
+                    if out is not None:
+                        err = {
+                            "schema": "hark.event.v1",
+                            "kind": "ambient.error",
+                            "event_id": new_event_id(),
+                            "observed_at": utc_now_iso(),
+                            "error": f"record: {exc}",
+                        }
+                        out.write(json.dumps(err, separators=(",", ":")) + "\n")
+                        out.flush()
+                    time.sleep(0.5)
+                    continue
 
-        hit = backend.score_snippet(pcm, 16000)
-        text = getattr(backend, "last_text", "") or ""
-        rms = float(getattr(backend, "last_rms", 0.0) or 0.0)
+            try:
+                ok = stream.read_for(need_fill_s, should_stop=_should_yield)
+            except Exception as exc:
+                _close_stream()
+                if out is not None:
+                    err = {
+                        "schema": "hark.event.v1",
+                        "kind": "ambient.error",
+                        "event_id": new_event_id(),
+                        "observed_at": utc_now_iso(),
+                        "error": f"record: {exc}",
+                    }
+                    out.write(json.dumps(err, separators=(",", ":")) + "\n")
+                    out.flush()
+                time.sleep(0.5)
+                continue
 
-        # Dev: keep audio+transcript for scored snippets (hits and misses)
-        if debug_save and (hit is not None or text):
-            save_wake_snippet(
-                pcm16=pcm,
-                sample_rate=16000,
-                text=text or None,
-                matched=hit is not None,
-                phrase=hit.phrase if hit else None,
-                rms=rms,
-                backend=getattr(backend, "name", None),
-                enabled=True,
-            )
-            snips_since_purge += 1
-            if snips_since_purge >= 20:
-                purge_old_debug_snips(retention_days=debug_retention_days)
-                snips_since_purge = 0
+            if not ok:
+                if ambient_pause_requested():
+                    _close_stream()
+                    continue
+                if shutdown_requested() or reload_requested():
+                    return None
+                # deadline hit mid-read
+                if time.monotonic() >= deadline:
+                    return None
+                continue
 
-        if hit is not None:
-            if acc is not None:
-                acc.reset_pending()
-            syslog(
-                "ambient.wake",
-                component="ambient",
-                message=hit.phrase,
-                phrase=hit.phrase,
-                raw=hit.raw,
-                remainder=hit.remainder,
-                backend=hit.backend,
-                confidence=hit.confidence,
-            )
-            return hit
+            # Subsequent ticks: hop of new audio, score last snippet window
+            need_fill_s = hop
+            if stream.available_s + 1e-9 < snippet * 0.9:
+                # Still priming after a partial read — gather more
+                need_fill_s = max(hop, snippet - stream.available_s)
+                continue
 
-        # Hot-reload learned aliases written by other processes / previous cycles
-        learned_state = load_learned_if_changed(learned_state)
-        if learned_state is not None and pol.learn:
-            pol = pol.merge_learned(
-                name_aliases=learned_state.name_aliases,
-                phrase_aliases=learned_state.phrase_aliases,
-            )
-            _apply_policy_to_backend(backend, pol)
-            phrase_list = pol.display_phrases()
+            pcm = stream.window_pcm16(snippet)
+            hit = backend.score_snippet(pcm, 16000)
+            text = getattr(backend, "last_text", "") or ""
+            rms = float(getattr(backend, "last_rms", 0.0) or 0.0)
 
-        # Plausible failed wake → Mode A monitor (grouped), never spam on noise
-        if acc is not None and text:
-            miss = plausible_near_miss(text, phrase_list, policy=pol)
-            if miss is not None:
-                # Dynamically expand alternates (names or full phrases) — no restart
-                pol, learned_state = _maybe_learn_from_miss(
-                    miss, policy=pol, learned=learned_state, out=out
+            # Dev: keep audio+transcript for scored snippets (hits and misses)
+            if debug_save and (hit is not None or text):
+                save_wake_snippet(
+                    pcm16=pcm,
+                    sample_rate=16000,
+                    text=text or None,
+                    matched=hit is not None,
+                    phrase=hit.phrase if hit else None,
+                    rms=rms,
+                    backend=getattr(backend, "name", None),
+                    enabled=True,
+                )
+                snips_since_purge += 1
+                if snips_since_purge >= 20:
+                    purge_old_debug_snips(retention_days=debug_retention_days)
+                    snips_since_purge = 0
+
+            if hit is not None:
+                if acc is not None:
+                    acc.reset_pending()
+                syslog(
+                    "ambient.wake",
+                    component="ambient",
+                    message=hit.phrase,
+                    phrase=hit.phrase,
+                    raw=hit.raw,
+                    remainder=hit.remainder,
+                    backend=hit.backend,
+                    confidence=hit.confidence,
+                    snippet_s=snippet,
+                    hop_s=hop,
+                )
+                return hit
+
+            # Hot-reload learned aliases written by other processes / previous cycles
+            learned_state = load_learned_if_changed(learned_state)
+            if learned_state is not None and pol.learn:
+                pol = pol.merge_learned(
+                    name_aliases=learned_state.name_aliases,
+                    phrase_aliases=learned_state.phrase_aliases,
                 )
                 _apply_policy_to_backend(backend, pol)
                 phrase_list = pol.display_phrases()
-                group = acc.add(miss)
-                if group is not None:
-                    ev = make_wake_near_miss_event(
-                        group,
-                        total_near_misses=acc.total,
-                        group_index=acc.group_index,
-                        phrases=phrase_list,
-                    )
-                    if out is not None:
-                        out.write(json.dumps(ev, separators=(",", ":")) + "\n")
-                        out.flush()
-                    syslog(
-                        "ambient.wake_near_miss",
-                        component="ambient",
-                        level="info",
-                        message=f"{len(group)} near-miss(es)",
-                        count=len(group),
-                        total_near_misses=acc.total,
-                        attempts=[m.text for m in group],
-                    )
 
-        now = time.monotonic()
-        if now - last_debug >= debug_every_s:
-            last_debug = now
-            dbg = {
-                "schema": "hark.event.v1",
-                "kind": "ambient.debug",
-                "event_id": new_event_id(),
-                "observed_at": utc_now_iso(),
-                "rms": round(rms, 5),
-                "last_text": text or None,
-                "scored": getattr(backend, "snippets_scored", None),
-                "skipped_quiet": getattr(backend, "snippets_skipped_quiet", None),
-            }
-            if out is not None:
-                out.write(json.dumps(dbg, separators=(",", ":")) + "\n")
-                out.flush()
-            syslog(
-                "ambient.debug",
-                component="ambient",
-                level="debug",
-                message=text or "quiet",
-                rms=dbg["rms"],
-                last_text=dbg["last_text"],
-                scored=dbg["scored"],
-                skipped_quiet=dbg["skipped_quiet"],
-            )
-        time.sleep(0.05)
-    return None
+            # Plausible failed wake → Mode A monitor (grouped), never spam on noise
+            if acc is not None and text:
+                miss = plausible_near_miss(text, phrase_list, policy=pol)
+                if miss is not None:
+                    # Dynamically expand alternates (names or full phrases) — no restart
+                    pol, learned_state = _maybe_learn_from_miss(
+                        miss, policy=pol, learned=learned_state, out=out
+                    )
+                    _apply_policy_to_backend(backend, pol)
+                    phrase_list = pol.display_phrases()
+                    group = acc.add(miss)
+                    if group is not None:
+                        ev = make_wake_near_miss_event(
+                            group,
+                            total_near_misses=acc.total,
+                            group_index=acc.group_index,
+                            phrases=phrase_list,
+                        )
+                        if out is not None:
+                            out.write(json.dumps(ev, separators=(",", ":")) + "\n")
+                            out.flush()
+                        syslog(
+                            "ambient.wake_near_miss",
+                            component="ambient",
+                            level="info",
+                            message=f"{len(group)} near-miss(es)",
+                            count=len(group),
+                            total_near_misses=acc.total,
+                            attempts=[m.text for m in group],
+                        )
+
+            now = time.monotonic()
+            if now - last_debug >= debug_every_s:
+                last_debug = now
+                dbg = {
+                    "schema": "hark.event.v1",
+                    "kind": "ambient.debug",
+                    "event_id": new_event_id(),
+                    "observed_at": utc_now_iso(),
+                    "rms": round(rms, 5),
+                    "last_text": text or None,
+                    "scored": getattr(backend, "snippets_scored", None),
+                    "skipped_quiet": getattr(backend, "snippets_skipped_quiet", None),
+                    "snippet_s": snippet,
+                    "hop_s": hop,
+                    "ring_s": round(stream.available_s, 3),
+                }
+                if out is not None:
+                    out.write(json.dumps(dbg, separators=(",", ":")) + "\n")
+                    out.flush()
+                syslog(
+                    "ambient.debug",
+                    component="ambient",
+                    level="debug",
+                    message=text or "quiet",
+                    rms=dbg["rms"],
+                    last_text=dbg["last_text"],
+                    scored=dbg["scored"],
+                    skipped_quiet=dbg["skipped_quiet"],
+                )
+        return None
+    finally:
+        _close_stream()
 
 
 def complete_after_wake(
@@ -589,10 +670,13 @@ def run_ambient(
 
     deadline = _wake_deadline(timeout_s, amb.timeout_s)
 
-    # Lease is taken per snippet inside _wait_for_wake (not for the whole wait)
+    # Continuous MicLease + ring held inside _wait_for_wake for the whole arm;
+    # released on wake hit, pause (answer/ask), reload, or deadline.
     hit = _wait_for_wake(
         backend,
         snippet_s=amb.snippet_s,
+        hop_s=getattr(amb, "snippet_hop_s", None),
+        ring_s=float(getattr(amb, "ring_s", 5.0) or 5.0),
         deadline=deadline,
         out=out,
         debug_save=bool(amb.debug),

@@ -1,14 +1,15 @@
 """Coordinate mic ownership between ambient wake and bound listen/ask.
 
-Ambient holds the capture device while scanning for wake phrases. Mode A
-answer flows (listen / ask / tts --listen) need exclusive access. Cooperative
-protocol:
+Ambient holds a continuous capture stream (MicLease + ring buffer) while
+scanning for wake phrases. Mode A answer flows (listen / ask / tts --listen)
+need exclusive access. Cooperative protocol:
 
   1. Listener writes ``state/ambient.pause``
-  2. Ambient skips new capture while that file exists (releases between snippets)
+  2. Ambient closes the continuous stream (releases lease) when pause is set
   3. Listener acquires ``MicLease``, records, then clears the pause file
 
-Max wait for ambient to yield is one snippet (~2.5 s) plus poll time.
+Max wait for ambient to yield is one hop (~0.5–1 s of 20 ms reads) plus poll
+time — not a full snippet open/close cycle.
 """
 
 from __future__ import annotations

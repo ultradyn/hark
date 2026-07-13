@@ -220,7 +220,7 @@ def test_ambient_loop_file_watch_reload(tmp_path, monkeypatch):
 
     phase = {"n": 0}
 
-    def fake_record(seconds: float, sample_rate: int = 16000) -> bytes:
+    def next_pcm() -> bytes:
         phase["n"] += 1
         if phase["n"] == 1:
             # Operator edits config mid-wait; watcher will request_reload
@@ -254,7 +254,37 @@ def test_ambient_loop_file_watch_reload(tmp_path, monkeypatch):
         request_shutdown(reason="stop")
         return listened
 
-    monkeypatch.setattr(ambient, "record_seconds", fake_record)
+    # Minimal ContinuousMicStream stand-in (same pattern as test_custom_wake_e2e)
+    class FakeStream:
+        def __init__(self, *a, **k):
+            self._last = b"TXT:silence"
+
+        def open(self):
+            return self
+
+        def close(self):
+            pass
+
+        def __enter__(self):
+            return self.open()
+
+        def __exit__(self, *a):
+            pass
+
+        @property
+        def available_s(self):
+            return 5.0
+
+        def read_for(self, duration_s, *, should_stop=None):
+            if should_stop is not None and should_stop():
+                return False
+            self._last = next_pcm()
+            return True
+
+        def window_pcm16(self, duration_s, *, end_offset_s=0.0):
+            return self._last
+
+    monkeypatch.setattr(ambient, "ContinuousMicStream", FakeStream)
     monkeypatch.setattr(ambient, "run_listen", fake_listen)
     monkeypatch.setattr(ambient, "run_tts", lambda *a, **k: None)
 

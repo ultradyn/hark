@@ -1159,14 +1159,15 @@ def test_run_listen_restores_duck_on_exception(monkeypatch, tmp_path):
 
 
 def test_ambient_wake_idle_does_not_import_run_listen_duck():
-    """Idle ambient wake path uses record_seconds, not run_listen (no STT duck)."""
+    """Idle ambient wake path uses continuous ring capture, not run_listen (no STT duck)."""
     import inspect
 
     import hark.ambient as ambient
 
     src = inspect.getsource(ambient._wait_for_wake)
     assert "duck_media" not in src
-    assert "record_seconds" in src
+    assert "ContinuousMicStream" in src
+    assert "run_listen" not in src
     # Post-wake STT is separate and goes through run_listen
     complete_src = inspect.getsource(ambient.complete_after_wake)
     assert "run_listen" in complete_src

@@ -6,6 +6,12 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Ambient continuous mic stream (B079): idle wake holds one `MicLease` +
+  `InputStream` + ring buffer instead of open/close per snippet; overlapping
+  score windows (`snippet_s` / `snippet_hop_s`, `ring_s`). Answer/post-wake
+  capture seeds ≥250 ms pre-speech via `listen.pre_roll_ms` (default 300,
+  clamped 250–500). Docs: `AUDIO_DESIGN` continuous stream model. Unit tests
+  for ring windowing/hop and pre-roll (no hardware).
 - **Live web dashboard** (I003 / B060–B067): `hark serve` — REST + SSE backend
   implementing the new versioned `hark.dashboard.v1` contract
   ([docs/DASHBOARD.md](docs/DASHBOARD.md), `schemas/dashboard-v1/`,

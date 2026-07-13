@@ -1,12 +1,12 @@
 {
   "schema": "hark.fixtures.manifest.v1",
-  "generated_at": "2026-07-13T14:40:29Z",
-  "count": 56,
+  "generated_at": "2026-07-13T16:11:28Z",
+  "count": 86,
   "files": [
     {
       "path": "README.md",
-      "bytes": 3493,
-      "sha256": "0b55ea1b5512af7abf04a6834393dfd61781a80d892419787cb08fb4b59fd25e"
+      "bytes": 3605,
+      "sha256": "4752f732b7d3b794c6db7a159124da6483c195a1c5e2721127e0f4d58453875c"
     },
     {
       "path": "dashboard/actions.jsonl",
@@ -75,8 +75,8 @@
     },
     {
       "path": "events/hep/ambient_partial.sample.json",
-      "bytes": 821,
-      "sha256": "1bb3b65d1200c76fd86d23e89404011d0fc210824f56bab8accc60fc9ebe4357"
+      "bytes": 1964,
+      "sha256": "d221e6e447f5694c5657e4c91da6690a0f7233b7e14592b79f798929cc18b4b4"
     },
     {
       "path": "events/hep/ambient_prompt_final_radio.sample.json",
@@ -100,8 +100,8 @@
     },
     {
       "path": "events/hep/radio_partial_then_final.jsonl",
-      "bytes": 2140,
-      "sha256": "75cb2680b7efcdac0b8687e2a56e5970591f5fdb1b77eee608aaefec7d45dadf"
+      "bytes": 4440,
+      "sha256": "6c4b7ba2147e14c29d5bfd9b46630fa233b8066cab40a27e278c78ee6d764c2c"
     },
     {
       "path": "events/hep/watch_armed.json",
@@ -205,13 +205,163 @@
     },
     {
       "path": "voice/README.md",
-      "bytes": 2195,
-      "sha256": "b9409a30c676623ce277519c9f43edcedf90749229bcf263011096dbbe19f439"
+      "bytes": 5906,
+      "sha256": "f6d1a59c108fb500fbf9653b2eedcf20af28d48032ddfe5c2ae6bd984e779884"
     },
     {
       "path": "voice/wake/cases.jsonl",
-      "bytes": 1380,
-      "sha256": "5062ea34bbfee9916b0db91fdc7f0d7ce762e145fae0ee8d7f0c8a67eba30464"
+      "bytes": 13967,
+      "sha256": "b19adc3b01d05672194546f8c7b79b5877d54344af88ef1a70f7188355a7a3e9"
+    },
+    {
+      "path": "voice/wake/derived/a-hawk-miss-noise-heavy.wav",
+      "bytes": 80044,
+      "sha256": "151fdd37edf64e8e52adf047fb2b718854bff5d618637f35d90a58886f58d1aa"
+    },
+    {
+      "path": "voice/wake/derived/a-hawk-miss-noise-light.wav",
+      "bytes": 80044,
+      "sha256": "2c15f12788b98b1a717dd234ecc482a142e1195250bef18f8b66d47c39f62c3b"
+    },
+    {
+      "path": "voice/wake/derived/a-hawk-miss-pad150.wav",
+      "bytes": 80044,
+      "sha256": "f402c7c32b4c407d5fe20f38ab0d2be3754930bd5afc75a2cc2fcf2ebbf0d0ef"
+    },
+    {
+      "path": "voice/wake/derived/a-hawk-miss-quiet.wav",
+      "bytes": 80044,
+      "sha256": "79f7b695c26f0b77018901885e1506fcd579acc08849d2cc62c5ffbfd832917d"
+    },
+    {
+      "path": "voice/wake/derived/hello-alone-miss-noise-heavy.wav",
+      "bytes": 80044,
+      "sha256": "3d7447c846a569e29a10898200b5c29389ad66a454d5d00df0d889603a2e9807"
+    },
+    {
+      "path": "voice/wake/derived/hello-alone-miss-noise-light.wav",
+      "bytes": 80044,
+      "sha256": "ba825562423a6f7dc6a70305548cca8ab3abfd15f4b9721df0ec0c7203e95e86"
+    },
+    {
+      "path": "voice/wake/derived/hello-alone-miss-pad150.wav",
+      "bytes": 80044,
+      "sha256": "3945a6e53e19644a770470c9a63a27049e9b1ee75229802fe223b68c0cc5af67"
+    },
+    {
+      "path": "voice/wake/derived/hello-alone-miss-quiet.wav",
+      "bytes": 80044,
+      "sha256": "b06b8e50f0165ceb75e3c332096650f055fd83d453a28c73f30ed4eae17fca3a"
+    },
+    {
+      "path": "voice/wake/derived/hey-harold-as-herald-hit-noise-heavy.wav",
+      "bytes": 80044,
+      "sha256": "ca92b652bff2cf37344210d74f314769f88e29ac785dea75346082f600fcb102"
+    },
+    {
+      "path": "voice/wake/derived/hey-harold-as-herald-hit-noise-light.wav",
+      "bytes": 80044,
+      "sha256": "d9c1a4f97ac73f46f5ce3a128af9c7449975345349862b6e2753f4cb0acbcb38"
+    },
+    {
+      "path": "voice/wake/derived/hey-harold-as-herald-hit-pad150.wav",
+      "bytes": 80044,
+      "sha256": "6b98e1113967d3c6cb37b6ffe334c03a762587142677877fcc4076931209f86e"
+    },
+    {
+      "path": "voice/wake/derived/hey-harold-as-herald-hit-quiet.wav",
+      "bytes": 80044,
+      "sha256": "ddaf14601fb01730ceb97586f71fbaf94747ffeeb40c5787ca64b2cd05e9dbd8"
+    },
+    {
+      "path": "voice/wake/derived/hey-hawk-as-hark-hit-noise-heavy.wav",
+      "bytes": 80044,
+      "sha256": "51688da3ef25f50cbff1aff3db15ac319620819d962992b48450f2aa4782c8ed"
+    },
+    {
+      "path": "voice/wake/derived/hey-hawk-as-hark-hit-noise-light.wav",
+      "bytes": 80044,
+      "sha256": "567a40ebc7bf160585aa166ce31fe7b11ead8d0202ff15358a1e443874b636b1"
+    },
+    {
+      "path": "voice/wake/derived/hey-hawk-as-hark-hit-pad150.wav",
+      "bytes": 80044,
+      "sha256": "68487fcc9a06714f162d501a5abf2d034ab501698eebd5403308caaafd1f1767"
+    },
+    {
+      "path": "voice/wake/derived/hey-hawk-as-hark-hit-quiet.wav",
+      "bytes": 80044,
+      "sha256": "4a5c3917c20b1f5df551612d5e6cec1793b8473f78c233ddd92bf70eadc9095a"
+    },
+    {
+      "path": "voice/wake/derived/hey-ho-miss-noise-heavy.wav",
+      "bytes": 80044,
+      "sha256": "2c922d5206f9e5480b73e80d5e96942aa83f1d78c0647010da50ff9eda175520"
+    },
+    {
+      "path": "voice/wake/derived/hey-ho-miss-noise-light.wav",
+      "bytes": 80044,
+      "sha256": "254358862e1c27452fd214e4700d17f52a3f2b21b77db64920c10ceaac7b61a5"
+    },
+    {
+      "path": "voice/wake/derived/hey-ho-miss-pad150.wav",
+      "bytes": 80044,
+      "sha256": "52881f30d8ddd9451bb37b0fde92d6bc536e2171715e7d5d657909c625934c55"
+    },
+    {
+      "path": "voice/wake/derived/hey-ho-miss-quiet.wav",
+      "bytes": 80044,
+      "sha256": "05013ba7b39df330a97238b64a565be311a4d0097290a1990cba89926a66219f"
+    },
+    {
+      "path": "voice/wake/derived/hey-hoc-miss-noise-heavy.wav",
+      "bytes": 80044,
+      "sha256": "00cfb11816233c05dd894306e5d21b4d8a60bf19ab41f09863a4d58322bf968a"
+    },
+    {
+      "path": "voice/wake/derived/hey-hoc-miss-noise-light.wav",
+      "bytes": 80044,
+      "sha256": "be26a3ac26527b7860df8fde00f3743f449a903150e47613b03b14e739aa2b1c"
+    },
+    {
+      "path": "voice/wake/derived/hey-hoc-miss-pad150.wav",
+      "bytes": 80044,
+      "sha256": "8043328e259454173228b145d887194ba2d92e03d99ac83a37d44667ba42ae0e"
+    },
+    {
+      "path": "voice/wake/derived/hey-hoc-miss-quiet.wav",
+      "bytes": 80044,
+      "sha256": "3c5ccab246551491814159dd0df4b4afa60331fcc8cc35a0716c0bb76e6c255b"
+    },
+    {
+      "path": "voice/wake/derived/hey-hook-as-hark-hit-noise-heavy.wav",
+      "bytes": 80044,
+      "sha256": "e986e8bfedc526b7f4ed4ce530d7005480c1a22db3bc57f98d0a85a224121fc8"
+    },
+    {
+      "path": "voice/wake/derived/hey-hook-as-hark-hit-noise-light.wav",
+      "bytes": 80044,
+      "sha256": "b6ecc3d0182dd26c29bc1f7ccfbf04a9b4451ec7d2abfd316052e46ca400da8a"
+    },
+    {
+      "path": "voice/wake/derived/hey-hook-as-hark-hit-pad150.wav",
+      "bytes": 80044,
+      "sha256": "15b81bb89f84464b61103e861e039121cc64d29a21b57ae3486d5708a6aafe09"
+    },
+    {
+      "path": "voice/wake/derived/hey-hook-as-hark-hit-quiet.wav",
+      "bytes": 80044,
+      "sha256": "0b3b301ff3b21e0a672ef2420162b184301a630e3fe03797d81c6c7f84f93d51"
+    },
+    {
+      "path": "voice/wake/derived/noise-only-miss.wav",
+      "bytes": 80044,
+      "sha256": "ec1cc28883ccd08cd3ba687ef0b1f991d2f6c2bc652186d7528f57e5a4fa2ce7"
+    },
+    {
+      "path": "voice/wake/derived/silence-2.5s-miss.wav",
+      "bytes": 80044,
+      "sha256": "7ecf682084778b830a82e84e04e87013363718960dfd22be6a2cd233e65509aa"
     },
     {
       "path": "voice/wake/live/a-hawk-miss.json",

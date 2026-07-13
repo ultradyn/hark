@@ -49,4 +49,5 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
   "vosk: optional offline Vosk re-decode tests (needs model + vosk extra)",
+  "sherpa_kws: optional Sherpa-ONNX KWS wake eval (B070 backend + model; skip if absent)",
 ]

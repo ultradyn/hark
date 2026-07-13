@@ -16,10 +16,11 @@ fixtures/
     fingerprint.jsonl       # question fingerprint stability
     risk.jsonl              # risk classification
   voice/
-    README.md               # how to record more clips
+    README.md               # capture method + B071 eval harness notes
     wake/
-      cases.jsonl           # case index (links text + wav)
+      cases.jsonl           # eval index (live / derived / text-only)
       live/*.wav + *.json   # real Wave captures + vosk sidecars
+      derived/*.wav         # noise/gain/pad/silence variants (B071)
   events/
     hep/                    # Hark Event Protocol v1 samples
     syslog/                 # internal system.jsonl-shaped samples
@@ -33,7 +34,7 @@ fixtures/
 | Family | Tests | Rust client use |
 |--------|-------|-----------------|
 | `text/*` | Deterministic phrase/risk/fp logic | Port matchers; assert same outcomes |
-| `voice/wake` | Fuzzy wake on **vosk_text**; optional offline STT later | Ingest snip meta; same match rules |
+| `voice/wake` | Fuzzy wake on **vosk_text**; offline Vosk/Sherpa hit-miss-FA eval (B071) | Ingest snip meta; same match rules |
 | `events/hep` | Schema shape, partial HOLD, stream supersede | Event ingest / bus consumers |
 | `events/syslog` | Timeline wake→prompt | Optional internal log parsers |
 | `usage` | Ledger fields | Metrics parity |

@@ -123,12 +123,25 @@ def test_fixture_risk(case: dict) -> None:
     ids=lambda c: c["id"],
 )
 def test_fixture_voice_wake_cases(case: dict) -> None:
-    wav = FIX / "voice" / "wake" / case["wav"]
-    meta_path = FIX / "voice" / "wake" / case["meta"]
-    assert wav.is_file(), f"missing wav {_repo_rel(wav)}"
-    assert meta_path.is_file(), f"missing meta {_repo_rel(meta_path)}"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    text = case.get("vosk_text") or meta.get("text") or ""
+    # B071: cases may be audio (live/derived), text-only (no wav), or derived
+    # without a sidecar meta. Text-path parity uses vosk_text / meta.text.
+    tags = set(case.get("tags") or [])
+    wav_rel = case.get("wav")
+    meta_rel = case.get("meta")
+    meta: dict = {}
+    if meta_rel:
+        meta_path = FIX / "voice" / "wake" / meta_rel
+        assert meta_path.is_file(), f"missing meta {_repo_rel(meta_path)}"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if wav_rel:
+        wav = FIX / "voice" / "wake" / wav_rel
+        assert wav.is_file(), f"missing wav {_repo_rel(wav)}"
+    elif "text-only" not in tags:
+        # Non-text cases must point at audio.
+        raise AssertionError(f"{case['id']}: missing wav (not tagged text-only)")
+    text = case.get("vosk_text")
+    if text is None:
+        text = meta.get("text") or case.get("text") or ""
     hit = match_activation(text, anywhere=True)
     if not case["expect_match"]:
         assert hit is None, f"{case['id']}: unexpected hit for {text!r}"

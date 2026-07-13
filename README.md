@@ -152,7 +152,9 @@ uv run hark monitor              # primary handsfree feed (compact default)
 uv run hark tts "hello"
 uv run hark listen               # speak, then silence ends (or end_mode=radio)
 uv run hark ask "What color?"
-# ambient wake (needs vosk model if engine=vosk):
+uv run hark start                # ambient + watch workers (idempotent; mode-a.pids)
+uv run hark stop                 # graceful stop workers
+# ambient alone (needs vosk model if engine=vosk):
 # uv run hark ambient
 uv run hark watch-logs           # live colorful system.jsonl (Ctrl-C to stop)
 uv run hark watch-logs --all     # also ambient.jsonl + watch.jsonl
@@ -172,7 +174,7 @@ uv run hark daemon stop
 # or: uv run harkd status|start|stop
 ```
 
-Do not run `harkd` alongside `./scripts/run-mode-a.sh` (single always-on owner; no silent double-send).
+Do not run `harkd` alongside `hark start` / `./scripts/run-mode-a.sh` (single always-on owner; no silent double-send).
 
 ### Ambient wake (`hey hark`)
 

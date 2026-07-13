@@ -229,7 +229,7 @@ Monitor({
 | `ambient.wake_learned` | Alias auto-learned |
 | `ambient.error` / `ambient.cancelled` / `ambient.reloaded` / `ambient.armed` | Ops / status |
 
-Requires workers writing state (`./scripts/run-mode-a.sh` or `hark daemon start --workers`): `watch.jsonl` + `ambient.jsonl` under `~/.local/state/hark/`.
+Requires workers writing state (`hark start`, `./scripts/run-mode-a.sh`, or `hark daemon start --workers`): `watch.jsonl` + `ambient.jsonl` under `~/.local/state/hark/`.
 
 **Do not** replace this with only `hark watch` (misses ambient) or only ambient tails (misses Herdr blocked).
 
@@ -255,7 +255,7 @@ When **you** are Google Antigravity CLI (`agy`), there is **no** native long-liv
 Monitor tool. Wake uses **agentapi inject** (same idea as c2c’s agy path):
 
 1. Install/load this skill; ensure `hark` CLI works (`hark doctor`).
-2. Start workers: `./scripts/run-mode-a.sh` (or equivalent ambient+watch).
+2. Start workers: `hark start` (or `./scripts/run-mode-a.sh` / ambient+watch).
 3. **Register** inject target (shell inside agy so env is set):
    ```bash
    hark agentapi register

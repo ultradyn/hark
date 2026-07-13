@@ -424,6 +424,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="print log path(s) only",
     )
 
+    # Handsfree always-on workers (ambient + watch); preferred over run-mode-a.sh
+    from hark.workers import add_lifecycle_parsers
+
+    add_lifecycle_parsers(sub)
+
     dae = sub.add_parser(
         "daemon",
         help="experimental harkd scaffold (not required for handsfree v1; see docs/HARKD.md)",
@@ -782,6 +787,18 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
         return cmd_logs(args)
     if cmd == "watch-logs":
         return cmd_watch_logs(args)
+    if cmd == "start":
+        from hark.workers import cmd_start
+
+        return cmd_start(args)
+    if cmd == "stop":
+        from hark.workers import cmd_stop
+
+        return cmd_stop(args)
+    if cmd == "restart":
+        from hark.workers import cmd_restart
+
+        return cmd_restart(args)
     if cmd == "daemon":
         from hark.daemon import dispatch_daemon
 

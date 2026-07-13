@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Run Hark handsfree properly: Herdr watch + ambient wake (hey hark).
+# Preferred CLI equivalent: `hark start` / `hark stop` / `hark restart`.
 #
 #   ./scripts/run-mode-a.sh
 #   ./scripts/run-mode-a.sh --no-ambient

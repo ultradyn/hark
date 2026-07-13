@@ -1,3 +1,4 @@
+import errno
 import io
 import json
 
@@ -6,6 +7,7 @@ import hark.watch as watch
 from hark.config import HarkConfig, SessionConfig
 from hark.delivery import BoundEvent, DeliveryStore
 from hark.herdr.client import AgentInfo, HerdrError
+from hark.herdr.socket_client import is_expected_disconnect
 
 
 class FakeWatchStore:
@@ -144,3 +146,203 @@ def test_socket_lifecycle_event_invalidates_bound_target(monkeypatch, tmp_path):
     assert invalidated[0]["disposition"] == "invalidated"
     assert invalidated[0]["invalidated_event_ids"] == ["evt-pending"]
     assert store.get("evt-pending").status == "invalidated"
+
+
+def test_is_expected_disconnect_classifies_pipe_and_reset():
+    assert is_expected_disconnect(BrokenPipeError(errno.EPIPE, "Broken pipe"))
+    assert is_expected_disconnect(
+        ConnectionResetError(errno.ECONNRESET, "Connection reset by peer")
+    )
+    assert is_expected_disconnect(EOFError("Herdr socket closed"))
+    assert is_expected_disconnect(OSError(errno.EPIPE, "Broken pipe"))
+    assert is_expected_disconnect(OSError(errno.ECONNREFUSED, "Connection refused"))
+    assert is_expected_disconnect(FileNotFoundError("herdr.sock"))
+    # String form as seen in "socket watch failed, poll: [Errno 32] Broken pipe"
+    assert is_expected_disconnect(RuntimeError("[Errno 32] Broken pipe"))
+    assert is_expected_disconnect(RuntimeError("[Errno 104] Connection reset by peer"))
+    assert not is_expected_disconnect(RuntimeError("subscribe failed: unknown method"))
+    assert not is_expected_disconnect(RuntimeError("ping failed: not authorized"))
+
+
+def test_watch_socket_reconnects_quietly_on_broken_pipe(monkeypatch, tmp_path):
+    from hark.herdr import socket_client
+
+    attempts = {"n": 0}
+    sleeps: list[float] = []
+
+    def fake_subscribe(_socket_path, on_event):
+        attempts["n"] += 1
+        if attempts["n"] < 4:
+            raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(socket_client, "run_subscribe_loop", fake_subscribe)
+    monkeypatch.setattr(watch.time, "sleep", lambda s: sleeps.append(s))
+
+    client = FakeWatchClient(SessionConfig(id="local"))
+    client.socket_path = tmp_path / "herdr.sock"
+    emitted: list[dict[str, object]] = []
+
+    assert (
+        watch._watch_socket(
+            client,
+            tracker=watch.EdgeTracker(),
+            interest={"blocked"},
+            emit=emitted.append,
+            heartbeat_s=60,
+            sessions=["local"],
+            question_for=None,
+            store=None,
+        )
+        == 0
+    )
+
+    assert attempts["n"] == 4
+    assert len(sleeps) == 3  # backoff between reconnects
+    errors = [e for e in emitted if e["kind"] == "watch.error"]
+    # Rate-limited: many Broken pipes → a single watch.error in the window
+    assert len(errors) == 1
+    assert "reconnecting" in str(errors[0]["error"])
+    assert "Broken pipe" in str(errors[0]["error"])
+
+
+def test_watch_socket_rate_limits_expected_disconnect_errors(monkeypatch, tmp_path):
+    from hark.herdr import socket_client
+
+    clock = {"t": 1000.0}
+    attempts = {"n": 0}
+
+    def fake_subscribe(_socket_path, on_event):
+        attempts["n"] += 1
+        if attempts["n"] <= 5:
+            raise ConnectionResetError(errno.ECONNRESET, "Connection reset by peer")
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(socket_client, "run_subscribe_loop", fake_subscribe)
+    monkeypatch.setattr(watch.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(watch.time, "monotonic", lambda: clock["t"])
+
+    client = FakeWatchClient(SessionConfig(id="local"))
+    client.socket_path = tmp_path / "herdr.sock"
+    emitted: list[dict[str, object]] = []
+
+    # Advance clock only after first emit window so later reconnects suppress.
+    orig_allow = watch._WatchErrorLimiter.allow
+
+    def allow_then_advance(self):
+        allowed, suppressed = orig_allow(self)
+        if allowed:
+            # next disconnects stay inside the interval
+            clock["t"] += 1.0
+        return allowed, suppressed
+
+    monkeypatch.setattr(watch._WatchErrorLimiter, "allow", allow_then_advance)
+
+    assert (
+        watch._watch_socket(
+            client,
+            tracker=watch.EdgeTracker(),
+            interest={"blocked"},
+            emit=emitted.append,
+            heartbeat_s=60,
+            sessions=["local"],
+            question_for=None,
+            store=None,
+        )
+        == 0
+    )
+
+    errors = [e for e in emitted if e["kind"] == "watch.error"]
+    assert len(errors) == 1
+    assert attempts["n"] == 6
+
+
+def test_watch_socket_real_failure_propagates_for_poll_fallback(monkeypatch, tmp_path):
+    from hark.herdr import socket_client
+
+    def fake_subscribe(_socket_path, on_event):
+        raise RuntimeError("subscribe failed: unknown method")
+
+    monkeypatch.setattr(socket_client, "run_subscribe_loop", fake_subscribe)
+    monkeypatch.setattr(watch.time, "sleep", lambda _s: None)
+
+    client = FakeWatchClient(SessionConfig(id="local"))
+    client.socket_path = tmp_path / "herdr.sock"
+    emitted: list[dict[str, object]] = []
+
+    try:
+        watch._watch_socket(
+            client,
+            tracker=watch.EdgeTracker(),
+            interest={"blocked"},
+            emit=emitted.append,
+            heartbeat_s=60,
+            sessions=["local"],
+            question_for=None,
+            store=None,
+        )
+        raised = False
+    except RuntimeError as exc:
+        raised = True
+        assert "unknown method" in str(exc)
+
+    assert raised
+    # Real failures are not swallowed as quiet reconnect errors inside the loop.
+    reconnect_errors = [
+        e
+        for e in emitted
+        if e["kind"] == "watch.error" and "reconnecting" in str(e.get("error", ""))
+    ]
+    assert reconnect_errors == []
+
+
+def test_run_watch_poll_fallback_rate_limits_expected_disconnect(monkeypatch):
+    """Outer fallback: expected disconnect → at most rate-limited watch.error."""
+
+    def make_client(session: SessionConfig) -> FakeWatchClient:
+        c = FakeWatchClient(session)
+        c.socket_path = "/tmp/fake-herdr.sock"
+        return c
+
+    def boom_socket(*_a, **_k):
+        raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+
+    monkeypatch.setattr(watch, "HerdrClient", make_client)
+    monkeypatch.setattr(watch, "DeliveryStore", lambda: FakeWatchStore())
+    monkeypatch.setattr(watch, "_watch_socket", boom_socket)
+    monkeypatch.setattr(FakeWatchClient, "socket_exists", lambda self: True)
+    # once=True skips socket; interrupt poll after fallback.
+    monkeypatch.setattr(watch.time, "sleep", lambda _s: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    out = io.StringIO()
+    cfg = HarkConfig(sessions=[SessionConfig(id="local")])
+    assert watch.run_watch(cfg, transport="socket", once=False, out=out) == 0
+    events = [json.loads(line) for line in out.getvalue().splitlines()]
+    errors = [e for e in events if e["kind"] == "watch.error"]
+    assert len(errors) == 1
+    assert "Broken pipe" in errors[0]["error"]
+    assert "poll" in errors[0]["error"]
+
+
+def test_run_watch_poll_fallback_always_emits_real_socket_failure(monkeypatch):
+    def make_client(session: SessionConfig) -> FakeWatchClient:
+        c = FakeWatchClient(session)
+        c.socket_path = "/tmp/fake-herdr.sock"
+        return c
+
+    def boom_socket(*_a, **_k):
+        raise RuntimeError("subscribe failed: unknown method")
+
+    monkeypatch.setattr(watch, "HerdrClient", make_client)
+    monkeypatch.setattr(watch, "DeliveryStore", lambda: FakeWatchStore())
+    monkeypatch.setattr(watch, "_watch_socket", boom_socket)
+    monkeypatch.setattr(FakeWatchClient, "socket_exists", lambda self: True)
+    monkeypatch.setattr(watch.time, "sleep", lambda _s: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    out = io.StringIO()
+    cfg = HarkConfig(sessions=[SessionConfig(id="local")])
+    assert watch.run_watch(cfg, transport="socket", once=False, out=out) == 0
+    events = [json.loads(line) for line in out.getvalue().splitlines()]
+    errors = [e for e in events if e["kind"] == "watch.error"]
+    assert len(errors) == 1
+    assert "unknown method" in errors[0]["error"]

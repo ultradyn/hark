@@ -20,7 +20,35 @@ from hark.events import (
 )
 from hark.fingerprint import question_fingerprint
 from hark.herdr.client import AgentInfo, HerdrClient, HerdrError
+from hark.herdr.socket_client import is_expected_disconnect
 from hark.herdr.tunnel import Tunnel, ensure_tunnel
+
+# Min gap between watch.error for expected socket drops (Broken pipe, reset, …).
+_EXPECTED_DISCONNECT_ERROR_INTERVAL_S = 60.0
+_SOCKET_RECONNECT_BACKOFF_MIN_S = 0.25
+_SOCKET_RECONNECT_BACKOFF_MAX_S = 10.0
+# If a subscribe session lived this long, treat the next drop as healthy→quick reconnect.
+_SOCKET_HEALTHY_SESSION_S = 2.0
+
+
+class _WatchErrorLimiter:
+    """Rate-limit repeated expected-disconnect watch.error emissions."""
+
+    def __init__(self, interval_s: float = _EXPECTED_DISCONNECT_ERROR_INTERVAL_S) -> None:
+        self.interval_s = interval_s
+        self._last_emit = 0.0
+        self._suppressed = 0
+
+    def allow(self) -> tuple[bool, int]:
+        """Return (should_emit, suppressed_since_last_emit)."""
+        now = time.monotonic()
+        if now - self._last_emit >= self.interval_s:
+            suppressed = self._suppressed
+            self._suppressed = 0
+            self._last_emit = now
+            return True, suppressed
+        self._suppressed += 1
+        return False, 0
 
 
 class EdgeTracker:
@@ -163,6 +191,7 @@ def run_watch(
     use_socket = transport == "socket" or (
         transport == "auto" and len(clients) == 1 and clients[0].socket_exists()
     )
+    fallback_limiter = _WatchErrorLimiter()
     if use_socket and transport != "poll" and not once:
         try:
             return _watch_socket(
@@ -176,7 +205,15 @@ def run_watch(
                 store=store,
             )
         except Exception as exc:
-            emit(make_watch_error(clients[0].session.id, f"socket watch failed, poll: {exc}"))
+            # Expected disconnects should normally reconnect inside _watch_socket.
+            # If we still land here (or process only tried once), rate-limit spam.
+            _emit_watch_error(
+                emit,
+                clients[0].session.id,
+                f"socket watch failed, poll: {exc}",
+                exc=exc,
+                limiter=fallback_limiter,
+            )
 
     try:
         while True:
@@ -210,6 +247,24 @@ def _emit(event: dict[str, Any], *, for_monitor: bool, out: TextIO) -> None:
     out.flush()
 
 
+def _emit_watch_error(
+    emit: Callable[[dict[str, Any]], None],
+    session_id: str,
+    message: str,
+    *,
+    exc: BaseException | None = None,
+    limiter: _WatchErrorLimiter | None = None,
+) -> None:
+    """Emit watch.error; rate-limit when *exc* is an expected disconnect."""
+    if exc is not None and is_expected_disconnect(exc) and limiter is not None:
+        allowed, suppressed = limiter.allow()
+        if not allowed:
+            return
+        if suppressed:
+            message = f"{message} ({suppressed} similar suppressed)"
+    emit(make_watch_error(session_id, message))
+
+
 def _watch_socket(
     client: HerdrClient,
     *,
@@ -221,14 +276,33 @@ def _watch_socket(
     question_for: Callable[[AgentInfo], str | None] | None,
     store: DeliveryStore | None,
 ) -> int:
-    """Hybrid: socket events trigger refresh + poll edges; heartbeat thread."""
+    """Hybrid: socket events trigger refresh + poll edges; heartbeat thread.
+
+    Reconnects quietly on expected peer drops (Broken pipe, connection reset,
+    EPIPE, brief socket absence). Real protocol failures propagate so
+    ``run_watch`` can fall back to poll with a visible watch.error.
+    """
     from hark.herdr.socket_client import run_subscribe_loop
 
     stop = threading.Event()
+    limiter = _WatchErrorLimiter()
+    backoff_s = _SOCKET_RECONNECT_BACKOFF_MIN_S
 
     def heartbeat() -> None:
         while not stop.wait(heartbeat_s):
             emit(make_watch_heartbeat(sessions))
+
+    def reconcile() -> None:
+        try:
+            agents = client.list_agents()
+        except HerdrError as exc:
+            # list_agents failures are operational; always surface (not disconnect spam).
+            emit(make_watch_error(client.session.id, str(exc)))
+            return
+        for event in tracker.process(
+            agents, interest=interest, question_for=question_for
+        ):
+            emit(event)
 
     def on_wire(raw: dict[str, Any]) -> None:
         if _handle_lifecycle_event(raw, client=client, store=store, emit=emit):
@@ -244,21 +318,40 @@ def _watch_socket(
             emit(event)
 
     # initial reconcile
-    try:
-        agents = client.list_agents()
-        for event in tracker.process(
-            agents, interest=interest, question_for=question_for
-        ):
-            emit(event)
-    except HerdrError as exc:
-        emit(make_watch_error(client.session.id, str(exc)))
+    reconcile()
 
     t = threading.Thread(target=heartbeat, daemon=True)
     t.start()
     try:
-        run_subscribe_loop(client.socket_path, on_wire)
-    except KeyboardInterrupt:
-        return 0
+        while True:
+            started = time.monotonic()
+            try:
+                run_subscribe_loop(client.socket_path, on_wire)
+                return 0
+            except KeyboardInterrupt:
+                return 0
+            except Exception as exc:
+                if not is_expected_disconnect(exc):
+                    # Protocol/API failure → outer poll fallback with full error.
+                    raise
+                ran_for = time.monotonic() - started
+                _emit_watch_error(
+                    emit,
+                    client.session.id,
+                    f"socket disconnected, reconnecting: {exc}",
+                    exc=exc,
+                    limiter=limiter,
+                )
+                # Edge-detect via CLI while socket is down.
+                reconcile()
+                if ran_for >= _SOCKET_HEALTHY_SESSION_S:
+                    backoff_s = _SOCKET_RECONNECT_BACKOFF_MIN_S
+                time.sleep(backoff_s)
+                if ran_for < _SOCKET_HEALTHY_SESSION_S:
+                    backoff_s = min(
+                        _SOCKET_RECONNECT_BACKOFF_MAX_S,
+                        backoff_s * 2,
+                    )
     finally:
         stop.set()
     return 0

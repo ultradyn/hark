@@ -17,6 +17,7 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   precedence, half-duplex / no idle-wake ducking, shipped defaults with
   `duck_level = 0.15`), `hark doctor` soft readiness for `pactl` / `playerctl`
   (degraded warning, not hard fail). Behavior itself shipped in B044–B046.
+
 ## 0.1.5
 
 - Site Supports notes: document bare `hark monitor` (compact/`--for-monitor` is default on).

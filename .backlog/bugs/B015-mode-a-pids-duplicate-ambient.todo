@@ -1,0 +1,20 @@
+---
+complexity: medium
+created_at: "2026-07-13T07:35:03Z"
+depends_on: []
+estimate_hours: 1
+id: B015
+priority: high
+status: pending
+tags:
+    - dogfood
+    - ops
+title: mode-a.pids / duplicate ambient processes
+updated_at: "2026-07-13T07:35:03Z"
+---
+## Dogfood
+Multiple ambient processes and stale pidfile entries after partial restarts during mic-busy workarounds.
+
+## Wanted
+- run-mode-a.sh single-instance ambient
+- Clean pidfile rewrite on start/stop

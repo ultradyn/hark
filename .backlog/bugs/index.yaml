@@ -13,3 +13,4 @@ bugs:
     - file: B012-empty-stt-after-tts-false-spee.todo
     - file: B013-wave-hardware-mute-vs-pactl-mu.todo
     - file: B014-socket-watch-broken-pipe-noisy.todo
+    - file: B015-mode-a-pids-duplicate-ambient.todo

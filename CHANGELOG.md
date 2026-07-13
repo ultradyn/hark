@@ -6,6 +6,9 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Site homepage (B043): sticky nav chrome spans full viewport width (content still
+  max-width centered); hero pitch pills and marketing copy drop internal “Mode A”
+  jargon for outsider-readable voice/fleet framing.
 - Site typography (B042): replace generic system stacks with curated webfonts —
   **Fraunces** (display), **Source Sans 3** (body), **JetBrains Mono** (mono) —
   loaded with `preconnect` + `display=swap` on the marketing site and OG card.

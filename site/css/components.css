@@ -146,6 +146,7 @@ a.product-link:hover {
 /* --- Eyebrow / kicker --- */
 .eyebrow {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--s-2);
   font-family: var(--font-mono);
@@ -154,6 +155,7 @@ a.product-link:hover {
   text-transform: uppercase;
   color: var(--herald);
   margin-bottom: var(--s-4);
+  max-width: 100%;
 }
 
 .eyebrow__dot {

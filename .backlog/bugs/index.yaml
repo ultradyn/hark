@@ -57,3 +57,4 @@ bugs:
     - file: B056-herdrclient-list-ensure-named.todo
     - file: B057-cli-hark-agent-start-session-e.todo
     - file: B058-mode-a-skill-voice-playbook-fo.todo
+    - file: B059-config-doctor-and-docs-for-voi.todo

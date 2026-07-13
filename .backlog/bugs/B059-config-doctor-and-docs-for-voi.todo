@@ -1,0 +1,32 @@
+---
+complexity: low
+created_at: "2026-07-13T14:26:24Z"
+depends_on:
+    - B057
+    - B058
+estimate_hours: 2
+id: B059
+priority: medium
+status: pending
+tags:
+    - I005
+    - docs
+    - doctor
+    - config
+title: Config, doctor, and docs for voice Herdr agent control
+updated_at: "2026-07-13T14:26:24Z"
+---
+## Problem
+Operators need discoverability: which CLIs resolve, how aliases work, and how voice spawn fits Mode A. Doctor should surface readiness.
+
+## Scope (I005 / B059)
+- Config keys for agent CLI overrides (see `docs/plans/I005-voice-herdr-agent-control.md`)
+- `hark doctor` soft checks: for each catalog agent, show resolved argv or missing
+- Docs: HERDR.md (start/session), SPEC/PRODUCT brief mention if needed, plan status → implementation pointers
+- CHANGELOG Unreleased note when behavior ships (with implement PRs; this bug can stage the bullets)
+
+## Acceptance
+- [ ] Config documented in config.toml comments / `hark config` surface as appropriate
+- [ ] Doctor lists resolved vs missing CLIs without failing hard if optional agents absent
+- [ ] HERDR.md documents `agent start` + session ensure via hark wrappers
+- [ ] Plan doc status updated when epic completes

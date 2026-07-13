@@ -1,14 +1,18 @@
 ---
+claimed_at: "2026-07-13T22:22:29Z"
+claimed_by: grok-bl-fix
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T19:58:09Z"
 depends_on: []
 estimate_hours: 1
 id: B101
 priority: high
-status: pending
+started_at: "2026-07-13T22:22:29Z"
+status: in_progress
 tags: []
 title: Delivery queue accumulates stale bound events; queue --announce becomes untrustworthy
-updated_at: "2026-07-13T19:58:09Z"
+updated_at: "2026-07-13T22:22:29Z"
 ---
 ## Dogfood (2026-07-14)
 `hark queue` listed dozens of old event_ids (many default/w1:p6, plus assorted

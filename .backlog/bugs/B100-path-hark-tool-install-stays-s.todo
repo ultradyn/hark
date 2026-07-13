@@ -1,14 +1,18 @@
 ---
+claimed_at: "2026-07-13T22:22:29Z"
+claimed_by: grok-bl-fix
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T19:58:09Z"
 depends_on: []
 estimate_hours: 1
 id: B100
 priority: high
-status: pending
+started_at: "2026-07-13T22:22:29Z"
+status: in_progress
 tags: []
 title: PATH hark tool install stays stale after master gains subcommands (e.g. start/stop)
-updated_at: "2026-07-13T19:58:09Z"
+updated_at: "2026-07-13T22:22:29Z"
 ---
 ## Dogfood (2026-07-14)
 After B089 landed on master (`hark start`/`stop`/`restart`), the PATH install

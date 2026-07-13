@@ -1,0 +1,32 @@
+---
+complexity: medium
+created_at: "2026-07-13T18:56:52Z"
+depends_on: []
+estimate_hours: 1
+id: B098
+priority: high
+status: pending
+tags: []
+title: 'Ambient streaming mode: keep mic open, respond live to partials'
+updated_at: "2026-07-13T18:56:52Z"
+---
+## Request (dogfood 2026-07-13)
+Add an ambient **streaming** mode: operator turns streaming on; mic stays open; agent may respond live as partials arrive (not only on ambient.prompt final). Everything stays partial-like; agent can reply as they go.
+
+## Pieces already present
+- `ambient.partial` HEP events + radio segment STT
+- `stream_partials`, `radio_partial_silence_s` (now dogfooded at 1.05s ≈ half of end_silence 2.1s)
+- TTS play queue (B092), mute-during-TTS freeze (B084)
+
+## Gaps
+1. Skill/protocol: RADIO PARTIAL currently **forbids** full TTS until final — need streaming-mode agent policy (short acks, interruptible replies).
+2. Defer TTS while user still speaking (paired bug).
+3. Barge-in / echo / half-duplex policy when mic stays open during agent speech.
+4. Turn-taking: when is a live reply allowed vs hold; silence end vs end phrases.
+5. Optional: continuous ambient without re-wake between turns.
+
+## Acceptance sketch
+- Config flag e.g. `ambient.streaming` or listen end_mode variant.
+- HEP instructions differ for streaming vs hold-radio.
+- TTS does not cut off active user speech (see paired bug).
+- Dogfood: multi-turn open-mic conversation without full re-wake each time.

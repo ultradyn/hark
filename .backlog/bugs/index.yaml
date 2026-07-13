@@ -96,3 +96,4 @@ bugs:
     - file: B095-print-tts-question-text-to-ter.todo
     - file: B096-false-agent-completed-done-whi.todo
     - file: B097-tts-plays-while-operator-still.todo
+    - file: B098-ambient-streaming-mode-keep-mi.todo

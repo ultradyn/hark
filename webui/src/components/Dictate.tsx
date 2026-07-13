@@ -17,12 +17,12 @@ export function DictateOverlay({ onClose }: { onClose: () => void }) {
   const partial = useSignal("");
   const error = useSignal<string | null>(null);
   const target = useSignal<string>("prompt"); // "prompt" | event_id
-  const level = useSignal(0);
 
   const recRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const rafRef = useRef(0);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     void refresh("deliveries");
@@ -52,7 +52,6 @@ export function DictateOverlay({ onClose }: { onClose: () => void }) {
     streamRef.current = null;
     audioCtxRef.current = null;
     recRef.current = null;
-    level.value = 0;
   };
 
   useEffect(() => () => cleanupBrowser(), []);
@@ -62,21 +61,50 @@ export function DictateOverlay({ onClose }: { onClose: () => void }) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-      // VU meter
+      // live spectrum: vertical bars mirrored about y=0, x ~ frequency
       const ctx = new AudioContext();
       audioCtxRef.current = ctx;
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 512;
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.75;
       ctx.createMediaStreamSource(stream).connect(analyser);
-      const buf = new Uint8Array(analyser.frequencyBinCount);
-      const meter = () => {
-        analyser.getByteTimeDomainData(buf);
-        let peak = 0;
-        for (const v of buf) peak = Math.max(peak, Math.abs(v - 128) / 128);
-        level.value = peak;
-        rafRef.current = window.requestAnimationFrame(meter);
+      const freq = new Uint8Array(analyser.frequencyBinCount);
+      // show up to ~6 kHz — where voice lives
+      const bins = Math.min(
+        analyser.frequencyBinCount,
+        Math.ceil(6000 / (ctx.sampleRate / analyser.fftSize)),
+      );
+      const draw = () => {
+        rafRef.current = window.requestAnimationFrame(draw);
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const dpr = window.devicePixelRatio || 1;
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+        if (canvas.width !== Math.round(w * dpr)) {
+          canvas.width = Math.round(w * dpr);
+          canvas.height = Math.round(h * dpr);
+        }
+        const g = canvas.getContext("2d");
+        if (!g) return;
+        g.setTransform(dpr, 0, 0, dpr, 0, 0);
+        g.clearRect(0, 0, w, h);
+        analyser.getByteFrequencyData(freq);
+        const mid = h / 2;
+        const bw = w / bins;
+        for (let i = 0; i < bins; i++) {
+          const v = freq[i] / 255;
+          const bh = Math.max(0.75, v * (mid - 1));
+          // indigo → violet across the frequency axis, hotter when louder
+          const t = i / bins;
+          g.fillStyle = `rgba(${99 + t * 69}, ${102 - t * 17}, ${241 + t * 6}, ${0.35 + v * 0.65})`;
+          g.fillRect(i * bw + 0.5, mid - bh, Math.max(bw - 1, 1), bh * 2);
+        }
+        // y=0 axis hairline
+        g.fillStyle = "rgba(165,180,252,0.35)";
+        g.fillRect(0, mid - 0.5, w, 1);
       };
-      meter();
+      draw();
 
       const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
@@ -225,14 +253,17 @@ export function DictateOverlay({ onClose }: { onClose: () => void }) {
               <span class="badge err">
                 <span class="dot" style="background:var(--error)" /> recording
               </span>
-              {mode.value === "browser" && (
-                <div style="flex:1;height:8px;border-radius:4px;background:var(--bg-raise);overflow:hidden">
-                  <div
-                    style={`height:100%;width:${Math.min(100, level.value * 140)}%;background:var(--grad);transition:width 60ms`}
-                  />
-                </div>
-              )}
+              <span style="color:var(--text-faint);font-size:10px;margin-left:auto">
+                {mode.value === "browser" ? "0–6 kHz" : "host mic"}
+              </span>
             </div>
+            {mode.value === "browser" && (
+              <canvas
+                ref={canvasRef}
+                style="width:100%;height:72px;display:block;background:#05070d;
+                       border:1px solid var(--line-soft);border-radius:8px"
+              />
+            )}
             {partial.value && (
               <div class="qtext" style="color:var(--text-dim)">
                 {partial.value}

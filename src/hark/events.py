@@ -392,12 +392,37 @@ def is_idle_like_status(status: str | None) -> bool:
 
 
 def monitor_profile(event: dict[str, Any]) -> dict[str, Any]:
-    """Compact --for-monitor line: no secrets, no huge transcripts."""
-    target = event.get("target") or {}
-    question = event.get("question") or {}
-    q_text = question.get("text")
+    """Compact --for-monitor line: no secrets, no huge transcripts.
+
+    Tolerates legacy/malformed wire shapes: ``question`` or ``target`` may be a
+    plain string (older watch lines / partial normalizers) instead of objects.
+    """
+    raw_target = event.get("target")
+    if isinstance(raw_target, dict):
+        target: dict[str, Any] = raw_target
+    elif isinstance(raw_target, str) and raw_target.strip():
+        # "session/pane" or bare pane
+        parts = raw_target.split("/", 1)
+        if len(parts) == 2:
+            target = {"server_instance": parts[0].strip(), "pane_id": parts[1].strip()}
+        else:
+            target = {"pane_id": raw_target.strip()}
+    else:
+        target = {}
+
+    raw_q = event.get("question")
+    q_meta: dict[str, Any] = {}
+    if isinstance(raw_q, dict):
+        q_meta = raw_q
+        q_text = raw_q.get("text")
+    elif isinstance(raw_q, str):
+        q_text = raw_q
+    else:
+        q_text = None
     if isinstance(q_text, str) and len(q_text) > 240:
         q_text = q_text[:237] + "…"
+
+    state = event.get("state") if isinstance(event.get("state"), dict) else {}
 
     session_id = event.get("session_id") or target.get("server_instance")
     pane_id = target.get("pane_id")
@@ -410,14 +435,14 @@ def monitor_profile(event: dict[str, Any]) -> dict[str, Any]:
         "agent": target.get("agent"),
         "name": target.get("friendly_name"),
         "pane_id": pane_id,
-        "status_to": (event.get("state") or {}).get("to"),
+        "status_to": state.get("to"),
     }
     if q_text:
         compact["question"] = q_text
-    if question.get("risk"):
-        compact["risk"] = question["risk"]
-    if question.get("fingerprint"):
-        compact["fingerprint"] = question["fingerprint"]
+    if q_meta.get("risk"):
+        compact["risk"] = q_meta["risk"]
+    if q_meta.get("fingerprint"):
+        compact["fingerprint"] = q_meta["fingerprint"]
     if event.get("false_done"):
         compact["false_done"] = True
     if event.get("pending_reasons"):

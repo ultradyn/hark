@@ -564,12 +564,14 @@ def run_ambient_loop(
 
     if announce:
         try:
-            # Lifecycle cues: keep mic unmuted (Wave ring stays white)
+            # Lifecycle cues: keep mic unmuted (Wave ring stays white).
+            # Skip (do not hold/block ambient boot) if operator is in a call.
             run_tts(
                 cfg,
                 "Hark ambient is listening. Say hey hark when you need me.",
                 play=True,
                 mute_mic=False,
+                conference_policy="skip",
             )
         except Exception as exc:
             err = {
@@ -641,8 +643,14 @@ def run_ambient_loop(
     # Speak after any in-flight recording finished (we only get here post-cycle)
     if announce:
         try:
-            # Shutdown/restart cues: do not mute the mic
-            run_tts(cfg, phrase, play=True, mute_mic=False)
+            # Shutdown/restart cues: do not mute the mic; skip during conference
+            run_tts(
+                cfg,
+                phrase,
+                play=True,
+                mute_mic=False,
+                conference_policy="skip",
+            )
         except Exception as exc:
             syslog(
                 "ambient.shutdown_tts_error",

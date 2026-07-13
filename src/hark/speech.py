@@ -63,7 +63,16 @@ def run_tts(
     mute_mic: bool | None = None,
     on_near_end: Any | None = None,
     near_end_ms: int | None = None,
+    conference_policy: str | None = None,
 ) -> dict[str, Any]:
+    """Synthesize and optionally play TTS.
+
+    ``conference_policy`` (B017):
+      - ``None`` / default: ``hold`` when ``audio.hold_during_conference``, else ``force``
+      - ``hold``: wait for Zoom/Teams/Meet etc. to end (soft chime optional)
+      - ``skip``: do not speak while conference active (lifecycle cues)
+      - ``force``: always speak immediately
+    """
     limit = max_chars if max_chars is not None else cfg.tts.max_chars
     truncated = False
     if limit and len(text) > limit:
@@ -71,6 +80,35 @@ def run_tts(
         truncated = True
     if not text.strip():
         raise ProviderError("empty TTS text")
+
+    # Mode A path (hark tts / ask): hold full question speech during conference.
+    hold_meta: dict[str, Any] | None = None
+    if play:
+        from hark.conference import apply_conference_hold
+
+        policy = conference_policy
+        if policy is None:
+            policy = "hold" if cfg.audio.hold_during_conference else "force"
+        hold = apply_conference_hold(cfg, text, policy=policy)
+        hold_meta = hold.as_meta()
+        if hold.skipped:
+            return {
+                "ok": True,
+                "provider": "skipped",
+                "voice": voice or cfg.tts.voice or "eve",
+                "truncated": truncated,
+                "chars": len(text),
+                "words": len(text.split()),
+                "out": None,
+                "content_type": None,
+                "audio_ms": 0,
+                "latency_ms": 0,
+                "mic_muted": False,
+                "from_cache": False,
+                "conference": hold_meta,
+                "skipped": True,
+                "reason": "conference",
+            }
 
     do_mute = cfg.audio.mute_mic_during_tts if mute_mic is None else mute_mic
     store = UsageStore()
@@ -146,9 +184,9 @@ def run_tts(
         audio_ms=play_ms,
         latency_ms=latency_ms,
         ok=True,
-        meta={"from_cache": from_cache},
+        meta={"from_cache": from_cache, "conference": hold_meta},
     )
-    return {
+    result: dict[str, Any] = {
         "ok": True,
         "provider": provider_name,
         "voice": used_voice,
@@ -162,6 +200,9 @@ def run_tts(
         "mic_muted": mute_applied,
         "from_cache": from_cache,
     }
+    if hold_meta is not None:
+        result["conference"] = hold_meta
+    return result
 
 
 EMPTY_STT_NUDGE_TEXT = "Sorry, I didn't catch that."

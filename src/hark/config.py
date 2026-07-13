@@ -47,6 +47,14 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "cue_volume",
         "cue_start_path",
         "cue_stop_path",
+        # Conference hold (B017): pause full TTS while Zoom/Teams/Meet is active
+        "hold_during_conference",
+        "conference_chime_only",
+        "conference_process_names",
+        "conference_fail_open",
+        "conference_check_audio",
+        "conference_poll_ms",
+        "conference_max_hold_s",
     }),
     "listen": frozenset({
         "end_mode",
@@ -120,6 +128,34 @@ class AudioConfig:
     # Optional custom WAV/MP3 paths (empty = assets/cues defaults)
     cue_start_path: str | None = None
     cue_stop_path: str | None = None
+    # Hold full TTS while a conference app is active (Zoom/Teams/Meet…); default ON
+    hold_during_conference: bool = True
+    # Soft chime while held instead of speaking the full question immediately
+    conference_chime_only: bool = True
+    # Process name fragments matched against /proc (case-insensitive)
+    conference_process_names: list[str] = field(
+        default_factory=lambda: [
+            "zoom",
+            "zoom.us",
+            "teams",
+            "ms-teams",
+            "teams-for-linux",
+            "webex",
+            "ciscowebexstart",
+            "skypeforlinux",
+            "skype",
+            "discord",
+            "slack",
+        ]
+    )
+    # If detection tools/proc are missing: treat as free (True) or hold (False)
+    conference_fail_open: bool = True
+    # Also scan pactl/pw-cli stream names when available
+    conference_check_audio: bool = True
+    # Poll interval while waiting for the call to end
+    conference_poll_ms: int = 2000
+    # Max seconds to hold (0 = wait until free / no cap). On timeout, speak anyway.
+    conference_max_hold_s: float = 0.0
 
 
 @dataclass
@@ -240,6 +276,14 @@ sync_hw_unmute = true        # Wave/ALSA unmute button → force OS/Pulse unmute
 cue_volume = 0.22            # generated start/stop beep volume (0–1)
 # cue_start_path = "/path/to/record-start.wav"
 # cue_stop_path  = "/path/to/record-stop.wav"
+# Hold full TTS during Zoom/Teams/Meet (process list + optional audio streams)
+hold_during_conference = true
+conference_chime_only = true # soft cue while held; full question after call ends
+# conference_process_names = ["zoom", "teams", "webex", "discord", "slack"]
+conference_fail_open = true  # missing /proc or tools → allow TTS
+conference_check_audio = true
+conference_poll_ms = 2000
+# conference_max_hold_s = 0  # 0 = wait until free; >0 speak after timeout
 
 # Bound answer windows — how spoken replies end
 # Defaults are product-scoped so normal speech does not trigger control.
@@ -532,6 +576,34 @@ def load_config(path: Path | None = None) -> HarkConfig:
                 if audio_raw.get("cue_stop_path")
                 else os.environ.get("HARK_CUE_STOP")
             ),
+            hold_during_conference=bool(
+                audio_raw.get(
+                    "hold_during_conference",
+                    os.environ.get("HARK_HOLD_DURING_CONFERENCE", "true").lower()
+                    not in ("0", "false", "no", "off"),
+                )
+            ),
+            conference_chime_only=bool(audio_raw.get("conference_chime_only", True)),
+            conference_process_names=_as_list_str(
+                audio_raw.get("conference_process_names"),
+                [
+                    "zoom",
+                    "zoom.us",
+                    "teams",
+                    "ms-teams",
+                    "teams-for-linux",
+                    "webex",
+                    "ciscowebexstart",
+                    "skypeforlinux",
+                    "skype",
+                    "discord",
+                    "slack",
+                ],
+            ),
+            conference_fail_open=bool(audio_raw.get("conference_fail_open", True)),
+            conference_check_audio=bool(audio_raw.get("conference_check_audio", True)),
+            conference_poll_ms=int(audio_raw.get("conference_poll_ms", 2000)),
+            conference_max_hold_s=float(audio_raw.get("conference_max_hold_s", 0)),
         ),
         listen=ListenConfig(
             end_mode=end_mode,
@@ -660,6 +732,13 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "cue_volume": cfg.audio.cue_volume,
             "cue_start_path": cfg.audio.cue_start_path,
             "cue_stop_path": cfg.audio.cue_stop_path,
+            "hold_during_conference": cfg.audio.hold_during_conference,
+            "conference_chime_only": cfg.audio.conference_chime_only,
+            "conference_process_names": list(cfg.audio.conference_process_names),
+            "conference_fail_open": cfg.audio.conference_fail_open,
+            "conference_check_audio": cfg.audio.conference_check_audio,
+            "conference_poll_ms": cfg.audio.conference_poll_ms,
+            "conference_max_hold_s": cfg.audio.conference_max_hold_s,
         },
         "listen": {
             "end_mode": cfg.listen.end_mode,

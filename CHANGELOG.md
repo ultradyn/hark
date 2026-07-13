@@ -6,6 +6,10 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- fix(ambient/B070): continuous ambient no longer rebuilds Sherpa KWS keywords
+  every score hop when `learn_from_near_misses` is on — only when `wake_learned`
+  mtime changes; `rebuild_keywords` no-ops if the keyword graph signature is
+  unchanged. Skill `WAKE_STT.md` documents B072 local full-STT (not “for later”).
 - fix(audio, B078): answer-window record beep when **listen is ready** (radio +
   silence), not only when speech opens; no double-beep on gate open. Skill +
   `docs/AUDIO_DESIGN.md` wording; dogfood note to use checkout or

@@ -341,6 +341,33 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="speak the waiting-agent count by TTS when more than one is waiting",
     )
+    q.add_argument(
+        "--all",
+        action="store_true",
+        help="include stale/superseded/aged-out pending events (default: fresh only)",
+    )
+    q.add_argument(
+        "--prune",
+        action="store_true",
+        help="expire stale/superseded/aged-out pending events (B101)",
+    )
+    q.add_argument(
+        "--live",
+        action="store_true",
+        help="with --prune: expire events whose pane is gone or not blocked (also default soft-filter)",
+    )
+    q.add_argument(
+        "--offline",
+        action="store_true",
+        help="skip Herdr live checks; age/supersede filter only",
+    )
+    q.add_argument(
+        "--max-age",
+        type=float,
+        default=None,
+        metavar="SEC",
+        help="max age for fresh queue items in seconds (default 4h / HARK_QUEUE_MAX_AGE_S)",
+    )
 
     prov = sub.add_parser("providers", help="list speech providers or voices")
     prov.add_argument(
@@ -1652,15 +1679,88 @@ def cmd_ambient(args: argparse.Namespace, cfg) -> int:
     return run_ambient_loop(cfg, announce=announce)
 
 
+def _queue_live_answerable(cfg, ev: dict) -> tuple[bool, str]:
+    """Return whether a bound event still looks answerable on Herdr (B101).
+
+    Fail-soft on Herdr errors: keep the event rather than silently dropping it.
+    """
+    session_id = str(ev.get("session_id") or "")
+    pane_id = str(ev.get("pane_id") or "")
+    try:
+        live = _client_for(cfg, session_id).get_agent(pane_id)
+    except Exception as exc:  # noqa: BLE001 — fail-soft; leave pending
+        return True, f"herdr_error:{exc}"
+    if live is None:
+        return False, "pane_gone"
+    # Answerable when blocked (needs input). Idle/working panes are stale queue noise.
+    if live.status != "blocked":
+        return False, "not_blocked"
+    rev = ev.get("pane_revision")
+    if (
+        isinstance(rev, int)
+        and rev > 0
+        and getattr(live, "revision", None) is not None
+        and live.revision != rev
+    ):
+        return False, "stale_revision"
+    return True, "ok"
+
+
 def cmd_queue(args: argparse.Namespace, cfg=None) -> int:
-    from hark.delivery import summarize_pending
+    from hark.delivery import queue_max_age_s, summarize_pending
 
     store = DeliveryStore()
-    pending = store.pending_events()
-    summary = summarize_pending(pending)
+    max_age = getattr(args, "max_age", None)
+    include_all = bool(getattr(args, "all", False))
+    do_prune = bool(getattr(args, "prune", False))
+    # Live check defaults on whenever we have config (trustworthy announce/list).
+    # `--offline` skips Herdr. `--live` is accepted as an explicit alias for the
+    # default live soft-filter / prune-with-live behavior.
+    offline = bool(getattr(args, "offline", False))
+    use_live = (not offline) and cfg is not None
+
+    pruned: list[dict] = []
+    if do_prune:
+        # Age/supersede always expire. Live-unanswerable expire when Herdr is
+        # reachable (default) or when --live was passed; --offline skips live.
+        live_cb = (
+            (lambda ev: _queue_live_answerable(cfg, ev))
+            if use_live and cfg is not None
+            else None
+        )
+        pruned = store.prune(max_age_s=max_age, is_answerable=live_cb)
+
+    classified = store.classify_pending(max_age_s=max_age)
+    fresh = list(classified["fresh"])
+    stale = list(classified["stale"])
+
+    # Soft live filter for display/announce (no write unless --prune above).
+    if use_live and not include_all and cfg is not None:
+        still_fresh: list[dict] = []
+        for item in fresh:
+            ok, reason = _queue_live_answerable(cfg, item)
+            if ok:
+                still_fresh.append(item)
+            else:
+                tagged = dict(item)
+                tagged["_stale_reason"] = reason
+                stale.append(tagged)
+        fresh = still_fresh
+
+    fresh_public = [
+        {k: v for k, v in item.items() if not str(k).startswith("_")}
+        for item in fresh
+    ]
+    if include_all:
+        pending = store.pending_events(include_stale=True)
+        summary = summarize_pending(pending, stale=None)
+    else:
+        pending = fresh_public
+        summary = summarize_pending(fresh_public, stale=stale)
     count = summary["count"]
 
     announced = False
+    # Announce only the fresh/answerable count (never inflate with stale).
     if getattr(args, "announce", False) and count > 1 and cfg is not None:
         from hark.speech import run_tts
 
@@ -1674,6 +1774,19 @@ def cmd_queue(args: argparse.Namespace, cfg=None) -> int:
                     "queue": pending,
                     "count": count,
                     "targets": summary["targets"],
+                    "stale_count": summary.get("stale_count", 0),
+                    "stale_targets": summary.get("stale_targets", []),
+                    "pruned": [
+                        {
+                            "event_id": p.get("event_id"),
+                            "session_id": p.get("session_id"),
+                            "pane_id": p.get("pane_id"),
+                            "reason": p.get("_stale_reason"),
+                        }
+                        for p in pruned
+                    ],
+                    "max_age_s": queue_max_age_s(max_age),
+                    "live": use_live and not include_all,
                     "announcement": summary["announcement"],
                     "announced": announced,
                 },
@@ -1685,6 +1798,13 @@ def cmd_queue(args: argparse.Namespace, cfg=None) -> int:
             print("(empty)")
         for p in pending:
             print(f"{p.get('event_id')}  {p.get('session_id')}/{p.get('pane_id')}")
+        if pruned:
+            print(f"pruned {len(pruned)} stale event(s)")
+        elif summary.get("stale_count", 0) and not include_all:
+            print(
+                f"({summary['stale_count']} stale pending ignored; "
+                f"`hark queue --prune` to expire)"
+            )
         print(summary["announcement"])
     return OK
 

@@ -85,7 +85,7 @@ When `[listen] end_mode = "radio"` and `stream_partials = true`, interim transcr
 }
 ```
 
-Mode A agents may finalize a stuck radio capture with `hark listen-end` (or `--cancel`) when the operator’s wording is an informal stop/send, not an exact product end phrase.
+Mode A agents may finalize a stuck radio capture with `hark listen-end` (or `--cancel`) when the operator’s wording is an informal stop/send, not an exact product end phrase. Optionally, with `[listen].soft_end_phrases_enabled = true` (default **off**), Hark itself may auto-finish on conservative utterance-final soft closers without agent intervention — see [AUDIO_DESIGN.md](AUDIO_DESIGN.md).
 
 Consumers **MUST**:
 

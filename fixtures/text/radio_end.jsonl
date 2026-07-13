@@ -9,3 +9,11 @@
 {"id":"no-casual-send-it","input":"please just send it to production","expect_kind":null}
 {"id":"no-bare-over","input":"turn it over carefully","expect_kind":null}
 {"id":"still-thinking","input":"I am still thinking about the design","expect_kind":null}
+{"id":"soft-off-thats-all","input":"refactor the module that's all","expect_kind":null,"soft_end_phrases_enabled":false}
+{"id":"soft-on-thats-all","input":"refactor the module that's all","expect_kind":"end","expect_phrase":"that's all","expect_body_contains":"refactor","soft_end_phrases_enabled":true}
+{"id":"soft-on-end-of-message","input":"ship the branch end of message","expect_kind":"end","expect_phrase":"end of message","soft_end_phrases_enabled":true}
+{"id":"soft-on-okay-send-it","input":"please use black formatting okay send it","expect_kind":"end","expect_phrase":"okay send it","soft_end_phrases_enabled":true}
+{"id":"soft-on-over-and-out","input":"that covers the plan over and out","expect_kind":"end","expect_phrase":"over and out","soft_end_phrases_enabled":true}
+{"id":"soft-no-mid-clause-thats-all","input":"that's all I know about the auth bug","expect_kind":null,"soft_end_phrases_enabled":true}
+{"id":"soft-no-mid-send-it-production","input":"please just send it to production","expect_kind":null,"soft_end_phrases_enabled":true}
+{"id":"soft-no-when-disabled","input":"end of message","expect_kind":null,"soft_end_phrases_enabled":false}

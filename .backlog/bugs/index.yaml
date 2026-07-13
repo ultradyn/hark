@@ -32,3 +32,4 @@ bugs:
     - file: B031-post-wake-listen-no-speech-aft.todo
     - file: B032-bare-herald-hark-tokens-miss-w.todo
     - file: B033-continuous-ambient-emits-ambie.todo
+    - file: B034-the-startup-tts-should-be-cach.todo

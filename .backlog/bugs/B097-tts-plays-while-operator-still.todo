@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T19:08:28Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T19:16:51Z"
 complexity: medium
 created_at: "2026-07-13T18:56:52Z"
 depends_on: []
+duration_minutes: 8.391824389166667
 estimate_hours: 1
 id: B097
 priority: high
 started_at: "2026-07-13T19:08:28Z"
-status: in_progress
+status: done
 tags: []
 title: TTS plays while operator still speaking and mutes mic (cuts off radio capture)
-updated_at: "2026-07-13T19:08:28Z"
+updated_at: "2026-07-13T19:16:51Z"
 ---
 ## Dogfood (2026-07-13)
 While answering an ambient.prompt, operator started a new wake/radio stream mid-thought. Agent launched `hark tts` for the prior answer; TTS played immediately with `mute_mic_during_tts=true`, cutting off the operator mid-sentence and corrupting the open listen stream.

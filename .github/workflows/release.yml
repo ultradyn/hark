@@ -1,9 +1,11 @@
 name: Release
 
 # Publishes @ultradyn/hark to npm and cuts a GitHub Release when a version tag
-# is pushed. Cut a release per RELEASE.md (bump packages/ultradyn-hark, tag
-# vX.Y.Z, push tag). Trusted publisher on npm must list workflow filename
-# release.yml (OIDC — no NPM_TOKEN secret).
+# is pushed. See RELEASE.md. Trusted publisher on npm must list:
+#   org/user: clankercode  (until repo moves to ultradyn)
+#   repository: hark
+#   workflow filename: release.yml
+#   environment: (blank)
 on:
   push:
     tags:
@@ -11,38 +13,37 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to re-run release for (e.g. v0.1.1)"
+        description: "Existing tag to re-run release for (e.g. v0.1.2)"
         required: true
         type: string
 
 permissions:
-  contents: write # create the GitHub Release
+  contents: write # create / update the GitHub Release
   id-token: write # OIDC: npm trusted publishing (no NPM_TOKEN)
-
-defaults:
-  run:
-    working-directory: packages/ultradyn-hark
 
 jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: packages/ultradyn-hark
     steps:
       - uses: actions/checkout@v4
         with:
-          # workflow_dispatch may pass a tag; default ref is the pushed tag
           ref: ${{ inputs.tag || github.ref }}
 
-      # Do NOT set registry-url here — it writes a dummy NODE_AUTH_TOKEN into
-      # .npmrc and breaks OIDC trusted publishing (404 / ENEEDAUTH).
+      # Match pi-c2c / npm trusted-publisher docs: registry-url is required so
+      # npm knows the target registry; OIDC is used when id-token: write is set
+      # and a Trusted Publisher is configured for this workflow.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Sync skills from monorepo
         run: node ./scripts/sync-skills.mjs
 
-      # Guard: the tag must match packages/ultradyn-hark package.json version.
       - name: Verify tag matches package version
         working-directory: .
         run: |
@@ -62,32 +63,19 @@ jobs:
           echo "TAG_NAME=$tag_name" >> "$GITHUB_ENV"
           echo "PKG_VERSION=$pkg" >> "$GITHUB_ENV"
 
-      # Package gate (npm skills only). Full Python pytest lives elsewhere — do not
-      # block OIDC publish on monorepo mic/socket flakiness.
       - name: Validate package contents
         run: |
           set -euo pipefail
           test -f skills/hark/SKILL.md
           test -f skills/handsfree/SKILL.md
-          test -x bin/hark-skill.js || test -f bin/hark-skill.js
+          test -f bin/hark-skill.js
           npm pack --dry-run
 
-      # Trusted publishing requires npm >= 11.5.1; Node 22 ships older npm.
+      # Trusted publishing needs npm >= 11.5.1 (Node 22 ships older npm).
       - name: Upgrade npm (for OIDC trusted publishing)
         run: npm install -g npm@latest
 
-      # Trusted publishing: npm exchanges the GitHub OIDC token for a
-      # short-lived publish token and attaches build provenance automatically.
-      # No NPM_TOKEN secret. Configure once at:
-      # https://www.npmjs.com/package/@ultradyn/hark/access
-      # → Trusted Publisher → GitHub Actions
-      #    Organization/user: clankercode
-      #    Repository: hark
-      #    Workflow filename: release.yml
-      #    Environment: (leave blank)
-      - name: Publish @ultradyn/hark to npm
-        run: npm publish --access public
-
+      # Create GitHub Release first so a failed npm publish still leaves notes.
       - name: Create GitHub Release
         working-directory: .
         env:
@@ -96,9 +84,15 @@ jobs:
           set -euo pipefail
           tag="${TAG_NAME}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists — leaving notes for agent to refresh"
+            echo "Release $tag already exists"
             exit 0
           fi
           gh release create "$tag" \
             --title "@ultradyn/hark ${PKG_VERSION}" \
             --generate-notes
+
+      # No NODE_AUTH_TOKEN secret: OIDC trusted publishing.
+      # A 404 here usually means Trusted Publisher org/repo/workflow mismatch
+      # (must be clankercode/hark + release.yml while the git remote is there).
+      - name: Publish @ultradyn/hark to npm
+        run: npm publish --access public

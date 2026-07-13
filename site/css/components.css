@@ -677,6 +677,24 @@ a.product-link:hover {
   color: var(--ink-faint);
 }
 
+.footer__credit {
+  margin: var(--s-3) 0 0;
+  font-size: var(--fs-micro);
+  letter-spacing: 0.02em;
+  color: var(--ink-faint);
+}
+
+.footer__credit a {
+  color: var(--ink-muted);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 0.15em;
+}
+
+.footer__credit a:hover {
+  color: var(--herald);
+}
+
 .footer a {
   color: var(--ink-muted);
   text-decoration: none;

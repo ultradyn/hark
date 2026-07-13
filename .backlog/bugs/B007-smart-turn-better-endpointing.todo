@@ -1,16 +1,18 @@
 ---
+claimed_at: "2026-07-13T11:07:51Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T06:40:31Z"
 depends_on: []
 estimate_hours: 1
 id: B007
 priority: high
-status: pending
-tags:
-    - audio
-    - listen
+started_at: "2026-07-13T11:07:51Z"
+status: in_progress
+tags: []
 title: Smart Turn / better endpointing for silence mode
-updated_at: "2026-07-13T06:40:31Z"
+updated_at: "2026-07-13T11:07:51Z"
 ---
 ## Problem
 Silence mode uses energy gate + fixed end_silence_s. Smarter turn detection would reduce cutoffs and long waits.

@@ -353,11 +353,13 @@
   max-width: 40rem;
 }
 
-/* CTA closing — cinematic weight */
+/* CTA closing — full-bleed glow; content in .cta__inner (shell) */
 .cta {
   text-align: center;
-  padding: clamp(4.5rem, 10vw, 7rem) 0 clamp(3.5rem, 8vw, 5.5rem);
   position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: visible;
   border-top: 1px solid transparent;
   background: linear-gradient(
     180deg,
@@ -365,24 +367,37 @@
     rgba(232, 184, 74, 0.03) 40%,
     transparent 100%
   );
+  /* Vertical padding on the full-bleed box so glow isn't clipped by neighbors */
+  padding: clamp(4.5rem, 10vw, 7rem) 0 clamp(3.5rem, 8vw, 5.5rem);
 }
 
+/* Soft herald wash — full viewport width, not shell-clipped */
 .cta::before {
   content: "";
   position: absolute;
-  left: 50%;
-  top: 35%;
-  width: min(36rem, 80%);
-  height: 12rem;
-  transform: translate(-50%, -50%);
-  background: radial-gradient(ellipse at 50% 50%, rgba(232, 184, 74, 0.14), transparent 68%);
+  inset: 0;
+  background: radial-gradient(
+    ellipse 55% 55% at 50% 42%,
+    rgba(232, 184, 74, 0.16),
+    transparent 70%
+  );
   pointer-events: none;
-  z-index: -1;
+  z-index: 0;
+}
+
+.cta__inner {
+  position: relative;
+  z-index: 1;
+  overflow: visible;
+  /* Glow budget for button box-shadows */
+  padding-inline: clamp(0.75rem, 2vw, 1.5rem);
+  box-sizing: border-box;
 }
 
 .cta h2 {
   font-size: var(--fs-h1);
   margin-bottom: var(--s-4);
+  overflow: visible;
 }
 
 .cta p {
@@ -397,6 +412,7 @@
   justify-content: center;
   margin-top: 0;
   gap: var(--s-3);
+  overflow: visible;
 }
 
 .cta .btn--primary {

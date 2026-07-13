@@ -929,13 +929,29 @@ a.product-link:hover {
   margin: 0;
 }
 
-/* --- Footer --- */
+/* --- Footer (full-bleed bar; content in .footer__inner shell) --- */
 .footer {
+  width: 100%;
+  box-sizing: border-box;
+  overflow: visible;
   padding: var(--s-7) 0 calc(var(--s-8) + env(safe-area-inset-bottom, 0px));
   color: var(--ink-muted);
   font-size: var(--fs-small);
   border-top: 1px solid var(--border);
   margin-top: 0;
+  /* Subtle full-bleed wash so edge glows/borders don't look shell-clipped */
+  background: linear-gradient(
+    180deg,
+    rgba(16, 19, 28, 0.35) 0%,
+    transparent 100%
+  );
+}
+
+.footer__inner {
+  overflow: visible;
+  /* Match hero glow budget so brand type / links aren't hard-clipped */
+  padding-inline: clamp(0.5rem, 1.5vw, 1rem);
+  box-sizing: border-box;
 }
 
 .footer__row {
@@ -944,6 +960,7 @@ a.product-link:hover {
   gap: var(--s-5) var(--s-6);
   justify-content: space-between;
   align-items: center;
+  overflow: visible;
 }
 
 .footer__row > div:first-child {

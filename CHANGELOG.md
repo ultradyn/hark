@@ -6,6 +6,8 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Skill: document Herdr **local / SSH / mixed** multi-session setup (`[[herdr.sessions]]`
+  with optional per-session `ssh`) for Mode A agents — see `skill/hark/SKILL.md`.
 - Site homepage (B043): sticky nav chrome spans full viewport width (content still
   max-width centered); hero pitch pills and marketing copy drop internal “Mode A”
   jargon for outsider-readable voice/fleet framing.

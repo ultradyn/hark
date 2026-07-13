@@ -22,10 +22,11 @@ You keep the human in the loop with Herdr-hosted agents **by voice**. You do
 Once `/hark` or `/handsfree` is invoked, you enter **TTS mode**:
 
 1. **Prefer speaking over typing.** Use `hark tts "…"` for almost all operator-facing messages (status, setup questions, confirmations, errors).
-2. **Initial setup is voice-first.** After doctor/health is OK, **ask by voice** what Herdr sessions to watch, voice preferences, etc. — do not dump long prose in chat first.
+2. **Initial setup is voice-first.** After doctor/health is OK, **ask by voice** what Herdr sessions to watch (local, SSH host, or both), voice preferences, etc. — do not dump long prose in chat first.
    ```bash
-   hark ask --confirm never "Which Herdr session should I watch? Say default, or name it."
+   hark ask --confirm never "Which Herdr sessions should I watch? Local only, a remote SSH host, or both?"
    ```
+   Then write `[[herdr.sessions]]` for local-only, `ssh = "…"` remote-only, or a **mix** (see **Herdr sessions** below).
 3. **Question → record → answer loop** for every operator decision:
    - Speak the question (`hark tts` or `hark ask`)
    - Start listening (`hark listen` / `hark ask` already listens)
@@ -39,14 +40,81 @@ Mic mutes automatically during TTS (`mute_mic_during_tts`). Recording **waits fo
 
 | You (orchestrator) | Local, **outside** Herdr |
 | `hark` + mic/speakers | Local |
-| Coding agents | One or more Herdr sessions (local and/or remote) |
+| Coding agents | One or more Herdr sessions (**local, SSH remote, or both**) |
 
 Always address **`session_id/pane_id`**. Prefer bound **`event_id`** from watch lines.
+
+## Herdr sessions — local, SSH, or a mix
+
+Hark is multi-session. Each `[[herdr.sessions]]` entry is one Herdr server.
+**`ssh` is optional per session** — omit it for local, set it for remote. Local and
+SSH sessions can run **together** in the same config; watch opens tunnels only
+where `ssh` is set.
+
+Config file: `~/.config/hark/config.toml` (or `HARK_CONFIG`). After edits, ambient
+file-watch reloads when Mode A is running; otherwise restart watch/Mode A.
+
+### Local only
+
+```toml
+[[herdr.sessions]]
+id = "local"
+# socket = "~/.config/herdr/herdr.sock"   # optional override
+# label = "this machine"
+```
+
+Default when unset is the usual local Herdr socket. Named local Herdr sessions
+use Herdr’s own session sockets (see `docs/HERDR.md`).
+
+### SSH remote only
+
+Hark **tunnels the remote Unix socket** (preferred) — you do not need a manual
+`ssh -L` for normal Mode A:
+
+```toml
+[[herdr.sessions]]
+id = "work"
+ssh = "workbox"                          # or user@host
+# remote_socket = "~/.config/herdr/herdr.sock"
+# label = "work box"
+```
+
+Local tunnel path is under `~/.cache/hark/tunnels/<id>.sock`. `hark doctor`
+checks tunnels; fix SSH/`ssh workbox herdr status` if unhealthy.
+
+### Mix — local + SSH (common)
+
+```toml
+[[herdr.sessions]]
+id = "local"
+
+[[herdr.sessions]]
+id = "work"
+ssh = "workbox"
+label = "work box"
+
+[[herdr.sessions]]
+id = "lab"
+ssh = "user@lab.example"
+```
+
+- Events and replies are always **`(session_id, pane_id)`** — e.g.  
+  `hark reply work/w1:p6 "yes"` or `hark answer <event_id> …`  
+- `hark queue` / watch cover **all** configured sessions.  
+- Remote/tunnelled sessions are **never** treated as “self” for self-detect.  
+- Voice bootstrap: ask which sessions to watch; if they say local *and* a remote
+  host, write both `[[herdr.sessions]]` blocks (local without `ssh`, remote with).
+
+Manual tunnel (optional, if not using `ssh =`):  
+`ssh -L /tmp/herdr-work.sock:~/.config/herdr/herdr.sock workbox -N` then point
+`socket` at the local path. Prefer config-managed `ssh =` for Mode A.
+
+Full contract: [docs/HERDR.md](../../docs/HERDR.md).
 
 ## Preconditions
 
 1. `hark` available — while developing: `uv run hark` from latest checkout.  
-2. `hark doctor` healthy (Herdr, tunnels, Grok OAuth / keys, mic).  
+2. `hark doctor` healthy (Herdr, **tunnels for any `ssh` sessions**, Grok OAuth / keys, mic).  
 3. STT/TTS: xAI via **Grok Build OAuth** preferred; OpenAI / Google / MiniMax as configured.  
 
 ## Hard rules
@@ -150,10 +218,10 @@ Optional: `hark monitor --replay 0` to skip replay; `--full` for uncompacted JSO
 1. `hark doctor` (text OK for tools).  
 2. `hark status` + `hark queue --announce` — **announce any already-blocked / pending by TTS**. `hark queue --announce` speaks the waiting count itself when more than one agent is waiting (JSON always carries `count` / `announcement` / distinct `targets`). Hark watch also emits on load; still speak a short rollup so the operator hears it.  
 3. TTS: “Hark is ready. I'll speak from here.”  
-4. Voice-ask session targets / mode if not already configured.  
-5. **Required:** arm the Herdr watch Monitor — `hark watch --for-monitor --statuses blocked,done` with `persistent: true`. Do **not** skip this. Ambient/system tail is optional add-on only; **never** arm ambient alone.  
+4. Voice-ask session targets if not already configured (local / SSH / mix — write `[[herdr.sessions]]` accordingly).  
+5. **Required:** arm **`hark monitor --for-monitor`** (persistent). One feed for Herdr + ambient (includes `wake_near_miss`). Do **not** arm only `hark watch` or only ambient tails.  
 6. Prefer `hark tts --listen "…"` or `hark ask` so recording starts after you speak (start cue on speech). **Ambient auto-pauses** for listen/ask (mic lease yield); no manual kill needed.  
-7. **Idle and wait for Monitors** to deliver blocked events or ambient lines. Do not poll.
+7. **Idle and wait for that Monitor** to deliver the next line. Do not poll.
 
 ## On `agent.blocked` / blocked monitor line
 
@@ -205,7 +273,8 @@ Handle one target fully before the next. Announce count when >1 by TTS (`hark qu
 | Command | Use |
 |---------|-----|
 | `hark doctor` | Health |
-| `hark watch --for-monitor` | Monitor feed |
+| `hark monitor --for-monitor` | **Unified** Mode A Monitor feed (Herdr + ambient) |
+| `hark watch --for-monitor` | Herdr-only (incomplete alone) |
 | `hark status` / `hark queue` | Snapshot / pending |
 | `hark context` | Bottom buffer |
 | `hark tts` / `tts --listen` / `listen` / `ask` | Voice I/O; `--listen` = speak then auto-record |
@@ -218,7 +287,7 @@ Handle one target fully before the next. Announce count when >1 by TTS (`hark qu
 
 | Issue | Action |
 |-------|--------|
-| Herdr | `hark doctor`; tunnels; speak the problem |
+| Herdr / tunnels | `hark doctor`; check each session’s local socket or `ssh` tunnel; speak the problem |
 | xAI 401 | `grok login` |
 | Audio | `hark devices` |
 | Stale answer | re-read context; re-prompt human by voice |

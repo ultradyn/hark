@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T11:07:51Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T11:26:07Z"
 complexity: medium
 created_at: "2026-07-13T10:07:34Z"
 depends_on: []
+duration_minutes: 18.27494956276667
 estimate_hours: 1
 id: B028
 priority: high
 started_at: "2026-07-13T11:07:51Z"
-status: in_progress
+status: done
 tags: []
 title: Investigate recent CI runs and fix any issues
-updated_at: "2026-07-13T11:07:51Z"
+updated_at: "2026-07-13T11:26:07Z"
 ---
 
 Investigate recent CI runs and fix any issues

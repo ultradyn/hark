@@ -83,3 +83,4 @@ bugs:
     - file: B082-when-we-do-the-rust-port-it-sh.todo
     - file: B083-radio-stt-assemble-per-segment.todo
     - file: B084-while-mic-is-muted-the-radio-t.todo
+    - file: B085-radio-listen-continuous-ring-n.todo

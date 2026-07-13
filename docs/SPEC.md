@@ -165,6 +165,7 @@ ssh = "workbox"
 statuses = ["blocked", "done"]
 debounce_ms = 250
 transport = "auto"
+detect_false_done = true   # done/idle + menu-like pane → agent.needs_input
 
 [audio]
 # adaptive gate params — see AUDIO_DESIGN

@@ -1,0 +1,15 @@
+{
+  "schema": "hark.event.v1",
+  "kind": "agent.needs_input",
+  "event_id": "19f5a2000false0done0sample01",
+  "observed_at": "2026-07-13T09:40:00.000Z",
+  "session_id": "default",
+  "agent": "claude",
+  "pane_id": "w7:p1",
+  "status_to": "done",
+  "false_done": true,
+  "pending_reasons": ["numbered_menu", "choice_phrase"],
+  "question": "Which option should I use for the Nomad worker path?\n1. Use the default path\n2. Custom path under /opt\n3. Skip worker setup\nReply with a number or option.",
+  "risk": "R1",
+  "instructions": "False done: pane still needs input. Treat like blocked. hark context default/w7:p1"
+}

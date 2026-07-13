@@ -6,5 +6,5 @@
   "sessions": [
     "default"
   ],
-  "instructions": "Use the hark skill; do not invent answers. On agent.blocked: hark context <session>/<pane>, then ask/answer."
+  "instructions": "Use the hark skill; do not invent answers. On agent.blocked or agent.needs_input: hark context <session>/<pane>, then ask/answer. needs_input may fire when status is done/idle but the pane still shows a menu (false done)."
 }

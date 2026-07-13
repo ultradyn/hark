@@ -85,3 +85,4 @@ bugs:
     - file: B084-while-mic-is-muted-the-radio-t.todo
     - file: B085-radio-listen-continuous-ring-n.todo
     - file: B086-mic-mute-desync-system-mute-st.todo
+    - file: B087-when-webui-is-up-we-are-record.todo

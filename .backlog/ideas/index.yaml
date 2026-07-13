@@ -5,7 +5,7 @@ ideas:
       file: I001-static-marketing-docs-site-for.todo
       id: I001
       priority: medium
-      status: in_progress
+      status: done
       tags: []
       title: Static marketing/docs site for Hark (GitHub Pages)
     - file: I002-tts-stt-ducking-when-music-or.todo

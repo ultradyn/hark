@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T10:05:43Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T10:05:50Z"
 complexity: medium
 created_at: "2026-07-13T07:48:13Z"
 depends_on: []
+duration_minutes: 0.11667643026666667
 estimate_hours: 10
 id: I001
 priority: medium
 started_at: "2026-07-13T10:05:43Z"
-status: in_progress
+status: done
 tags: []
 title: Static marketing/docs site for Hark (GitHub Pages)
-updated_at: "2026-07-13T10:05:43Z"
+updated_at: "2026-07-13T10:05:50Z"
 ---
 
 # Original Idea

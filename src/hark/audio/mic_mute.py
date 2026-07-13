@@ -313,15 +313,10 @@ def mute_sync_tick(
     pulse, alsa_on = _read_mute_snapshot()
     did = False
 
-    # Hardware / ALSA capture turned ON (unmuted) while Pulse still muted
-    if prev_alsa_on is False and alsa_on is True:
-        ensure_unmuted()
-        did = True
-        pulse, alsa_on = _read_mute_snapshot()
-
-    # Pulse source mute→unmute edge (Wave button often hits this path)
-    # Also covers user unmuting during TTS hold (override)
-    if prev_pulse is True and pulse is False:
+    # Unmute edges only (not levels) so TTS hold is not cancelled spuriously
+    alsa_edge = prev_alsa_on is False and alsa_on is True
+    pulse_edge = prev_pulse is True and pulse is False
+    if alsa_edge or pulse_edge:
         ensure_unmuted()
         did = True
         pulse, alsa_on = _read_mute_snapshot()

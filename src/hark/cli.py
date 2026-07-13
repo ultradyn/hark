@@ -118,11 +118,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="with --listen: how the reply capture ends (default: config)",
     )
+    tts.add_argument(
+        "--event-id",
+        default=None,
+        help="with --listen: tag the captured reply with the blocked event it answers "
+        "(echoed as for_event so a reply is never associated with the wrong pane)",
+    )
 
     li = sub.add_parser("listen", help="speech-to-text")
     li.add_argument("--provider")
     li.add_argument("--end-mode", choices=("silence", "radio"))
     li.add_argument("--json", action="store_true")
+    li.add_argument(
+        "--event-id",
+        default=None,
+        help="tag the captured reply with the blocked event it answers (echoed as for_event)",
+    )
 
     le = sub.add_parser(
         "listen-end",
@@ -143,6 +154,11 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--end-mode", choices=("silence", "radio"))
     ask.add_argument("--provider")
     ask.add_argument("--json", action="store_true")
+    ask.add_argument(
+        "--event-id",
+        default=None,
+        help="tag the captured reply with the blocked event it answers (echoed as for_event)",
+    )
 
     amb = sub.add_parser(
         "ambient",
@@ -778,6 +794,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
         "tts": result,
         "text": listened.text,
         "meta_command": listened.meta_command,
+        "for_event": getattr(args, "event_id", None),
         "listen": {
             "provider": listened.provider,
             "duration_ms": listened.duration_ms,
@@ -805,6 +822,7 @@ def cmd_listen(args: argparse.Namespace, cfg) -> int:
         "ok": True,
         "text": result.text,
         "meta_command": result.meta_command,
+        "for_event": getattr(args, "event_id", None),
         "provider": result.provider,
         "duration_ms": result.duration_ms,
         "end_mode": result.end_mode,
@@ -845,6 +863,7 @@ def cmd_ask(args: argparse.Namespace, cfg) -> int:
         end_mode=args.end_mode,
         provider=args.provider,
     )
+    result["for_event"] = getattr(args, "event_id", None)
     print(json.dumps(result, indent=2 if args.json else None))
     return int(result.get("exit", OK if result.get("ok") else ERROR))
 

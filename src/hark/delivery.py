@@ -192,11 +192,17 @@ def summarize_pending(pending: list[dict[str, Any]]) -> dict[str, Any]:
     targets: list[str] = []
     seen: set[tuple[str, str]] = set()
     for p in pending:
-        key = (str(p.get("session_id") or ""), str(p.get("pane_id") or ""))
+        session_id = str(p.get("session_id") or "").strip()
+        pane_id = str(p.get("pane_id") or "").strip()
+        if not pane_id:
+            # Malformed / unroutable event — never fold into a shared "/" target
+            # (would undercount). A real blocked agent always has a pane.
+            continue
+        key = (session_id, pane_id)
         if key in seen:
             continue
         seen.add(key)
-        targets.append(f"{key[0]}/{key[1]}")
+        targets.append(f"{session_id}/{pane_id}")
     count = len(targets)
     return {
         "count": count,

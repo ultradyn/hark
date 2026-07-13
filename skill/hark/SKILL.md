@@ -136,11 +136,12 @@ tail -n0 -F ~/.local/state/hark/system.jsonl ~/.local/state/hark/ambient.jsonl
 3. Classify: free text vs menu vs permission.  
 4. Speak + listen (pick one):
    ```bash
-   hark ask --confirm auto "…"   # upgrades to always for R2/R3 when risk known
+   hark ask --confirm auto --event-id <event_id> "…"  # upgrades to always for R2/R3 when risk known
    # or TTS then auto-record (start cue when speech opens):
-   hark tts --listen "…"
+   hark tts --listen --event-id <event_id> "…"
    hark tts --listen-for-user-response "…"   # alias
    ```
+   Pass `--event-id` so the captured reply is tagged (`for_event`) with the target it answers — never associate a reply with a different pane.
 5. Deliver:
    - free text: `hark answer <event_id> --text "…"`  
    - menu: `hark answer <event_id> --keys 2 enter`  
@@ -160,7 +161,7 @@ Herdr may report `done`/`idle` while the pane still shows a multi-option menu. W
 
 ## Meta (during answer windows / if human interrupts)
 
-If transcript is a command: **repeat**, **skip**, **cancel**, **next**, **status** — honor it; do not send to the worker agent as a prompt. `hark tts --listen`, `hark listen`, and `hark ask` classify the reply and return a `meta_command` field (`repeat` | `skip` | `next` | `status` | `cancel`) when the whole utterance is a control phrase; `hark ask` short-circuits (no confirm/send) in that case. On `meta_command`:
+If transcript is a command: **repeat**, **skip**, **cancel**, **next**, **status** — honor it; do not send to the worker agent as a prompt. `hark tts --listen`, `hark listen`, and `hark ask` classify the reply and return a `meta_command` field (`repeat` | `skip` | `next` | `status` | `cancel`) when the whole utterance is a control phrase; `hark ask` short-circuits (no confirm/send) in that case. A `hark`-prefixed form ("hark skip", "hey hark next") is unambiguous — use it when a bare word might read as a real answer. On `meta_command`:
 
 - **repeat** → re-speak the question (`hark tts --listen "…"`).
 - **skip** → `hark skip <event_id>` (drops it from `hark queue`), then move on.

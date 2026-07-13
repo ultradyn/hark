@@ -157,6 +157,43 @@ def test_answer_delivers_only_to_bound_pane(tmp_path, monkeypatch):
     assert {e["event_id"] for e in store.pending_events()} == {"evtB"}
 
 
+def test_meta_skip_removes_target_from_queue(tmp_path, monkeypatch):
+    """End-to-end: a 'skip' meta-command (via hark skip) drops that event."""
+    store = DeliveryStore(tmp_path / "events.jsonl")
+    _seed(store, "evtA", "local", "w1:p1")
+    _seed(store, "evtB", "work", "w9:p9")
+    monkeypatch.setattr(cli, "DeliveryStore", lambda: store)
+
+    rc = cli.cmd_skip(argparse.Namespace(event_id="evtA"))
+    assert rc == 0
+
+    # evtA gone from the queue; the other target still waiting and countable.
+    remaining = {e["event_id"] for e in store.pending_events()}
+    assert remaining == {"evtB"}
+    assert summarize_pending(store.pending_events())["count"] == 1
+
+
+def test_listen_echoes_for_event_binding(tmp_path, monkeypatch, capsys):
+    """The captured reply is tagged with the event it answers (no cross-assoc)."""
+    from hark.speech import ListenResult
+
+    monkeypatch.setattr(
+        speech,
+        "run_listen",
+        lambda cfg, **kw: ListenResult(
+            text="use option two", provider="test", duration_ms=10, end_mode="silence"
+        ),
+    )
+    args = argparse.Namespace(
+        provider=None, end_mode=None, json=True, event_id="evtA"
+    )
+    rc = cli.cmd_listen(args, cfg=object())
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["for_event"] == "evtA"
+    assert out["meta_command"] is None
+
+
 def test_listen_control_actions_do_not_cross_streams(tmp_path, monkeypatch):
     """A finish/cancel targeted at stream A must not end stream B (no audio merge)."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))

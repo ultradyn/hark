@@ -32,10 +32,32 @@ from hark.meta_commands import (
         ("cancel", CANCEL),
         ("never mind", CANCEL),
         ("nevermind", CANCEL),
+        # Unambiguous "hark"-prefixed control forms (authoritative).
+        ("hark skip", SKIP),
+        ("hey hark next", NEXT),
+        ("ok hark status", STATUS),
+        ("hark, cancel", CANCEL),
+        ("hark repeat", REPEAT),
     ],
 )
 def test_classify_recognizes_control_phrases(text, expected):
     assert classify_meta_command(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Conversational bare tokens are plausible literal answers — excluded
+        # from bare matching to avoid hijacking a real reply.
+        "again",
+        "pardon",
+        # A bare wake word alone is not a command.
+        "hark",
+        "hey hark",
+    ],
+)
+def test_classify_excludes_conversational_bare_tokens(text):
+    assert classify_meta_command(text) is None
 
 
 @pytest.mark.parametrize(

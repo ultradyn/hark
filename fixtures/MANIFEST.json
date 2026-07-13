@@ -1,17 +1,27 @@
 {
   "schema": "hark.fixtures.manifest.v1",
-  "generated_at": "2026-07-13T06:31:24Z",
-  "count": 36,
+  "generated_at": "2026-07-13T12:08:22Z",
+  "count": 47,
   "files": [
     {
       "path": "README.md",
-      "bytes": 3153,
-      "sha256": "53e2fd6bedf5141c9abe0cec1f9a4d00c70e3ef681b1d9f8ed3952f855ca6d12"
+      "bytes": 3185,
+      "sha256": "abbae19976e613a39b91709d882a12e5de5ca6c476578fb1cfb3466dd1973484"
+    },
+    {
+      "path": "events/hep/agent_blocked.json",
+      "bytes": 691,
+      "sha256": "5ec1dca9919b53c6aeca089d63790ce500b0e045641ddfe12dac4277664b300a"
     },
     {
       "path": "events/hep/agent_completed.json",
       "bytes": 355,
       "sha256": "85957c899ed30d7d74795d557e44df3ddc64c49c55187315264d2146286261ad"
+    },
+    {
+      "path": "events/hep/agent_needs_input.json",
+      "bytes": 622,
+      "sha256": "d310f21867103c7a861174549979c5e320be0f92dfd1cfeb770d9222881f2c9a"
     },
     {
       "path": "events/hep/agent_state_changed.json",
@@ -35,8 +45,8 @@
     },
     {
       "path": "events/hep/ambient_prompt_samples.jsonl",
-      "bytes": 5960,
-      "sha256": "8d0445b4f841adf2e9eba5a357f605acbf98800b10b1c41a710831d8df1e160c"
+      "bytes": 7328,
+      "sha256": "3b7d693d0449fda00199bc9ed5ad2d78e9dcbcaf137be4b8af4e64f2fc7f9b3b"
     },
     {
       "path": "events/hep/ambient_prompt_second.json",
@@ -75,8 +85,53 @@
     },
     {
       "path": "herdr/README.md",
-      "bytes": 682,
-      "sha256": "59a5d211f279f3a35e07e05a3992d191856edef04dce39a307f2abd0aa6f7e06"
+      "bytes": 1633,
+      "sha256": "d0d52acb0c156e451e4d47600be51666d57c98d4ae06a66c77821289984f3196"
+    },
+    {
+      "path": "herdr/agent-list-blocked.json",
+      "bytes": 605,
+      "sha256": "9bee32dd8f93e5a04a1ba8b31f0d205e5cf617fd3e4f63ca432d1140e2a917a5"
+    },
+    {
+      "path": "herdr/agent-list-empty.json",
+      "bytes": 254,
+      "sha256": "96372e6114d89721ed8674637190552f31b1298bbdcc3ad1dcdaded752f3ff77"
+    },
+    {
+      "path": "herdr/agent-list-idle-sample.json",
+      "bytes": 1299,
+      "sha256": "67ea1b7632514c23e2805cfee9ad62a6162c7407f7bbe1916d2ae9084e387ef7"
+    },
+    {
+      "path": "herdr/agent-list-mixed.json",
+      "bytes": 5417,
+      "sha256": "54706edc6500e137cdd1c2023a221310102070b543d27dcfb7eb9e74b5dc949f"
+    },
+    {
+      "path": "herdr/agent-list-working.json",
+      "bytes": 969,
+      "sha256": "fe28881905c4b193c457f28820cb98ef0dcac8ab7eae99a93d9aa7d93c2e9519"
+    },
+    {
+      "path": "herdr/watch-stream-blocked.jsonl",
+      "bytes": 3626,
+      "sha256": "53224dee4d4b1f5fa7864261d4791145f837465186153c995ca464258194678c"
+    },
+    {
+      "path": "herdr/watch-stream-hep.jsonl",
+      "bytes": 3626,
+      "sha256": "53224dee4d4b1f5fa7864261d4791145f837465186153c995ca464258194678c"
+    },
+    {
+      "path": "herdr/watch-stream-wire.jsonl",
+      "bytes": 543,
+      "sha256": "d0bfc83f7518d2214ac6d32ceafe4096c7affc53499322ed9ffc844d88ebeaad"
+    },
+    {
+      "path": "text/false_done.jsonl",
+      "bytes": 1353,
+      "sha256": "512ca459b5da29f5368415cab216714429485658da934ad75c668c7070714cb5"
     },
     {
       "path": "text/fingerprint.jsonl",
@@ -85,8 +140,8 @@
     },
     {
       "path": "text/radio_end.jsonl",
-      "bytes": 1290,
-      "sha256": "453444a24bc70f134ad5ab889f1a983bdd085b1df2c6f5e1f5500ab5682e4fc6"
+      "bytes": 2452,
+      "sha256": "6e5abc1ee52be88728aef741de3ed209d861d3ff54779428ba04e0f64424ee46"
     },
     {
       "path": "text/risk.jsonl",
@@ -100,8 +155,8 @@
     },
     {
       "path": "usage/sample.jsonl",
-      "bytes": 4722,
-      "sha256": "5e33e00f596e1ddbf12adc439d7cbe83ea5607ed99142ba0b960b8fae8d30a7a"
+      "bytes": 4899,
+      "sha256": "0315f4cb877d3b71dc476c49dd04cadd22ce758248dd533268683117a2142e61"
     },
     {
       "path": "voice/README.md",

@@ -1,0 +1,50 @@
+{
+  "id": "cli:agent:list",
+  "result": {
+    "agents": [
+      {
+        "agent": "claude",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/c2c",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/c2c",
+        "pane_id": "w1:p1",
+        "revision": 0,
+        "tab_id": "w1:t1",
+        "terminal_id": "term_6567c82d7a6621",
+        "workspace_id": "w1"
+      },
+      {
+        "agent": "grok",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/c2c",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/c2c",
+        "pane_id": "w1:pC",
+        "revision": 0,
+        "tab_id": "w1:t1",
+        "terminal_id": "term_6567c82d7a7242",
+        "workspace_id": "w1"
+      },
+      {
+        "agent": "codex",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/c2c",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/c2c",
+        "pane_id": "w1:pD",
+        "revision": 0,
+        "tab_id": "w1:t4",
+        "terminal_id": "term_6567c82d7aab65",
+        "workspace_id": "w1"
+      }
+    ],
+    "type": "agent_list"
+  },
+  "_fixture": {
+    "source": "live herdr agent list (redacted)",
+    "captured_at": "2026-07-13T12:07:29Z",
+    "herdr_version": "0.7.3",
+    "protocol": 16
+  }
+}

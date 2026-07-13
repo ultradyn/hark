@@ -1,0 +1,26 @@
+{
+  "id": "cli:agent:list",
+  "result": {
+    "agents": [
+      {
+        "agent": "agy",
+        "agent_status": "blocked",
+        "cwd": "/home/operator/src/c2c",
+        "focused": true,
+        "foreground_cwd": "/home/operator/src/c2c",
+        "pane_id": "w1:p6",
+        "revision": 0,
+        "tab_id": "w1:t1",
+        "terminal_id": "term_6567c82d7a8753",
+        "workspace_id": "w1"
+      }
+    ],
+    "type": "agent_list"
+  },
+  "_fixture": {
+    "source": "live herdr agent list (redacted)",
+    "captured_at": "2026-07-13T12:07:29Z",
+    "herdr_version": "0.7.3",
+    "protocol": 16
+  }
+}

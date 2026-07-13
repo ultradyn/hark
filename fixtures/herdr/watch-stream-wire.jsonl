@@ -1,0 +1,4 @@
+{"id":"ev1","method":"events.notification","params":{"event":{"type":"pane.agent_status_changed","pane_id":"w1:p6","agent":"agy","agent_status":"blocked","workspace_id":"w1","tab_id":"w1:t1"}}}
+{"id":"ev2","method":"events.notification","params":{"event":{"type":"pane.agent_status_changed","pane_id":"w2:p1","agent":"grok","agent_status":"working","workspace_id":"w2","tab_id":"w2:t1"}}}
+{"type":"pane.agent_status_changed","pane_id":"w2:p1","agent":"grok","agent_status":"idle"}
+{"params":{"event":{"type":"pane.closed","pane_id":"w9:p1"}}}

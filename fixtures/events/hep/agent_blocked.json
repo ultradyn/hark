@@ -1,0 +1,14 @@
+{
+  "schema": "hark.event.v1",
+  "kind": "agent.blocked",
+  "event_id": "19f5a5edbc9874f411b85ca611a",
+  "observed_at": "2026-07-13T07:26:33.929Z",
+  "session_id": "default",
+  "agent": "claude",
+  "pane_id": "w7:p1",
+  "status_to": "blocked",
+  "question": " config bits, and add it to\n     the canonical mesh roster.\n  2. Approve \u2014 handle natoli-ws\n     Same, but register the peer under the handle 'natoli-ws' instead.\n  3. Hold \u2014 don't add yet\n     Don't touch the hub. I'll tell TOFU the add\u2026",
+  "risk": "R2",
+  "fingerprint": "blake2b:72fe18c7f9ded3cae556482e894d48cf",
+  "instructions": "Use the hark skill; do not invent an answer. hark context default/w7:p1"
+}

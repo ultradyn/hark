@@ -25,7 +25,7 @@ fixtures/
     syslog/                 # internal system.jsonl-shaped samples
   usage/
     sample.jsonl            # tts/stt usage ledger samples
-  herdr/                    # external Herdr wire captures (fill when available)
+  herdr/                    # redacted Herdr agent-list + watch wire (B005)
 ```
 
 ## What each family is for
@@ -37,7 +37,7 @@ fixtures/
 | `events/hep` | Schema shape, partial HOLD, stream supersede | Event ingest / bus consumers |
 | `events/syslog` | Timeline wake→prompt | Optional internal log parsers |
 | `usage` | Ledger fields | Metrics parity |
-| `herdr` | Agent list / watch wire | Socket/CLI client parity |
+| `herdr` | Agent list / watch wire (redacted live) | Socket/CLI client parity (`parse_agent_list`) |
 
 ## Conventions
 

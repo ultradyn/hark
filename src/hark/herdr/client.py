@@ -138,46 +138,7 @@ class HerdrClient:
 
     def list_agents(self) -> list[AgentInfo]:
         data = self.run_json(["agent", "list"])
-        result = data.get("result") or data
-        agents_raw = result.get("agents") if isinstance(result, dict) else None
-        if agents_raw is None and isinstance(data.get("agents"), list):
-            agents_raw = data["agents"]
-        if not isinstance(agents_raw, list):
-            raise HerdrError("agent list missing agents[]")
-
-        out: list[AgentInfo] = []
-        for item in agents_raw:
-            if not isinstance(item, dict):
-                continue
-            pane_id = str(item.get("pane_id") or item.get("id") or "")
-            if not pane_id:
-                continue
-            status = str(
-                item.get("agent_status")
-                or item.get("status")
-                or item.get("state")
-                or "unknown"
-            )
-            out.append(
-                AgentInfo(
-                    session_id=self.session.id,
-                    pane_id=pane_id,
-                    agent=(str(item["agent"]) if item.get("agent") else None),
-                    status=status,
-                    revision=int(item.get("revision") or item.get("pane_revision") or 0),
-                    workspace_id=(
-                        str(item["workspace_id"]) if item.get("workspace_id") else None
-                    ),
-                    tab_id=str(item["tab_id"]) if item.get("tab_id") else None,
-                    terminal_id=(
-                        str(item["terminal_id"]) if item.get("terminal_id") else None
-                    ),
-                    cwd=str(item["cwd"]) if item.get("cwd") else None,
-                    focused=bool(item.get("focused", False)),
-                    raw=item,
-                )
-            )
-        return out
+        return parse_agent_list(data, session_id=self.session.id)
 
     def get_agent(self, pane_id: str) -> AgentInfo | None:
         for a in self.list_agents():
@@ -289,3 +250,60 @@ class HerdrClient:
             except HerdrError:
                 continue
         raise HerdrError(f"could not read pane {pane_id}")
+
+def parse_agent_list(
+    data: dict[str, Any],
+    *,
+    session_id: str = "default",
+) -> list[AgentInfo]:
+    """Parse Herdr ``agent list`` JSON (live CLI or fixtures/herdr/*.json).
+
+    Accepts either the full CLI envelope ``{id, result: {agents, type}}`` or a
+    bare ``{agents: [...]}`` object. Used by :meth:`HerdrClient.list_agents` and
+    contract tests against redacted real captures.
+    """
+    if not isinstance(data, dict):
+        raise HerdrError(
+            f"expected JSON object for agent list, got {type(data).__name__}"
+        )
+    result = data.get("result") or data
+    agents_raw = result.get("agents") if isinstance(result, dict) else None
+    if agents_raw is None and isinstance(data.get("agents"), list):
+        agents_raw = data["agents"]
+    if not isinstance(agents_raw, list):
+        raise HerdrError("agent list missing agents[]")
+
+    out: list[AgentInfo] = []
+    for item in agents_raw:
+        if not isinstance(item, dict):
+            continue
+        pane_id = str(item.get("pane_id") or item.get("id") or "")
+        if not pane_id:
+            continue
+        status = str(
+            item.get("agent_status")
+            or item.get("status")
+            or item.get("state")
+            or "unknown"
+        )
+        out.append(
+            AgentInfo(
+                session_id=session_id,
+                pane_id=pane_id,
+                agent=(str(item["agent"]) if item.get("agent") else None),
+                status=status,
+                revision=int(item.get("revision") or item.get("pane_revision") or 0),
+                workspace_id=(
+                    str(item["workspace_id"]) if item.get("workspace_id") else None
+                ),
+                tab_id=str(item["tab_id"]) if item.get("tab_id") else None,
+                terminal_id=(
+                    str(item["terminal_id"]) if item.get("terminal_id") else None
+                ),
+                cwd=str(item["cwd"]) if item.get("cwd") else None,
+                focused=bool(item.get("focused", False)),
+                raw=item,
+            )
+        )
+    return out
+

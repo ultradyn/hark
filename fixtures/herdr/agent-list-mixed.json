@@ -1,0 +1,188 @@
+{
+  "id": "cli:agent:list",
+  "result": {
+    "agents": [
+      {
+        "agent": "claude",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/c2c",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/c2c",
+        "pane_id": "w1:p1",
+        "revision": 0,
+        "tab_id": "w1:t1",
+        "terminal_id": "term_6567c82d7a6621",
+        "workspace_id": "w1"
+      },
+      {
+        "agent": "grok",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/c2c",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/c2c",
+        "pane_id": "w1:pC",
+        "revision": 0,
+        "tab_id": "w1:t1",
+        "terminal_id": "term_6567c82d7a7242",
+        "workspace_id": "w1"
+      },
+      {
+        "agent": "agy",
+        "agent_status": "blocked",
+        "cwd": "/home/operator/src/c2c",
+        "focused": true,
+        "foreground_cwd": "/home/operator/src/c2c",
+        "pane_id": "w1:p6",
+        "revision": 0,
+        "tab_id": "w1:t1",
+        "terminal_id": "term_6567c82d7a8753",
+        "workspace_id": "w1"
+      },
+      {
+        "agent": "codex",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/c2c",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/c2c",
+        "pane_id": "w1:pD",
+        "revision": 0,
+        "tab_id": "w1:t4",
+        "terminal_id": "term_6567c82d7aab65",
+        "workspace_id": "w1"
+      },
+      {
+        "agent": "codex",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/c2c",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/c2c",
+        "pane_id": "w1:pE",
+        "revision": 0,
+        "tab_id": "w1:t4",
+        "terminal_id": "term_6567c82d7ad006",
+        "workspace_id": "w1"
+      },
+      {
+        "agent": "grok",
+        "agent_status": "working",
+        "cwd": "/home/operator/src/clawq",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/clawq",
+        "pane_id": "w2:p1",
+        "revision": 0,
+        "tab_id": "w2:t1",
+        "terminal_id": "term_6567c82d7afa47",
+        "workspace_id": "w2"
+      },
+      {
+        "agent": "grok",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/clawq",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/clawq",
+        "pane_id": "w2:p5",
+        "revision": 0,
+        "tab_id": "w2:t3",
+        "terminal_id": "term_6567c82d7b3f59",
+        "workspace_id": "w2"
+      },
+      {
+        "agent": "codex",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/clawq",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/clawq",
+        "pane_id": "w2:p6",
+        "revision": 0,
+        "tab_id": "w2:t3",
+        "terminal_id": "term_6567c82d7b562a",
+        "workspace_id": "w2"
+      },
+      {
+        "agent": "grok",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/quotas",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/quotas",
+        "pane_id": "w6:p3",
+        "revision": 0,
+        "tab_id": "w6:t1",
+        "terminal_id": "term_6567c82d7b78bb",
+        "workspace_id": "w6"
+      },
+      {
+        "agent": "claude",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/amaroo-nomad",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/amaroo-nomad",
+        "pane_id": "w7:p1",
+        "revision": 0,
+        "tab_id": "w7:t1",
+        "terminal_id": "term_6567c82d7bd52e",
+        "workspace_id": "w7"
+      },
+      {
+        "agent": "grok",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/preview-md",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/preview-md",
+        "pane_id": "w7:p2",
+        "revision": 0,
+        "tab_id": "w7:t1",
+        "terminal_id": "term_6567c82d7be61f",
+        "workspace_id": "w7"
+      },
+      {
+        "agent": "claude",
+        "agent_status": "working",
+        "cwd": "/home/operator/src/amaroo",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/amaroo",
+        "pane_id": "w8:pQ",
+        "revision": 0,
+        "tab_id": "w8:t6",
+        "terminal_id": "term_6567c82d7c16011",
+        "workspace_id": "w8"
+      },
+      {
+        "agent": "grok",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/amaroo",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/amaroo",
+        "pane_id": "w8:pY",
+        "revision": 0,
+        "tab_id": "w8:t6",
+        "terminal_id": "term_6567c82d7c28512",
+        "workspace_id": "w8"
+      },
+      {
+        "agent": "grok",
+        "agent_status": "idle",
+        "cwd": "/home/operator/src/openplanet/my-plugins",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/openplanet/my-plugins",
+        "pane_id": "wG:p1",
+        "revision": 0,
+        "tab_id": "wG:t1",
+        "terminal_id": "term_6567c82d7cea417",
+        "workspace_id": "wG"
+      },
+      {
+        "agent": "claude",
+        "agent_status": "done",
+        "cwd": "/home/operator/src/grok/hark",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/grok/hark",
+        "pane_id": "wG:p3",
+        "revision": 0,
+        "tab_id": "wG:t1",
+        "terminal_id": "term_6567c82d7cfe118",
+        "workspace_id": "wG"
+      }
+    ],
+    "type": "agent_list"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": "cli:agent:list",
+  "result": {
+    "agents": [
+      {
+        "agent": "grok",
+        "agent_status": "working",
+        "cwd": "/home/operator/src/clawq",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/clawq",
+        "pane_id": "w2:p1",
+        "revision": 0,
+        "tab_id": "w2:t1",
+        "terminal_id": "term_6567c82d7afa47",
+        "workspace_id": "w2"
+      },
+      {
+        "agent": "claude",
+        "agent_status": "working",
+        "cwd": "/home/operator/src/amaroo",
+        "focused": false,
+        "foreground_cwd": "/home/operator/src/amaroo",
+        "pane_id": "w8:pQ",
+        "revision": 0,
+        "tab_id": "w8:t6",
+        "terminal_id": "term_6567c82d7c16011",
+        "workspace_id": "w8"
+      }
+    ],
+    "type": "agent_list"
+  },
+  "_fixture": {
+    "source": "live herdr agent list (redacted)",
+    "captured_at": "2026-07-13T12:07:29Z",
+    "herdr_version": "0.7.3",
+    "protocol": 16
+  }
+}

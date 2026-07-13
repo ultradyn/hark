@@ -1,0 +1,13 @@
+{
+  "id": "cli:agent:list",
+  "result": {
+    "agents": [],
+    "type": "agent_list"
+  },
+  "_fixture": {
+    "source": "live herdr agent list (redacted)",
+    "captured_at": "2026-07-13T12:07:29Z",
+    "herdr_version": "0.7.3",
+    "protocol": 16
+  }
+}

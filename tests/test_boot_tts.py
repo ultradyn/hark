@@ -24,7 +24,12 @@ def _cfg(*, phrases=None, names=None, wake_mode=None) -> HarkConfig:
 
 
 def test_default_boot_uses_first_activation_phrase():
-    cfg = _cfg(phrases=["hey hark", "hey herald"])
+    # Explicit names so label does not fall through to product defaults (iris…)
+    cfg = _cfg(
+        phrases=["hey hark", "hey herald"],
+        names=["hark", "herald"],
+        wake_mode="names",
+    )
     assert primary_wake_label(cfg) == "hey hark"
     assert ambient_boot_tts_text(cfg) == ambient_boot_line("hey hark")
     assert "hey hark" in ambient_boot_tts_text(cfg)

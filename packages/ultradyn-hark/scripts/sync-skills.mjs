@@ -33,6 +33,9 @@ if (!fs.existsSync(path.join(src, "hark", "SKILL.md"))) {
   process.exit(0);
 }
 
+// Extra markdown docs shipped beside SKILL.md (setup / local STT).
+const extraDocs = ["SETUP.md", "WAKE_STT.md"];
+
 for (const name of names) {
   const from = path.join(src, name, "SKILL.md");
   if (!fs.existsSync(from)) fail(`missing ${from}`);
@@ -48,6 +51,14 @@ for (const name of names) {
   fs.mkdirSync(toDir, { recursive: true });
   fs.copyFileSync(from, path.join(toDir, "SKILL.md"));
   console.log(`sync-skills: ${name}`);
+  // Package mirrors for hark skill docs (handsfree may omit extras)
+  for (const doc of extraDocs) {
+    const docFrom = path.join(src, name, doc);
+    if (fs.existsSync(docFrom)) {
+      fs.copyFileSync(docFrom, path.join(toDir, doc));
+      console.log(`sync-skills: ${name}/${doc}`);
+    }
+  }
 }
 
 // Sanity: packaged layout must be discoverable by npx skills (skills/*/SKILL.md).

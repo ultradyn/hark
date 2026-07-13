@@ -39,6 +39,56 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("doctor", help="check Herdr, auth, paths")
     d.add_argument("--json", action="store_true")
 
+    su = sub.add_parser(
+        "setup",
+        help="guided first-run setup (persona, wake engine, sessions)",
+    )
+    su.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="non-interactive (use flags / defaults)",
+    )
+    su.add_argument(
+        "--force",
+        action="store_true",
+        help="re-run even if setup-complete.json exists",
+    )
+    su.add_argument(
+        "--persona",
+        choices=("feminine", "masculine", "custom"),
+        default=None,
+        help="feminine=Iris+eve, masculine=Mercury+leo",
+    )
+    su.add_argument(
+        "--wake-engine",
+        dest="wake_engine",
+        choices=("vosk", "sherpa_kws", "defer"),
+        default=None,
+        help="ambient wake backend (default vosk until dogfood)",
+    )
+    su.add_argument("--voice", default=None, help="TTS voice id (e.g. eve, leo)")
+    su.add_argument(
+        "--names",
+        default=None,
+        help="comma-separated wake names (overrides persona list)",
+    )
+    su.add_argument(
+        "--sessions",
+        default=None,
+        help="comma sessions: local or id=ssh:host (e.g. local,work=ssh:box)",
+    )
+    su.add_argument(
+        "--skip-doctor",
+        action="store_true",
+        help="skip doctor health print",
+    )
+    su.add_argument(
+        "--skip-download",
+        action="store_true",
+        help="do not download Sherpa model when engine=sherpa_kws",
+    )
+
     c = sub.add_parser("config", help="config path | init | show")
     cs = c.add_subparsers(dest="config_cmd", required=True)
     cs.add_parser("path")
@@ -568,6 +618,11 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
 
     if cmd == "doctor":
         return run_doctor(cfg, as_json=bool(args.json))
+
+    if cmd == "setup":
+        from hark.setup_flow import cmd_setup
+
+        return cmd_setup(args)
 
     if cmd == "config":
         if args.config_cmd == "path":

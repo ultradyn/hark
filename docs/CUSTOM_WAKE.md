@@ -3,11 +3,22 @@
 Ambient mode scans short **local** mic snippets for an activation, then opens
 **cloud STT** for the prompt body (`ambient.prompt`).
 
+**Local engine** (orthogonal to name vs phrase style):
+
+| `engine` | Role |
+|----------|------|
+| `vosk` (default) | Small ASR → text match + aliases / learning |
+| `sherpa_kws` | Open-vocab KWS; keywords from the same names/phrases; rebuild on reload |
+| `text_probe` | Tests only |
+
+Install Sherpa model: `./scripts/download-sherpa-kws-model.sh`. Details:
+`skill/hark/WAKE_STT.md`, survey B069. Default stays **vosk** until dogfood.
+
 There are **two customization styles**. Pick one.
 
 ## 1. Name-based (default)
 
-Configure **product names** (defaults: `hark`, `herald`). Multiple names are
+Configure **product names** (defaults: `iris`, `mercury`, `hark`, `herald`). Multiple names are
 fine. Matching is structural:
 
 - Greating + name: `hey` / `hello` / `hi` / `yo` / `ok` / `okay` / `sup` + name
@@ -18,8 +29,9 @@ fine. Matching is structural:
 ```toml
 [ambient]
 wake_mode = "names"          # default; can omit
-names = ["hark", "herald"]
+names = ["iris", "mercury", "hark", "herald"]
 # extra_names = ["alice"]    # append more canonical names
+engine = "vosk"              # or "sherpa_kws"
 learn_from_near_misses = true
 # Optional exact full-phrase extras still work alongside names:
 # extra_trigger_phrases = ["start prompt"]

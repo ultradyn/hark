@@ -12,7 +12,9 @@ import json
 import math
 import re
 import struct
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 from hark.listen_end import normalize_for_match
@@ -935,6 +937,367 @@ class TextProbeBackend:
         return None
 
 
+# Prefixes used when building Sherpa KWS keyword lists (subset of fuzzy prefixes).
+# Keep short greating forms that operators actually say for wake.
+_KWS_PREFIXES: tuple[str, ...] = ("hey", "hello", "okay", "ok", "hi")
+
+
+def kws_keyword_specs(
+    policy: WakePolicy | None = None,
+    *,
+    phrases: list[str] | tuple[str, ...] | None = None,
+) -> list[tuple[str, str, float, float]]:
+    """Build (spoken_phrase, keyword_id, boost, threshold) rows for open-vocab KWS.
+
+    *spoken_phrase* is space-separated uppercase words for BPE encoding.
+    *keyword_id* is the @label returned by sherpa (underscores, no spaces).
+    Boost/threshold tuned from B069 probe fixtures (greating tighter than bare).
+    """
+    pol = policy if policy is not None else (
+        policy_from_phrases(phrases) if phrases is not None else default_wake_policy()
+    )
+    rows: list[tuple[str, str, float, float]] = []
+    seen_ids: set[str] = set()
+
+    def add(spoken: str, *, boost: float, thr: float) -> None:
+        words = [w for w in spoken.strip().upper().split() if w]
+        if not words:
+            return
+        spoken_u = " ".join(words)
+        kid = "_".join(words)
+        if kid in seen_ids:
+            return
+        seen_ids.add(kid)
+        rows.append((spoken_u, kid, boost, thr))
+
+    if pol.normalized_mode() == "phrases":
+        for p in pol.exact_phrases():
+            add(p, boost=1.5, thr=0.2)
+        return rows
+
+    names = pol.canonical_names() or list(DEFAULT_WAKE_NAMES)
+    # Canonical + learned name tokens that should fire as wake words
+    name_tokens: list[tuple[str, str]] = []  # token, canonical
+    for n in names:
+        name_tokens.append((n, n))
+    for alias, canon in pol.name_aliases.items():
+        a = str(alias).strip().lower()
+        c = str(canon).strip().lower()
+        if a and c and c in names:
+            name_tokens.append((a, c))
+    # de-dupe tokens, keep first canonical
+    seen_tok: set[str] = set()
+    uniq_tokens: list[tuple[str, str]] = []
+    for tok, canon in name_tokens:
+        if tok not in seen_tok:
+            seen_tok.add(tok)
+            uniq_tokens.append((tok, canon))
+
+    for pref in _KWS_PREFIXES:
+        for tok, _canon in uniq_tokens:
+            # Multi-word greating+name: higher boost, lower threshold (easier hit)
+            add(f"{pref} {tok}", boost=2.0, thr=0.15)
+    for tok, _canon in uniq_tokens:
+        # Bare name: slightly stricter threshold to limit mid-sentence fires
+        add(tok, boost=1.5, thr=0.25)
+    # Exact full-phrase extras / learned phrase aliases
+    for p in list(pol.phrases) + list(pol.phrase_aliases):
+        add(p, boost=1.5, thr=0.2)
+    return rows
+
+
+def encode_kws_keywords_file(
+    specs: list[tuple[str, str, float, float]],
+    *,
+    bpe_model: str | Path,
+    tokens_txt: str | Path,
+    dest: str | Path,
+) -> Path:
+    """Write a sherpa keywords.txt (BPE tokens + :boost #thr @ID) from specs."""
+    dest_p = Path(dest)
+    dest_p.parent.mkdir(parents=True, exist_ok=True)
+    if not specs:
+        # KeywordSpotter requires a non-empty file; never-matching dummy
+        dest_p.write_text("▁Z Z Z Z :0.01 #0.99 @HARK_NEVER\n", encoding="utf-8")
+        return dest_p
+
+    bpe_model = Path(bpe_model)
+    tokens_txt = Path(tokens_txt)
+    lines_out: list[str] = []
+
+    # Prefer in-process sentencepiece (fast); fall back to sherpa-onnx-cli
+    sp = None
+    try:
+        import sentencepiece as spm  # type: ignore
+
+        sp = spm.SentencePieceProcessor()
+        sp.load(str(bpe_model))
+    except Exception:
+        sp = None
+
+    if sp is not None:
+        for spoken, kid, boost, thr in specs:
+            pieces = sp.encode(spoken, out_type=str)
+            if not pieces:
+                continue
+            lines_out.append(
+                f"{' '.join(pieces)} :{boost} #{thr} @{kid}"
+            )
+    else:
+        # CLI path: write raw phrases, convert
+        raw = dest_p.with_suffix(".raw.txt")
+        raw_lines = [
+            f"{spoken} :{boost} #{thr} @{kid}"
+            for spoken, kid, boost, thr in specs
+        ]
+        raw.write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
+        import shutil
+        import subprocess
+
+        cli = shutil.which("sherpa-onnx-cli")
+        if not cli:
+            raise RuntimeError(
+                "keyword BPE encode needs sentencepiece or sherpa-onnx-cli "
+                "(uv sync --extra wake-sherpa)"
+            )
+        subprocess.run(
+            [
+                cli,
+                "text2token",
+                "--tokens",
+                str(tokens_txt),
+                "--tokens-type",
+                "bpe",
+                "--bpe-model",
+                str(bpe_model),
+                str(raw),
+                str(dest_p),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return dest_p
+
+    dest_p.write_text("\n".join(lines_out) + "\n", encoding="utf-8")
+    return dest_p
+
+
+def resolve_sherpa_kws_model_files(model_dir: str | Path) -> dict[str, Path]:
+    """Locate encoder/decoder/joiner/tokens/bpe under a KWS model tree (prefer int8)."""
+    root = Path(model_dir)
+    if not root.is_dir():
+        raise FileNotFoundError(f"sherpa KWS model dir missing: {root}")
+
+    def pick(*names: str) -> Path:
+        for n in names:
+            p = root / n
+            if p.is_file():
+                return p
+        raise FileNotFoundError(
+            f"sherpa KWS model incomplete under {root}: need one of {names}"
+        )
+
+    return {
+        "tokens": pick("tokens.txt"),
+        "bpe": pick("bpe.model"),
+        "encoder": pick(
+            "encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
+            "encoder-epoch-12-avg-2-chunk-16-left-64.onnx",
+        ),
+        "decoder": pick(
+            "decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
+            "decoder-epoch-12-avg-2-chunk-16-left-64.onnx",
+        ),
+        "joiner": pick(
+            "joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
+            "joiner-epoch-12-avg-2-chunk-16-left-64.onnx",
+        ),
+    }
+
+
+def is_sherpa_kws_model_dir(path: str | Path | None) -> bool:
+    if not path:
+        return False
+    try:
+        resolve_sherpa_kws_model_files(path)
+        return True
+    except (OSError, FileNotFoundError):
+        return False
+
+
+def keyword_id_to_phrase(keyword_id: str) -> str:
+    """Map sherpa @HEY_HARK → 'hey hark'."""
+    s = (keyword_id or "").strip()
+    if s.startswith("@"):
+        s = s[1:]
+    return s.replace("_", " ").strip().lower()
+
+
+class SherpaKwsWakeBackend:
+    """Open-vocab keyword spotting via sherpa-onnx (English GigaSpeech 3.3M).
+
+    Optional engine (``ambient.engine = "sherpa_kws"``). Vosk remains default.
+    Keywords rebuild from :class:`WakePolicy` on policy/config reload without
+    process restart. Missing model/package → clear RuntimeError (fail-open docs:
+    leave engine on vosk or install model via download script).
+    """
+
+    name = "sherpa_kws"
+
+    def __init__(
+        self,
+        model_path: str,
+        phrases: list[str] | tuple[str, ...] | None = None,
+        *,
+        policy: WakePolicy | None = None,
+        energy_floor: float = 0.003,
+        keywords_path: str | Path | None = None,
+        num_threads: int = 2,
+    ) -> None:
+        self.model_path = model_path
+        self.policy = policy if policy is not None else policy_from_phrases(phrases)
+        self.phrases = list(
+            phrases
+            if phrases is not None
+            else self.policy.display_phrases()
+        )
+        self.energy_floor = energy_floor
+        self.num_threads = num_threads
+        self._files = resolve_sherpa_kws_model_files(model_path)
+        if keywords_path is None:
+            # Prefer XDG state; fall back to temp for tests without home
+            try:
+                from hark.paths import state_dir
+
+                kdir = state_dir()
+            except Exception:
+                kdir = Path(tempfile.gettempdir()) / "hark"
+            keywords_path = kdir / "sherpa_kws_keywords.txt"
+        self.keywords_path = Path(keywords_path)
+        self._spotter = None
+        self._np = None
+        self.last_text: str = ""
+        self.last_rms: float = 0.0
+        self.snippets_scored: int = 0
+        self.snippets_skipped_quiet: int = 0
+        self._keyword_ids: list[str] = []
+        self.rebuild_keywords(self.policy)
+
+    def rebuild_keywords(self, policy: WakePolicy | None = None) -> None:
+        """Regenerate keywords file + KeywordSpotter from policy (config reload)."""
+        if policy is not None:
+            self.policy = policy
+            self.phrases = policy.display_phrases()
+        specs = kws_keyword_specs(self.policy, phrases=self.phrases)
+        self._keyword_ids = [kid for _s, kid, _b, _t in specs]
+        encode_kws_keywords_file(
+            specs,
+            bpe_model=self._files["bpe"],
+            tokens_txt=self._files["tokens"],
+            dest=self.keywords_path,
+        )
+        # Force spotter rebuild with new graph
+        self._spotter = None
+
+    def _ensure(self) -> None:
+        if self._spotter is not None:
+            return
+        try:
+            import numpy as np  # type: ignore
+            import sherpa_onnx  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError(
+                "sherpa-onnx not installed; uv sync --extra wake-sherpa "
+                "or pip install sherpa-onnx sentencepiece"
+            ) from exc
+        self._np = np
+        if not self.keywords_path.is_file():
+            self.rebuild_keywords(self.policy)
+        self._spotter = sherpa_onnx.KeywordSpotter(
+            tokens=str(self._files["tokens"]),
+            encoder=str(self._files["encoder"]),
+            decoder=str(self._files["decoder"]),
+            joiner=str(self._files["joiner"]),
+            keywords_file=str(self.keywords_path),
+            num_threads=self.num_threads,
+            sample_rate=16000,
+            feature_dim=80,
+            max_active_paths=4,
+            keywords_score=1.0,
+            keywords_threshold=0.25,
+            num_trailing_blanks=1,
+            provider="cpu",
+        )
+
+    def score_snippet(self, pcm16_le: bytes, sample_rate: int = 16000) -> WakeHit | None:
+        rms = pcm16_rms(pcm16_le)
+        self.last_rms = rms
+        if rms < self.energy_floor:
+            self.snippets_skipped_quiet += 1
+            self.last_text = ""
+            return None
+
+        self._ensure()
+        assert self._spotter is not None and self._np is not None
+        self.snippets_scored += 1
+
+        # int16 LE → float32 in [-1, 1]
+        n = len(pcm16_le) // 2
+        if n == 0:
+            self.last_text = ""
+            return None
+        pcm = self._np.frombuffer(pcm16_le, dtype=self._np.int16).astype(
+            self._np.float32
+        ) / 32768.0
+
+        # Streaming KWS: feed ~100 ms chunks and decode as ready. Dumping the
+        # whole buffer + long tail in one accept_waveform over-triggers near
+        # misses (B069 probe used chunked decode for clean hit/miss separation).
+        stream = self._spotter.create_stream()
+        step = max(1, int(0.1 * sample_rate))
+        detected = ""
+        for i in range(0, len(pcm), step):
+            stream.accept_waveform(sample_rate, pcm[i : i + step])
+            while self._spotter.is_ready(stream):
+                self._spotter.decode_stream(stream)
+                r = self._spotter.get_result(stream)
+                if r:
+                    detected = r
+                    self._spotter.reset_stream(stream)
+                    break
+            if detected:
+                break
+        if not detected:
+            tail = self._np.zeros(int(0.5 * sample_rate), dtype=self._np.float32)
+            stream.accept_waveform(sample_rate, tail)
+            stream.input_finished()
+            while self._spotter.is_ready(stream):
+                self._spotter.decode_stream(stream)
+                r = self._spotter.get_result(stream)
+                if r:
+                    detected = r
+                    break
+
+        self.last_text = detected or ""
+        if not detected:
+            return None
+
+        phrase = keyword_id_to_phrase(detected)
+        # Prefer policy display form if close
+        for disp in self.phrases:
+            if normalize_for_match(disp) == normalize_for_match(phrase):
+                phrase = disp.lower()
+                break
+        return WakeHit(
+            phrase=phrase,
+            remainder="",
+            raw=detected,
+            confidence=0.9,
+            backend=self.name,
+        )
+
+
 class VoskWakeBackend:
     """Tiny local ASR on short snippets — model loaded once and reused."""
 
@@ -1046,4 +1409,17 @@ def build_wake_backend(
                 "(run ./scripts/setup-ambient.sh)"
             )
         return VoskWakeBackend(model_path, plist, policy=pol)
+    if engine in ("sherpa_kws", "sherpa", "kws"):
+        if not model_path:
+            raise RuntimeError(
+                "ambient.engine=sherpa_kws requires ambient.model_path "
+                "(run ./scripts/download-sherpa-kws-model.sh)"
+            )
+        if not is_sherpa_kws_model_dir(model_path):
+            raise RuntimeError(
+                f"ambient.model_path is not a sherpa KWS model tree: {model_path} "
+                "(need tokens.txt, bpe.model, encoder/decoder/joiner onnx — "
+                "run ./scripts/download-sherpa-kws-model.sh)"
+            )
+        return SherpaKwsWakeBackend(model_path, plist, policy=pol)
     raise ValueError(f"unknown ambient wake engine: {engine!r}")

@@ -176,9 +176,10 @@ done signal is clear and soft-end did not already finalize.
 ```toml
 [ambient]
 enabled = false
-activation_phrases = ["hey hark", "hey herald", "okay hark"]
-engine = "vosk"          # or text_probe for tests
-# model_path = "/path/to/vosk-model-small-en-us"
+# names = ["iris", "mercury", "hark", "herald"]
+engine = "vosk"          # default; or "sherpa_kws" | text_probe (tests)
+# model_path auto under ~/.local/share/hark/models/ (vosk or sherpa KWS tree)
+# Sherpa: ./scripts/download-sherpa-kws-model.sh + uv sync --extra wake-sherpa
 snippet_s = 2.5
 # One-shot wake wait / continuous idle cycle length (seconds).
 # 0 = wait indefinitely (no ambient.timeout cycle).
@@ -189,6 +190,11 @@ timeout_s = 300
 surface_timeouts = true
 # emit_timeout_events = true  # alias of surface_timeouts
 ```
+
+Wake engines: **Vosk** (default open-vocab ASR + aliases) or optional **Sherpa-ONNX
+open-vocab KWS** (`engine = "sherpa_kws"`, B070). Keywords rebuild from configured
+names/phrases on config reload. Vosk remains default until dogfood. Operator guide:
+`skill/hark/WAKE_STT.md`; survey: `docs/plans/B069-local-stt-survey.md`.
 
 | Key | Default | Notes |
 |-----|---------|--------|

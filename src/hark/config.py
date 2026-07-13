@@ -338,7 +338,7 @@ class AmbientConfig:
         default_factory=lambda: list(DEFAULT_ACTIVATION_PHRASES)
     )
     learn_from_near_misses: bool = True
-    # local | vosk | text_probe — never cloud during wake scan
+    # vosk (default) | sherpa_kws | text_probe — never cloud during wake scan
     engine: str = "vosk"
     model_path: str | None = None
     snippet_s: float = 2.5
@@ -572,8 +572,14 @@ names = ["iris", "mercury", "hark", "herald"]
 # trigger_phrases = ["start prompt"]
 # extra_trigger_phrases = ["begin dictation"]
 learn_from_near_misses = true
-engine = "vosk"              # vosk | text_probe (tests)
+engine = "vosk"              # vosk (default) | sherpa_kws | text_probe (tests)
+# model_path auto-detected under ~/.local/share/hark/models/ when present:
+#   vosk     → vosk-model-small-en-us-0.15
+#   sherpa_kws → sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01
 # model_path = "~/.local/share/hark/models/vosk-model-small-en-us-0.15"
+# For Sherpa KWS (B070): ./scripts/download-sherpa-kws-model.sh
+#   engine = "sherpa_kws"
+#   # model_path = "~/.local/share/hark/models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01"
 snippet_s = 2.5
 # One-shot wake wait / continuous idle cycle length (seconds). 0 = wait forever
 # (no ambient.timeout). Continuous Mode A re-enters the wake wait each timeout_s.
@@ -709,10 +715,14 @@ def _build_ambient_config(
         activation_phrases=policy.display_phrases(),
         learn_from_near_misses=policy.learn,
         engine=str(ambient_raw.get("engine", "vosk")),
-        model_path=_resolve_vosk_model_path(
+        model_path=_resolve_ambient_model_path(
             str(ambient_raw["model_path"])
             if ambient_raw.get("model_path")
-            else os.environ.get("HARK_VOSK_MODEL")
+            else (
+                os.environ.get("HARK_WAKE_MODEL")
+                or os.environ.get("HARK_VOSK_MODEL")
+            ),
+            engine=str(ambient_raw.get("engine", "vosk")),
         ),
         snippet_s=float(ambient_raw.get("snippet_s", 2.5)),
         timeout_s=float(ambient_raw.get("timeout_s", 300)),
@@ -878,17 +888,51 @@ def _warn_unknown_keys(
             warnings.append(f"unknown config key: {section}.{key}")
 
 
-def default_vosk_model_path() -> Path:
+def _models_root() -> Path:
     base = os.environ.get("XDG_DATA_HOME")
     root = Path(base) if base else Path.home() / ".local" / "share"
-    return root / "hark" / "models" / "vosk-model-small-en-us-0.15"
+    return root / "hark" / "models"
+
+
+def default_vosk_model_path() -> Path:
+    return _models_root() / "vosk-model-small-en-us-0.15"
+
+
+def default_sherpa_kws_model_path() -> Path:
+    return _models_root() / "sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01"
 
 
 def _resolve_vosk_model_path(raw: str | None) -> str | None:
+    """Legacy helper — prefer :func:`_resolve_ambient_model_path`."""
+    return _resolve_ambient_model_path(raw, engine="vosk")
+
+
+def _resolve_ambient_model_path(
+    raw: str | None,
+    *,
+    engine: str = "vosk",
+) -> str | None:
+    """Resolve ambient.model_path for the selected wake engine.
+
+    Explicit ``model_path`` always wins. Otherwise auto-detect the usual
+    XDG install location for vosk or sherpa_kws when present.
+    """
     if raw:
         p = Path(os.path.expanduser(raw))
         return str(p)
-    # Auto-detect common install location from setup-ambient.sh
+    eng = (engine or "vosk").strip().lower()
+    if eng in ("sherpa_kws", "sherpa", "kws"):
+        auto = default_sherpa_kws_model_path()
+        try:
+            from hark.wake import is_sherpa_kws_model_dir
+
+            if is_sherpa_kws_model_dir(auto):
+                return str(auto)
+        except Exception:
+            if auto.is_dir() and (auto / "tokens.txt").is_file():
+                return str(auto)
+        return None
+    # vosk / text_probe / default
     auto = default_vosk_model_path()
     if auto.is_dir():
         return str(auto)

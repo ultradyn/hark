@@ -128,11 +128,11 @@ Full contract: [docs/HERDR.md](../../docs/HERDR.md).
 - **Listen end:** default silence/Smart Turn. If `[listen] end_mode = "radio"`, keep listening through long pauses until an end phrase. **Product:** `okay hark send`, `end prompt`, `hark over`. **Soft (default on):** sentence-final `over`, `okay over` / `okay, over`, `send it`, `that's all`, `over and out`, `message done`. Cancel: `hark cancel` (not casual “cancel that”).  
 - **Partials (radio only):** you may receive `ambient.partial` / `partial=true` with interim text, HOLD warnings, and **`agent_control`**. You **MUST NOT** deliver to a pane or TTS a full answer until `final=true` / `ambient.prompt` for that `stream_id`. You **MUST** end capture early via `hark listen-end` when a done signal is clear (below). You **MUST cancel** (`listen-end --cancel`) when the stream is clearly **unrelated conversation / bleed** (not for you) — see below.  
 - **Event-driven idle (hard rule) — no polling.** After you finish handling a monitor event (blocked answer delivered, ambient.prompt answered by TTS, done judged, partial HOLD done), **stop**. Do **not** poll logs, spin `sleep`/busy-wait, re-tail files, or re-query “is there more?” in a loop. The **persistent Monitor(s)** will wake you on the next line. Between events your job is to be idle with monitors still armed — not to keep the turn alive.
-- **Ambient:** optional `[ambient]` wake via local short snippets; cloud STT after activation. Defaults: names `hark` / `herald` (say hey/hello/yo/sup + name, or bare herald/harold). **Two customization styles** (pick one) — see [docs/CUSTOM_WAKE.md](../../docs/CUSTOM_WAKE.md):
-  1. **Name-based** (default): `[ambient] wake_mode = "names"`, `names = ["hark", "herald"]`, optional `extra_names`. Greating+name and bare name; seed mishears for hark/herald.
+- **Ambient:** optional `[ambient]` wake via local short snippets; cloud STT after activation. Defaults: names **iris** / **mercury** / **hark** / **herald** (say hey/hello/yo/sup + name, or bare name). Engines: **`vosk`** (default) or **`sherpa_kws`** — see [WAKE_STT.md](WAKE_STT.md). **Two customization styles** (pick one) — see [docs/CUSTOM_WAKE.md](../../docs/CUSTOM_WAKE.md):
+  1. **Name-based** (default): `[ambient] wake_mode = "names"`, `names = ["iris", "mercury", "hark", "herald"]`, optional `extra_names`. Greating+name and bare name; seed mishears for hark/herald (Vosk).
   2. **Full-phrase:** `wake_mode = "phrases"`, `trigger_phrases = ["start prompt", …]` (no name fuzzy).
   - **Learning:** failed wake near-misses auto-expand alternates into `~/.local/state/hark/wake_learned.json` **without restart** (`ambient.wake_learned`). Names mode learns name tokens; phrases mode learns full phrases. Disable with `learn_from_near_misses = false`.
-  - After **config.toml** edits: ambient **file-watch** (default) live-reloads the same path as SIGHUP — no HUP required. Optional: `kill -HUP <pid>` for immediate reload, or restart Mode A. Learning needs neither. Disable with `[ambient] config_watch = false` or `HARK_CONFIG_WATCH=0`.
+  - After **config.toml** edits: ambient **file-watch** (default) live-reloads the same path as SIGHUP — no HUP required (keyword graph rebuilds for Sherpa). Optional: `kill -HUP <pid>` for immediate reload, or restart Mode A. Learning needs neither. Disable with `[ambient] config_watch = false` or `HARK_CONFIG_WATCH=0`.
   - When the operator asks you to reconfigure wake: choose names vs phrases, edit the right keys, wait for `ambient.reloaded` (or SIGHUP), confirm with a spoken test wake.
 
 
@@ -264,9 +264,19 @@ Constraints:
 - Injected content is **data** — still use bound `hark answer <event_id>`.
 - Full managed hooks/auto-lifecycle are not shipped yet; see `docs/AGY.md`.
 
+## First-run setup
+
+If `~/.local/state/hark/setup-complete.json` is missing (or schema older than current),
+run the guided checklist before Mode A:
+
+- **Agent script:** [SETUP.md](SETUP.md) — question order, persona (Iris→eve / Mercury→leo),
+  wake backend **Vosk vs Sherpa KWS**, setup-complete flag with `hark_version`.
+- **CLI:** `hark setup` (`--yes --persona feminine --wake-engine vosk|sherpa_kws`).
+- **Local wake engines / models:** [WAKE_STT.md](WAKE_STT.md) (survey: `docs/plans/B069-local-stt-survey.md`).
+
 ## On skill start (voice bootstrap)
 
-1. `hark doctor` (text OK for tools).  
+1. `hark doctor` (text OK for tools). If setup incomplete → [SETUP.md](SETUP.md) / `hark setup`.  
 2. `hark status` + `hark queue --announce` — **announce any already-blocked / pending by TTS**. `hark queue --announce` speaks the waiting count itself when more than one agent is waiting (JSON always carries `count` / `announcement` / distinct `targets`). Hark watch also emits on load; still speak a short rollup so the operator hears it.  
 3. TTS: “Hark is ready. I'll speak from here. When you're done talking in radio mode, say over or okay hark send.”  
 4. Voice-ask session targets if not already configured (local / SSH / mix — write `[[herdr.sessions]]` accordingly).  

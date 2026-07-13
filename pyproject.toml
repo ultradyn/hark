@@ -21,6 +21,13 @@ dev = [
 wake = [
   "vosk>=0.3.45",
 ]
+# Optional Sherpa-ONNX open-vocab KWS wake backend (B070). Prefer int8
+# GigaSpeech 3.3M model via scripts/download-sherpa-kws-model.sh.
+# Vosk remains the default ambient engine until dogfood flips it.
+wake-sherpa = [
+  "sherpa-onnx>=1.10",
+  "sentencepiece>=0.1.99",
+]
 # Optional Smart Turn endpointing (B007). Default install stays lean; the
 # energy gate needs none of this. See docs/ENDPOINTING.md.
 smart-turn = [
@@ -49,4 +56,5 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
   "vosk: optional offline Vosk re-decode tests (needs model + vosk extra)",
+  "sherpa_kws: optional Sherpa-ONNX KWS wake tests (needs model + wake-sherpa extra)",
 ]

@@ -121,6 +121,10 @@ class AmbientResult:
 
 
 def _apply_policy_to_backend(backend: WakeBackend, policy: WakePolicy) -> None:
+    if hasattr(backend, "rebuild_keywords"):
+        # Sherpa KWS: rebuild keyword graph from names/phrases (no process restart)
+        backend.rebuild_keywords(policy)  # type: ignore[attr-defined]
+        return
     if hasattr(backend, "policy"):
         backend.policy = policy  # type: ignore[attr-defined]
     if hasattr(backend, "phrases"):
@@ -573,9 +577,15 @@ def run_ambient(
         learned0 = None
 
     if backend is None:
-        if not amb.model_path and amb.engine == "vosk":
+        eng = (amb.engine or "").lower()
+        if not amb.model_path and eng == "vosk":
             raise RuntimeError(
                 "ambient.engine=vosk requires model_path — run ./scripts/setup-ambient.sh"
+            )
+        if not amb.model_path and eng in ("sherpa_kws", "sherpa", "kws"):
+            raise RuntimeError(
+                "ambient.engine=sherpa_kws requires model_path — "
+                "run ./scripts/download-sherpa-kws-model.sh"
             )
         backend = build_wake_backend(
             amb.engine,
@@ -671,10 +681,16 @@ def apply_config_reload(
         "wake_label_changed": wake_label_changed,
     }
 
+    eng = (new_cfg.ambient.engine or "").lower()
     if engine_changed or model_changed:
-        if not new_cfg.ambient.model_path and new_cfg.ambient.engine == "vosk":
+        if not new_cfg.ambient.model_path and eng == "vosk":
             raise RuntimeError(
                 "ambient.engine=vosk requires model_path — run ./scripts/setup-ambient.sh"
+            )
+        if not new_cfg.ambient.model_path and eng in ("sherpa_kws", "sherpa", "kws"):
+            raise RuntimeError(
+                "ambient.engine=sherpa_kws requires model_path — "
+                "run ./scripts/download-sherpa-kws-model.sh"
             )
         backend = build_wake_backend(
             new_cfg.ambient.engine,
@@ -825,13 +841,28 @@ def run_ambient_loop(
         except Exception:
             pass
 
-    if not cfg.ambient.model_path and cfg.ambient.engine == "vosk":
+    eng0 = (cfg.ambient.engine or "").lower()
+    if not cfg.ambient.model_path and eng0 == "vosk":
         err = {
             "schema": "hark.event.v1",
             "kind": "ambient.error",
             "event_id": new_event_id(),
             "observed_at": utc_now_iso(),
             "error": "no vosk model_path — run ./scripts/setup-ambient.sh",
+        }
+        out.write(json.dumps(err, separators=(",", ":")) + "\n")
+        out.flush()
+        return 1
+    if not cfg.ambient.model_path and eng0 in ("sherpa_kws", "sherpa", "kws"):
+        err = {
+            "schema": "hark.event.v1",
+            "kind": "ambient.error",
+            "event_id": new_event_id(),
+            "observed_at": utc_now_iso(),
+            "error": (
+                "no sherpa_kws model_path — "
+                "run ./scripts/download-sherpa-kws-model.sh"
+            ),
         }
         out.write(json.dumps(err, separators=(",", ":")) + "\n")
         out.flush()

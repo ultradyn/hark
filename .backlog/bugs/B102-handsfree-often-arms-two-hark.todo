@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T22:22:29Z"
 claimed_by: grok-bl-fix
-completed_at: null
+completed_at: "2026-07-13T22:26:31Z"
 complexity: medium
 created_at: "2026-07-13T19:58:09Z"
 depends_on: []
+duration_minutes: 4.039467678066667
 estimate_hours: 1
 id: B102
 priority: high
 started_at: "2026-07-13T22:22:29Z"
-status: in_progress
+status: done
 tags: []
 title: Handsfree often arms two hark monitor --for-monitor processes (duplicate HEP wakes)
-updated_at: "2026-07-13T22:22:29Z"
+updated_at: "2026-07-13T22:26:31Z"
 ---
 ## Dogfood (2026-07-14)
 Session had two concurrent `hark monitor --for-monitor --replay 0` processes.

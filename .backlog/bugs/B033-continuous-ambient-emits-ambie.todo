@@ -1,15 +1,14 @@
 ---
+completed_at: null
 complexity: low
 created_at: "2026-07-13T11:10:30Z"
 depends_on: []
 estimate_hours: 1
 id: B033
 priority: medium
+started_at: null
 status: pending
-tags:
-    - ambient
-    - ux
-    - dogfood
+tags: []
 title: Continuous ambient emits ambient.timeout every timeout_s (~5m) as noisy restart cycle
 updated_at: "2026-07-13T11:10:30Z"
 ---
@@ -26,3 +25,13 @@ Timeout-as-loop-tick is confusing in logs and may re-enter run_ambient once path
 
 ## Evidence
 system.jsonl ambient.timeout every ~300s while quiet
+
+
+## Config: optional hide of ambient.timeout (addendum)
+
+`ambient.timeout` events should be **optionally hidden**. They are still useful as a heartbeat depending on provider caching duration and how hard we are working (idle vs busy dogfood).
+
+- Put emission behind a config option under `[ambient]`
+- **Default on** — timeout messages are **surfaced** (current behavior for visibility)
+- When off: do not emit `ambient.timeout` to monitor NDJSON / syslog on continuous idle cycles (or gate both surfaces the same way)
+- Document the option and when to turn timeouts off (noisy continuous Mode A) vs leave on (heartbeat / cache-warmup awareness)

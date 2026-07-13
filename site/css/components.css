@@ -268,6 +268,140 @@ a.product-link:hover {
   color: var(--ink-muted);
 }
 
+/* --- Install picker (segmented control + command block) --- */
+.install-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+.install-picker__fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.segmented-control {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.2rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.segmented-control__opt {
+  position: relative;
+  display: block;
+  cursor: pointer;
+  margin: 0;
+}
+
+.segmented-control__opt input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.segmented-control__label {
+  display: block;
+  padding: 0.45rem 0.95rem;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  background: transparent;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+  user-select: none;
+}
+
+.segmented-control__opt:hover .segmented-control__label {
+  color: var(--ink);
+}
+
+/* Selected pill */
+.segmented-control__opt input:checked + .segmented-control__label {
+  color: var(--ink-invert);
+  background: linear-gradient(135deg, #f0c96a 0%, var(--herald) 50%, var(--herald-dim) 100%);
+  box-shadow: 0 4px 16px var(--herald-glow), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.segmented-control__opt input:focus-visible + .segmented-control__label {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+.install-picker .term__bar {
+  gap: var(--s-2);
+}
+
+/* Title + copy sit as a trailing group after the traffic-light dots */
+.install-picker .term__title {
+  margin-left: auto;
+}
+
+.install-picker__copy {
+  flex-shrink: 0;
+  padding: 0.25rem 0.65rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast),
+    border-color var(--dur-fast),
+    background var(--dur-fast);
+}
+
+.install-picker__copy:hover {
+  color: var(--herald);
+  border-color: var(--border-strong);
+  background: rgba(232, 184, 74, 0.08);
+}
+
+.install-picker__copy:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+.install-picker__copy.is-copied {
+  color: var(--safe);
+  border-color: rgba(134, 239, 172, 0.4);
+}
+
+.install-picker__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.5rem;
+  min-width: 0;
+}
+
+.install-picker__line .cmd {
+  word-break: break-all;
+}
+
 /* --- Terminal panel --- */
 .term {
   background: linear-gradient(180deg, #0b0e16 0%, #06080e 100%);

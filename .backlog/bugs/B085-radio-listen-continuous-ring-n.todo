@@ -1,14 +1,124 @@
 ---
 complexity: medium
-created_at: "2026-07-13T16:54:43Z"
+created_at: "2026-07-13T16:55:00Z"
 depends_on: []
-estimate_hours: 1
+estimate_hours: 4
 id: B085
 priority: high
 status: pending
-tags: []
-title: 'Radio/listen continuous ring: no word loss at segment boundaries (overlap PCM from ring, not silence-only pad)'
-updated_at: "2026-07-13T16:54:43Z"
+tags:
+  - audio
+  - radio
+  - stt
+  - ring-buffer
+title: 'Radio/listen continuous ring: no word loss at segment boundaries (overlap PCM from ring)'
+updated_at: "2026-07-13T16:55:00Z"
 ---
 
-Radio/listen continuous ring: no word loss at segment boundaries (overlap PCM from ring, not silence-only pad)
+## Problem
+
+**B083** fixed *text* reassembly (per-segment STT + join; partials must not shrink).
+Words can still **never enter STT** because radio capture still:
+
+1. Calls **`capture_utterance` per segment** (new energy-gated open each slice).
+2. Cuts on **silence** (`radio_partial_silence_s`); the next open starts cold (or with
+   short in-capture preroll only).
+3. **B075** only pads with *synthetic silence* — it does **not** recover speech that
+   fell in the gap between mic closes or between gate close and next open.
+4. **B079** continuous ring is used for **ambient wake**; answer/radio listen mostly
+   re-opens the device. Shared ring → utterance buffer was deferred as v1 fallback.
+
+Operator symptom: multi-clause radio messages “lose words between chunks” even after
+B083 — especially at thinking pauses that trigger a segment cut.
+
+## Goal
+
+**Take full advantage of the continuous PCM ring** for radio / post-wake / ask
+listen so:
+
+- No device open/close thrash mid-answer (one stream for the whole listen).
+- Segment STT windows are **overlapping cuts from the ring**, not disjoint cold
+  captures.
+- Boundary phonemes appear in **at least one** STT upload (and preferably both
+  adjacent windows with controlled overlap).
+- Text join (B083) remains the source of truth for partials/final; ring overlap
+  feeds **audio** completeness.
+
+## Desired design
+
+### Single continuous stream for listen
+- Hold `MicLease` + `ContinuousMicStream` / ring for the **whole** radio answer
+  (and post-wake prompt capture), same spirit as ambient B079.
+- Energy gate / endpointing only **marks** open/close/end; they do not release
+  the device until the utterance finishes (end phrase, B074 idle, max_listen,
+  agent listen-end).
+
+### Overlapping segment windows from the ring
+When radio cuts a segment for interim STT (after `radio_partial_silence_s`):
+
+1. Keep writing live PCM into the ring and into a **master utterance buffer**.
+2. Export STT WAV as:
+   ```
+   ring.tail(boundary_overlap_ms)  +  segment_pcm  [+ optional trail look-ahead]
+   ```
+   or cut `[t0 - overlap, t1 + trail]` from the continuous buffer using timestamps.
+3. Default **overlap 250–400 ms** (config `listen.radio_segment_overlap_ms`),
+   capped by ring capacity and partial silence budget (must not invent speech
+   across true long silence — overlap only real captured samples).
+4. **B075 silence pad** becomes optional fallback when ring history is empty
+   (start of stream); prefer real pre-boundary PCM over zeros.
+
+### Pre-roll for first open
+- First speech-open still uses **≥250 ms pre-roll** from the ring (B079
+  `pre_roll_ms`) so word onset is not clipped.
+- If ambient already held a continuous stream, **hand off** ring tail into listen
+  (no cold open) when lease design allows; else listen owns its own continuous
+  stream for the arm duration.
+
+### Text path (keep B083)
+- Still STT each window alone and `join_radio_stt_segments`.
+- Overlap may cause repeated tail/head tokens — join’s overlap trim already
+  handles that; tune overlap ms vs false doubles.
+- Monotonic partials + prefer-complete final remain.
+
+## Acceptance
+
+- [ ] Radio multi-segment capture: one continuous open for the listen lifetime
+  (OS mic indicator steady; no per-segment thrash)
+- [ ] Adjacent STT windows share **≥250 ms** of real PCM at the cut (unit test with
+  synthetic ring + known tones/markers at boundary)
+- [ ] Fixture/dogfood: word straddling a segment cut appears in joined text
+- [ ] B075 silence pad not required when ring history available
+- [ ] Config: `radio_segment_overlap_ms` (and docs in AUDIO_DESIGN)
+- [ ] Ambient handoff optional but preferred when ambient ring is already armed
+- [ ] No regression: B074 idle end, soft/product end, B083 join, B078 arm cue
+- [ ] Cooperate with **B084**: muted time still excluded from silence clocks
+
+## Non-goals
+
+- Replacing cloud STT quality inside a single window
+- Full duplex TTS+listen
+- Changing B083 text-join algorithm except tuning for larger audio overlap
+
+## Related
+
+| Ticket | Relation |
+|--------|----------|
+| **B083** (done) | Text reassembly — necessary but not sufficient |
+| **B075** (done) | Silence pad only — superseded at boundaries by ring overlap |
+| **B079** (done) | Ambient ring + listen pre_roll — extend to full radio continuous |
+| **B084** (open) | Mute must not burn silence/timeout clocks during continuous hold |
+| B074 | Idle auto-end still uses silence duration (freeze when muted) |
+
+## Code touchpoints
+
+- `src/hark/speech.py` radio loop (`capture_utterance` per segment → continuous)
+- `src/hark/audio/capture.py` — `ContinuousMicStream`, `PcmRingBuffer`, export
+  windows by time/offset
+- `src/hark/ambient.py` / mic lease — handoff or exclusive continuous listen
+- Config `listen.*`; AUDIO_DESIGN continuous-stream + radio sections
+
+## Estimate
+
+~4 h: continuous listen stream + ring window export + tests; handoff from ambient
+can be a follow-up commit if lease complexity slips.

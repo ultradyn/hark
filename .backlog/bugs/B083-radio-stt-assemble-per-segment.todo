@@ -36,7 +36,7 @@ whole body shorter or differently (“reassembly” failure).
 
 | Cause | Ticket / note |
 |-------|----------------|
-| Energy-gate clips phonemes at segment edges | B075 pad (silence only); B079 pre-roll for answer open |
+| Energy-gate / gap clips phonemes at segment edges | **B085** continuous ring + PCM overlap; B075 silence pad only |
 | TTS mute eats timeout / silence clocks | **B084** |
 | Cloud STT omits words *inside* one segment | Provider quality; not assembly |
 | Echo reject clears buffer | Intentional (`text_segments.clear`) |

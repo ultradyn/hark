@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-07-13T17:34:54Z"
+depends_on: []
+estimate_hours: 1
+id: B090
+priority: high
+status: pending
+tags: []
+title: Deprecate use of 'Mode A', it's the only mode right so no point mentioning it.
+updated_at: "2026-07-13T17:34:54Z"
+---
+
+Deprecate use of 'Mode A', it's the only mode right so no point mentioning it.

@@ -88,3 +88,4 @@ bugs:
     - file: B087-when-webui-is-up-we-are-record.todo
     - file: B088-add-a-self-update-check-based.todo
     - file: B089-add-start-stop-restart-command.todo
+    - file: B090-deprecate-use-of-mode-a-it-s-t.todo

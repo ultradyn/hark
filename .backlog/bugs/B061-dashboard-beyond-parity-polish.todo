@@ -1,0 +1,36 @@
+---
+complexity: medium
+created_at: "2026-07-13T14:19:32Z"
+depends_on:
+    - B057
+    - B058
+    - B059
+estimate_hours: 4
+id: B061
+priority: medium
+status: pending
+tags:
+    - dashboard
+    - webui
+    - pwa
+    - ux
+    - polish
+title: 'Dashboard: beyond-parity polish (PWA, notifications, palette, scrubber, heatmaps)'
+updated_at: "2026-07-13T14:19:32Z"
+---
+## Scope
+Owner-approved delight features, all webui-side (no contract change) — see 'Beyond-parity features' in docs/plans/I003-dashboard.md.
+
+- Phone-first PWA: installable, Web Notifications on agent.blocked, deep-link to event card (answer the fleet from the couch over tailnet)
+- One-tap answers: render event choices as buttons -> bound keys submit
+- Command palette (cmd-K): jump to pane/session, filter, dictate, answer
+- Timeline scrubber / session replay over event history
+- Activity heat + sparklines: per-pane activity, blocked->answered latency, empty-STT + near-miss trends
+- Spoken-audio audit trail (what TTS said, replay from cache where available)
+- Saved filter views (localStorage)
+
+## Acceptance
+- [ ] PWA installs on phone; notification tap opens the blocking event
+- [ ] One-tap menu answer round-trips via bound submit
+- [ ] Palette, scrubber, heatmap, saved views functional
+- [ ] No hark.dashboard.v1 contract changes required

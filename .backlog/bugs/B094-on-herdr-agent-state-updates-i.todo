@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T18:08:45Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T18:12:37Z"
 complexity: medium
 created_at: "2026-07-13T18:01:06Z"
 depends_on: []
+duration_minutes: 3.8747040752166666
 estimate_hours: 1
 id: B094
 priority: high
 started_at: "2026-07-13T18:08:45Z"
-status: in_progress
+status: done
 tags: []
 title: On Herdr agent state updates, include full pane text screen capture in HEP events for Mode A
-updated_at: "2026-07-13T18:08:45Z"
+updated_at: "2026-07-13T18:12:37Z"
 ---
 ## Problem
 

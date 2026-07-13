@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T09:13:47Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T09:24:41Z"
 complexity: medium
 created_at: "2026-07-13T08:32:27Z"
 depends_on: []
+duration_minutes: 10.912699937083334
 estimate_hours: 1
 id: B019
 priority: high
 started_at: "2026-07-13T09:13:47Z"
-status: in_progress
+status: done
 tags: []
 title: Surface plausible failed wake activations to Mode A monitor (grouped)
-updated_at: "2026-07-13T09:13:47Z"
+updated_at: "2026-07-13T09:24:41Z"
 ---
 ## Problem
 Failed activation-phrase attempts that are *close enough to be plausible* should be reviewed by the orchestrator agent. Unrelated speech (long fragments / many words) should be discarded immediately and never surfaced.

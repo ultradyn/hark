@@ -176,6 +176,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="comma-separated kind filter (default: handsfree wake set)",
     )
+    mon.add_argument(
+        "--allow-multiple",
+        action="store_true",
+        help=(
+            "skip singleflight lock (debug only — a second consumer "
+            "duplicates HEP wakes to the orchestrator)"
+        ),
+    )
 
     ctx = sub.add_parser("context", help="read pane context")
     ctx.add_argument("target")
@@ -733,6 +741,7 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
             for_monitor=for_monitor,
             kinds=kinds,
             replay=int(getattr(args, "replay", 0) or 0),
+            allow_multiple=bool(getattr(args, "allow_multiple", False)),
         )
     if cmd in ("webui", "dashboard", "serve"):
         if getattr(args, "print_token", False):

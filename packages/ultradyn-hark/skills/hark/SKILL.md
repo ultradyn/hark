@@ -226,8 +226,16 @@ Exact product/soft end phrases still auto-finish without you when they match. Yo
 
 **Hard-require:** arm **one** persistent Monitor on the unified Hark feed. Do **not** invent separate `tail | grep` pipelines — those miss events (e.g. `ambient.wake_near_miss` was easy to drop).
 
+**Singleflight (B102):** only **one** `hark monitor` consumer may run. A second process exits non-zero with `hark monitor already running (pid …)`. Before arming on skill start / session restart:
+
+1. If this session **already has** a live Monitor on `hark monitor`, **do not** arm another.
+2. Optional check: `hark start --status` (shows `monitor: running|not running`) or attempt arm once — refuse means one is already live; leave it.
+3. Never run parallel ambient-only / watch-only tails alongside the unified monitor.
+4. `--allow-multiple` is **debug only** (duplicates HEP wakes).
+
 ```text
 # REQUIRED — single Monitor for all Hark wake events (persistent)
+# Arm at most once per handsfree session.
 Monitor({
   description: "hark",
   command: "hark monitor --for-monitor",
@@ -314,7 +322,7 @@ run the guided checklist before arming handsfree:
 2. `hark status` + `hark queue --announce` — **announce any already-blocked / pending by TTS**. `hark queue --announce` speaks the waiting count itself when more than one agent is waiting (JSON always carries `count` / `announcement` / distinct `targets`). Hark watch also emits on load; still speak a short rollup so the operator hears it.  
 3. TTS: “Hark is ready. I'll speak from here. When you're done talking in radio mode, say over or okay hark send.”  
 4. Voice-ask session targets if not already configured (local / SSH / mix — write `[[herdr.sessions]]` accordingly).  
-5. **Required:** arm **`hark monitor --for-monitor`** (persistent). One feed for Herdr + ambient (includes `wake_near_miss`). Do **not** arm only `hark watch` or only ambient tails.  
+5. **Required:** arm **one** **`hark monitor --for-monitor`** (persistent) if not already armed. One feed for Herdr + ambient (includes `wake_near_miss`). Do **not** arm a second monitor on restart/dual skill boots — check first (`hark start --status` / existing Monitor). Do **not** arm only `hark watch` or only ambient tails.  
 6. Prefer `hark tts --listen "…"` or `hark ask` so recording arms after you speak (**beep when listen ready**, not when speech opens). **Ambient auto-pauses** for listen/ask (mic lease yield); no manual kill needed.  
 7. **Idle and wait for that Monitor** to deliver the next line. Do not poll.
 

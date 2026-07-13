@@ -404,13 +404,14 @@ def test_monitor_prints_notice(
     monkeypatch.setattr("hark.update_check.cache_path", lambda: cache)
     monkeypatch.setattr("hark.update_check.package_version", lambda: "0.1.0")
     monkeypatch.setattr("hark.paths.state_dir", lambda: tmp_path)
+    monkeypatch.setattr("hark.monitor_feed.state_dir", lambda: tmp_path)
     # Avoid following forever: empty feed files, replay 0, then break follow
     monkeypatch.setattr(
         "hark.monitor_feed.follow_state_files",
         lambda *a, **k: 0,
     )
     monkeypatch.setattr("hark.monitor_feed.default_feed_paths", lambda: [])
-    code = run_monitor(replay=0)
+    code = run_monitor(replay=0, state_root=tmp_path)
     assert code == 0
     err = capsys.readouterr().err
     assert "update available" in err

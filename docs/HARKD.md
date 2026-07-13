@@ -68,6 +68,7 @@ Both modes **MUST** use the same XDG layout (overridable via `XDG_*`):
 |----------------------|-------------|
 | `harkd.pid` | Single-instance pidfile for `harkd` |
 | `mode-a.pids` | Handsfree launcher (or harkd `--workers`) ambient/watch PIDs |
+| `monitor.pid` | Singleflight lock for `hark monitor` feed consumer (B102) |
 | `busy.lock` | Recording in progress (lifecycle / stop grace) |
 | `mic.lock` | Exclusive mic (`MicLease`) |
 | `ambient.pause` | Cooperative yield from ambient to listen/ask |

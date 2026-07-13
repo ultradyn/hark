@@ -329,6 +329,9 @@ def workers_status(root: Path | None = None) -> dict[str, Any]:
     root = root or state_dir()
     mode_a = probe_mode_a(root)
     harkd = probe_harkd(root)
+    from hark.monitor_feed import probe_monitor_consumer
+
+    monitor = probe_monitor_consumer(root)
     return {
         "state_dir": str(root),
         "workers": {
@@ -340,6 +343,7 @@ def workers_status(root: Path | None = None) -> dict[str, Any]:
             "running": harkd.running,
             "pids": harkd.pids,
         },
+        "monitor": monitor,
         "busy_lock": busy_lock_path(root).is_file(),
         "logs": {
             "watch": str(root / "watch.jsonl"),
@@ -394,6 +398,11 @@ def cmd_start(args: Any) -> int:
                 print(f"harkd: running (pids {', '.join(str(p) for p in h['pids'])})")
             else:
                 print("harkd: not running")
+            mon = st.get("monitor") or {}
+            if mon.get("running"):
+                print(f"monitor: running (pid {mon.get('pid')})")
+            else:
+                print("monitor: not running")
             print(f"state_dir: {st['state_dir']}")
         return OK
 

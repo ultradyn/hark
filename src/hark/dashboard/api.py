@@ -36,12 +36,25 @@ def health_snapshot(cfg: HarkConfig, server_meta: dict[str, Any]) -> dict[str, A
     buf = io.StringIO()
     run_doctor(cfg, as_json=True, out=buf, err=io.StringIO())
     doctor = json.loads(buf.getvalue() or "{}")
+    # Prefer top-level update (also mirrored under doctor.update from B088)
+    update = doctor.get("update") if isinstance(doctor.get("update"), dict) else {}
+    if not update:
+        try:
+            from hark.update_check import update_status_for_api
+
+            update = update_status_for_api(
+                enabled=bool(getattr(cfg.update, "enabled", True)),
+                repo=getattr(cfg.update, "repo", None),
+            )
+        except Exception as exc:  # pragma: no cover — fail soft
+            update = {"error": str(exc), "update_available": False}
     return {
         "schema": SCHEMA,
         "ok": bool(doctor.get("ok", False)),
         "server": server_meta,
         "doctor": doctor,
         "pipeline": pipeline_state(),
+        "update": update,
     }
 
 

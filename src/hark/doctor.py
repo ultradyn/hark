@@ -232,6 +232,9 @@ def run_doctor(
     # Coding CLI resolve readiness (I005 / B059) — soft only
     report["coding_clis"] = _coding_clis_report(cfg)
 
+    # GitHub release self-update check (B088) — advisory only
+    report["update"] = _update_report(cfg)
+
     if as_json:
         out.write(json.dumps(report, indent=2) + "\n")
     else:
@@ -351,6 +354,19 @@ def _dashboard_report(cfg: HarkConfig) -> dict[str, Any]:
     }
 
 
+def _update_report(cfg: HarkConfig) -> dict[str, Any]:
+    """Cached GitHub release check (B088). Soft; never fails doctor."""
+    try:
+        from hark.update_check import update_status_for_api
+
+        return update_status_for_api(
+            enabled=bool(getattr(cfg.update, "enabled", True)),
+            repo=getattr(cfg.update, "repo", None),
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        return {"error": str(exc), "update_available": False, "disabled": False}
+
+
 def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
     print(f"hark doctor  v{report['hark_version']}", file=out)
     print(f"  config: {report['config_path']}"
@@ -464,6 +480,29 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
                 )
             else:
                 print(f"    · {row.get('agent')}: missing", file=out)
+    upd = report.get("update") or {}
+    if upd:
+        if upd.get("disabled"):
+            print("  update: check disabled", file=out)
+        elif upd.get("update_available"):
+            print(
+                f"  update: AVAILABLE  {upd.get('current_version')} → "
+                f"{upd.get('latest_version')}  "
+                f"({upd.get('html_url') or upd.get('repo')})",
+                file=out,
+            )
+        elif upd.get("latest_version"):
+            print(
+                f"  update: up to date  "
+                f"(installed={upd.get('current_version')} "
+                f"latest={upd.get('latest_version')}"
+                f"{'; stale' if upd.get('stale') else ''})",
+                file=out,
+            )
+        elif upd.get("error"):
+            print(f"  update: check failed ({upd.get('error')})", file=out)
+        else:
+            print("  update: no release data yet", file=out)
     print(
         "  overall: "
         + ("OK" if report["ok"] and report.get("speech_ok", True) else "DEGRADED"),

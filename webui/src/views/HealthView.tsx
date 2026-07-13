@@ -33,6 +33,7 @@ export function HealthView() {
         providers?: { name: string; available: boolean; source?: string | null; detail?: string | null }[];
       })
     | undefined;
+  const update = h?.update;
 
   return (
     <div class="panelwrap">
@@ -57,6 +58,41 @@ export function HealthView() {
           )}
         </div>
       </section>
+      {update && !update.disabled && (
+        <section class="section">
+          <h3 class="paneltitle">update</h3>
+          <div class="readout" style="gap:10px;align-items:center">
+            {update.update_available ? (
+              <>
+                <span class="badge warn">available</span>
+                <span>
+                  {update.current_version ?? "?"} → {update.latest_version ?? "?"}
+                </span>
+                {update.html_url && (
+                  <a href={update.html_url} target="_blank" rel="noreferrer">
+                    release notes
+                  </a>
+                )}
+              </>
+            ) : update.latest_version ? (
+              <>
+                <span class="badge live">up to date</span>
+                <span style="color:var(--text-dim)">
+                  installed {update.current_version} · latest {update.latest_version}
+                  {update.stale ? " (stale cache)" : ""}
+                </span>
+              </>
+            ) : update.error ? (
+              <>
+                <span class="badge">check failed</span>
+                <span style="color:var(--text-faint);font-size:11px">{update.error}</span>
+              </>
+            ) : (
+              <span class="readout dim">no release data yet</span>
+            )}
+          </div>
+        </section>
+      )}
       <section class="section">
         <h3 class="paneltitle">doctor</h3>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:2px 24px">

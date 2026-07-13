@@ -109,6 +109,36 @@ textarea {
   z-index: 5;
 }
 
+/* B088: GitHub release update notice */
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 8px var(--pad);
+  background: linear-gradient(90deg, #1e1b4bcc 0%, #312e81cc 50%, #1e1b4bcc 100%);
+  border-bottom: 1px solid #6366f166;
+  color: var(--brand-hi);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.update-banner strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.update-banner a {
+  color: var(--warn);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.update-banner a:hover {
+  color: #fde68a;
+}
+
 .topbar::after {
   /* hairline gradient signature under the header */
   content: "";

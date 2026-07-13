@@ -1,7 +1,7 @@
 import { useComputed, useSignal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { api } from "./lib/api";
-import { conferenceHold, deliveries, wireDataRefreshes } from "./lib/data";
+import { conferenceHold, deliveries, ensureHealthOnce, health, refresh, wireDataRefreshes } from "./lib/data";
 import { connState, connect, events, serverInfo, severityOf } from "./lib/stream";
 import { DictateOverlay } from "./components/Dictate";
 import { Palette } from "./components/Palette";
@@ -76,6 +76,24 @@ function AuthGate() {
   );
 }
 
+function UpdateBanner() {
+  const u = health.value?.update;
+  if (!u?.update_available || u.disabled) return null;
+  const cur = u.current_version ?? "?";
+  const lat = u.latest_version ?? "?";
+  const href = u.html_url || (u.repo ? `https://github.com/${u.repo}/releases` : "#");
+  return (
+    <div class="update-banner" role="status">
+      <span>
+        update available: <strong>{cur}</strong> → <strong>{lat}</strong>
+      </span>
+      <a href={href} target="_blank" rel="noreferrer">
+        release notes
+      </a>
+    </div>
+  );
+}
+
 export function App() {
   const view = useSignal<ViewId>("events");
   const dictating = useSignal(false);
@@ -84,6 +102,9 @@ export function App() {
     wireDataRefreshes();
     wireNotifications();
     connect();
+    // B088: poll health so the update banner can surface without visiting Health
+    ensureHealthOnce();
+    const t = window.setInterval(() => void refresh("health"), 60_000);
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -91,7 +112,10 @@ export function App() {
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.clearInterval(t);
+    };
   }, []);
 
   // notification deep-link lands on the events view
@@ -115,48 +139,51 @@ export function App() {
 
   return (
     <div class="shell">
-      <header class="topbar">
-        <div class="wordmark">
-          <span class="glyph">⁂</span> hark <small>dashboard</small>
-        </div>
-        <ConnBadge />
-        {blockedCount.value > 0 && (
-          <span class="badge warn" title="agents waiting for input">
-            ⚠ {blockedCount.value} blocked
-          </span>
-        )}
-        {conferenceHold.value && <span class="badge warn">⏸ conference</span>}
-        {errorCount.value > 0 && (
-          <span class="badge err">{errorCount.value} errors</span>
-        )}
-        <button
-          class="btn small"
-          style="margin-left:auto"
-          onClick={() => (dictating.value = true)}
-          title="dictate a prompt or answer by voice"
-        >
-          ◉ dictate
-        </button>
-        <button
-          class="btn small"
-          onClick={() => (paletteOpen.value = true)}
-          title="command palette (ctrl/cmd-K)"
-        >
-          ⌘K
-        </button>
-        {notifySupported && (
+      <div class="shell-top">
+        <header class="topbar">
+          <div class="wordmark">
+            <span class="glyph">⁂</span> hark <small>dashboard</small>
+          </div>
+          <ConnBadge />
+          {blockedCount.value > 0 && (
+            <span class="badge warn" title="agents waiting for input">
+              ⚠ {blockedCount.value} blocked
+            </span>
+          )}
+          {conferenceHold.value && <span class="badge warn">⏸ conference</span>}
+          {errorCount.value > 0 && (
+            <span class="badge err">{errorCount.value} errors</span>
+          )}
           <button
-            class={`btn small ${notifyEnabled.value ? "primary" : ""}`}
-            onClick={() => void toggleNotifications()}
-            title="notify when an agent blocks (needs HTTPS or localhost)"
+            class="btn small"
+            style="margin-left:auto"
+            onClick={() => (dictating.value = true)}
+            title="dictate a prompt or answer by voice"
           >
-            {notifyEnabled.value ? "🔔" : "🔕"}
+            ◉ dictate
           </button>
-        )}
-        <span class="serverver" style="color:var(--text-faint);font-size:11px">
-          {serverInfo.value ? `${serverInfo.value.server} ${serverInfo.value.version}` : ""}
-        </span>
-      </header>
+          <button
+            class="btn small"
+            onClick={() => (paletteOpen.value = true)}
+            title="command palette (ctrl/cmd-K)"
+          >
+            ⌘K
+          </button>
+          {notifySupported && (
+            <button
+              class={`btn small ${notifyEnabled.value ? "primary" : ""}`}
+              onClick={() => void toggleNotifications()}
+              title="notify when an agent blocks (needs HTTPS or localhost)"
+            >
+              {notifyEnabled.value ? "🔔" : "🔕"}
+            </button>
+          )}
+          <span class="serverver" style="color:var(--text-faint);font-size:11px">
+            {serverInfo.value ? `${serverInfo.value.server} ${serverInfo.value.version}` : ""}
+          </span>
+        </header>
+        <UpdateBanner />
+      </div>
       {dictating.value && <DictateOverlay onClose={() => (dictating.value = false)} />}
       {paletteOpen.value && (
         <Palette

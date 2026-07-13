@@ -552,6 +552,15 @@ def run_serve(cfg: HarkConfig, *, host: str | None = None, port: int | None = No
     bind = f"{server.server_address[0]}:{server.server_address[1]}"
     print(f"hark serve: http://{bind}/  (auth {'on' if server.auth_required else 'off'})")
     try:
+        from hark.update_check import maybe_print_update_notice
+
+        maybe_print_update_notice(
+            enabled=bool(getattr(cfg.update, "enabled", True)),
+            repo=getattr(cfg.update, "repo", None),
+        )
+    except Exception:  # pragma: no cover — never block serve on update check
+        pass
+    try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass

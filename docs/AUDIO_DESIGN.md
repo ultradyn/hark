@@ -51,14 +51,15 @@ Operators may add casual phrases if they accept false triggers.
 
 ### How to end radio (operator-facing)
 
-When listen is in **radio** mode, the mic stays open through long pauses.
-Finish a turn with any of:
+When listen is in **radio** mode, the mic stays open through short thinking
+pauses. Finish a turn with any of:
 
-| Say… | Kind |
-|------|------|
+| Say… / do… | Kind |
+|------------|------|
 | **`okay hark send`** / **`hark over`** / **`end prompt`** | Product end (always on) |
 | **`over`** (after a sentence / alone) / **`okay, over`** / **`okay over`** | Soft end (default on) |
 | **`send it`**, **`that's all`**, **`over and out`**, **`message done`** | Soft end (default on) |
+| Stay quiet ~**6.3 s** after you have started speaking | Idle auto-finish (default 3× `end_silence_s`; B074) |
 | **`hark cancel`** | Abort without using the transcript |
 
 Mode A agents also **must** run `hark listen-end` when a partial clearly shows
@@ -70,7 +71,7 @@ you are done (backup if soft-end misses). Skill bootstrap reminds operators:
 | `end_mode` | Behavior |
 |------------|----------|
 | **`silence`** (default) | Energy gate + end-silence; optional Smart Turn (see [ENDPOINTING.md](ENDPOINTING.md)) |
-| **`radio`** | Keep listening through long pauses until end phrase |
+| **`radio`** | Keep listening through short pauses until end phrase or post-speech idle |
 
 Silence-mode turn detection is pluggable via `listen.endpoint_strategy`
 (`energy` default / `smart_turn` optional). See [ENDPOINTING.md](ENDPOINTING.md)
@@ -85,6 +86,8 @@ strip_phrase = true
 max_listen_s = 300
 # Quiet before interim STT / ambient.partial (radio only; does not finalize)
 radio_partial_silence_s = 0.6
+# After speech opens: continuous quiet → auto-finish (default 3× end_silence_s)
+# radio_idle_end_silence_s = 6.3
 stream_partials = true
 # Soft informal closers — DEFAULT ON (B039 radio dogfood; see soft end below)
 soft_end_phrases_enabled = true
@@ -99,15 +102,22 @@ Env: `HARK_LISTEN_END_MODE=radio`. Disable soft end with
 |--------|------|---------|------|
 | `end_silence_s` | **silence** only | 2.1 s | Quiet that **ends** the answer window |
 | `radio_partial_silence_s` | **radio** only | 0.6 s | Quiet that ends a **segment** → cloud STT → optional `ambient.partial` (HOLD) |
+| `radio_idle_end_silence_s` | **radio** answer only | **3× `end_silence_s`** (~6.3 s) | After speech has opened at least once, continuous quiet this long **auto-finishes** (soft-end path, not cancel). Before first open: no-op (initial timeout / nudges) |
 | `radio_end_silence_s` | legacy | 2.5 s | Kept for config BC; segment cadence is `radio_partial_silence_s` |
 | `stream_partials` | radio | `true` | Emit interim events when segment text grows |
 
-Radio **never** finalizes on silence alone. After each short quiet, Hark runs STT on
-accumulated audio: if an end/cancel/soft phrase hits, the stream finalizes; otherwise
-(with `stream_partials`) it emits a partial and keeps listening. Shorter
-`radio_partial_silence_s` → more frequent partials for Mode A; raise it (e.g. 1.0–1.5)
-to cut STT cost when pauses are long. Do **not** lower `end_silence_s` to chase radio
-partials — that would change normal silence-mode answer windows.
+Radio does **not** finalize on short silence alone. After each short quiet
+(`radio_partial_silence_s`), Hark runs STT on accumulated audio: if an
+end/cancel/soft phrase hits, the stream finalizes; otherwise (with
+`stream_partials`) it emits a partial and keeps listening. **After speech has
+opened**, if the operator stays quiet longer than `radio_idle_end_silence_s`
+(~6.3 s by default), the answer window auto-finishes so forgotten radio closers
+do not leave the mic open indefinitely (B074). Short thinking pauses (~2 s)
+remain open. Before the first open, long quiet still uses the existing initial
+timeout / nudge path. Shorter `radio_partial_silence_s` → more frequent
+partials for Mode A; raise it (e.g. 1.0–1.5) to cut STT cost when pauses are
+long. Do **not** lower `end_silence_s` to chase radio partials — that would
+change normal silence-mode answer windows.
 
 ### Soft end phrases (default on)
 

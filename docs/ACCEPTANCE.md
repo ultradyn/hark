@@ -43,7 +43,8 @@ Each criterion is testable. Implementation is not complete until these pass (or 
 | C6 | No local neural STT required |
 | C7 | `provider=anthropic` fails clearly as unsupported (not a hang) |
 | C8 | OpenAI and Google batch STT work when keys present (or skip if no key in CI) |
-| C9 | With `listen.end_mode=radio`, a multi-second mid-utterance pause does **not** finalize |
+| C9 | With `listen.end_mode=radio`, a multi-second mid-utterance pause (~2 s thinking) does **not** finalize |
+| C9b | Radio answer window: after speech has opened, continuous quiet ≥ `radio_idle_end_silence_s` (default ~6.3 s / 3× `end_silence_s`) auto-finishes (not cancel); before first open, long quiet uses initial timeout / nudges only |
 | C10 | Radio mode: speaking a configured end phrase (e.g. “okay send it”) finalizes; phrase stripped when `strip_phrase=true` |
 | C11 | Radio mode: cancel phrase → exit 7, nothing delivered |
 | C12 | Radio mode still hits `max_listen_s` → exit 6 |

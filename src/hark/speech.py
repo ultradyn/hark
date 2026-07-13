@@ -538,13 +538,21 @@ def run_listen(
     stt = resolve_stt(provider or cfg.stt.provider)
     # Silence mode: end_silence_s finalizes the answer window.
     # Radio mode: radio_partial_silence_s only cuts a segment for interim STT /
-    # ambient.partial (B037). The turn still finalizes only on end phrase,
-    # soft end (if enabled), agent listen-end, cancel, or max_listen_s.
+    # ambient.partial (B037). The turn still finalizes on end phrase, soft end
+    # (if enabled), agent listen-end, cancel, max_listen_s, or (B074) post-speech
+    # idle quiet of radio_idle_end_silence_s (default 3× end_silence_s).
     end_silence = (
         float(cfg.listen.end_silence_s)
         if mode is EndMode.SILENCE
         else float(getattr(cfg.listen, "radio_partial_silence_s", 0.6))
     )
+    # Radio answer windows: long continuous quiet after speech has opened → finish
+    # (not cancel). Before first open, use normal initial_timeout / nudges only.
+    radio_idle_end = float(
+        getattr(cfg.listen, "radio_idle_end_silence_s", 0.0) or 0.0
+    )
+    if radio_idle_end <= 0:
+        radio_idle_end = 3.0 * float(cfg.listen.end_silence_s)
     # Pluggable endpointing (B007): only for silence mode. Falls back to the
     # energy gate (strategy=None) if the smart detector can't load.
     endpoint_strategy: EndpointStrategy | None = None
@@ -896,12 +904,16 @@ def run_listen(
                         stream_id=stream,
                     )
 
-            # Radio mode — segment until end phrase / agent finish; stream partials
+            # Radio mode — segment until end phrase / agent finish / post-speech
+            # idle (B074); stream partials. Short pauses stay open; long quiet
+            # after speech has opened auto-finishes (same path as soft-end).
             pieces: list[bytes] = []
             started = time.monotonic()
             partial_seq = 0
             last_partial_text = ""
             last_provider = getattr(stt, "name", "unknown")
+            last_sample_rate = 16000
+            speech_opened_once = False
             if guard > 0:
                 time.sleep(guard)
             # Answer-window arm cue: beep as soon as listen is ready (radio too)
@@ -917,25 +929,34 @@ def run_listen(
                     # Only first segment uses discard (TTS handoff); later segments clean
                     seg_discard = discard_leading_ms if not pieces else 0
                     seg_ok_after = audio_ok_after if not pieces else None
-                    on_open = (
-                        (
-                            lambda: syslog(
+
+                    def _on_speech_opened() -> None:
+                        nonlocal speech_opened_once
+                        speech_opened_once = True
+                        if arm_cue:
+                            syslog(
                                 "listen.speech_opened",
                                 component="stt",
                                 level="info",
                                 stream_id=stream,
                                 mode=mode.value,
                             )
-                        )
-                        if arm_cue
-                        else _cue_start_once
-                    )
+                        else:
+                            _cue_start_once()
+
+                    # After speech has opened at least once, wait only
+                    # radio_idle_end_silence_s for more speech before auto-finish.
+                    # Before first open: normal initial_timeout (nudges / timeout).
+                    if speech_opened_once:
+                        seg_timeout = min(radio_idle_end, remaining)
+                    else:
+                        seg_timeout = min(gate_timeout_s, remaining)
                     cap = capture_utterance(
                         max_s=min(remaining, max_listen),
                         end_silence_s=end_silence,
-                        initial_timeout_s=min(gate_timeout_s, remaining),
+                        initial_timeout_s=seg_timeout,
                         post_tts_guard_s=0,
-                        on_opened=on_open,
+                        on_opened=_on_speech_opened,
                         should_stop=_agent_wants_stop,
                         discard_leading_ms=seg_discard,
                         audio_ok_after=seg_ok_after,
@@ -946,6 +967,103 @@ def run_listen(
                     agent_act = poll_listen_action(stream)
                     if agent_act is not None and pieces:
                         break
+                    # B074: post-speech continuous quiet → auto-finish (not cancel)
+                    if pieces and speech_opened_once:
+                        if recording_cued:
+                            play_record_stop()
+                        wav = write_wav_bytes(
+                            b"".join(pieces), last_sample_rate or 16000
+                        )
+                        stt_seq += 1
+                        tr, latency_ms = _transcribe_logged(
+                            stt,
+                            wav,
+                            stream_id=stream,
+                            seq=stt_seq,
+                            mode=mode.value,
+                            purpose="radio_idle",
+                            sample_rate=last_sample_rate or 16000,
+                        )
+                        last_provider = tr.provider
+                        hit = evaluate_radio_transcript(
+                            tr.text,
+                            end_phrases=cfg.listen.end_phrases,
+                            cancel_phrases=cfg.listen.cancel_phrases,
+                            soft_end_phrases=getattr(
+                                cfg.listen, "soft_end_phrases", ()
+                            ),
+                            soft_end_phrases_enabled=bool(
+                                getattr(
+                                    cfg.listen, "soft_end_phrases_enabled", True
+                                )
+                            ),
+                        )
+                        if hit is not None:
+                            body = (
+                                hit.body if cfg.listen.strip_phrase else tr.text
+                            )
+                            store.record_stt(
+                                text=body,
+                                provider=tr.provider,
+                                audio_ms=int(
+                                    1000 * (time.monotonic() - started)
+                                ),
+                                latency_ms=latency_ms,
+                                ok=hit.kind != "cancel",
+                                error="cancel" if hit.kind == "cancel" else None,
+                            )
+                            if hit.kind == "cancel":
+                                return ListenResult(
+                                    text=hit.body,
+                                    provider=tr.provider,
+                                    duration_ms=int(
+                                        1000 * (time.monotonic() - started)
+                                    ),
+                                    end_mode=mode.value,
+                                    end_phrase=hit.phrase,
+                                    cancelled=True,
+                                    stream_id=stream,
+                                    partials_emitted=partial_seq,
+                                )
+                            return ListenResult(
+                                text=body,
+                                provider=tr.provider,
+                                duration_ms=int(
+                                    1000 * (time.monotonic() - started)
+                                ),
+                                end_mode=mode.value,
+                                end_phrase=hit.phrase,
+                                stream_id=stream,
+                                partials_emitted=partial_seq,
+                            )
+                        body = (tr.text or "").strip()
+                        store.record_stt(
+                            text=body,
+                            provider=tr.provider,
+                            audio_ms=int(1000 * (time.monotonic() - started)),
+                            latency_ms=latency_ms,
+                            ok=True,
+                        )
+                        syslog(
+                            "listen.radio_idle_end",
+                            component="stt",
+                            level="info",
+                            stream_id=stream,
+                            idle_s=radio_idle_end,
+                            text_len=len(body),
+                            partials_emitted=partial_seq,
+                        )
+                        return ListenResult(
+                            text=body,
+                            provider=tr.provider,
+                            duration_ms=int(
+                                1000 * (time.monotonic() - started)
+                            ),
+                            end_mode=mode.value,
+                            end_phrase="radio_idle",
+                            stream_id=stream,
+                            partials_emitted=partial_seq,
+                        )
                     if pieces:
                         continue
                     if recording_cued:
@@ -957,6 +1075,9 @@ def run_listen(
                         error="timeout",
                     )
                     raise
+                # Successful capture always means the energy gate opened
+                speech_opened_once = True
+                last_sample_rate = cap.sample_rate
                 pieces.append(cap.pcm16)
                 wav = write_wav_bytes(b"".join(pieces), cap.sample_rate)
                 stt_seq += 1

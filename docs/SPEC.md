@@ -135,9 +135,11 @@ See [AUDIO_DESIGN.md](AUDIO_DESIGN.md). Event-driven answer windows only in MVP.
 | Mode | Finalize when |
 |------|----------------|
 | `silence` (default) | Energy gate + end-silence; optionally Smart Turn |
-| `radio` | Spoken end phrase (product-scoped defaults + soft closers when enabled; e.g. `okay hark send`, `send it`, sentence-final `over`); long pauses must not cut off |
+| `radio` | Spoken end phrase (product-scoped defaults + soft closers when enabled; e.g. `okay hark send`, `send it`, sentence-final `over`); short mid-turn pauses must not cut off; long post-speech idle auto-finishes |
 
-**Radio partial cadence** (`[listen].radio_partial_silence_s`, default **0.6 s**): in radio mode only, trailing quiet of this length ends a capture **segment** and runs interim STT (emitted as `ambient.partial` when `stream_partials` is true). It does **not** end the turn — end phrases (or agent `listen-end` / cancel / `max_listen_s`) still finalize. Silence mode continues to use `end_silence_s` (default 2.1 s) for answer-window end; do not change that for radio partial frequency. See [AUDIO_DESIGN.md](AUDIO_DESIGN.md).
+**Radio partial cadence** (`[listen].radio_partial_silence_s`, default **0.6 s**): in radio mode only, trailing quiet of this length ends a capture **segment** and runs interim STT (emitted as `ambient.partial` when `stream_partials` is true). It does **not** end the turn by itself. End phrases, soft closers, agent `listen-end` / cancel, `max_listen_s`, or **post-speech idle** still finalize. Silence mode continues to use `end_silence_s` (default 2.1 s) for answer-window end; do not change that for radio partial frequency. See [AUDIO_DESIGN.md](AUDIO_DESIGN.md).
+
+**Radio idle auto-finish** (`[listen].radio_idle_end_silence_s`, default **3× `end_silence_s`** ≈ **6.3 s**): for **answer / ask windows** in radio mode only (not ambient wake), after the energy gate has opened at least once, continuous quiet longer than this value auto-finishes the capture on the same path as soft-end (finalize STT + close stream; **not** cancel). Before speech opens, existing initial timeout / nudge behavior applies. Short thinking pauses (~2 s) stay open. Soft/product end phrases still finish sooner when said.
 
 Cancel phrases abort without delivery (`hark cancel`, not casual “cancel that”). Hard `max_listen_s` always applies.
 
@@ -182,10 +184,11 @@ post_tts_guard_ms = 350
 # overlap_discard_ms = 150     # echo discard after TTS ends (overlap mode)
 
 [listen]
-# silence | radio — radio = keep listening until end phrase (long pauses OK)
+# silence | radio — radio = keep listening until end phrase / post-speech idle
 end_mode = "silence"
 # end_silence_s = 2.1               # silence mode: quiet that ends the answer window
 # radio_partial_silence_s = 0.6     # radio only: quiet before interim STT/partial
+# radio_idle_end_silence_s = 6.3    # radio answer: post-speech quiet → auto-finish (3× end_silence)
 # stream_partials = true
 endpoint_strategy = "energy"        # energy (default/fallback) | smart_turn
 # smart_turn_model_path = "~/.local/share/hark/models/smart-turn-v3.onnx"

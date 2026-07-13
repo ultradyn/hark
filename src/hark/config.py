@@ -107,6 +107,7 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "end_silence_s",
         "radio_end_silence_s",
         "radio_partial_silence_s",
+        "radio_idle_end_silence_s",
         "stream_partials",
         "empty_stt_retry",
         "empty_stt_nudge",
@@ -284,6 +285,11 @@ class ListenConfig:
     # (shorter than end_silence_s so Mode A gets frequent HOLD partials). Does NOT
     # finalize the turn — end phrases / agent listen-end still required.
     radio_partial_silence_s: float = 0.6
+    # Radio answer windows only: after speech has opened at least once, continuous
+    # quiet longer than this auto-finishes the capture (soft-end path, not cancel).
+    # Default is 3× end_silence_s (~6.3s). Does not apply before first open.
+    # Partial cadence stays radio_partial_silence_s; short thinking pauses still OK.
+    radio_idle_end_silence_s: float = 6.3
     # Radio mode: emit interim STT to agent with HOLD warnings (before end phrase)
     stream_partials: bool = True
     # After empty STT (gate opened but no text): one automatic re-listen
@@ -497,6 +503,8 @@ end_mode = "silence"         # silence | radio
 end_silence_s = 2.1          # quiet seconds before ending silence-mode capture
 # radio_partial_silence_s = 0.6  # radio only: quiet before interim STT/partial (B037)
 # radio_end_silence_s = 2.5      # legacy; segment cadence is radio_partial_silence_s
+# radio_idle_end_silence_s = 6.3 # radio answer only: post-speech quiet → auto-finish
+#                                # (default 3× end_silence_s; before first open: no-op)
 # Endpointing strategy (B007): "energy" (default) reduces to the fixed
 # end_silence_s gate. "smart_turn" consults a Smart Turn v3 model to finish
 # earlier when you clearly stopped, or wait longer through mid-thought pauses.
@@ -632,6 +640,15 @@ port = 4136
 # tls_terminated = false     # true behind `tailscale serve` (Secure cookies)
 # history_limit = 2000       # backfill window per source
 """
+
+
+def _radio_idle_end_silence_s(
+    listen_raw: dict[str, Any], *, end_silence_s: float
+) -> float:
+    """Post-speech radio idle auto-finish (B074). Default 3× end_silence_s."""
+    if "radio_idle_end_silence_s" in listen_raw:
+        return float(listen_raw["radio_idle_end_silence_s"])
+    return 3.0 * float(end_silence_s)
 
 
 def _as_list_str(value: Any, default: list[str]) -> list[str]:
@@ -970,6 +987,7 @@ def load_config(path: Path | None = None) -> HarkConfig:
         warnings.append(str(exc))
         end_mode = EndMode.SILENCE.value
 
+    end_silence_s = float(listen_raw.get("end_silence_s", 2.1))
     soft_end_enabled = bool(
         listen_raw.get("soft_end_phrases_enabled", DEFAULT_SOFT_END_PHRASES_ENABLED)
     )
@@ -1108,10 +1126,13 @@ def load_config(path: Path | None = None) -> HarkConfig:
             strip_phrase=bool(listen_raw.get("strip_phrase", True)),
             max_listen_s=float(listen_raw.get("max_listen_s", 300)),
             nudge_silence_s=float(listen_raw.get("nudge_silence_s", 0)),
-            end_silence_s=float(listen_raw.get("end_silence_s", 2.1)),
+            end_silence_s=end_silence_s,
             radio_end_silence_s=float(listen_raw.get("radio_end_silence_s", 2.5)),
             radio_partial_silence_s=float(
                 listen_raw.get("radio_partial_silence_s", 0.6)
+            ),
+            radio_idle_end_silence_s=_radio_idle_end_silence_s(
+                listen_raw, end_silence_s=end_silence_s
             ),
             stream_partials=bool(listen_raw.get("stream_partials", True)),
             empty_stt_retry=bool(listen_raw.get("empty_stt_retry", True)),
@@ -1307,6 +1328,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "end_silence_s": cfg.listen.end_silence_s,
             "radio_end_silence_s": cfg.listen.radio_end_silence_s,
             "radio_partial_silence_s": cfg.listen.radio_partial_silence_s,
+            "radio_idle_end_silence_s": cfg.listen.radio_idle_end_silence_s,
             "stream_partials": cfg.listen.stream_partials,
             "empty_stt_retry": cfg.listen.empty_stt_retry,
             "empty_stt_nudge": cfg.listen.empty_stt_nudge,

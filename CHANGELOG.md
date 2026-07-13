@@ -6,6 +6,14 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- Radio answer idle auto-finish (B074): with `end_mode=radio`, after speech has
+  opened at least once in an answer/ask window, continuous quiet longer than
+  `listen.radio_idle_end_silence_s` (default **3× `end_silence_s`** ≈ 6.3 s)
+  finalizes capture on the soft-end path (not cancel). Short thinking pauses
+  (~2 s) stay open; pre-open quiet still uses initial timeout / nudges;
+  `radio_partial_silence_s` remains non-terminal segment cadence. Docs:
+  AUDIO_DESIGN / SPEC / ACCEPTANCE C9b.
+
 - **Live web dashboard** (I003 / B060–B067): `hark serve` — REST + SSE backend
   implementing the new versioned `hark.dashboard.v1` contract
   ([docs/DASHBOARD.md](docs/DASHBOARD.md), `schemas/dashboard-v1/`,

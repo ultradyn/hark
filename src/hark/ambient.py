@@ -10,6 +10,7 @@ from typing import Any, TextIO
 
 from hark.audio.capture import MicLease, record_seconds
 from hark.config import HarkConfig
+from hark.debug_snips import purge_old_debug_snips, save_wake_snippet
 from hark.events import new_event_id, utc_now_iso
 from hark.speech import run_listen, run_tts
 from hark.syslog import log as syslog
@@ -33,10 +34,13 @@ def _wait_for_wake(
     deadline: float,
     out: TextIO | None = None,
     debug_every_s: float = 15.0,
+    debug_save: bool = False,
+    debug_retention_days: float = 7.0,
 ) -> WakeHit | None:
     """Record short windows until activation or deadline. Reuses backend (no reload)."""
     snippet = max(0.8, min(snippet_s, 2.5))
     last_debug = 0.0
+    snips_since_purge = 0
     while time.monotonic() < deadline:
         try:
             pcm = record_seconds(snippet, sample_rate=16000)
@@ -55,6 +59,26 @@ def _wait_for_wake(
             continue
 
         hit = backend.score_snippet(pcm, 16000)
+        text = getattr(backend, "last_text", "") or ""
+        rms = float(getattr(backend, "last_rms", 0.0) or 0.0)
+
+        # Dev: keep audio+transcript for scored snippets (hits and misses)
+        if debug_save and (hit is not None or text):
+            save_wake_snippet(
+                pcm16=pcm,
+                sample_rate=16000,
+                text=text or None,
+                matched=hit is not None,
+                phrase=hit.phrase if hit else None,
+                rms=rms,
+                backend=getattr(backend, "name", None),
+                enabled=True,
+            )
+            snips_since_purge += 1
+            if snips_since_purge >= 20:
+                purge_old_debug_snips(retention_days=debug_retention_days)
+                snips_since_purge = 0
+
         if hit is not None:
             syslog(
                 "ambient.wake",
@@ -76,8 +100,8 @@ def _wait_for_wake(
                 "kind": "ambient.debug",
                 "event_id": new_event_id(),
                 "observed_at": utc_now_iso(),
-                "rms": round(getattr(backend, "last_rms", 0.0), 5),
-                "last_text": getattr(backend, "last_text", "") or None,
+                "rms": round(rms, 5),
+                "last_text": text or None,
                 "scored": getattr(backend, "snippets_scored", None),
                 "skipped_quiet": getattr(backend, "snippets_skipped_quiet", None),
             }
@@ -88,13 +112,12 @@ def _wait_for_wake(
                 "ambient.debug",
                 component="ambient",
                 level="debug",
-                message=getattr(backend, "last_text", "") or "quiet",
+                message=text or "quiet",
                 rms=dbg["rms"],
                 last_text=dbg["last_text"],
                 scored=dbg["scored"],
                 skipped_quiet=dbg["skipped_quiet"],
             )
-        # small idle so we don't peg a core if record returns instantly
         time.sleep(0.05)
     return None
 
@@ -189,6 +212,8 @@ def run_ambient(
             snippet_s=amb.snippet_s,
             deadline=deadline,
             out=out,
+            debug_save=bool(amb.debug),
+            debug_retention_days=float(amb.debug_retention_days),
         )
 
     if hit is None:

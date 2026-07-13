@@ -50,6 +50,18 @@ def test_fuzzy_hey_harold_is_herald():
     assert "herald" in hit.phrase
 
 
+def test_hello_herald_wake():
+    hit = match_activation("hello herald", anywhere=True)
+    assert hit is not None
+    assert "herald" in hit.phrase
+
+
+def test_hello_hark_fuzzy():
+    hit = match_activation("hello hook", anywhere=True)
+    assert hit is not None
+    assert "hark" in hit.phrase
+
+
 def test_text_probe_backend():
     be = TextProbeBackend()
     assert be.score_snippet(b"\x00\x01\x02\x03") is None

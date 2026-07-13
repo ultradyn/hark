@@ -20,6 +20,8 @@ from hark.listen_end import normalize_for_match
 DEFAULT_ACTIVATION_PHRASES: tuple[str, ...] = (
     "hey hark",
     "hey herald",
+    "hello hark",
+    "hello herald",
     "okay hark",
     "ok hark",
 )
@@ -61,7 +63,7 @@ _HERALD_ALIASES = frozenset(
         "herrold",
     }
 )
-_PREFIXES = ("hey", "okay", "ok", "hi")
+_PREFIXES = ("hey", "hello", "okay", "ok", "hi")
 
 
 def match_activation(
@@ -126,7 +128,7 @@ def _match_fuzzy_wake(norm: str) -> WakeHit | None:
             if nxt in _HARK_ALIASES or nxt in ("hark", "hook", "hawk", "hork"):
                 rem = " ".join(words[i + 2 :])
                 return WakeHit(
-                    phrase="hey hark" if w == "hey" else f"{w} hark",
+                    phrase=f"{w} hark",
                     remainder=rem,
                     raw=norm,
                     confidence=0.7,
@@ -135,7 +137,7 @@ def _match_fuzzy_wake(norm: str) -> WakeHit | None:
         if nxt in _HERALD_ALIASES:
             rem = " ".join(words[i + 2 :])
             return WakeHit(
-                phrase="hey herald" if w == "hey" else f"{w} herald",
+                phrase=f"{w} herald",
                 remainder=rem,
                 raw=norm,
                 confidence=0.7,

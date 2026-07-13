@@ -189,7 +189,11 @@ def run_listen(
         guard = max(0.0, cfg.audio.post_tts_guard_ms / 1000.0)
 
     stt = resolve_stt(provider or cfg.stt.provider)
-    end_silence = 1.1 if mode is EndMode.SILENCE else 2.5
+    end_silence = (
+        float(cfg.listen.end_silence_s)
+        if mode is EndMode.SILENCE
+        else float(cfg.listen.radio_end_silence_s)
+    )
     store = UsageStore()
     configure_cues_from_config(cfg)
 

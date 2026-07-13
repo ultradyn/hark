@@ -46,8 +46,26 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "cue_start_path",
         "cue_stop_path",
     }),
-    "listen": frozenset({"end_mode", "end_phrases", "cancel_phrases", "strip_phrase", "max_listen_s", "nudge_silence_s"}),
-    "ambient": frozenset({"enabled", "activation_phrases", "engine", "model_path", "snippet_s", "timeout_s"}),
+    "listen": frozenset({
+        "end_mode",
+        "end_phrases",
+        "cancel_phrases",
+        "strip_phrase",
+        "max_listen_s",
+        "nudge_silence_s",
+        "end_silence_s",
+        "radio_end_silence_s",
+    }),
+    "ambient": frozenset({
+        "enabled",
+        "activation_phrases",
+        "engine",
+        "model_path",
+        "snippet_s",
+        "timeout_s",
+        "debug",
+        "debug_retention_days",
+    }),
     "stt": frozenset({"provider"}),
     "tts": frozenset({"provider", "voice", "language", "max_chars", "allow_espeak_fallback"}),
     "confirm": frozenset({"mode"}),
@@ -101,6 +119,10 @@ class ListenConfig:
     strip_phrase: bool = True
     max_listen_s: float = 300.0
     nudge_silence_s: float = 0.0
+    # Seconds of quiet before ending a silence-mode capture
+    end_silence_s: float = 1.1
+    # Longer hang for radio mode segment boundaries
+    radio_end_silence_s: float = 2.5
 
 
 @dataclass
@@ -116,6 +138,9 @@ class AmbientConfig:
     model_path: str | None = None
     snippet_s: float = 2.5
     timeout_s: float = 300.0
+    # Dev: save wake audio+text under state/debug/wake (7-day cleanup)
+    debug: bool = False
+    debug_retention_days: float = 7.0
 
 
 @dataclass
@@ -196,6 +221,8 @@ cue_volume = 0.22            # generated start/stop beep volume (0–1)
 [listen]
 end_mode = "silence"         # silence | radio
 # end_mode = "radio"         # keep listening until end phrase (long pauses OK)
+end_silence_s = 1.1          # quiet seconds before ending silence-mode capture
+# radio_end_silence_s = 2.5
 end_phrases = [
   "okay hark send",
   "ok hark send",
@@ -219,11 +246,20 @@ max_listen_s = 300
 # Setup: ./scripts/setup-ambient.sh
 [ambient]
 enabled = false
-activation_phrases = ["hey hark", "hey herald", "okay hark", "ok hark"]
+activation_phrases = [
+  "hey hark",
+  "hey herald",
+  "hello hark",
+  "hello herald",
+  "okay hark",
+  "ok hark",
+]
 engine = "vosk"              # vosk | text_probe (tests)
 # model_path = "~/.local/share/hark/models/vosk-model-small-en-us-0.15"
 snippet_s = 2.5
 timeout_s = 300
+debug = true                 # save wake wav+text under ~/.local/state/hark/debug/wake
+debug_retention_days = 7
 
 [stt]
 provider = "auto"
@@ -407,6 +443,8 @@ def load_config(path: Path | None = None) -> HarkConfig:
             strip_phrase=bool(listen_raw.get("strip_phrase", True)),
             max_listen_s=float(listen_raw.get("max_listen_s", 300)),
             nudge_silence_s=float(listen_raw.get("nudge_silence_s", 0)),
+            end_silence_s=float(listen_raw.get("end_silence_s", 1.1)),
+            radio_end_silence_s=float(listen_raw.get("radio_end_silence_s", 2.5)),
         ),
         ambient=AmbientConfig(
             enabled=ambient_enabled,
@@ -422,6 +460,14 @@ def load_config(path: Path | None = None) -> HarkConfig:
             ),
             snippet_s=float(ambient_raw.get("snippet_s", 2.5)),
             timeout_s=float(ambient_raw.get("timeout_s", 300)),
+            debug=bool(
+                ambient_raw.get(
+                    "debug",
+                    os.environ.get("HARK_DEBUG", "").lower()
+                    in ("1", "true", "yes", "on"),
+                )
+            ),
+            debug_retention_days=float(ambient_raw.get("debug_retention_days", 7)),
         ),
         stt=SttConfig(provider=stt_provider),
         tts=TtsConfig(
@@ -514,6 +560,8 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "strip_phrase": cfg.listen.strip_phrase,
             "max_listen_s": cfg.listen.max_listen_s,
             "nudge_silence_s": cfg.listen.nudge_silence_s,
+            "end_silence_s": cfg.listen.end_silence_s,
+            "radio_end_silence_s": cfg.listen.radio_end_silence_s,
         },
         "ambient": {
             "enabled": cfg.ambient.enabled,
@@ -522,6 +570,8 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "model_path": cfg.ambient.model_path,
             "snippet_s": cfg.ambient.snippet_s,
             "timeout_s": cfg.ambient.timeout_s,
+            "debug": cfg.ambient.debug,
+            "debug_retention_days": cfg.ambient.debug_retention_days,
         },
         "stt": {"provider": cfg.stt.provider},
         "tts": {

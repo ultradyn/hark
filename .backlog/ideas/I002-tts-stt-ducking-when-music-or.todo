@@ -1,59 +1,64 @@
 ---
 claimed_at: "2026-07-13T13:05:58Z"
 claimed_by: cli-user
-completed_at: "2026-07-13T13:13:06Z"
+completed_at: null
 complexity: medium
 created_at: "2026-07-13T07:48:13Z"
 depends_on: []
-duration_minutes: 7.1438726322
 estimate_hours: 10
 id: I002
 priority: medium
 started_at: "2026-07-13T13:05:58Z"
-status: done
+status: in_progress
 tags: []
 title: TTS/STT ducking when music or other media is playing
-updated_at: "2026-07-13T13:13:06Z"
+updated_at: "2026-07-13T13:12:00Z"
 ---
+
 # Original Idea
 
 TTS/STT ducking when music or other media is playing
 
+## Planning Task (Equivalent of /plan-task)
+
+- [x] Recon current TTS/STT/audio paths and conference hold (B017).
+- [x] Confirm backlog hierarchy: flat **bugs** (no phase/milestone/epic tree in this repo).
+- [x] Design note: `docs/plans/I002-media-ducking.md`.
+- [x] Decompose into B044–B047 with AC + dependencies.
+
 ## Design summary
 
-When music or other media is playing, Hark should temporarily lower (duck)
-non-Hark Pulse/PipeWire sink-input volumes so TTS is audible and STT capture
-is cleaner—then always restore. Detection is fail-open (no pactl → behave as
-today). Conference hold (B017) stays first-class: when conference hold applies,
-do not fight it with ducking. Optional MPRIS pause during STT is off by default.
+Music/podcasts compete with TTS and bleed into STT. Unlike **B017** (hold TTS during
+Zoom/Teams), I002 **ducks** other sink-input volumes while Hark speaks or listens, then
+restores. Foundation: Pulse/PipeWire sink-input detection (+ optional MPRIS). Conference
+hold still wins when a call is active. Fail-open if `pactl` is missing. Defaults: duck
+on for TTS and STT listen windows; optional MPRIS pause off.
 
-Reuse/extend audio stream listing patterns in `src/hark/conference.py` and
-apply ducking around TTS play and listen capture windows in `speech` / ambient.
+## Hierarchy placement
 
-## Decomposition (plan-task)
-
-| Order | ID | Title | Depends |
-|------:|----|-------|---------|
-| 1 | **B044** | Detect active media playback (Pulse/PipeWire + optional MPRIS) | — |
-| 2 | **B045** | Duck other media volume during TTS playback | B044 |
-| 3 | **B046** | Duck or pause media during STT capture windows | B044 |
-| 4 | **B047** | Config, docs, and doctor checks for media ducking | B045, B046 |
-
-B045 ∥ B046 after B044; B047 finishes the operator surface.
+- Repo backlog is **bugs + ideas** only (`phases: []` in `.backlog/index.yaml`).
+- Implementation tracked as medium-priority **bugs** B044–B047 (same style as B017 audio work).
+- No new phase/epic required.
 
 ## Created Work Items
 
-### Bugs
-- **B044** — Detect active media playback (Pulse/PipeWire sink-inputs + optional MPRIS)
-- **B045** — Duck other media volume during TTS playback *(depends: B044)*
-- **B046** — Duck or pause media during STT capture windows *(depends: B044)*
-- **B047** — Config, docs, and doctor checks for media ducking *(depends: B045, B046)*
+| ID | Title | Est | Depends |
+|----|-------|-----|---------|
+| **B044** | Detect active media playback (Pulse/PipeWire sink-inputs + optional MPRIS) | 2h | — |
+| **B045** | Duck other media volume during TTS playback | 3h | B044 |
+| **B046** | Duck or pause media during STT capture windows | 3h | B044 |
+| **B047** | Config, docs, and doctor checks for media ducking | 2h | B045, B046 |
 
-### Tasks
-- (none — implementation tracked as bugs)
+### Suggested implement order
+
+1. B044 detection API + fixtures  
+2. B045 TTS duck (wires speak path)  
+3. B046 STT duck (wires listen path; parallelizable with B045 after B044)  
+4. B047 docs/doctor polish once behavior lands  
 
 ## Completion Criteria
 
-- [x] Idea decomposed into concrete backlog work items (B044–B047)
-- [x] Items include acceptance criteria and dependencies
-- [x] This idea intake updated with created IDs
+- [x] Idea decomposed into concrete backlog work items.
+- [x] New items include clear acceptance criteria and dependencies.
+- [x] This idea intake updated with created IDs and design summary.
+- [ ] Mark idea done (parent agent after merge — **do not** `bl done I002` in this PR).

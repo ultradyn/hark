@@ -57,7 +57,12 @@ class WatchConfig:
 @dataclass
 class AudioConfig:
     half_duplex: bool = True
-    post_tts_guard_ms: int = 350
+    # After TTS ends, wait this long before arming capture (tight handoff)
+    post_tts_guard_ms: int = 100
+    # Fire near-end callback this many ms before TTS finishes (pre-arm signal)
+    listen_pre_arm_ms: int = 300
+    # Mute system default capture during TTS (Wave ring white→red via pactl)
+    mute_mic_during_tts: bool = True
 
 
 @dataclass
@@ -153,7 +158,9 @@ poll_ms = 1000
 
 [audio]
 half_duplex = true
-post_tts_guard_ms = 350
+post_tts_guard_ms = 100      # after TTS ends → start listen (tight handoff)
+listen_pre_arm_ms = 300      # signal ~0.3s before TTS ends
+mute_mic_during_tts = true   # pactl mute → Elgato Wave ring red while speaking
 
 # Bound answer windows — how spoken replies end
 # Defaults are product-scoped so normal speech does not trigger control.
@@ -300,7 +307,9 @@ def load_config(path: Path | None = None) -> HarkConfig:
         ),
         audio=AudioConfig(
             half_duplex=bool(audio_raw.get("half_duplex", True)),
-            post_tts_guard_ms=int(audio_raw.get("post_tts_guard_ms", 350)),
+            post_tts_guard_ms=int(audio_raw.get("post_tts_guard_ms", 100)),
+            listen_pre_arm_ms=int(audio_raw.get("listen_pre_arm_ms", 300)),
+            mute_mic_during_tts=bool(audio_raw.get("mute_mic_during_tts", True)),
         ),
         listen=ListenConfig(
             end_mode=end_mode,
@@ -403,6 +412,12 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "debounce_ms": cfg.watch.debounce_ms,
             "transport": cfg.watch.transport,
             "poll_ms": cfg.watch.poll_ms,
+        },
+        "audio": {
+            "half_duplex": cfg.audio.half_duplex,
+            "post_tts_guard_ms": cfg.audio.post_tts_guard_ms,
+            "listen_pre_arm_ms": cfg.audio.listen_pre_arm_ms,
+            "mute_mic_during_tts": cfg.audio.mute_mic_during_tts,
         },
         "listen": {
             "end_mode": cfg.listen.end_mode,

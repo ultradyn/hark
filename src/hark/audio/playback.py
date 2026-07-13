@@ -6,8 +6,12 @@ import io
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import wave
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -15,6 +19,12 @@ try:
     import sounddevice as sd
 except ImportError:  # pragma: no cover
     sd = None  # type: ignore
+
+
+@dataclass
+class PlayResult:
+    duration_ms: int
+    format: str
 
 
 def sniff_audio_format(data: bytes) -> str:
@@ -25,7 +35,6 @@ def sniff_audio_format(data: bytes) -> str:
         return "wav"
     if data[:3] == b"ID3":
         return "mp3"
-    # MPEG ADTS sync (xAI TTS returns this)
     if data[0] == 0xFF and (data[1] & 0xE0) == 0xE0:
         return "mp3"
     if data[:4] == b"fLaC":
@@ -35,8 +44,52 @@ def sniff_audio_format(data: bytes) -> str:
     return "pcm"
 
 
+def estimate_duration_ms(data: bytes, sample_rate: int | None = None) -> int:
+    """Best-effort duration from bytes (WAV exact; else ffprobe; else bitrate guess)."""
+    fmt = sniff_audio_format(data)
+    if fmt == "wav":
+        try:
+            with wave.open(io.BytesIO(data), "rb") as wf:
+                return int(1000 * wf.getnframes() / max(1, wf.getframerate()))
+        except Exception:
+            pass
+    if fmt == "pcm" and sample_rate:
+        # 16-bit mono
+        return int(1000 * (len(data) / 2) / sample_rate)
+    # ffprobe
+    if shutil.which("ffprobe"):
+        with tempfile.NamedTemporaryFile(suffix=f".{fmt if fmt != 'unknown' else 'bin'}", delete=False) as tmp:
+            p = Path(tmp.name)
+        try:
+            p.write_bytes(data)
+            r = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(p),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                return max(0, int(float(r.stdout.strip()) * 1000))
+        except Exception:
+            pass
+        finally:
+            p.unlink(missing_ok=True)
+    # MP3 crude: assume ~16 KB/s at 128kbps
+    if fmt == "mp3" and len(data) > 0:
+        return int(1000 * len(data) / 16000)
+    return 0
+
+
 def write_audio(path: Path | str, data: bytes, *, sample_rate: int = 16000) -> Path:
-    """Write audio bytes; convert to WAV via ffmpeg when needed for .wav targets."""
     path = Path(path)
     fmt = sniff_audio_format(data)
     suffix = path.suffix.lower()
@@ -48,14 +101,12 @@ def write_audio(path: Path | str, data: bytes, *, sample_rate: int = 16000) -> P
             path.write_bytes(_pcm16_to_wav(data, sample_rate))
         return path
 
-    # Native container matches extension
     if fmt == "mp3" and suffix in (".mp3", ".mpeg", ""):
         if not suffix:
             path = path.with_suffix(".mp3")
         path.write_bytes(data)
         return path
 
-    # Convert with ffmpeg when writing .wav from mp3/etc.
     if suffix == ".wav" or not suffix:
         if not suffix:
             path = path.with_suffix(".wav")
@@ -65,38 +116,71 @@ def write_audio(path: Path | str, data: bytes, *, sample_rate: int = 16000) -> P
     return path
 
 
-# Back-compat name used by speech.py / CLI
 def write_wav(path: Path | str, pcm_or_wav: bytes, sample_rate: int = 16000) -> Path:
     return write_audio(path, pcm_or_wav, sample_rate=sample_rate)
 
 
-def play_audio(data: bytes, *, sample_rate: int | None = None) -> None:
-    """Play provider audio safely (never treat MP3 as PCM — that is static)."""
+def play_audio(
+    data: bytes,
+    *,
+    sample_rate: int | None = None,
+    on_near_end: Callable[[], None] | None = None,
+    near_end_ms: int = 0,
+) -> PlayResult:
+    """Play audio. Optional on_near_end fires ~near_end_ms before playback ends.
+
+    Used so listen can arm ~0.3s before TTS finishes.
+    """
     fmt = sniff_audio_format(data)
-    if fmt == "wav":
-        pcm, sr = _wav_to_pcm16(data)
-        _play_pcm16(pcm, sr)
-        return
-    if fmt == "pcm":
-        _play_pcm16(data, sample_rate or 24000)
-        return
+    duration_ms = estimate_duration_ms(data, sample_rate)
 
-    # Compressed (mp3/ogg/flac): external player only
-    ext = {".mp3": ".mp3", "mp3": ".mp3", "ogg": ".ogg", "flac": ".flac"}.get(fmt, ".bin")
-    if fmt == "mp3":
-        ext = ".mp3"
-    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-        p = Path(tmp.name)
+    def _maybe_schedule_near_end() -> threading.Timer | None:
+        if not on_near_end or near_end_ms <= 0 or duration_ms <= 0:
+            return None
+        delay = max(0.0, (duration_ms - near_end_ms) / 1000.0)
+        t = threading.Timer(delay, on_near_end)
+        t.daemon = True
+        t.start()
+        return t
+
+    timer = _maybe_schedule_near_end()
+    t0 = time.monotonic()
     try:
-        p.write_bytes(data)
-        _play_file(p)
+        if fmt == "wav":
+            pcm, sr = _wav_to_pcm16(data)
+            _play_pcm16(pcm, sr)
+        elif fmt == "pcm":
+            _play_pcm16(data, sample_rate or 24000)
+        else:
+            ext = ".mp3" if fmt == "mp3" else f".{fmt}"
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                p = Path(tmp.name)
+            try:
+                p.write_bytes(data)
+                _play_file(p)
+            finally:
+                p.unlink(missing_ok=True)
     finally:
-        p.unlink(missing_ok=True)
+        if timer is not None:
+            timer.cancel()
+
+    wall_ms = int(1000 * (time.monotonic() - t0))
+    return PlayResult(duration_ms=duration_ms or wall_ms, format=fmt)
 
 
-def play_wav_bytes(data: bytes, *, sample_rate: int | None = None) -> None:
-    """Alias kept for existing call sites."""
-    play_audio(data, sample_rate=sample_rate)
+def play_wav_bytes(
+    data: bytes,
+    *,
+    sample_rate: int | None = None,
+    on_near_end: Callable[[], None] | None = None,
+    near_end_ms: int = 0,
+) -> PlayResult:
+    return play_audio(
+        data,
+        sample_rate=sample_rate,
+        on_near_end=on_near_end,
+        near_end_ms=near_end_ms,
+    )
 
 
 def _play_pcm16(pcm: bytes, sample_rate: int) -> None:
@@ -129,7 +213,6 @@ def _play_file(path: Path) -> None:
             return
         except (FileNotFoundError, subprocess.CalledProcessError):
             continue
-    # Last resort: decode with ffmpeg → wav → sounddevice
     if shutil.which("ffmpeg") and sd is not None:
         wav_path = path.with_suffix(".decoded.wav")
         try:
@@ -162,7 +245,6 @@ def _play_file(path: Path) -> None:
 
 def _ffmpeg_convert(data: bytes, dest: Path, fmt: str) -> Path:
     if not shutil.which("ffmpeg"):
-        # Fall back: write raw bytes with correct extension so user can open it
         alt = dest.with_suffix(".mp3" if fmt == "mp3" else dest.suffix or ".bin")
         alt.write_bytes(data)
         return alt
@@ -197,7 +279,6 @@ def _wav_to_pcm16(data: bytes) -> tuple[bytes, int]:
         width = wf.getsampwidth()
         ch = wf.getnchannels()
         if width != 2:
-            # Expand/narrow is rare; require ffmpeg path for non-16-bit
             raise RuntimeError(f"unsupported WAV sample width {width}")
         if ch > 1:
             mono = bytearray()

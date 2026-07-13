@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 import re
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from hark.audio.capture import MicLease, capture_utterance, write_wav_bytes
+from hark.audio.mic_mute import mic_muted_during_tts
 from hark.audio.playback import play_wav_bytes, write_wav
 from hark.config import HarkConfig
 from hark.confirm_lexicon import classify_confirm_reply
-from hark.exitcodes import ABORT, AUDIO, OK, PROVIDER, TIMEOUT
+from hark.exitcodes import ABORT, OK, PROVIDER, TIMEOUT
 from hark.listen_end import EndMode, evaluate_radio_transcript, parse_end_mode
-from hark.providers.base import ProviderError, Transcript
+from hark.providers.base import ProviderError
 from hark.providers.resolve import resolve_stt, resolve_tts
 from hark.risk import classify_question, confirm_required
+from hark.usage import UsageStore
 
 
 @dataclass
@@ -37,6 +41,9 @@ def run_tts(
     play: bool = True,
     out: Path | None = None,
     max_chars: int | None = None,
+    mute_mic: bool | None = None,
+    on_near_end: Any | None = None,
+    near_end_ms: int | None = None,
 ) -> dict[str, Any]:
     limit = max_chars if max_chars is not None else cfg.tts.max_chars
     truncated = False
@@ -45,25 +52,70 @@ def run_tts(
         truncated = True
     if not text.strip():
         raise ProviderError("empty TTS text")
+
+    do_mute = cfg.audio.mute_mic_during_tts if mute_mic is None else mute_mic
+    store = UsageStore()
+    t0 = time.monotonic()
     tts = resolve_tts(
         provider or cfg.tts.provider,
         voice=voice or cfg.tts.voice,
         language=cfg.tts.language,
     )
-    result = tts.synthesize(text, voice=voice or cfg.tts.voice)
+    try:
+        result = tts.synthesize(text, voice=voice or cfg.tts.voice)
+    except Exception as exc:
+        store.record_tts(
+            text=text,
+            provider=provider or cfg.tts.provider,
+            voice=voice or cfg.tts.voice,
+            ok=False,
+            error=str(exc)[:200],
+            latency_ms=int(1000 * (time.monotonic() - t0)),
+        )
+        raise
+
+    latency_ms = int(1000 * (time.monotonic() - t0))
     out_path = None
     if out:
         out_path = str(write_wav(out, result.audio))
+
+    play_ms = 0
+    mute_applied = False
     if play:
-        play_wav_bytes(result.audio)
+        near = (
+            near_end_ms
+            if near_end_ms is not None
+            else int(cfg.audio.listen_pre_arm_ms)
+        )
+        with mic_muted_during_tts(enabled=do_mute) as mute_state:
+            mute_applied = mute_state.applied
+            pr = play_wav_bytes(
+                result.audio,
+                on_near_end=on_near_end,
+                near_end_ms=near if on_near_end else 0,
+            )
+            play_ms = pr.duration_ms
+
+    store.record_tts(
+        text=text,
+        provider=result.provider,
+        voice=result.voice,
+        audio_ms=play_ms,
+        latency_ms=latency_ms,
+        ok=True,
+    )
     return {
         "ok": True,
         "provider": result.provider,
         "voice": result.voice,
         "truncated": truncated,
         "chars": len(text),
+        "words": len(text.split()),
         "out": out_path,
         "content_type": result.content_type,
+        "audio_ms": play_ms,
+        "latency_ms": latency_ms,
+        "mic_muted": mute_applied,
     }
 
 
@@ -74,7 +126,6 @@ def _echo_overlap(transcript: str, last_tts: str | None) -> bool:
     b = re.sub(r"\W+", " ", last_tts.lower()).strip()
     if len(a) < 8 or len(b) < 8:
         return False
-    # crude: high containment
     if a in b or b in a:
         return True
     aw, bw = set(a.split()), set(b.split())
@@ -92,19 +143,25 @@ def run_listen(
     max_s: float | None = None,
     last_tts: str | None = None,
     post_tts_guard_s: float | None = None,
+    already_armed: bool = False,
 ) -> ListenResult:
     mode = parse_end_mode(end_mode or cfg.listen.end_mode)
     max_listen = float(max_s if max_s is not None else cfg.listen.max_listen_s)
-    guard = (
-        post_tts_guard_s
-        if post_tts_guard_s is not None
-        else max(0.5, cfg.audio.post_tts_guard_ms / 1000.0)
-    )
+    if already_armed:
+        guard = 0.0
+    elif post_tts_guard_s is not None:
+        guard = post_tts_guard_s
+    else:
+        # Tight handoff: config post_tts_guard_ms (default 100–150)
+        guard = max(0.0, cfg.audio.post_tts_guard_ms / 1000.0)
+
     stt = resolve_stt(provider or cfg.stt.provider)
     end_silence = 1.1 if mode is EndMode.SILENCE else 2.5
+    store = UsageStore()
 
     with MicLease("listen"):
         if mode is EndMode.SILENCE:
+            t0 = time.monotonic()
             try:
                 cap = capture_utterance(
                     max_s=max_listen,
@@ -112,15 +169,46 @@ def run_listen(
                     post_tts_guard_s=guard,
                 )
             except TimeoutError as exc:
-                raise TimeoutError(str(exc)) from exc
+                store.record_stt(
+                    text="",
+                    provider=getattr(stt, "name", None),
+                    ok=False,
+                    error=str(exc)[:200],
+                )
+                raise
+            t_api = time.monotonic()
             tr = stt.transcribe(cap.wav)
+            latency_ms = int(1000 * (time.monotonic() - t_api))
             if not (tr.text or "").strip():
+                store.record_stt(
+                    text="",
+                    provider=tr.provider,
+                    audio_ms=cap.duration_ms,
+                    latency_ms=latency_ms,
+                    ok=False,
+                    error="empty transcript",
+                )
                 raise TimeoutError(
                     "heard audio but STT returned empty text "
                     "(try speaking clearer, or check mic device)"
                 )
             if _echo_overlap(tr.text, last_tts):
+                store.record_stt(
+                    text=tr.text,
+                    provider=tr.provider,
+                    audio_ms=cap.duration_ms,
+                    latency_ms=latency_ms,
+                    ok=False,
+                    error="echo",
+                )
                 raise ProviderError("transcript rejected as TTS echo", code=ABORT)
+            store.record_stt(
+                text=tr.text,
+                provider=tr.provider,
+                audio_ms=cap.duration_ms,
+                latency_ms=latency_ms,
+                ok=True,
+            )
             return ListenResult(
                 text=tr.text,
                 provider=tr.provider,
@@ -128,9 +216,7 @@ def run_listen(
                 end_mode=mode.value,
             )
 
-        # Radio mode: capture segments, re-STT full buffer, accept only on end phrase.
-        import time
-
+        # Radio mode
         pieces: list[bytes] = []
         started = time.monotonic()
         if guard > 0:
@@ -146,12 +232,19 @@ def run_listen(
                 )
             except TimeoutError:
                 if pieces:
-                    # keep waiting for more speech / end phrase
                     continue
+                store.record_stt(
+                    text="",
+                    provider=getattr(stt, "name", None),
+                    ok=False,
+                    error="timeout",
+                )
                 raise
             pieces.append(cap.pcm16)
             wav = write_wav_bytes(b"".join(pieces), cap.sample_rate)
+            t_api = time.monotonic()
             tr = stt.transcribe(wav)
+            latency_ms = int(1000 * (time.monotonic() - t_api))
             if _echo_overlap(tr.text, last_tts):
                 pieces.clear()
                 continue
@@ -162,6 +255,15 @@ def run_listen(
             )
             if hit is None:
                 continue
+            body = hit.body if cfg.listen.strip_phrase else tr.text
+            store.record_stt(
+                text=body,
+                provider=tr.provider,
+                audio_ms=int(1000 * (time.monotonic() - started)),
+                latency_ms=latency_ms,
+                ok=hit.kind != "cancel",
+                error="cancel" if hit.kind == "cancel" else None,
+            )
             if hit.kind == "cancel":
                 return ListenResult(
                     text=hit.body,
@@ -171,7 +273,6 @@ def run_listen(
                     end_phrase=hit.phrase,
                     cancelled=True,
                 )
-            body = hit.body if cfg.listen.strip_phrase else tr.text
             return ListenResult(
                 text=body,
                 provider=tr.provider,
@@ -191,10 +292,27 @@ def run_ask(
     provider: str | None = None,
     risk_hint: str | None = None,
 ) -> dict[str, Any]:
+    """Speak prompt (mic muted), then listen ASAP — optional pre-arm before TTS ends."""
     confirm_mode = confirm or cfg.confirm.mode
-    # Speak prompt
-    tts_info = run_tts(cfg, prompt, provider=provider, play=True)
-    # Listen
+    pre_arm_ms = int(cfg.audio.listen_pre_arm_ms)
+    arm_event = threading.Event()
+
+    def _on_near_end() -> None:
+        # Signal that TTS is nearly done — listen starts immediately after play returns
+        # with already_armed / zero guard. True overlap capture needs a second thread;
+        # we keep half-duplex: unmute happens when play exits mute context, then listen.
+        arm_event.set()
+
+    tts_info = run_tts(
+        cfg,
+        prompt,
+        provider=provider,
+        play=True,
+        mute_mic=cfg.audio.mute_mic_during_tts,
+        on_near_end=_on_near_end if pre_arm_ms > 0 else None,
+        near_end_ms=pre_arm_ms if pre_arm_ms > 0 else 0,
+    )
+    # Mic unmuted as TTS context exits. Start listen with minimal guard.
     try:
         listened = run_listen(
             cfg,
@@ -202,11 +320,17 @@ def run_ask(
             end_mode=end_mode,
             last_tts=prompt,
             post_tts_guard_s=cfg.audio.post_tts_guard_ms / 1000.0,
+            already_armed=arm_event.is_set(),
         )
     except TimeoutError as exc:
-        return {"ok": False, "error": str(exc), "exit": TIMEOUT}
+        return {"ok": False, "error": str(exc), "exit": TIMEOUT, "tts": tts_info}
     except ProviderError as exc:
-        return {"ok": False, "error": str(exc), "exit": getattr(exc, "code", PROVIDER)}
+        return {
+            "ok": False,
+            "error": str(exc),
+            "exit": getattr(exc, "code", PROVIDER),
+            "tts": tts_info,
+        }
 
     if listened.cancelled:
         return {
@@ -215,11 +339,11 @@ def run_ask(
             "text": listened.text,
             "exit": ABORT,
             "end_phrase": listened.end_phrase,
+            "tts": tts_info,
         }
 
     risk = risk_hint or classify_question(prompt).risk
     need_confirm = confirm_required(risk, confirm_mode)
-    # also force if confirm=always
     if confirm_mode == "always":
         need_confirm = True
     if confirm_mode == "never" and risk not in ("R2", "R3"):
@@ -236,7 +360,13 @@ def run_ask(
                 last_tts=readback,
             )
         except TimeoutError:
-            return {"ok": False, "error": "confirm timeout", "exit": TIMEOUT}
+            return {
+                "ok": False,
+                "error": "confirm timeout",
+                "exit": TIMEOUT,
+                "text": listened.text,
+                "tts": tts_info,
+            }
         decision = classify_confirm_reply(conf.text)
         if decision != "yes":
             return {
@@ -245,6 +375,7 @@ def run_ask(
                 "confirm_reply": conf.text,
                 "text": listened.text,
                 "exit": ABORT,
+                "tts": tts_info,
             }
 
     return {

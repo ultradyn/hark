@@ -122,8 +122,12 @@ def build_parser() -> argparse.ArgumentParser:
     dev = sub.add_parser("devices", help="list audio devices")
     dev.add_argument("--json", action="store_true")
 
-    sub.add_parser("mute", help="mute (no-op stub)")
-    sub.add_parser("unmute", help="unmute (no-op stub)")
+    sub.add_parser("mute", help="mute system default mic (pactl)")
+    sub.add_parser("unmute", help="unmute system default mic (pactl)")
+
+    stt_stats = sub.add_parser("stats", help="TTS/STT usage stats")
+    stt_stats.add_argument("--json", action="store_true")
+    stt_stats.add_argument("--reset", action="store_true", help="delete usage log")
 
     return p
 
@@ -222,10 +226,66 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
         return cmd_providers(args)
     if cmd == "devices":
         return cmd_devices(args)
-    if cmd in ("mute", "unmute"):
-        eprint(f"hark {cmd}: noted (library mute store later)")
-        return OK
+    if cmd == "mute":
+        return cmd_mic_mute(True)
+    if cmd == "unmute":
+        return cmd_mic_mute(False)
+    if cmd == "stats":
+        return cmd_stats(args)
     return USAGE
+
+
+def cmd_mic_mute(mute: bool) -> int:
+    from hark.audio.mic_mute import default_source, set_source_mute, source_is_muted
+
+    src = default_source()
+    if not src:
+        eprint("hark: no default Pulse/PipeWire source")
+        return AUDIO
+    if not set_source_mute(src, mute):
+        eprint(f"hark: failed to {'mute' if mute else 'unmute'} {src}")
+        return AUDIO
+    state = source_is_muted(src)
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "source": src,
+                "muted": state if state is not None else mute,
+            }
+        )
+    )
+    return OK
+
+
+def cmd_stats(args: argparse.Namespace) -> int:
+    from hark.usage import UsageStore
+
+    store = UsageStore()
+    if args.reset:
+        if store.path.is_file():
+            store.path.unlink()
+        print(json.dumps({"ok": True, "reset": True, "path": str(store.path)}))
+        return OK
+    summary = store.summary()
+    if args.json:
+        print(json.dumps(summary, indent=2))
+        return OK
+    print(f"usage log: {summary['path']}  ({summary['total_events']} events)")
+    for kind in ("tts", "stt"):
+        a = summary[kind]
+        print(f"\n{kind.upper()}")
+        print(f"  instances:     {a['instances']}  (ok={a['ok']} err={a['errors']})")
+        print(f"  total chars:   {a['total_chars']}  (avg {a['avg_chars']})")
+        print(f"  total words:   {a['total_words']}  (avg {a['avg_words']})")
+        print(
+            f"  total audio:   {a['total_audio_s']}s  "
+            f"({a['total_audio_ms']} ms, avg {a['avg_audio_ms']} ms)"
+        )
+        print(f"  total latency: {a['total_latency_ms']} ms  (avg {a['avg_latency_ms']})")
+        if a["by_provider"]:
+            print(f"  by provider:   {a['by_provider']}")
+    return OK
 
 
 def _client_for(cfg, session_id: str) -> HerdrClient:
@@ -323,15 +383,30 @@ def cmd_answer(args: argparse.Namespace, cfg) -> int:
         eprint("hark answer: already delivered (idempotent refuse)")
         return ABORT
 
+    fingerprint = (
+        bound.question_fingerprint.strip()
+        if isinstance(bound.question_fingerprint, str)
+        else ""
+    )
+    has_revision = isinstance(bound.pane_revision, int) and bound.pane_revision > 0
+    if not fingerprint and not has_revision:
+        store.mark(args.event_id, "rejected", reason="missing_stale_protection")
+        eprint("hark answer: bound event has no fingerprint or pane revision")
+        return ABORT
+
     client = _client_for(cfg, bound.session_id)
     live = client.get_agent(bound.pane_id)
     if live is None:
         store.mark(args.event_id, "rejected", reason="pane_gone")
         eprint("hark answer: pane no longer present")
         return ABORT
-    if bound.pane_revision and live.revision != bound.pane_revision:
+    if live.status != "blocked":
+        store.mark(args.event_id, "rejected", reason="not_blocked")
+        eprint(f"hark answer: agent is no longer blocked (live status: {live.status})")
+        return ABORT
+    if has_revision and live.revision != bound.pane_revision:
         # revision 0 often means unknown — only reject if both non-zero mismatch
-        if bound.pane_revision > 0 and live.revision > 0:
+        if live.revision > 0:
             store.mark(args.event_id, "rejected", reason="stale_revision")
             eprint(
                 f"hark answer: stale revision "
@@ -339,19 +414,21 @@ def cmd_answer(args: argparse.Namespace, cfg) -> int:
             )
             return ABORT
 
-    if bound.question_fingerprint:
+    if fingerprint:
         try:
             text = client.read_pane(bound.pane_id, lines=40)
             from hark.events import extract_question_excerpt
 
             excerpt = extract_question_excerpt(text)
             live_fp = question_fingerprint(excerpt)
-            if live_fp != bound.question_fingerprint:
+            if live_fp != fingerprint:
                 store.mark(args.event_id, "rejected", reason="fingerprint_mismatch")
                 eprint("hark answer: question fingerprint mismatch (stale)")
                 return ABORT
         except HerdrError:
-            pass  # best-effort fingerprint
+            store.mark(args.event_id, "rejected", reason="fingerprint_unavailable")
+            eprint("hark answer: unable to verify question fingerprint")
+            return ABORT
 
     if args.keys:
         client.send_keys(bound.pane_id, list(args.keys))

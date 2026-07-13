@@ -1,14 +1,54 @@
 ---
+claimed_at: "2026-07-13T17:13:04Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
-created_at: "2026-07-13T17:01:35Z"
+created_at: "2026-07-13T17:02:00Z"
 depends_on: []
-estimate_hours: 1
+estimate_hours: 2
 id: B086
 priority: high
-status: pending
+started_at: "2026-07-13T17:13:04Z"
+status: in_progress
 tags: []
-title: 'Mic mute desync: system mute status out of sync with Hark TTS hold; sometimes fails to unmute after TTS'
-updated_at: "2026-07-13T17:01:35Z"
+title: 'Mic mute desync: Hark TTS hold vs system mute; sometimes stuck muted after TTS'
+updated_at: "2026-07-13T17:13:04Z"
 ---
 
-Mic mute desync: system mute status out of sync with Hark TTS hold; sometimes fails to unmute after TTS
+## Problem (dogfood 2026-07-14)
+
+1. **Indicator desync** — Elgato Wave / Pulse mute light and “system mute status”
+   can disagree with whether Hark *thinks* it still holds TTS mute
+   (`tts_mute_depth` / nestable `mic_muted_during_tts`).
+2. **Stuck muted after TTS** — after some TTS turns (including force-policy /
+   long / interrupted runs), capture remains muted so post-wake listen sees
+   `peak_rms=0` and times out. Operator must manually unmute or
+   `ensure_unmuted()`.
+
+Related but separate from **B084** (freeze *clocks* while intentionally muted).
+This ticket is **lifecycle correctness of mute/unmute itself**.
+
+## Desired
+
+- Outermost TTS mute context always restores OS+ALSA unmute (unless user
+  deliberately re-muted).
+- Process crash / cancel / exception paths release hold (try/finally already
+  intended — audit gaps: concurrent TTS, hung play, ensure_unmuted mid-hold).
+- Optional: after every `run_tts` exit, assert `tts_mute_depth()==0` and
+  source unmuted; if not, repair + syslog `mic.mute_desync`.
+- Doctor / `hark mute-sync` already exist — document recovery; maybe
+  `run_tts` always calls soft ensure when depth returns to 0.
+- UI/status: surface “hark holding mute” vs “source muted” if feasible later.
+
+## Acceptance
+
+- [ ] Forced interrupt of TTS does not leave source muted
+- [ ] Nested TTS mute still restores once
+- [ ] `ensure_unmuted` clears stuck hold (already partially true) + unit tests
+- [ ] Post-TTS listen does not see all-zero RMS solely because mute stuck
+- [ ] Syslog when desync repaired
+
+## Related
+
+- B084 mute clock freeze; B013 Wave vs pactl desync (hardware); `mic_mute.py`
+- Dogfood ambient.error after wake with peak_rms=0

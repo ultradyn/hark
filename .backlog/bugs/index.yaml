@@ -22,3 +22,4 @@ bugs:
     - file: B021-add-install-sh-for-one-line-co.todo
     - file: B022-npx-skills-npm-package-distrib.todo
     - file: B023-homepage-install-command-picke.todo
+    - file: B024-move-github-remote-clankercode.todo

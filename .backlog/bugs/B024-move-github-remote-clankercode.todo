@@ -1,0 +1,28 @@
+---
+complexity: medium
+created_at: "2026-07-13T09:11:11Z"
+depends_on: []
+estimate_hours: 1
+id: B024
+priority: high
+status: pending
+tags:
+    - ops
+    - github
+    - dx
+title: Move GitHub remote clankercode/hark → ultradyn/hark
+updated_at: "2026-07-13T09:11:11Z"
+---
+## Goal
+Transfer repository ownership/path from `clankercode/hark` to `ultradyn/hark` on GitHub.
+
+## Operator
+Human will perform the GitHub transfer when ready.
+
+## Follow-ups after transfer
+- [ ] Update git remotes locally
+- [ ] Update README, site, install.sh, package.json repository fields
+- [ ] Update GitHub Pages custom domain / Actions if needed
+- [ ] Update `npx skills add` docs to `ultradyn/hark`
+- [ ] Redirect or archive note on old clankercode path if GitHub leaves a redirect
+- [ ] Verify @ultradyn/hark npm package repository URL points at new home

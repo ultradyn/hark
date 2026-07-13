@@ -1,0 +1,16 @@
+{
+  "schema": "hark.event.v1",
+  "kind": "ambient.prompt",
+  "event_id": "19f5a16910801ef0f4a462c4db5",
+  "observed_at": "2026-07-13T06:07:44.643Z",
+  "phrase": "hey hark",
+  "text": "Oh, cool. Alright, well that one worked.",
+  "wake_backend": "vosk",
+  "listen": {
+    "provider": "xai",
+    "duration_ms": 2580,
+    "end_phrase": null,
+    "cancelled": false
+  },
+  "instructions": "Ambient operator prompt (not bound to a pane). Use judgment; do not invent answers. If it targets an agent, use hark status / context / reply."
+}

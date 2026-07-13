@@ -1,0 +1,10 @@
+{
+  "schema": "hark.event.v1",
+  "kind": "agent.state_changed",
+  "event_id": "19f5a1278fd33d51c2a2cde7cd1",
+  "observed_at": "2026-07-13T06:03:07.901Z",
+  "session_id": "default",
+  "agent": "claude",
+  "pane_id": "w8:pQ",
+  "status_to": "working"
+}

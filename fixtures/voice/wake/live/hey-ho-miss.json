@@ -1,0 +1,13 @@
+{
+  "ts": 1783923955.1496162,
+  "matched": false,
+  "phrase": null,
+  "text": "hey ho",
+  "rms": 0.007957645022728848,
+  "backend": "vosk",
+  "sample_rate": 16000,
+  "wav": "fixtures/voice/wake/live/hey-ho-miss.wav",
+  "pcm_bytes": 80000,
+  "fixture_id": "hey-ho-miss",
+  "source": "live-capture-2026-07-13"
+}

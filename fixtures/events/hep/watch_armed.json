@@ -1,0 +1,10 @@
+{
+  "schema": "hark.event.v1",
+  "kind": "watch.armed",
+  "event_id": "19f5a11ec6cd6b68ff6c0fa65e8",
+  "observed_at": "2026-07-13T06:02:31.916Z",
+  "sessions": [
+    "default"
+  ],
+  "instructions": "Use the hark skill; do not invent answers. On agent.blocked: hark context <session>/<pane>, then ask/answer."
+}

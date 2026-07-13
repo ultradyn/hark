@@ -1,0 +1,13 @@
+{
+  "ts": 1783923775.8294635,
+  "matched": false,
+  "phrase": null,
+  "text": "hey hoc",
+  "rms": 0.006796114936621934,
+  "backend": "vosk",
+  "sample_rate": 16000,
+  "wav": "fixtures/voice/wake/live/hey-hoc-miss.wav",
+  "pcm_bytes": 80000,
+  "fixture_id": "hey-hoc-miss",
+  "source": "live-capture-2026-07-13"
+}

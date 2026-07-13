@@ -1,0 +1,11 @@
+{
+  "schema": "hark.event.v1",
+  "kind": "agent.completed",
+  "event_id": "19f5a1447f8cb1eab18b8bdc755",
+  "observed_at": "2026-07-13T06:05:06.424Z",
+  "session_id": "default",
+  "agent": "claude",
+  "pane_id": "w8:pQ",
+  "status_to": "done",
+  "instructions": "Done event: judge if finished; do not auto-announce. Optional: hark context default/w8:pQ"
+}

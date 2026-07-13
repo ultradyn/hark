@@ -1,0 +1,7 @@
+{"id":"hey-harold-as-herald-hit","wav":"live/hey-harold-as-herald-hit.wav","meta":"live/hey-harold-as-herald-hit.json","vosk_text":"hey harold","expect_match":true,"expect_phrase_contains":"herald","notes":"Live Wave capture; vosk said harold, fuzzy maps to herald"}
+{"id":"hey-hook-as-hark-hit","wav":"live/hey-hook-as-hark-hit.wav","meta":"live/hey-hook-as-hark-hit.json","vosk_text":"hey hook","expect_match":true,"expect_phrase_contains":"hark","notes":"Common vosk mishear of hark"}
+{"id":"hey-hawk-as-hark-hit","wav":"live/hey-hawk-as-hark-hit.wav","meta":"live/hey-hawk-as-hark-hit.json","vosk_text":"hey hawk","expect_match":true,"expect_phrase_contains":"hark","notes":"Common vosk mishear of hark"}
+{"id":"a-hawk-miss","wav":"live/a-hawk-miss.wav","meta":"live/a-hawk-miss.json","vosk_text":"a hawk","expect_match":false,"notes":"No hey/ok prefix — must not wake"}
+{"id":"hey-hoc-miss","wav":"live/hey-hoc-miss.wav","meta":"live/hey-hoc-miss.json","vosk_text":"hey hoc","expect_match":false,"notes":"Near-miss garbage; not in alias set"}
+{"id":"hello-alone-miss","wav":"live/hello-alone-miss.wav","meta":"live/hello-alone-miss.json","vosk_text":"hello","expect_match":false,"notes":"Prefix alone is not a wake"}
+{"id":"hey-ho-miss","wav":"live/hey-ho-miss.wav","meta":"live/hey-ho-miss.json","vosk_text":"hey ho","expect_match":false,"notes":"Incomplete wake phrase"}

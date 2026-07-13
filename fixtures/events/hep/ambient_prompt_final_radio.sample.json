@@ -1,0 +1,22 @@
+{
+  "schema": "hark.event.v1",
+  "kind": "ambient.prompt",
+  "event_id": "fixture-final-001",
+  "observed_at": "2026-07-13T12:00:06.000Z",
+  "partial": false,
+  "final": true,
+  "stream_id": "sfixture01",
+  "text": "please open the pull request for the auth module and then run the tests okay hark send",
+  "phrase": "hey hark",
+  "provider": "xai",
+  "end_phrase": "okay hark send",
+  "listen": {
+    "provider": "xai",
+    "duration_ms": 6000,
+    "end_phrase": "okay hark send",
+    "cancelled": false
+  },
+  "partials_emitted": 2,
+  "warning": null,
+  "instructions": "FINAL transcript for this stream_id. Supersedes all prior partials. You may now respond / act."
+}

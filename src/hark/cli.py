@@ -102,6 +102,19 @@ def build_parser() -> argparse.ArgumentParser:
     li.add_argument("--end-mode", choices=("silence", "radio"))
     li.add_argument("--json", action="store_true")
 
+    le = sub.add_parser(
+        "listen-end",
+        help="finish or cancel an active listen (agent control from partials)",
+    )
+    le.add_argument("--stream-id", default=None, help="target stream_id from partial")
+    le.add_argument(
+        "--cancel",
+        action="store_true",
+        help="cancel instead of finalize as complete prompt",
+    )
+    le.add_argument("--reason", default=None, help="optional note (logged)")
+    le.add_argument("--json", action="store_true")
+
     ask = sub.add_parser("ask", help="speak prompt + listen")
     ask.add_argument("text", nargs="+")
     ask.add_argument("--confirm", choices=("auto", "always", "never"))
@@ -259,6 +272,8 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
         return cmd_tts(args, cfg)
     if cmd == "listen":
         return cmd_listen(args, cfg)
+    if cmd == "listen-end":
+        return cmd_listen_end(args)
     if cmd == "ask":
         return cmd_ask(args, cfg)
     if cmd == "ambient":
@@ -610,8 +625,28 @@ def cmd_listen(args: argparse.Namespace, cfg) -> int:
         "duration_ms": result.duration_ms,
         "end_mode": result.end_mode,
         "end_phrase": result.end_phrase,
+        "stream_id": result.stream_id,
     }
     print(json.dumps(payload, indent=2 if args.json else None))
+    return OK
+
+
+def cmd_listen_end(args: argparse.Namespace) -> int:
+    """Agent control: finish or cancel the active listen (from radio partials)."""
+    from hark.listen_control import read_active, request_listen_action
+
+    action = "cancel" if args.cancel else "finish"
+    result = request_listen_action(
+        action,
+        stream_id=args.stream_id,
+        reason=args.reason,
+    )
+    active = read_active()
+    out = {**result, "active": active}
+    print(json.dumps(out, indent=2 if args.json else None))
+    if not result.get("ok"):
+        eprint(f"hark listen-end: {result.get('error')}")
+        return USAGE
     return OK
 
 

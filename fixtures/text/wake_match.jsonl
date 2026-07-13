@@ -1,0 +1,17 @@
+{"id":"exact-hey-hark","input":"Hey Hark, open the PR checklist","anywhere":false,"expect_match":true,"expect_phrase":"hey hark","expect_remainder_contains":"open the pr"}
+{"id":"exact-hey-herald","input":"hey herald","anywhere":false,"expect_match":true,"expect_phrase":"hey herald","expect_remainder":""}
+{"id":"anywhere-mid-snippet","input":"um yes hey hark ship it","anywhere":true,"expect_match":true,"expect_phrase":"hey hark","expect_remainder_contains":"ship"}
+{"id":"no-false-hark-back","input":"please hark back to the earlier design","anywhere":false,"expect_match":false}
+{"id":"no-false-herald-of","input":"the herald of spring arrived","anywhere":false,"expect_match":false}
+{"id":"no-bare-hark","input":"hark back to the design","anywhere":false,"expect_match":false}
+{"id":"fuzzy-hey-hook","input":"hey hook","anywhere":true,"expect_match":true,"expect_phrase_contains":"hark"}
+{"id":"fuzzy-hey-harold","input":"hey harold please","anywhere":true,"expect_match":true,"expect_phrase_contains":"herald"}
+{"id":"fuzzy-hey-hawk","input":"hey hawk","anywhere":true,"expect_match":true,"expect_phrase_contains":"hark"}
+{"id":"fuzzy-hello-hook","input":"hello hook","anywhere":true,"expect_match":true,"expect_phrase_contains":"hark"}
+{"id":"hello-herald","input":"hello herald","anywhere":true,"expect_match":true,"expect_phrase_contains":"herald"}
+{"id":"miss-a-hawk","input":"a hawk","anywhere":true,"expect_match":false}
+{"id":"miss-hey-hoc","input":"hey hoc","anywhere":true,"expect_match":false}
+{"id":"miss-hello-alone","input":"hello","anywhere":true,"expect_match":false}
+{"id":"miss-hey-ho","input":"hey ho","anywhere":true,"expect_match":false}
+{"id":"ok-hark","input":"ok hark status please","anywhere":false,"expect_match":true,"expect_phrase":"ok hark","expect_remainder_contains":"status"}
+{"id":"okay-hark","input":"okay hark list panes","anywhere":false,"expect_match":true,"expect_phrase":"okay hark","expect_remainder_contains":"list"}

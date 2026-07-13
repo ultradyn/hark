@@ -1,0 +1,8 @@
+{
+  "schema": "hark.event.v1",
+  "kind": "watch.error",
+  "event_id": "19f5a11f27197156c2219de1689",
+  "observed_at": "2026-07-13T06:02:33.457Z",
+  "session_id": "default",
+  "error": "socket watch failed, poll: [Errno 32] Broken pipe"
+}

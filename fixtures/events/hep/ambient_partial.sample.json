@@ -1,0 +1,15 @@
+{
+  "schema": "hark.event.v1",
+  "kind": "ambient.partial",
+  "event_id": "fixture-partial-001",
+  "observed_at": "2026-07-13T12:00:00.000Z",
+  "partial": true,
+  "final": false,
+  "stream_id": "sfixture01",
+  "seq": 1,
+  "text": "please open the pull request for the",
+  "phrase": "hey hark",
+  "provider": "xai",
+  "warning": "PARTIAL TRANSCRIPT \u2014 not complete. More speech may still be captured. Do NOT send a final answer, do NOT speak to the user yet, and do NOT deliver to a Herdr pane based on this alone. You MAY begin private thinking/planning. Wait for the matching final event (same stream_id, partial=false / final=true).",
+  "instructions": "HOLD RESPONSE. This is an interim radio-mode partial. Await ambient.prompt or answer.final with the same stream_id before acting or speaking to the operator."
+}

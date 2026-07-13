@@ -1,0 +1,13 @@
+{
+  "ts": 1783923947.0265563,
+  "matched": false,
+  "phrase": null,
+  "text": "hello",
+  "rms": 0.006874673494258569,
+  "backend": "vosk",
+  "sample_rate": 16000,
+  "wav": "fixtures/voice/wake/live/hello-alone-miss.wav",
+  "pcm_bytes": 80000,
+  "fixture_id": "hello-alone-miss",
+  "source": "live-capture-2026-07-13"
+}

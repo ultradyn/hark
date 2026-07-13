@@ -9,6 +9,7 @@ import struct
 import threading
 import time
 import wave
+from collections import deque
 from dataclasses import dataclass
 from typing import Callable
 
@@ -120,6 +121,8 @@ class CaptureResult:
     sample_rate: int
     duration_ms: int
     speech_ms: int
+    # Time spent waiting for speech open (leading silence not in pcm16)
+    wait_speech_ms: int = 0
 
     @property
     def wav(self) -> bytes:
@@ -136,15 +139,22 @@ def capture_utterance(
     # Absolute floor: speech louder than this opens even if relative margin fails
     abs_open_db: float = -38.0,
     open_confirm_blocks: int = 4,  # ~80 ms
+    # Keep this much audio immediately before speech open (trims long leading silence)
+    preroll_ms: int = 200,
     initial_timeout_s: float = 45.0,
     device: int | str | None = None,
     should_stop: Callable[[bytes, float], bool] | None = None,
+    on_opened: Callable[[], None] | None = None,
     post_tts_guard_s: float = 0.0,
 ) -> CaptureResult:
     """Energy-gated capture until end silence or should_stop or max.
 
-    should_stop(pcm_so_far, elapsed_s) → True to end (e.g. radio phrase after STT
-    is handled by outer loop; here used for max/external cancel).
+    Leading silence / background noise is **not** kept: the gate waits until
+    speech is confirmed, then starts the capture buffer with a short pre-roll
+    only (so word onsets are not clipped). ``on_opened`` fires once when speech
+    is confirmed — use it for the record-start cue / stream arming.
+
+    should_stop(pcm_so_far, elapsed_s) → True to end (e.g. agent listen-end).
     """
     _require_sd()
     if post_tts_guard_s > 0:
@@ -160,11 +170,15 @@ def capture_utterance(
     min_speech_blocks = max(1, int(min_speech_s / 0.02))
     max_blocks = int(max_s / 0.02)
     timeout_blocks = int(initial_timeout_s / 0.02)
+    preroll_blocks = max(1, int(preroll_ms / 20.0))
     peak_db = -120.0
     peak_rms = 0.0
 
     chunks: list[np.ndarray] = []
+    # Short ring of recent frames while waiting for speech (discarded if timeout)
+    preroll: deque[np.ndarray] = deque(maxlen=preroll_blocks)
     start = time.monotonic()
+    wait_speech_ms = 0
 
     with sd.InputStream(
         samplerate=sample_rate,
@@ -184,6 +198,7 @@ def capture_utterance(
                 peak_rms = rms
 
             if not opened:
+                preroll.append(samples.copy())
                 # adapt noise floor while closed (slow attack)
                 noise_floor = 0.98 * noise_floor + 0.02 * rms
                 rel_thresh = 20.0 * np.log10(noise_floor + 1e-12) + open_margin_db
@@ -193,7 +208,15 @@ def capture_utterance(
                     if speech_blocks >= open_confirm_blocks:
                         opened = True
                         silent_blocks = 0
-                        # keep a bit of pre-roll from last few speech frames
+                        # Seed buffer with short pre-roll only (not full leading silence)
+                        chunks.extend(preroll)
+                        preroll.clear()
+                        wait_speech_ms = int(1000 * (time.monotonic() - start))
+                        if on_opened is not None:
+                            try:
+                                on_opened()
+                            except Exception:
+                                pass
                 else:
                     speech_blocks = max(0, speech_blocks - 1)
                 if i >= timeout_blocks and not opened:
@@ -231,7 +254,11 @@ def capture_utterance(
     dur_ms = int(1000 * len(all_s) / sample_rate)
     speech_ms = int(1000 * speech_blocks * 0.02)
     return CaptureResult(
-        pcm16=pcm, sample_rate=sample_rate, duration_ms=dur_ms, speech_ms=speech_ms
+        pcm16=pcm,
+        sample_rate=sample_rate,
+        duration_ms=dur_ms,
+        speech_ms=speech_ms,
+        wait_speech_ms=wait_speech_ms,
     )
 
 

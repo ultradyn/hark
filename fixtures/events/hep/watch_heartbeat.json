@@ -1,0 +1,6 @@
+{
+  "schema": "hark.event.v1",
+  "kind": "watch.heartbeat",
+  "event_id": "19f5a126adb6f31e23a7955ae36",
+  "observed_at": "2026-07-13T06:03:04.284Z"
+}

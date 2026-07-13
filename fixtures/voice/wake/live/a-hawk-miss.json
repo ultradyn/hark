@@ -1,0 +1,13 @@
+{
+  "ts": 1783923772.776476,
+  "matched": false,
+  "phrase": null,
+  "text": "a hawk",
+  "rms": 0.007002615238950314,
+  "backend": "vosk",
+  "sample_rate": 16000,
+  "wav": "fixtures/voice/wake/live/a-hawk-miss.wav",
+  "pcm_bytes": 80000,
+  "fixture_id": "a-hawk-miss",
+  "source": "live-capture-2026-07-13"
+}

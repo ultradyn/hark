@@ -12,6 +12,8 @@ def test_wake_remainder_still_uses_cloud_listen(monkeypatch):
         duration_ms=42,
         end_phrase=None,
         cancelled=False,
+        stream_id="stest1",
+        partials_emitted=0,
     )
     calls = []
     monkeypatch.setattr(
@@ -28,6 +30,7 @@ def test_wake_remainder_still_uses_cloud_listen(monkeypatch):
 
     result = ambient.complete_after_wake(HarkConfig(), hit, announce=False)
 
-    assert calls == [{"end_mode": "silence"}]
+    assert len(calls) == 1
+    assert calls[0]["end_mode"] == "silence"
     assert result.text == "cloud transcript"
     assert result.listen["provider"] == "xai"

@@ -1,0 +1,4 @@
+{"id":"stable-ws-case","text_a":"Allow rm -rf?","choices_a":["Yes","No"],"text_b":"  allow   RM -rf? ","choices_b":["yes","no"],"expect_equal":true,"expect_prefix":"blake2b:"}
+{"id":"different-text","text_a":"Allow rm -rf?","choices_a":["Yes","No"],"text_b":"Allow git push?","choices_b":["Yes","No"],"expect_equal":false}
+{"id":"different-choices","text_a":"Pick one","choices_a":["A","B"],"text_b":"Pick one","choices_b":["A","C"],"expect_equal":false}
+{"id":"no-choices","text_a":"What is your name?","choices_a":null,"text_b":"what is your name?","choices_b":null,"expect_equal":true}

@@ -1,0 +1,11 @@
+{"id":"end-okay-hark-send","input":"Please use black formatting okay hark send","expect_kind":"end","expect_phrase":"okay hark send","expect_body":"please use black formatting"}
+{"id":"end-prompt-punct","input":"refactor the auth module. End prompt!","expect_kind":"end","expect_phrase":"end prompt","expect_body_contains":"refactor"}
+{"id":"end-hark-send","input":"long thoughtful answer hark send","expect_kind":"end","expect_phrase":"hark send","expect_body_contains":"long thoughtful"}
+{"id":"end-hark-over","input":"ship the branch hark over","expect_kind":"end","expect_phrase":"hark over"}
+{"id":"end-of-prompt","input":"done for now end of prompt","expect_kind":"end","expect_phrase":"end of prompt"}
+{"id":"cancel-hark-cancel","input":"scratch this whole idea hark cancel","expect_kind":"cancel","expect_phrase":"hark cancel"}
+{"id":"cancel-cancel-hark","input":"never mind cancel hark","expect_kind":"cancel","expect_phrase":"cancel hark"}
+{"id":"no-casual-cancel-that","input":"actually wait cancel that","expect_kind":null}
+{"id":"no-casual-send-it","input":"please just send it to production","expect_kind":null}
+{"id":"no-bare-over","input":"turn it over carefully","expect_kind":null}
+{"id":"still-thinking","input":"I am still thinking about the design","expect_kind":null}

@@ -23,6 +23,12 @@ from hark.config import HarkConfig
 from hark.confirm_lexicon import classify_confirm_reply
 from hark.exitcodes import ABORT, OK, PROVIDER, TIMEOUT
 from hark.lifecycle import BusySection
+from hark.listen_control import (
+    clear_active_listen,
+    consume_listen_action,
+    poll_listen_action,
+    register_active_listen,
+)
 from hark.listen_end import EndMode, evaluate_radio_transcript, parse_end_mode
 from hark.partial import make_partial_event, new_stream_id
 from hark.providers.base import ProviderError
@@ -214,176 +220,324 @@ def run_listen(
     stream_partials = mode is EndMode.RADIO and getattr(
         cfg.listen, "stream_partials", True
     )
+    recording_cued = False
+
+    def _cue_start_once() -> None:
+        """Play record-start only when speech opens (not during leading silence)."""
+        nonlocal recording_cued
+        if not recording_cued:
+            recording_cued = True
+            play_record_start()
+            syslog(
+                "listen.speech_opened",
+                component="stt",
+                level="info",
+                stream_id=stream,
+                mode=mode.value,
+            )
+
+    def _agent_wants_stop(_pcm: bytes, _elapsed: float) -> bool:
+        return poll_listen_action(stream) is not None
 
     with MicLease("listen"), BusySection("listen"):
-        if mode is EndMode.SILENCE:
-            if guard > 0:
-                time.sleep(guard)
-            play_record_start()
-            try:
-                cap = capture_utterance(
-                    max_s=max_listen,
-                    end_silence_s=end_silence,
-                    post_tts_guard_s=0,
-                )
-            except TimeoutError as exc:
-                play_record_stop()
-                store.record_stt(
-                    text="",
-                    provider=getattr(stt, "name", None),
-                    ok=False,
-                    error=str(exc)[:200],
-                )
-                raise
-            play_record_stop()
-            t_api = time.monotonic()
-            tr = stt.transcribe(cap.wav)
-            latency_ms = int(1000 * (time.monotonic() - t_api))
-            if not (tr.text or "").strip():
-                store.record_stt(
-                    text="",
-                    provider=tr.provider,
-                    audio_ms=cap.duration_ms,
-                    latency_ms=latency_ms,
-                    ok=False,
-                    error="empty transcript",
-                )
-                raise TimeoutError(
-                    "heard audio but STT returned empty text "
-                    "(try speaking clearer, or check mic device)"
-                )
-            if _echo_overlap(tr.text, last_tts):
+        register_active_listen(stream, mode=mode.value)
+        try:
+            if mode is EndMode.SILENCE:
+                if guard > 0:
+                    time.sleep(guard)
+                try:
+                    cap = capture_utterance(
+                        max_s=max_listen,
+                        end_silence_s=end_silence,
+                        post_tts_guard_s=0,
+                        on_opened=_cue_start_once,
+                        should_stop=_agent_wants_stop,
+                    )
+                except TimeoutError as exc:
+                    if recording_cued:
+                        play_record_stop()
+                    store.record_stt(
+                        text="",
+                        provider=getattr(stt, "name", None),
+                        ok=False,
+                        error=str(exc)[:200],
+                    )
+                    raise
+                agent_act = consume_listen_action(stream)
+                if recording_cued:
+                    play_record_stop()
+                if agent_act == "cancel":
+                    store.record_stt(
+                        text="",
+                        provider=getattr(stt, "name", None),
+                        audio_ms=cap.duration_ms,
+                        ok=False,
+                        error="agent_cancel",
+                    )
+                    return ListenResult(
+                        text="",
+                        provider=getattr(stt, "name", "unknown"),
+                        duration_ms=cap.duration_ms,
+                        end_mode=mode.value,
+                        end_phrase="agent:cancel",
+                        cancelled=True,
+                        stream_id=stream,
+                    )
+                t_api = time.monotonic()
+                tr = stt.transcribe(cap.wav)
+                latency_ms = int(1000 * (time.monotonic() - t_api))
+                if not (tr.text or "").strip():
+                    store.record_stt(
+                        text="",
+                        provider=tr.provider,
+                        audio_ms=cap.duration_ms,
+                        latency_ms=latency_ms,
+                        ok=False,
+                        error="empty transcript",
+                    )
+                    raise TimeoutError(
+                        "heard audio but STT returned empty text "
+                        "(try speaking clearer, or check mic device)"
+                    )
+                if _echo_overlap(tr.text, last_tts):
+                    store.record_stt(
+                        text=tr.text,
+                        provider=tr.provider,
+                        audio_ms=cap.duration_ms,
+                        latency_ms=latency_ms,
+                        ok=False,
+                        error="echo",
+                    )
+                    raise ProviderError("transcript rejected as TTS echo", code=ABORT)
                 store.record_stt(
                     text=tr.text,
                     provider=tr.provider,
                     audio_ms=cap.duration_ms,
                     latency_ms=latency_ms,
-                    ok=False,
-                    error="echo",
+                    ok=True,
                 )
-                raise ProviderError("transcript rejected as TTS echo", code=ABORT)
-            store.record_stt(
-                text=tr.text,
-                provider=tr.provider,
-                audio_ms=cap.duration_ms,
-                latency_ms=latency_ms,
-                ok=True,
-            )
-            return ListenResult(
-                text=tr.text,
-                provider=tr.provider,
-                duration_ms=cap.duration_ms,
-                end_mode=mode.value,
-                stream_id=stream,
-            )
-
-        # Radio mode — segment until end phrase; stream partials between segments
-        pieces: list[bytes] = []
-        started = time.monotonic()
-        partial_seq = 0
-        last_partial_text = ""
-        if guard > 0:
-            time.sleep(guard)
-        play_record_start()
-        while time.monotonic() - started < max_listen:
-            remaining = max_listen - (time.monotonic() - started)
-            try:
-                cap = capture_utterance(
-                    max_s=min(remaining, max_listen),
-                    end_silence_s=end_silence,
-                    initial_timeout_s=min(45.0, remaining),
-                    post_tts_guard_s=0,
-                )
-            except TimeoutError:
-                if pieces:
-                    continue
-                play_record_stop()
-                store.record_stt(
-                    text="",
-                    provider=getattr(stt, "name", None),
-                    ok=False,
-                    error="timeout",
-                )
-                raise
-            pieces.append(cap.pcm16)
-            wav = write_wav_bytes(b"".join(pieces), cap.sample_rate)
-            t_api = time.monotonic()
-            tr = stt.transcribe(wav)
-            latency_ms = int(1000 * (time.monotonic() - t_api))
-            if _echo_overlap(tr.text, last_tts):
-                pieces.clear()
-                continue
-            hit = evaluate_radio_transcript(
-                tr.text,
-                end_phrases=cfg.listen.end_phrases,
-                cancel_phrases=cfg.listen.cancel_phrases,
-            )
-            if hit is None:
-                # Interim: emit partial if text grew
-                body_so_far = (tr.text or "").strip()
-                if (
-                    stream_partials
-                    and body_so_far
-                    and body_so_far != last_partial_text
-                    and on_partial is not None
-                ):
-                    partial_seq += 1
-                    last_partial_text = body_so_far
-                    ev = make_partial_event(
-                        stream_id=stream,
-                        seq=partial_seq,
-                        text=body_so_far,
-                        kind=partial_kind,
-                        provider=tr.provider,
-                    )
-                    try:
-                        on_partial(ev)
-                    except Exception:
-                        pass
+                if cap.wait_speech_ms or agent_act:
                     syslog(
-                        "listen.partial",
+                        "listen.ok",
                         component="stt",
                         level="info",
+                        wait_speech_ms=cap.wait_speech_ms,
+                        agent_end=agent_act,
                         stream_id=stream,
-                        seq=partial_seq,
-                        text=body_so_far[:300],
-                        provider=tr.provider,
-                        partial=True,
-                        final=False,
                     )
-                continue
-            play_record_stop()
-            body = hit.body if cfg.listen.strip_phrase else tr.text
-            store.record_stt(
-                text=body,
-                provider=tr.provider,
-                audio_ms=int(1000 * (time.monotonic() - started)),
-                latency_ms=latency_ms,
-                ok=hit.kind != "cancel",
-                error="cancel" if hit.kind == "cancel" else None,
-            )
-            if hit.kind == "cancel":
                 return ListenResult(
-                    text=hit.body,
+                    text=tr.text,
+                    provider=tr.provider,
+                    duration_ms=cap.duration_ms,
+                    end_mode=mode.value,
+                    end_phrase="agent:finish" if agent_act == "finish" else None,
+                    stream_id=stream,
+                )
+
+            # Radio mode — segment until end phrase / agent finish; stream partials
+            pieces: list[bytes] = []
+            started = time.monotonic()
+            partial_seq = 0
+            last_partial_text = ""
+            last_provider = getattr(stt, "name", "unknown")
+            if guard > 0:
+                time.sleep(guard)
+            while time.monotonic() - started < max_listen:
+                agent_act = poll_listen_action(stream)
+                if agent_act is not None and pieces:
+                    # Finalize with audio already captured
+                    break
+                remaining = max_listen - (time.monotonic() - started)
+                try:
+                    cap = capture_utterance(
+                        max_s=min(remaining, max_listen),
+                        end_silence_s=end_silence,
+                        initial_timeout_s=min(45.0, remaining),
+                        post_tts_guard_s=0,
+                        on_opened=_cue_start_once,
+                        should_stop=_agent_wants_stop,
+                    )
+                except TimeoutError:
+                    agent_act = poll_listen_action(stream)
+                    if agent_act is not None and pieces:
+                        break
+                    if pieces:
+                        continue
+                    if recording_cued:
+                        play_record_stop()
+                    store.record_stt(
+                        text="",
+                        provider=getattr(stt, "name", None),
+                        ok=False,
+                        error="timeout",
+                    )
+                    raise
+                pieces.append(cap.pcm16)
+                wav = write_wav_bytes(b"".join(pieces), cap.sample_rate)
+                t_api = time.monotonic()
+                tr = stt.transcribe(wav)
+                latency_ms = int(1000 * (time.monotonic() - t_api))
+                last_provider = tr.provider
+                if _echo_overlap(tr.text, last_tts):
+                    pieces.clear()
+                    continue
+                # Agent may have requested end while we were capturing/STT
+                agent_act = consume_listen_action(stream)
+                if agent_act == "cancel":
+                    if recording_cued:
+                        play_record_stop()
+                    body = (tr.text or "").strip()
+                    store.record_stt(
+                        text=body,
+                        provider=tr.provider,
+                        audio_ms=int(1000 * (time.monotonic() - started)),
+                        latency_ms=latency_ms,
+                        ok=False,
+                        error="agent_cancel",
+                    )
+                    return ListenResult(
+                        text=body,
+                        provider=tr.provider,
+                        duration_ms=int(1000 * (time.monotonic() - started)),
+                        end_mode=mode.value,
+                        end_phrase="agent:cancel",
+                        cancelled=True,
+                        stream_id=stream,
+                        partials_emitted=partial_seq,
+                    )
+                if agent_act == "finish":
+                    if recording_cued:
+                        play_record_stop()
+                    body = (tr.text or "").strip()
+                    store.record_stt(
+                        text=body,
+                        provider=tr.provider,
+                        audio_ms=int(1000 * (time.monotonic() - started)),
+                        latency_ms=latency_ms,
+                        ok=True,
+                    )
+                    return ListenResult(
+                        text=body,
+                        provider=tr.provider,
+                        duration_ms=int(1000 * (time.monotonic() - started)),
+                        end_mode=mode.value,
+                        end_phrase="agent:finish",
+                        stream_id=stream,
+                        partials_emitted=partial_seq,
+                    )
+                hit = evaluate_radio_transcript(
+                    tr.text,
+                    end_phrases=cfg.listen.end_phrases,
+                    cancel_phrases=cfg.listen.cancel_phrases,
+                )
+                if hit is None:
+                    body_so_far = (tr.text or "").strip()
+                    if (
+                        stream_partials
+                        and body_so_far
+                        and body_so_far != last_partial_text
+                        and on_partial is not None
+                    ):
+                        partial_seq += 1
+                        last_partial_text = body_so_far
+                        ev = make_partial_event(
+                            stream_id=stream,
+                            seq=partial_seq,
+                            text=body_so_far,
+                            kind=partial_kind,
+                            provider=tr.provider,
+                        )
+                        try:
+                            on_partial(ev)
+                        except Exception:
+                            pass
+                        syslog(
+                            "listen.partial",
+                            component="stt",
+                            level="info",
+                            stream_id=stream,
+                            seq=partial_seq,
+                            text=body_so_far[:300],
+                            provider=tr.provider,
+                            partial=True,
+                            final=False,
+                        )
+                    continue
+                if recording_cued:
+                    play_record_stop()
+                body = hit.body if cfg.listen.strip_phrase else tr.text
+                store.record_stt(
+                    text=body,
+                    provider=tr.provider,
+                    audio_ms=int(1000 * (time.monotonic() - started)),
+                    latency_ms=latency_ms,
+                    ok=hit.kind != "cancel",
+                    error="cancel" if hit.kind == "cancel" else None,
+                )
+                if hit.kind == "cancel":
+                    return ListenResult(
+                        text=hit.body,
+                        provider=tr.provider,
+                        duration_ms=int(1000 * (time.monotonic() - started)),
+                        end_mode=mode.value,
+                        end_phrase=hit.phrase,
+                        cancelled=True,
+                        stream_id=stream,
+                        partials_emitted=partial_seq,
+                    )
+                return ListenResult(
+                    text=body,
                     provider=tr.provider,
                     duration_ms=int(1000 * (time.monotonic() - started)),
                     end_mode=mode.value,
                     end_phrase=hit.phrase,
+                    stream_id=stream,
+                    partials_emitted=partial_seq,
+                )
+
+            # Exit loop: agent finish with pieces, or max timeout
+            agent_act = consume_listen_action(stream)
+            if recording_cued:
+                play_record_stop()
+            if pieces and agent_act in ("finish", None):
+                # Final STT on accumulated audio if agent finished or we fell through
+                if agent_act == "finish" or agent_act is None:
+                    wav = write_wav_bytes(b"".join(pieces), 16000)
+                    t_api = time.monotonic()
+                    tr = stt.transcribe(wav)
+                    latency_ms = int(1000 * (time.monotonic() - t_api))
+                    body = (tr.text or "").strip()
+                    if agent_act == "finish":
+                        store.record_stt(
+                            text=body,
+                            provider=tr.provider,
+                            audio_ms=int(1000 * (time.monotonic() - started)),
+                            latency_ms=latency_ms,
+                            ok=True,
+                        )
+                        return ListenResult(
+                            text=body,
+                            provider=tr.provider,
+                            duration_ms=int(1000 * (time.monotonic() - started)),
+                            end_mode=mode.value,
+                            end_phrase="agent:finish",
+                            stream_id=stream,
+                            partials_emitted=partial_seq,
+                        )
+            if agent_act == "cancel":
+                return ListenResult(
+                    text=last_partial_text,
+                    provider=last_provider,
+                    duration_ms=int(1000 * (time.monotonic() - started)),
+                    end_mode=mode.value,
+                    end_phrase="agent:cancel",
                     cancelled=True,
                     stream_id=stream,
                     partials_emitted=partial_seq,
                 )
-            return ListenResult(
-                text=body,
-                provider=tr.provider,
-                duration_ms=int(1000 * (time.monotonic() - started)),
-                end_mode=mode.value,
-                end_phrase=hit.phrase,
-                stream_id=stream,
-                partials_emitted=partial_seq,
-            )
-        play_record_stop()
-        raise TimeoutError(f"radio listen exceeded max_listen_s={max_listen}")
+            raise TimeoutError(f"radio listen exceeded max_listen_s={max_listen}")
+        finally:
+            clear_active_listen(stream)
 
 
 def run_ask(

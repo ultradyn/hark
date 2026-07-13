@@ -19,7 +19,11 @@ HOLD_WARNING = (
 HOLD_INSTRUCTIONS = (
     "HOLD RESPONSE. This is an interim radio-mode partial. "
     "Await ambient.prompt or answer.final with the same stream_id before "
-    "acting or speaking to the operator."
+    "acting or speaking to the operator — unless the operator clearly wants "
+    "to finish/cancel without an exact end phrase. In that case you MAY run "
+    "the agent_control.end_recording or agent_control.cancel_recording command "
+    "for this stream_id (e.g. they said 'how do I stop?', 'okay stop recording', "
+    "'that's all, send it'). Prefer finish when they completed their thought."
 )
 
 
@@ -37,6 +41,8 @@ def make_partial_event(
     phrase: str | None = None,
     event_id: str | None = None,
 ) -> dict[str, Any]:
+    from hark.listen_control import agent_control_block
+
     return {
         "schema": "hark.event.v1",
         "kind": kind,
@@ -51,6 +57,7 @@ def make_partial_event(
         "provider": provider,
         "warning": HOLD_WARNING,
         "instructions": HOLD_INSTRUCTIONS,
+        "agent_control": agent_control_block(stream_id),
     }
 
 

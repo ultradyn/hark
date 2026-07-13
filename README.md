@@ -104,8 +104,22 @@ Model lands at `~/.local/share/hark/models/vosk-model-small-en-us-0.15`.
 - `[ambient]` — local 2–3s wake for `hey hark` / `hey herald` (no cloud until activated)
 - `[audio] mute_mic_during_tts` — Wave mute ring while TTS plays
 
+## Fixtures (Python ↔ Rust parity)
+
+Shared golden corpora under [`fixtures/`](fixtures/README.md) for wake matching, radio end phrases, HEP event ingest, and live Wave wake snips.
+
+```bash
+uv run pytest tests/test_fixtures_parity.py -q
+./scripts/export-fixtures.sh              # refresh HEP/syslog samples from live state
+./scripts/export-fixtures.sh --with-wake  # also copy today's debug wake snips
+```
+
 ## Repo
 
 ```text
 /home/xertrov/src/grok/hark
+  fixtures/          # parity goldens + live wake audio
+  schemas/           # HEP JSON Schema
+  src/hark/          # Python Mode A bridge
+  tests/
 ```

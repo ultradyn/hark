@@ -1,0 +1,3 @@
+{"id":"r3-rm-rf","text":"Allow running rm -rf build/?","expect_risk":"R3"}
+{"id":"r2-network","text":"Allow network access for this command?","expect_risk":"R2"}
+{"id":"r1-soft","text":"Should I rename the helper function?","expect_risk":"R1"}

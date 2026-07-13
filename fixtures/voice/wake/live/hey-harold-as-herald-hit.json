@@ -1,0 +1,13 @@
+{
+  "ts": 1783923778.8320246,
+  "matched": true,
+  "phrase": "hey herald",
+  "text": "hey harold",
+  "rms": 0.008381419655156984,
+  "backend": "vosk",
+  "sample_rate": 16000,
+  "wav": "fixtures/voice/wake/live/hey-harold-as-herald-hit.wav",
+  "pcm_bytes": 80000,
+  "fixture_id": "hey-harold-as-herald-hit",
+  "source": "live-capture-2026-07-13"
+}

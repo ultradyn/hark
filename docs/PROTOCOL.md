@@ -76,9 +76,16 @@ When `[listen] end_mode = "radio"` and `stream_partials = true`, interim transcr
   "seq": 1,
   "text": "please open the pull request for…",
   "warning": "PARTIAL TRANSCRIPT — not complete. … HOLD …",
-  "instructions": "HOLD RESPONSE. … Await ambient.prompt with the same stream_id …"
+  "instructions": "HOLD RESPONSE. … You MAY run agent_control.end_recording if they clearly want to finish without an exact end phrase …",
+  "agent_control": {
+    "end_recording": "hark listen-end --stream-id s…",
+    "cancel_recording": "hark listen-end --stream-id s… --cancel",
+    "hint": "If the operator clearly wants to finish …"
+  }
 }
 ```
+
+Mode A agents may finalize a stuck radio capture with `hark listen-end` (or `--cancel`) when the operator’s wording is an informal stop/send, not an exact product end phrase.
 
 Consumers **MUST**:
 

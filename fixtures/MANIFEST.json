@@ -1,0 +1,187 @@
+{
+  "schema": "hark.fixtures.manifest.v1",
+  "generated_at": "2026-07-13T06:31:24Z",
+  "count": 36,
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 3153,
+      "sha256": "53e2fd6bedf5141c9abe0cec1f9a4d00c70e3ef681b1d9f8ed3952f855ca6d12"
+    },
+    {
+      "path": "events/hep/agent_completed.json",
+      "bytes": 355,
+      "sha256": "85957c899ed30d7d74795d557e44df3ddc64c49c55187315264d2146286261ad"
+    },
+    {
+      "path": "events/hep/agent_state_changed.json",
+      "bytes": 251,
+      "sha256": "0fdc178b0430514ad106a3f0d57044cfebd4ccf3b726faaced2bad194c00ef3c"
+    },
+    {
+      "path": "events/hep/ambient_partial.sample.json",
+      "bytes": 821,
+      "sha256": "1bb3b65d1200c76fd86d23e89404011d0fc210824f56bab8accc60fc9ebe4357"
+    },
+    {
+      "path": "events/hep/ambient_prompt_final_radio.sample.json",
+      "bytes": 671,
+      "sha256": "70225ad54c967155da8a569d3d44e8af6e0e158764a96895e1df521a4858e412"
+    },
+    {
+      "path": "events/hep/ambient_prompt_first.json",
+      "bytes": 532,
+      "sha256": "4c58135415734eb8ebfe1026b081a1161ffe689402e61e426b576463b735bdf6"
+    },
+    {
+      "path": "events/hep/ambient_prompt_samples.jsonl",
+      "bytes": 5960,
+      "sha256": "8d0445b4f841adf2e9eba5a357f605acbf98800b10b1c41a710831d8df1e160c"
+    },
+    {
+      "path": "events/hep/ambient_prompt_second.json",
+      "bytes": 562,
+      "sha256": "d06d277c2c5819f680fe0b64a53cd3b3662d4499342970394003dc7983141c03"
+    },
+    {
+      "path": "events/hep/radio_partial_then_final.jsonl",
+      "bytes": 2140,
+      "sha256": "75cb2680b7efcdac0b8687e2a56e5970591f5fdb1b77eee608aaefec7d45dadf"
+    },
+    {
+      "path": "events/hep/watch_armed.json",
+      "bytes": 312,
+      "sha256": "4d025b32180f0079819f9b77140e0037cb56185a9933aaf132bc30d454f8f618"
+    },
+    {
+      "path": "events/hep/watch_error.json",
+      "bytes": 238,
+      "sha256": "a0de919544f9c53cdeb6ef21e3bd8c20f9cf7b2119464d5bff8b0a1ad7a9687e"
+    },
+    {
+      "path": "events/hep/watch_heartbeat.json",
+      "bytes": 151,
+      "sha256": "c730bc094c5016d809ce627af770098bbf535b4f5d1b04b3e57f68963acb8af5"
+    },
+    {
+      "path": "events/syslog/system_interesting_sample.jsonl",
+      "bytes": 13115,
+      "sha256": "631b4f667bcd2fb6a6c92a3be99e0976176c02e22604c91ac8ed881460f2e593"
+    },
+    {
+      "path": "events/syslog/wake_to_prompt_sequence.jsonl",
+      "bytes": 2227,
+      "sha256": "b7086f40b76eb5e14a394717d0fde3b70af2e1c62d53ba7fdfce09695f0b25a9"
+    },
+    {
+      "path": "herdr/README.md",
+      "bytes": 682,
+      "sha256": "59a5d211f279f3a35e07e05a3992d191856edef04dce39a307f2abd0aa6f7e06"
+    },
+    {
+      "path": "text/fingerprint.jsonl",
+      "bytes": 589,
+      "sha256": "5d9c1aedae11b19b2e729c98c936fb7c05e46c2a9605a834de355c4a972b91c2"
+    },
+    {
+      "path": "text/radio_end.jsonl",
+      "bytes": 1290,
+      "sha256": "453444a24bc70f134ad5ab889f1a983bdd085b1df2c6f5e1f5500ab5682e4fc6"
+    },
+    {
+      "path": "text/risk.jsonl",
+      "bytes": 244,
+      "sha256": "e5789d6ee4a2dc189d0255a44d4208db90cbd19fde05d975510607b7f5579e90"
+    },
+    {
+      "path": "text/wake_match.jsonl",
+      "bytes": 1964,
+      "sha256": "27f92b004af8572c8ababe860cae29b975057213b0b3bfc95abeff418a50d8c0"
+    },
+    {
+      "path": "usage/sample.jsonl",
+      "bytes": 4722,
+      "sha256": "5e33e00f596e1ddbf12adc439d7cbe83ea5607ed99142ba0b960b8fae8d30a7a"
+    },
+    {
+      "path": "voice/README.md",
+      "bytes": 2195,
+      "sha256": "b9409a30c676623ce277519c9f43edcedf90749229bcf263011096dbbe19f439"
+    },
+    {
+      "path": "voice/wake/cases.jsonl",
+      "bytes": 1380,
+      "sha256": "5062ea34bbfee9916b0db91fdc7f0d7ce762e145fae0ee8d7f0c8a67eba30464"
+    },
+    {
+      "path": "voice/wake/live/a-hawk-miss.json",
+      "bytes": 309,
+      "sha256": "7dd011ca87e8e50c3b3829bbf635150403381e6d0ba601ef92c32c140e77cac8"
+    },
+    {
+      "path": "voice/wake/live/a-hawk-miss.wav",
+      "bytes": 80044,
+      "sha256": "3165563f261c4a06dd87a0699c5a16cbcf70657597a133ed238301f7ee16062d"
+    },
+    {
+      "path": "voice/wake/live/hello-alone-miss.json",
+      "bytes": 319,
+      "sha256": "14414a0bf6ce69c9ac61e89ac02858a6ff7f4752b104468eb7fee5f7906ed1cb"
+    },
+    {
+      "path": "voice/wake/live/hello-alone-miss.wav",
+      "bytes": 80044,
+      "sha256": "b71e70c9daefffe3a3f90bd0d8b43d12fbaf54aa37ef8b8d2c7f3c060f44fc5d"
+    },
+    {
+      "path": "voice/wake/live/hey-harold-as-herald-hit.json",
+      "bytes": 347,
+      "sha256": "726f04280f48bb9a3ed8eef3e36e208031fcba9911c0cd0b059eeab87c1ff6a7"
+    },
+    {
+      "path": "voice/wake/live/hey-harold-as-herald-hit.wav",
+      "bytes": 80044,
+      "sha256": "65129ed0c05ccc68e16dc53a02fbf7fa36d1020ac14813866ea3573b1c55e70d"
+    },
+    {
+      "path": "voice/wake/live/hey-hawk-as-hark-hit.json",
+      "bytes": 334,
+      "sha256": "3c2209bace2299e399de76e24c0c7b7fb04f0b82208387dd6bf64454937e5ed0"
+    },
+    {
+      "path": "voice/wake/live/hey-hawk-as-hark-hit.wav",
+      "bytes": 80044,
+      "sha256": "537d3ff9fc75a63f74b7f1376c3974e9a9ac1e8157339533450aa7049b127eff"
+    },
+    {
+      "path": "voice/wake/live/hey-ho-miss.json",
+      "bytes": 310,
+      "sha256": "b6039b9e2d7064f5a7eef77fdce77ea056464e426a943fd976b9c891e0e9f174"
+    },
+    {
+      "path": "voice/wake/live/hey-ho-miss.wav",
+      "bytes": 80044,
+      "sha256": "acc67d69fe213f818c8c3b28ebc7b229934c7dc5f4416c2e2cd526b07302e717"
+    },
+    {
+      "path": "voice/wake/live/hey-hoc-miss.json",
+      "bytes": 313,
+      "sha256": "f772cbcc31673fd8192b4242c1491e91f3c7d0209fb5703b725584cd9d524c5f"
+    },
+    {
+      "path": "voice/wake/live/hey-hoc-miss.wav",
+      "bytes": 80044,
+      "sha256": "a54fd3bd38ea5720eea0eaabc1e5a4752e61ea5c5197726401f3937db805f88d"
+    },
+    {
+      "path": "voice/wake/live/hey-hook-as-hark-hit.json",
+      "bytes": 335,
+      "sha256": "7532c711795ecfd59eb46d33b24194de4ef5aa7ca95a92100e2af77ede308506"
+    },
+    {
+      "path": "voice/wake/live/hey-hook-as-hark-hit.wav",
+      "bytes": 80044,
+      "sha256": "e14931f3c20ddef3b632545faa94c4dcfa2c7ad7b86a9e9b4bb05fc6138b950c"
+    }
+  ]
+}

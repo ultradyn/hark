@@ -1,0 +1,13 @@
+{
+  "ts": 1783923881.1748853,
+  "matched": true,
+  "phrase": "hey hark",
+  "text": "hey hook",
+  "rms": 0.006421635226486166,
+  "backend": "vosk",
+  "sample_rate": 16000,
+  "wav": "fixtures/voice/wake/live/hey-hook-as-hark-hit.wav",
+  "pcm_bytes": 80000,
+  "fixture_id": "hey-hook-as-hark-hit",
+  "source": "live-capture-2026-07-13"
+}

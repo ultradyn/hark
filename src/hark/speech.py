@@ -164,6 +164,9 @@ def run_tts(
     }
 
 
+EMPTY_STT_NUDGE_TEXT = "Sorry, I didn't catch that."
+
+
 def _echo_overlap(transcript: str, last_tts: str | None) -> bool:
     if not last_tts or not transcript:
         return False
@@ -178,6 +181,37 @@ def _echo_overlap(transcript: str, last_tts: str | None) -> bool:
         return False
     j = len(aw & bw) / max(1, len(aw | bw))
     return j >= 0.7
+
+
+def _log_empty_stt(
+    *,
+    duration_ms: int,
+    peak_rms: float | None,
+    peak_db: float | None,
+    wait_speech_ms: int,
+    after_tts: bool,
+    attempt: int,
+    provider: str | None,
+    stream_id: str | None,
+    phase: str,
+) -> None:
+    """Structured metric for empty STT rate / residual-TTS diagnosis."""
+    syslog(
+        "speech.empty_stt",
+        component="stt",
+        level="warn",
+        message="STT returned empty transcript",
+        duration_ms=duration_ms,
+        audio_ms=duration_ms,
+        rms=round(peak_rms, 6) if peak_rms is not None else None,
+        peak_db=round(peak_db, 2) if peak_db is not None else None,
+        wait_speech_ms=wait_speech_ms,
+        after_tts=after_tts,
+        attempt=attempt,
+        provider=provider,
+        stream_id=stream_id,
+        phase=phase,
+    )
 
 
 def run_listen(
@@ -197,16 +231,23 @@ def run_listen(
 
     on_partial(event_dict) is called for each non-final radio transcript so Mode A
     agents can start thinking early. Events always set partial=true and HOLD warnings.
+
+    Empty STT recovery (silence mode): log ``speech.empty_stt``, optionally
+    re-listen once (``empty_stt_retry``), then TTS nudge + re-listen
+    (``empty_stt_nudge``) before failing.
     """
     mode = parse_end_mode(end_mode or cfg.listen.end_mode)
     max_listen = float(max_s if max_s is not None else cfg.listen.max_listen_s)
-    if already_armed:
-        guard = 0.0
-    elif post_tts_guard_s is not None:
-        guard = post_tts_guard_s
-    else:
-        # Tight handoff: config post_tts_guard_ms (default 100–150)
+    # Explicit post_tts_guard always wins. Pre-arm (already_armed) used to zero
+    # the guard and race mute-unmute / residual TTS into the energy gate.
+    if post_tts_guard_s is not None:
+        guard = max(0.0, post_tts_guard_s)
+    elif already_armed:
+        # No explicit guard: still settle briefly for mute unmute / echo residual
         guard = max(0.0, cfg.audio.post_tts_guard_ms / 1000.0)
+    else:
+        guard = max(0.0, cfg.audio.post_tts_guard_ms / 1000.0)
+    after_tts = last_tts is not None
 
     stt = resolve_stt(provider or cfg.stt.provider)
     end_silence = (
@@ -249,96 +290,169 @@ def run_listen(
         register_active_listen(stream, mode=mode.value)
         try:
             if mode is EndMode.SILENCE:
-                if guard > 0:
-                    time.sleep(guard)
-                try:
-                    cap = capture_utterance(
-                        max_s=max_listen,
-                        end_silence_s=end_silence,
-                        post_tts_guard_s=0,
-                        on_opened=_cue_start_once,
-                        should_stop=_agent_wants_stop,
-                    )
-                except TimeoutError as exc:
+                # attempt: 0 = first, 1 = empty_stt_retry, 2 = after nudge
+                attempt = 0
+                did_retry = False
+                did_nudge = False
+                settle = guard
+
+                while True:
+                    if settle > 0:
+                        time.sleep(settle)
+                    # After first attempt, only short re-arm settle (mute/echo)
+                    settle = max(0.05, min(0.2, guard if guard > 0 else 0.1))
+                    recording_cued = False
+                    try:
+                        cap = capture_utterance(
+                            max_s=max_listen,
+                            end_silence_s=end_silence,
+                            post_tts_guard_s=0,
+                            on_opened=_cue_start_once,
+                            should_stop=_agent_wants_stop,
+                        )
+                    except TimeoutError as exc:
+                        if recording_cued:
+                            play_record_stop()
+                        store.record_stt(
+                            text="",
+                            provider=getattr(stt, "name", None),
+                            ok=False,
+                            error=str(exc)[:200],
+                        )
+                        raise
+                    agent_act = consume_listen_action(stream)
                     if recording_cued:
                         play_record_stop()
-                    store.record_stt(
-                        text="",
-                        provider=getattr(stt, "name", None),
-                        ok=False,
-                        error=str(exc)[:200],
-                    )
-                    raise
-                agent_act = consume_listen_action(stream)
-                if recording_cued:
-                    play_record_stop()
-                if agent_act == "cancel":
-                    store.record_stt(
-                        text="",
-                        provider=getattr(stt, "name", None),
-                        audio_ms=cap.duration_ms,
-                        ok=False,
-                        error="agent_cancel",
-                    )
-                    return ListenResult(
-                        text="",
-                        provider=getattr(stt, "name", "unknown"),
-                        duration_ms=cap.duration_ms,
-                        end_mode=mode.value,
-                        end_phrase="agent:cancel",
-                        cancelled=True,
-                        stream_id=stream,
-                    )
-                t_api = time.monotonic()
-                tr = stt.transcribe(cap.wav)
-                latency_ms = int(1000 * (time.monotonic() - t_api))
-                if not (tr.text or "").strip():
-                    store.record_stt(
-                        text="",
-                        provider=tr.provider,
-                        audio_ms=cap.duration_ms,
-                        latency_ms=latency_ms,
-                        ok=False,
-                        error="empty transcript",
-                    )
-                    raise TimeoutError(
-                        "heard audio but STT returned empty text "
-                        "(try speaking clearer, or check mic device)"
-                    )
-                if _echo_overlap(tr.text, last_tts):
+                    if agent_act == "cancel":
+                        store.record_stt(
+                            text="",
+                            provider=getattr(stt, "name", None),
+                            audio_ms=cap.duration_ms,
+                            ok=False,
+                            error="agent_cancel",
+                        )
+                        return ListenResult(
+                            text="",
+                            provider=getattr(stt, "name", "unknown"),
+                            duration_ms=cap.duration_ms,
+                            end_mode=mode.value,
+                            end_phrase="agent:cancel",
+                            cancelled=True,
+                            stream_id=stream,
+                        )
+                    t_api = time.monotonic()
+                    tr = stt.transcribe(cap.wav)
+                    latency_ms = int(1000 * (time.monotonic() - t_api))
+                    if not (tr.text or "").strip():
+                        phase = (
+                            "nudge"
+                            if did_nudge
+                            else ("retry" if did_retry else "initial")
+                        )
+                        _log_empty_stt(
+                            duration_ms=cap.duration_ms,
+                            peak_rms=getattr(cap, "peak_rms", None),
+                            peak_db=getattr(cap, "peak_db", None),
+                            wait_speech_ms=cap.wait_speech_ms,
+                            after_tts=after_tts,
+                            attempt=attempt,
+                            provider=tr.provider,
+                            stream_id=stream,
+                            phase=phase,
+                        )
+                        store.record_stt(
+                            text="",
+                            provider=tr.provider,
+                            audio_ms=cap.duration_ms,
+                            latency_ms=latency_ms,
+                            ok=False,
+                            error="empty transcript",
+                        )
+                        # One automatic re-listen (residual TTS / mute race)
+                        if cfg.listen.empty_stt_retry and not did_retry:
+                            did_retry = True
+                            attempt = 1
+                            syslog(
+                                "speech.empty_stt_retry",
+                                component="stt",
+                                level="info",
+                                after_tts=after_tts,
+                                stream_id=stream,
+                                duration_ms=cap.duration_ms,
+                            )
+                            continue
+                        # Operator nudge + one more listen
+                        if cfg.listen.empty_stt_nudge and not did_nudge:
+                            did_nudge = True
+                            attempt = 2
+                            syslog(
+                                "speech.empty_stt_nudge",
+                                component="stt",
+                                level="info",
+                                after_tts=after_tts,
+                                stream_id=stream,
+                                text=EMPTY_STT_NUDGE_TEXT,
+                            )
+                            try:
+                                run_tts(
+                                    cfg,
+                                    EMPTY_STT_NUDGE_TEXT,
+                                    provider=provider,
+                                    play=True,
+                                    mute_mic=cfg.audio.mute_mic_during_tts,
+                                )
+                            except Exception as nudge_exc:
+                                syslog(
+                                    "speech.empty_stt_nudge_failed",
+                                    component="stt",
+                                    level="warn",
+                                    error=str(nudge_exc)[:200],
+                                    stream_id=stream,
+                                )
+                            settle = max(0.1, cfg.audio.post_tts_guard_ms / 1000.0)
+                            continue
+                        raise TimeoutError(
+                            "heard audio but STT returned empty text "
+                            "(try speaking clearer, or check mic device)"
+                        )
+                    if _echo_overlap(tr.text, last_tts):
+                        store.record_stt(
+                            text=tr.text,
+                            provider=tr.provider,
+                            audio_ms=cap.duration_ms,
+                            latency_ms=latency_ms,
+                            ok=False,
+                            error="echo",
+                        )
+                        raise ProviderError(
+                            "transcript rejected as TTS echo", code=ABORT
+                        )
                     store.record_stt(
                         text=tr.text,
                         provider=tr.provider,
                         audio_ms=cap.duration_ms,
                         latency_ms=latency_ms,
-                        ok=False,
-                        error="echo",
+                        ok=True,
                     )
-                    raise ProviderError("transcript rejected as TTS echo", code=ABORT)
-                store.record_stt(
-                    text=tr.text,
-                    provider=tr.provider,
-                    audio_ms=cap.duration_ms,
-                    latency_ms=latency_ms,
-                    ok=True,
-                )
-                if cap.wait_speech_ms or agent_act:
-                    syslog(
-                        "listen.ok",
-                        component="stt",
-                        level="info",
-                        wait_speech_ms=cap.wait_speech_ms,
-                        agent_end=agent_act,
+                    if cap.wait_speech_ms or agent_act or attempt:
+                        syslog(
+                            "listen.ok",
+                            component="stt",
+                            level="info",
+                            wait_speech_ms=cap.wait_speech_ms,
+                            agent_end=agent_act,
+                            stream_id=stream,
+                            empty_stt_attempts=attempt,
+                            after_tts=after_tts,
+                        )
+                    return ListenResult(
+                        text=tr.text,
+                        provider=tr.provider,
+                        duration_ms=cap.duration_ms,
+                        end_mode=mode.value,
+                        end_phrase="agent:finish" if agent_act == "finish" else None,
                         stream_id=stream,
                     )
-                return ListenResult(
-                    text=tr.text,
-                    provider=tr.provider,
-                    duration_ms=cap.duration_ms,
-                    end_mode=mode.value,
-                    end_phrase="agent:finish" if agent_act == "finish" else None,
-                    stream_id=stream,
-                )
 
             # Radio mode — segment until end phrase / agent finish; stream partials
             pieces: list[bytes] = []

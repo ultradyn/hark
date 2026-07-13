@@ -57,6 +57,8 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "end_silence_s",
         "radio_end_silence_s",
         "stream_partials",
+        "empty_stt_retry",
+        "empty_stt_nudge",
     }),
     "ambient": frozenset({
         "enabled",
@@ -132,6 +134,10 @@ class ListenConfig:
     radio_end_silence_s: float = 2.5
     # Radio mode: emit interim STT to agent with HOLD warnings (before end phrase)
     stream_partials: bool = True
+    # After empty STT (gate opened but no text): one automatic re-listen
+    empty_stt_retry: bool = True
+    # If still empty after retry: TTS "Sorry, I didn't catch that." then re-listen once
+    empty_stt_nudge: bool = True
 
 
 @dataclass
@@ -251,6 +257,8 @@ cancel_phrases = [
 ]
 strip_phrase = true
 max_listen_s = 300
+empty_stt_retry = true       # re-listen once if STT returns empty transcript
+empty_stt_nudge = true       # TTS "Sorry, I didn't catch that." then re-listen once more
 
 # Ambient: when NOT replying to a blocked agent question
 # Local 2–3s snippets scan for activation; cloud STT only after wake.
@@ -518,6 +526,8 @@ def load_config(path: Path | None = None) -> HarkConfig:
             end_silence_s=float(listen_raw.get("end_silence_s", 2.1)),
             radio_end_silence_s=float(listen_raw.get("radio_end_silence_s", 2.5)),
             stream_partials=bool(listen_raw.get("stream_partials", True)),
+            empty_stt_retry=bool(listen_raw.get("empty_stt_retry", True)),
+            empty_stt_nudge=bool(listen_raw.get("empty_stt_nudge", True)),
         ),
         ambient=AmbientConfig(
             enabled=ambient_enabled,
@@ -636,6 +646,8 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "end_silence_s": cfg.listen.end_silence_s,
             "radio_end_silence_s": cfg.listen.radio_end_silence_s,
             "stream_partials": cfg.listen.stream_partials,
+            "empty_stt_retry": cfg.listen.empty_stt_retry,
+            "empty_stt_nudge": cfg.listen.empty_stt_nudge,
         },
         "ambient": {
             "enabled": cfg.ambient.enabled,

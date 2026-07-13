@@ -142,10 +142,14 @@ def _agg(events: list[dict[str, Any]]) -> dict[str, Any]:
     audio_ms = sum(int(e.get("audio_ms") or 0) for e in events)
     latency_ms = sum(int(e.get("latency_ms") or 0) for e in events)
     by_provider: dict[str, int] = {}
+    empty_n = 0
     for e in events:
         p = str(e.get("provider") or "unknown")
         by_provider[p] = by_provider.get(p, 0) + 1
-    return {
+        err = (e.get("error") or "").lower()
+        if "empty transcript" in err:
+            empty_n += 1
+    out = {
         "instances": n,
         "ok": ok_n,
         "errors": n - ok_n,
@@ -160,3 +164,8 @@ def _agg(events: list[dict[str, Any]]) -> dict[str, Any]:
         "avg_latency_ms": round(latency_ms / n, 1) if n else 0,
         "by_provider": by_provider,
     }
+    # Empty STT rate is meaningful for STT events only
+    if any(e.get("kind") == "stt" for e in events) or empty_n:
+        out["empty_transcript"] = empty_n
+        out["empty_stt_rate"] = round(empty_n / n, 4) if n else 0.0
+    return out

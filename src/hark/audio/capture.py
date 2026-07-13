@@ -123,6 +123,9 @@ class CaptureResult:
     speech_ms: int
     # Time spent waiting for speech open (leading silence not in pcm16)
     wait_speech_ms: int = 0
+    # Peak energy while capture was armed (helps diagnose residual TTS / mute races)
+    peak_rms: float = 0.0
+    peak_db: float = -120.0
 
     @property
     def wav(self) -> bytes:
@@ -259,6 +262,8 @@ def capture_utterance(
         duration_ms=dur_ms,
         speech_ms=speech_ms,
         wait_speech_ms=wait_speech_ms,
+        peak_rms=float(peak_rms),
+        peak_db=float(peak_db),
     )
 
 

@@ -1,0 +1,23 @@
+---
+name: handsfree
+description: >
+  Alias of the hark skill (identical Mode A voice bridge). After load, communicate
+  primarily via TTS; watch blocked/done, speak questions, cloud STT/TTS, reply with
+  text or menu keys. Use when operator says handsfree, hark, or voice bridge.
+  Requires `hark` CLI and Herdr ≥ 0.7.1.
+---
+
+# Handsfree — alias for Hark (Mode A)
+
+> **This skill is an alias of [`hark`](../hark/SKILL.md).** Same product, CLI (`hark`), TTS mode, and loop. Install either or both names.
+
+Follow **all** instructions in `skill/hark/SKILL.md`, including:
+
+- **TTS mode** after skill start (prefer `hark tts --listen` / `hark ask` for operator communication)
+- Voice-first setup (sessions, preferences)
+- Question → listen → act loop
+- Radio **partials** + `hark listen-end` when the operator wants to finish without exact end phrases
+- Safe targeting / confirm rules
+- **Dogfooding:** every friction → session todo + `bl bug`; fix now or later, never silent forget
+
+Do not invent answers. Speak, listen, deliver.

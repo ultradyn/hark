@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T16:09:27Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T16:16:47Z"
 complexity: low
 created_at: "2026-07-13T16:04:22Z"
 depends_on: []
+duration_minutes: 7.338628705483333
 estimate_hours: 1
 id: B080
 priority: high
 started_at: "2026-07-13T16:09:27Z"
-status: in_progress
+status: done
 tags: []
 title: test_boot_tts::test_default_boot_uses_first_activation_phrase fails after wake-name defaults change (iris/mercury)
-updated_at: "2026-07-13T16:09:27Z"
+updated_at: "2026-07-13T16:16:47Z"
 ---
 ## Problem
 tests/test_boot_tts.py::test_default_boot_uses_first_activation_phrase fails on master (assert at line 28) since the B074/B076 wake-name default change (iris/mercury personas). Pre-existing on master, reproduced at 2a9a252; unrelated to the dashboard branch.

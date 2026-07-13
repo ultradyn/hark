@@ -170,3 +170,36 @@ def test_run_doctor_flags_dashboard_error(monkeypatch):
     report = json.loads(out.getvalue())
     assert report["dashboard"]["status"] == "error"
     assert report["ok"] is False
+
+
+def test_tts_play_queue_report_heals_abandoned(tmp_path, monkeypatch):
+    """Doctor auto-heals stuck TTS play queue (B099)."""
+    import time
+
+    from hark.audio import playback as pb
+    from hark.doctor import _tts_play_queue_report
+
+    lock = tmp_path / "tts_play.lock"
+    queue = tmp_path / "tts_play_queue.json"
+    monkeypatch.setattr(pb, "tts_play_lock_path", lambda: lock)
+    monkeypatch.setattr(pb, "tts_play_queue_path", lambda: queue)
+    queue.write_text(
+        json.dumps(
+            {
+                "next": 10,
+                "serving": 8,
+                "cancelled": [],
+                "holders": {
+                    "8": {"pid": 999_999_981, "claimed_at": time.time() - 120},
+                    "9": {"pid": 999_999_982, "claimed_at": time.time() - 100},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pb, "_pid_alive", lambda _pid: False)
+    report = _tts_play_queue_report()
+    assert report["status"] == "healed"
+    assert report["healed_count"] == 2
+    assert report["serving"] == 10
+    assert any("healed" in w for w in report["warnings"])

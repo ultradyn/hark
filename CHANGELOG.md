@@ -6,6 +6,11 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- fix(tts, B099): abandoned play-queue tickets no longer stall ambient boot —
+  holders track PID + claim time; dead/missing heads are auto-healed; ambient
+  boot TTS heals then waits at most 15s; doctor heals + warns; atexit/SIGTERM
+  abandon claimed tickets.
+
 ## 0.1.7
 
 - Radio STT assemble (B083): per-segment cloud STT + `join_radio_stt_segments`

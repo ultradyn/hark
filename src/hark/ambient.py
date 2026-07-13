@@ -1031,13 +1031,33 @@ def run_ambient_loop(
             # Lifecycle cues: keep mic unmuted (Wave ring stays white).
             # Skip (do not hold/block ambient boot) if operator is in a call.
             # Text (and TTS disk cache key) follows primary name or custom phrase.
+            # B099: heal abandoned play-queue tickets and never wait forever —
+            # a stuck tts_play_queue must not prevent wake arming.
+            try:
+                from hark.audio.playback import heal_tts_play_queue
+
+                healed = heal_tts_play_queue(missing_as_abandoned=True)
+                if healed.get("healed_count"):
+                    syslog(
+                        "ambient.tts_queue_healed",
+                        component="ambient",
+                        level="warn",
+                        healed_count=healed.get("healed_count"),
+                        serving=healed.get("serving"),
+                        next=healed.get("next"),
+                        message="auto-healed stuck TTS play queue before boot announce",
+                    )
+            except Exception:
+                pass
             boot_text = ambient_boot_tts_text(cfg)
+            # ~15s: enough for a short legitimate wait; skips if queue still stuck
             run_tts(
                 cfg,
                 boot_text,
                 play=True,
                 mute_mic=False,
                 conference_policy="skip",
+                play_wait_timeout_s=15.0,
             )
         except Exception as exc:
             err = {
@@ -1049,6 +1069,16 @@ def run_ambient_loop(
             }
             out.write(json.dumps(err, separators=(",", ":")) + "\n")
             out.flush()
+            try:
+                syslog(
+                    "ambient.boot_tts_error",
+                    component="ambient",
+                    level="warn",
+                    error=str(exc)[:200],
+                    message="boot TTS failed or timed out; continuing to arm wake",
+                )
+            except Exception:
+                pass
 
     last_idle = time.monotonic()
     watch_path = cfg.path or default_config_path()

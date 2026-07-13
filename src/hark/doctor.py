@@ -232,6 +232,9 @@ def run_doctor(
     # Coding CLI resolve readiness (I005 / B059) — soft only
     report["coding_clis"] = _coding_clis_report(cfg)
 
+    # TTS play queue (B099) — auto-heal abandoned tickets; soft warn only
+    report["tts_play_queue"] = _tts_play_queue_report()
+
     if as_json:
         out.write(json.dumps(report, indent=2) + "\n")
     else:
@@ -260,6 +263,52 @@ def _coding_clis_report(cfg: HarkConfig) -> dict[str, Any]:
         "total": len(rows),
         "prefer_aliases": prefer,
         "agents": rows,
+    }
+
+
+def _tts_play_queue_report() -> dict[str, Any]:
+    """Heal abandoned TTS play-queue tickets; report status (B099, soft only)."""
+    try:
+        from hark.audio.playback import heal_tts_play_queue
+
+        status = heal_tts_play_queue(missing_as_abandoned=True)
+    except Exception as exc:  # pragma: no cover - defensive
+        return {
+            "status": "error",
+            "ok": False,
+            "error": str(exc)[:200],
+            "warnings": [f"tts play queue check failed: {exc}"],
+        }
+    warnings: list[str] = []
+    healed_n = int(status.get("healed_count") or 0)
+    pending = int(status.get("pending") or 0)
+    if healed_n:
+        warnings.append(
+            f"healed {healed_n} abandoned TTS play ticket(s) "
+            f"(serving={status.get('serving')} next={status.get('next')})"
+        )
+    if pending > 0 and not healed_n:
+        # Live holders still waiting — informational, not a failure
+        warnings.append(
+            f"TTS play queue has {pending} pending ticket(s) "
+            f"(serving={status.get('serving')} next={status.get('next')})"
+        )
+    if healed_n:
+        qstatus = "healed"
+    elif pending > 0:
+        qstatus = "busy"
+    else:
+        qstatus = "idle"
+    return {
+        "status": qstatus,
+        "ok": bool(status.get("ok", True)),
+        "serving": status.get("serving"),
+        "next": status.get("next"),
+        "pending": pending,
+        "healed_count": healed_n,
+        "healed": status.get("healed") or [],
+        "path": status.get("path"),
+        "warnings": warnings,
     }
 
 
@@ -464,6 +513,17 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
                 )
             else:
                 print(f"    · {row.get('agent')}: missing", file=out)
+    tq = report.get("tts_play_queue") or {}
+    if tq:
+        print(
+            f"  tts play queue: {tq.get('status', '?')} "
+            f"(serving={tq.get('serving')} next={tq.get('next')} "
+            f"pending={tq.get('pending', 0)} "
+            f"healed={tq.get('healed_count', 0)})",
+            file=out,
+        )
+        for w in tq.get("warnings") or []:
+            print(f"  warn: {w}", file=out)
     print(
         "  overall: "
         + ("OK" if report["ok"] and report.get("speech_ok", True) else "DEGRADED"),

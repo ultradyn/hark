@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T19:11:31Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T19:16:11Z"
 complexity: medium
 created_at: "2026-07-13T17:18:55Z"
 depends_on: []
+duration_minutes: 4.672284601666667
 estimate_hours: 1
 id: B088
 priority: high
 started_at: "2026-07-13T19:11:31Z"
-status: in_progress
+status: done
 tags: []
 title: 'add a self-update check based on github releases to detect when new versions are available. cache this check with 24hr ttl and if we have a cached check and there is a new version: print it when starting the server and monitor and also show it in the webui.'
-updated_at: "2026-07-13T19:11:31Z"
+updated_at: "2026-07-13T19:16:11Z"
 ---
 
 add a self-update check based on github releases to detect when new versions are available. cache this check with 24hr ttl and if we have a cached check and there is a new version: print it when starting the server and monitor and also show it in the webui.

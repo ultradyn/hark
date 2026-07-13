@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hark — when your agents need a word</title>
+    <meta
+      name="description"
+      content="Voice bridge for Herdr coding agents. Blocked agents speak. You answer by voice. Work continues."
+    />
+    <meta property="og:title" content="Hark — when your agents need a word" />
+    <meta
+      property="og:description"
+      content="The voice bridge for blocked Herdr agents. Human-in-the-loop without hands on the keyboard."
+    />
+    <meta property="og:type" content="website" />
+    <meta name="theme-color" content="#05060a" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Sans+3:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/components.css" />
+    <link rel="stylesheet" href="css/layout.css" />
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true">
+      <div class="atmosphere__grid"></div>
+      <div class="atmosphere__noise"></div>
+    </div>
+
+    <header class="shell">
+      <nav class="nav" data-nav>
+        <a class="nav__brand" href="#top">
+          <span class="nav__mark" aria-hidden="true"></span>
+          Hark
+        </a>
+        <ul class="nav__links">
+          <li><a href="#why">Why</a></li>
+          <li><a href="#loop">Loop</a></li>
+          <li><a href="#safety">Safety</a></li>
+          <li><a href="#install">Install</a></li>
+          <li><a href="https://github.com/clankercode/hark">GitHub</a></li>
+        </ul>
+        <a class="nav__mobile-cta" href="https://github.com/clankercode/hark">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <!-- HERO -->
+      <section class="shell hero">
+        <div>
+          <p class="eyebrow"><span class="eyebrow__dot" aria-hidden="true"></span> Voice bridge · Herdr ≥ 0.7.1</p>
+          <h1 class="hero__title">Hark</h1>
+          <p class="hero__tag">When your agents need a word.</p>
+          <p class="hero__lede">
+            Blocked coding agents stop the fleet. Hark turns those freezes into short voice
+            conversations—so you can ship from the shop floor, the couch, or a Teams call.
+          </p>
+          <div class="btn-row">
+            <a class="btn btn--primary" href="https://github.com/clankercode/hark">Open the repo</a>
+            <a class="btn btn--ghost" href="#install">Get started</a>
+          </div>
+          <div class="hero__meta">
+            <span class="pill pill--live">Mode A ready</span>
+            <span class="pill">CLI · skill · cloud STT/TTS</span>
+            <span class="pill pill--risk">R2/R3 always confirm</span>
+          </div>
+        </div>
+        <div>
+          <div class="wave-frame" aria-hidden="true">
+            <canvas id="wave" width="800" height="240"></canvas>
+            <span class="wave-frame__label">Listening · half-duplex</span>
+          </div>
+          <blockquote class="verse">
+            <span>Hark, the herald agents sing:</span>
+            <span>“Human input, please, we bring.”</span>
+            <span>Blocked in Herdr, questions rise;</span>
+            <span>Hark relays your voice replies.</span>
+          </blockquote>
+        </div>
+      </section>
+
+      <div class="band">
+        <div class="shell band__inner">
+          <div class="stat">
+            <div class="stat__value">&lt;2s</div>
+            <div class="stat__label">Blocked → TTS start</div>
+          </div>
+          <div class="stat">
+            <div class="stat__value">0</div>
+            <div class="stat__label">Stale double-sends</div>
+          </div>
+          <div class="stat">
+            <div class="stat__value">N</div>
+            <div class="stat__label">Sessions · one feed</div>
+          </div>
+          <div class="stat">
+            <div class="stat__value">R0–R3</div>
+            <div class="stat__label">Risk-aware confirm</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- WHY -->
+      <section class="shell section" id="why">
+        <div class="section__head">
+          <p class="eyebrow">The problem</p>
+          <h2>Agents freeze. You’re not at the keyboard.</h2>
+          <p>
+            Herdr sessions wait on lockfiles, menus, and permissions while you’re mid-build or
+            mid-call. Polling panes doesn’t scale. Voice does.
+          </p>
+        </div>
+        <div class="grid-3">
+          <article class="card">
+            <div class="card__icon">01</div>
+            <h3>Hear the block</h3>
+            <p>Watch emits when an agent needs you. Hark speaks the question—tagged to the right pane.</p>
+          </article>
+          <article class="card">
+            <div class="card__icon">02</div>
+            <h3>Answer out loud</h3>
+            <p>Cloud STT captures a bounded reply. Radio mode streams partials with HOLD until you’re done.</p>
+          </article>
+          <article class="card">
+            <div class="card__icon">03</div>
+            <h3>Deliver safely</h3>
+            <div>
+              <p>Fingerprint + revision checks refuse stale targets. Destructive asks always confirm.</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <hr class="divider shell" />
+
+      <!-- LOOP -->
+      <section class="shell section" id="loop">
+        <div class="split">
+          <div>
+            <p class="eyebrow">The loop</p>
+            <h2>From blocked to unblocked without a screen.</h2>
+            <p>
+              Mode A keeps the orchestrator outside Herdr: local mic, speakers, and a skill that
+              never invents your answers.
+            </p>
+            <div class="flow" style="margin-top: var(--s-6)">
+              <div class="flow__step">
+                <div class="flow__num" aria-hidden="true"></div>
+                <div>
+                  <h3>Agent blocked</h3>
+                  <p>Monitor line with event_id, pane, risk.</p>
+                </div>
+              </div>
+              <div class="flow__step">
+                <div class="flow__num" aria-hidden="true"></div>
+                <div>
+                  <h3>Speak the ask</h3>
+                  <p><code>hark tts --listen</code> or <code>hark ask</code>—mic mutes while Eve talks.</p>
+                </div>
+              </div>
+              <div class="flow__step">
+                <div class="flow__num" aria-hidden="true"></div>
+                <div>
+                  <h3>You reply</h3>
+                  <p>Speech-gated capture; start cue only when you speak.</p>
+                </div>
+              </div>
+              <div class="flow__step">
+                <div class="flow__num" aria-hidden="true"></div>
+                <div>
+                  <h3>Bound deliver</h3>
+                  <p><code>hark answer &lt;event_id&gt;</code> with stale-safe checks.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="term" aria-label="Example terminal session">
+            <div class="term__bar">
+              <span class="term__dot"></span>
+              <span class="term__dot"></span>
+              <span class="term__dot"></span>
+              <span class="term__title">hark · mode a</span>
+            </div>
+            <div class="term__body">
+              <div><span class="prompt">$</span> <span class="cmd">hark doctor</span></div>
+              <div class="out">overall: OK · ambient armed · xAI OAuth</div>
+              <div class="dim">…</div>
+              <div><span class="prompt">$</span> <span class="cmd">hark watch --for-monitor</span></div>
+              <div class="err">agent.blocked  default/w7:p1  risk=R2</div>
+              <div><span class="prompt">$</span> <span class="cmd">hark ask --confirm always "Approve mesh peer?"</span></div>
+              <div class="dim">▸ mic muted · Eve speaking</div>
+              <div class="dim">▸ speech open · record cue</div>
+              <div class="out">transcript: "option one, chris-ws"</div>
+              <div><span class="prompt">$</span> <span class="cmd">hark answer 19f5… --keys 1 enter</span></div>
+              <div class="out">delivered · pane working</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <hr class="divider shell" />
+
+      <!-- SAFETY -->
+      <section class="shell section" id="safety">
+        <div class="section__head">
+          <p class="eyebrow">Safety first</p>
+          <h2>The verse is playful. Routing is not.</h2>
+          <p>
+            Pane text is untrusted. Humans stay in the loop. Permissions and destructive actions
+            always require confirmation.
+          </p>
+        </div>
+        <div class="card" style="padding: 0; overflow: hidden">
+          <table class="risk-table">
+            <thead>
+              <tr>
+                <th>Risk</th>
+                <th>Meaning</th>
+                <th>Confirm</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>R0</td>
+                <td>Informational / trivial</td>
+                <td>Never forced</td>
+              </tr>
+              <tr>
+                <td>R1</td>
+                <td>Ordinary free-text / soft choices</td>
+                <td>When unsure</td>
+              </tr>
+              <tr>
+                <td>R2</td>
+                <td>Permissions, network, edits</td>
+                <td>Always</td>
+              </tr>
+              <tr>
+                <td>R3</td>
+                <td>Destructive / secrets / prod</td>
+                <td>Always</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- INSTALL -->
+      <section class="shell section" id="install">
+        <div class="grid-2">
+          <div>
+            <p class="eyebrow">Install</p>
+            <h2>Prototype today. Spec for the long haul.</h2>
+            <p>
+              Python Mode A is dogfooding now. Fixtures and HEP schemas are ready for a Rust
+              client. Read the docs, arm the skill, say <em>hey hark</em>.
+            </p>
+            <div class="btn-row">
+              <a class="btn btn--primary" href="https://github.com/clankercode/hark">Star &amp; clone</a>
+              <a class="btn btn--ghost" href="https://github.com/clankercode/hark/tree/master/docs">Read the docs</a>
+            </div>
+          </div>
+          <div class="term">
+            <div class="term__bar">
+              <span class="term__dot"></span>
+              <span class="term__dot"></span>
+              <span class="term__dot"></span>
+              <span class="term__title">quickstart</span>
+            </div>
+            <div class="term__body">
+              <div><span class="prompt">$</span> <span class="cmd">git clone git@github.com:clankercode/hark.git</span></div>
+              <div><span class="prompt">$</span> <span class="cmd">cd hark &amp;&amp; uv sync</span></div>
+              <div><span class="prompt">$</span> <span class="cmd">uv run hark doctor</span></div>
+              <div><span class="prompt">$</span> <span class="cmd">./scripts/run-mode-a.sh</span></div>
+              <div class="dim"># say: hey hark · hey herald · start prompt</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="shell cta">
+        <p class="eyebrow" style="justify-content: center"><span class="eyebrow__dot"></span> Ready when they are</p>
+        <h2>Blocked agents call.<br />Hark answers.</h2>
+        <p>Human-in-the-loop, without hands on the keyboard.</p>
+        <div class="btn-row">
+          <a class="btn btn--primary" href="https://github.com/clankercode/hark">Get Hark</a>
+          <a class="btn btn--ghost" href="https://herdr.dev/">Herdr</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="shell footer">
+      <div class="footer__row">
+        <div>
+          <strong style="color: var(--ink); font-family: var(--font-display)">Hark</strong>
+          <div>When your agents need a word.</div>
+        </div>
+        <div>
+          <a href="https://github.com/clankercode/hark">GitHub</a>
+          ·
+          <a href="https://github.com/clankercode/hark/blob/master/docs/SPEC.md">SPEC</a>
+          ·
+          <a href="https://github.com/clankercode/hark/blob/master/LICENSE">License</a>
+        </div>
+      </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+  </body>
+</html>

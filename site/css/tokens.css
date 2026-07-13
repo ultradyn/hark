@@ -1,0 +1,77 @@
+/* Hark design tokens — edit here first; components consume vars only. */
+:root {
+  /* Surfaces */
+  --bg-void: #05060a;
+  --bg-deep: #0a0c12;
+  --bg-panel: #10131c;
+  --bg-elevated: #161b28;
+  --bg-glass: rgba(16, 19, 28, 0.72);
+
+  /* Ink */
+  --ink: #eef1f7;
+  --ink-muted: #9aa3b5;
+  --ink-faint: #6b7385;
+  --ink-invert: #0a0c12;
+
+  /* Brand signal */
+  --herald: #e8b84a;
+  --herald-dim: #b8892a;
+  --herald-glow: rgba(232, 184, 74, 0.35);
+  --signal: #5eead4;
+  --signal-dim: #2a9d8f;
+  --blocked: #fb7185;
+  --safe: #86efac;
+  --warn: #fbbf24;
+
+  /* Type */
+  --font-display: "Fraunces", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --font-body: "Source Sans 3", "Source Sans Pro", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "ui-monospace", "Cascadia Code", monospace;
+
+  --fs-hero: clamp(3.5rem, 12vw, 8.5rem);
+  --fs-h1: clamp(2rem, 5vw, 3.25rem);
+  --fs-h2: clamp(1.5rem, 3.5vw, 2.125rem);
+  --fs-h3: clamp(1.125rem, 2vw, 1.35rem);
+  --fs-body: clamp(1.05rem, 1.5vw, 1.2rem);
+  --fs-small: 0.875rem;
+  --fs-micro: 0.75rem;
+
+  --lh-tight: 1.05;
+  --lh-snug: 1.25;
+  --lh-body: 1.6;
+
+  --tracking-display: -0.04em;
+  --tracking-wide: 0.14em;
+
+  /* Space (4px base) */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.5rem;
+  --s-6: 2rem;
+  --s-7: 3rem;
+  --s-8: 4.5rem;
+  --s-9: 6.5rem;
+
+  /* Layout */
+  --max: 72rem;
+  --max-narrow: 40rem;
+  --gutter: clamp(1.25rem, 4vw, 2.5rem);
+  --radius-sm: 0.5rem;
+  --radius: 0.875rem;
+  --radius-lg: 1.25rem;
+  --radius-pill: 999px;
+
+  /* Borders & shadow */
+  --border: rgba(238, 241, 247, 0.08);
+  --border-strong: rgba(232, 184, 74, 0.35);
+  --shadow-glow: 0 0 80px var(--herald-glow);
+  --shadow-panel: 0 24px 60px rgba(0, 0, 0, 0.45);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 140ms;
+  --dur: 280ms;
+  --dur-slow: 600ms;
+}

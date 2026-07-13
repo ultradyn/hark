@@ -19,3 +19,6 @@ uv.lock
 .idea/
 .vscode/
 *.swp
+
+# Local visual review screenshots
+site/_review/

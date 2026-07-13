@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T08:53:33Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T08:57:19Z"
 complexity: medium
 created_at: "2026-07-13T07:35:03Z"
 depends_on: []
+duration_minutes: 3.7715607883333333
 estimate_hours: 1
 id: B014
 priority: high
 started_at: "2026-07-13T08:53:33Z"
-status: in_progress
+status: done
 tags: []
 title: Socket watch Broken pipe — noisy errors, poll fallback
-updated_at: "2026-07-13T08:53:33Z"
+updated_at: "2026-07-13T08:57:19Z"
 ---
 ## Dogfood
 watch.jsonl often shows socket watch failed Broken pipe / connection reset then continues via poll.

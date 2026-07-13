@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-13T14:14:12Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-13T14:30:02Z"
 complexity: high
 created_at: "2026-07-13T09:41:41Z"
 depends_on: []
+duration_minutes: 15.8384665473
 estimate_hours: 16
 id: I003
 priority: high
 started_at: "2026-07-13T14:14:12Z"
-status: in_progress
+status: done
 tags: []
 title: 'Live web dashboard: stream events, Herdr state, chatlogs + mic dictation'
-updated_at: "2026-07-13T14:14:12Z"
+updated_at: "2026-07-13T14:30:02Z"
 ---
 ## Vision
 A comprehensive live web dashboard for Hark / Mode A operators. One place to see everything the voice bridge knows, in real time, and to inject speech without leaving the browser.

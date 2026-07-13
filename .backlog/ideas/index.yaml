@@ -23,7 +23,7 @@ ideas:
       file: I003-live-web-dashboard-stream-even.todo
       id: I003
       priority: high
-      status: in_progress
+      status: done
       tags: []
       title: 'Live web dashboard: stream events, Herdr state, chatlogs + mic dictation'
     - file: I004-add-support-for-local-models-l.todo

@@ -134,6 +134,21 @@ When the operator asks to change how they wake Hark, the Mode A skill should:
 uv run pytest tests/test_wake_policy.py tests/test_custom_triggers.py tests/test_custom_wake_e2e.py tests/test_config_watch.py -q
 ```
 
+## Larger Vosk models
+
+Optional: point `ambient.model_path` at `vosk-model-en-us-0.22-lgraph` (~128 M)
+or `vosk-model-en-us-0.22` (~1.8 G) for better generic WER. **Default remains
+small.** Bigger models still mangle rare product names — keep this doc’s alias /
+learning setup. Helper:
+
+```bash
+./scripts/download-vosk-model.sh --model lgraph   # or --model 0.22
+```
+
+Details and RAM trade-offs: [`AUDIO_DESIGN.md`](AUDIO_DESIGN.md) § Larger Vosk
+models; survey [`plans/B069-local-stt-survey.md`](plans/B069-local-stt-survey.md).
+Long-term wake direction is KWS (B070), not bigger ASR alone.
+
 ## Related
 
 - `src/hark/wake.py` — `WakePolicy`, match, near-miss, learn suggest
@@ -142,3 +157,4 @@ uv run pytest tests/test_wake_policy.py tests/test_custom_triggers.py tests/test
 - `src/hark/ambient.py` — loop, learn hot-apply, SIGHUP / file-watch reload
 - `src/hark/config_watch.py` — mtime poll + debounce → `request_reload`
 - Skill: `skill/hark/SKILL.md` (Ambient + wake config)
+- `scripts/download-vosk-model.sh` — default small model + optional `--model lgraph|0.22`

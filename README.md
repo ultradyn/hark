@@ -178,13 +178,18 @@ Do not run `harkd` alongside `./scripts/run-mode-a.sh` (single always-on owner; 
 
 ```bash
 ./scripts/setup-ambient.sh          # uv sync --extra wake + download vosk model + enable config
-# download only:
+# download only (default = small en-us 0.15):
 ./scripts/download-vosk-model.sh    # methods: hf → curl → wget → browser
 ./scripts/download-vosk-model.sh --method curl
+# optional larger models (operator experiment; still needs wake aliases):
+# ./scripts/download-vosk-model.sh --model lgraph   # ~128M
+# ./scripts/download-vosk-model.sh --model 0.22     # ~1.8G
 uv run hark ambient                 # say “hey hark”, then speak a prompt
 ```
 
-Model lands at `~/.local/share/hark/models/vosk-model-small-en-us-0.15`.
+Default model lands at `~/.local/share/hark/models/vosk-model-small-en-us-0.15`.
+Larger models: set `ambient.model_path` after download — see
+[`docs/AUDIO_DESIGN.md`](docs/AUDIO_DESIGN.md) § Larger Vosk models.
 
 ### Config highlights (`~/.config/hark/config.toml`)
 

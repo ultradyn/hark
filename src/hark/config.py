@@ -573,7 +573,11 @@ names = ["iris", "mercury", "hark", "herald"]
 # extra_trigger_phrases = ["begin dictation"]
 learn_from_near_misses = true
 engine = "vosk"              # vosk | text_probe (tests)
-# model_path = "~/.local/share/hark/models/vosk-model-small-en-us-0.15"
+# model_path = "~/.local/share/hark/models/vosk-model-small-en-us-0.15"  # default small
+# Optional larger Vosk (same engine; still needs aliases — docs/AUDIO_DESIGN.md):
+# model_path = "~/.local/share/hark/models/vosk-model-en-us-0.22-lgraph"  # ~128M
+# model_path = "~/.local/share/hark/models/vosk-model-en-us-0.22"         # ~1.8G
+# Download: ./scripts/download-vosk-model.sh --model lgraph|0.22
 snippet_s = 2.5
 # One-shot wake wait / continuous idle cycle length (seconds). 0 = wait forever
 # (no ambient.timeout). Continuous Mode A re-enters the wake wait each timeout_s.

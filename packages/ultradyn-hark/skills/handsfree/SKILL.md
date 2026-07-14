@@ -11,8 +11,9 @@ description: >
 
 > **This skill is an alias of [`hark`](../hark/SKILL.md).** Same product, CLI (`hark`), TTS mode, and loop. Install either or both names.
 
-Follow **all** instructions in `skill/hark/SKILL.md`, including:
+Follow **all** instructions in [`../hark/SKILL.md`](../hark/SKILL.md), including:
 
+- **Post-install:** if `hark` CLI is missing, follow [`../hark/POST_INSTALL.md`](../hark/POST_INSTALL.md) first (`npx skills` does not install Python)
 - **TTS mode** after skill start (prefer `hark tts --listen` / `hark ask` for operator communication)
 - Voice-first setup (sessions, preferences)
 - Question → listen → act loop

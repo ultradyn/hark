@@ -167,11 +167,17 @@ Fleet control by voice. Human-in-the-loop without hands on the keyboard.
 ```text
 @ultradyn/hark
   skills/hark/SKILL.md
+  skills/hark/POST_INSTALL.md   # CLI + Python deps (skills install is not enough)
+  skills/hark/SETUP.md
+  skills/hark/WAKE_STT.md
   skills/handsfree/SKILL.md
   bin/hark-skill.js
 ```
 
 Skills are synced from the monorepo on pack (`npm pack` / publish).
+
+**After `npx skills add`:** install the Python CLI — see skill
+[`POST_INSTALL.md`](skills/hark/POST_INSTALL.md) or the [one-liner installer](#install-the-cli-hark-binary).
 
 ---
 
@@ -186,7 +192,7 @@ Skills are synced from the monorepo on pack (`npm pack` / publish).
 
 ## Releasing
 
-Maintainers: see monorepo [`RELEASE.md`](../../RELEASE.md). Pushing tag `vX.Y.Z`
+Maintainers: see monorepo [`RELEASE.md`](https://github.com/ultradyn/hark/blob/master/RELEASE.md). Pushing tag `vX.Y.Z`
 (matching this package’s version) runs GitHub Actions `release.yml` — OIDC
 trusted publish to npm + GitHub Release. After push, agents run
 `/watch-gh-populate-release`.

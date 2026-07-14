@@ -6,6 +6,15 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+## 0.1.9
+
+- **Post-install skill doc:** `skill/hark/POST_INSTALL.md` — what `npx skills add`
+  does **not** install (Python CLI, PortAudio, wake extras/models, Herdr, auth),
+  one-liner + manual `uv tool install` steps, dependency map, common failure table.
+  Linked from SKILL/SETUP/handsfree; synced into `@ultradyn/hark` package skills.
+  Distinguishes PATH `uv tool` vs checkout `uv sync` for wake extras; portable
+  GitHub docs links in shipped skill markdown (no broken `../../docs/` after install).
+
 ## 0.1.8
 
 - **Install freshness (B100):** `hark doctor` reports PATH / `uv tool` install vs

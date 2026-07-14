@@ -109,11 +109,16 @@ Manual tunnel (optional, if not using `ssh =`):
 `ssh -L /tmp/herdr-work.sock:~/.config/herdr/herdr.sock workbox -N` then point
 `socket` at the local path. Prefer config-managed `ssh =` for handsfree operation.
 
-Full contract: [docs/HERDR.md](../../docs/HERDR.md).
+Full contract: [docs/HERDR.md](https://github.com/ultradyn/hark/blob/master/docs/HERDR.md).
 
 ## Preconditions
 
-1. `hark` available — while developing: `uv run hark` from latest checkout, or `uv tool install -e . --force` (not a stale non-editable `uv tool` install).  
+**Skills-only install is incomplete.** `npx skills add ultradyn/hark` copies this
+markdown skill only — **not** the Python `hark` CLI, PortAudio, or wake extras.
+If `hark` is missing or doctor fails on deps, follow **[POST_INSTALL.md](POST_INSTALL.md)**
+before arming Monitor or TTS mode.
+
+1. `hark` available — while developing: `uv run hark` from latest checkout, or `uv tool install -e . --force` (not a stale non-editable `uv tool` install). See [POST_INSTALL.md](POST_INSTALL.md).
 2. `hark doctor` healthy (Herdr, **tunnels for any `ssh` sessions**, Grok OAuth / keys, mic). If doctor reports **`install: stale`** / missing cmds vs the checkout, reinstall editable before arming handsfree.  
 3. STT/TTS: xAI via **Grok Build OAuth** preferred; OpenAI / Google / MiniMax as configured.  
 
@@ -128,7 +133,7 @@ Full contract: [docs/HERDR.md](../../docs/HERDR.md).
 - **Listen end:** default silence/Smart Turn. If `[listen] end_mode = "radio"`, keep listening through long pauses until an end phrase. **Product:** `okay hark send`, `end prompt`, `hark over`. **Soft (default on):** utterance-final prosign `over` (not phrasal `turn it over` / `take over`), `okay over` / `okay, over`, `send it`, `that's all`, `over and out`, `message done`. Soft `over` is always **finish**, never cancel. Cancel: `hark cancel` (not casual “cancel that”).  
 - **Partials (radio only):** you may receive `ambient.partial` / `partial=true` with interim text, policy `warning`/`instructions`, `streaming` bool, and **`agent_control`**. You **MUST NOT** deliver to a pane until `final=true` / `ambient.prompt` for that `stream_id`. **Default HOLD** (`streaming=false` / `[ambient].streaming` off): do **not** TTS a full answer on partials — think privately. **Streaming mode** (`streaming=true`): short, interruptible live acks / brief interim TTS are allowed; still no pane delivery and no final-style full answer until final. You **MUST** end capture early via `hark listen-end` when a done signal is clear (below). You **MUST cancel** (`listen-end --cancel`) when the stream is clearly **unrelated conversation / bleed** (not for you) — see below.  
 - **Event-driven idle (hard rule) — no polling.** After you finish handling a monitor event (blocked answer delivered, ambient.prompt answered by TTS, done judged, partial HOLD/streaming decision done), **stop**. Do **not** poll logs, spin `sleep`/busy-wait, re-tail files, or re-query “is there more?” in a loop. The **persistent Monitor(s)** will wake you on the next line. Between events your job is to be idle with monitors still armed — not to keep the turn alive.
-- **Ambient:** optional `[ambient]` wake via local short snippets; cloud STT after activation. Defaults: names **iris** / **mercury** / **hark** / **herald** (say hey/hello/yo/sup + name, or bare name). Engines: **`vosk`** (stock default) or **`sherpa_kws`** (**prefer for product names** — keyword spotting vs open ASR; see [WAKE_STT.md](WAKE_STT.md) § *Why Sherpa is better*). **Two customization styles** (pick one) — see [docs/CUSTOM_WAKE.md](../../docs/CUSTOM_WAKE.md):
+- **Ambient:** optional `[ambient]` wake via local short snippets; cloud STT after activation. Defaults: names **iris** / **mercury** / **hark** / **herald** (say hey/hello/yo/sup + name, or bare name). Engines: **`vosk`** (stock default) or **`sherpa_kws`** (**prefer for product names** — keyword spotting vs open ASR; see [WAKE_STT.md](WAKE_STT.md) § *Why Sherpa is better*). **Two customization styles** (pick one) — see [docs/CUSTOM_WAKE.md](https://github.com/ultradyn/hark/blob/master/docs/CUSTOM_WAKE.md):
   1. **Name-based** (default): `[ambient] wake_mode = "names"`, `names = ["iris", "mercury", "hark", "herald"]`, optional `extra_names`. Greating+name and bare name; seed mishears for hark/herald (Vosk).
   2. **Full-phrase:** `wake_mode = "phrases"`, `trigger_phrases = ["start prompt", …]` (no name fuzzy).
   - **Learning:** failed wake near-misses auto-expand alternates into `~/.local/state/hark/wake_learned.json` **without restart** (`ambient.wake_learned`). Names mode learns name tokens; phrases mode learns full phrases. Disable with `learn_from_near_misses = false`.
@@ -272,7 +277,7 @@ Requires workers writing state (`hark start`, `./scripts/run-mode-a.sh`, or `har
 
 - **Pi** — [`pi-monitor`](https://github.com/clankercode/pi-monitor) (`pi install npm:pi-monitor`)
 - **OpenCode** — [`opencode-monitor-bg`](https://github.com/clankercode/opencode-monitor-bg)
-- **Antigravity (`agy`)** — **experimental** agentapi inject (no native Monitor). See **Antigravity (agy)** below and [docs/AGY.md](../../docs/AGY.md).
+- **Antigravity (`agy`)** — **experimental** agentapi inject (no native Monitor). See **Antigravity (agy)** below and [docs/AGY.md](https://github.com/ultradyn/hark/blob/master/docs/AGY.md).
 
 Point plugins / agentapi at: `hark monitor --for-monitor`.
 
@@ -319,6 +324,8 @@ Constraints:
 If `~/.local/state/hark/setup-complete.json` is missing (or schema older than current),
 run the guided checklist before arming handsfree:
 
+- **CLI / deps not installed yet:** [POST_INSTALL.md](POST_INSTALL.md) first
+  (`npx skills` does not install Python).
 - **Agent script:** [SETUP.md](SETUP.md) — question order, persona (Iris→eve / Mercury→leo),
   wake backend **Vosk vs Sherpa KWS**, setup-complete flag with `hark_version`.
 - **Web UI:** `hark webui` (aliases `dashboard`, `serve`) → http://127.0.0.1:4136 by default. See docs/DASHBOARD.md.
@@ -327,7 +334,7 @@ run the guided checklist before arming handsfree:
 
 ## On skill start (voice bootstrap)
 
-1. `hark doctor` (text OK for tools). If setup incomplete → [SETUP.md](SETUP.md) / `hark setup`.  
+1. Ensure CLI exists (`command -v hark`). If not → [POST_INSTALL.md](POST_INSTALL.md). Then `hark doctor` (text OK for tools). If setup incomplete → [SETUP.md](SETUP.md) / `hark setup`.
 2. `hark status` + `hark queue --announce` — **announce any already-blocked / pending by TTS**. `hark queue --announce` speaks the waiting count itself when more than one agent is waiting (JSON always carries `count` / `announcement` / distinct `targets`). Hark watch also emits on load; still speak a short rollup so the operator hears it.  
 3. TTS: “Hark is ready. I'll speak from here. When you're done talking in radio mode, say over or okay hark send.”  
 4. Voice-ask session targets if not already configured (local / SSH / mix — write `[[herdr.sessions]]` accordingly).  
@@ -439,6 +446,7 @@ Use PATH binaries only (Herdr cannot see fish functions). Overrides: `[agents]` 
 
 | Issue | Action |
 |-------|--------|
+| `hark` missing / import / PortAudio / wake package | [POST_INSTALL.md](POST_INSTALL.md) — skills install is not a CLI install |
 | Herdr / tunnels | `hark doctor`; check each session’s local socket or `ssh` tunnel; speak the problem |
 | xAI 401 | `grok login` |
 | Audio | `hark devices` |

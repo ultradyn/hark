@@ -47,8 +47,9 @@ Install skills into agents (recommended):
   # or from this package after npm i -g @ultradyn/hark:
   npx skills add "$(hark-skill path | head -1)/.." -g -y
 
-CLI (separate Python package):
-  See https://github.com/ultradyn/hark and https://hark.xk.io
+CLI (separate Python package — skills install does not install it):
+  curl -fsSL https://hark.xk.io/install.sh | bash
+  # or see skill POST_INSTALL.md / https://hark.xk.io
 `);
   process.exit(0);
 }

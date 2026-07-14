@@ -2,7 +2,7 @@
 
 Hark ambient **wake** uses a **local** short-snippet model only. After activation,
 prompt body / radio STT stays **cloud-first** (xAI etc.). Full survey:
-[docs/plans/B069-local-stt-survey.md](../../docs/plans/B069-local-stt-survey.md).
+[docs/plans/B069-local-stt-survey.md](https://github.com/ultradyn/hark/blob/master/docs/plans/B069-local-stt-survey.md).
 
 Setup chooser: [SETUP.md](SETUP.md) · `hark setup --wake-engine …`
 
@@ -111,7 +111,7 @@ local_fail_open = true        # → cloud when model/dep missing
 ```
 
 Env: `HARK_STT_PROVIDER`, `HARK_STT_LOCAL_MODEL`, `HARK_STT_LOCAL_FAIL_OPEN`.
-Details and B069 RTF notes: [docs/PROVIDERS.md](../../docs/PROVIDERS.md).
+Details and B069 RTF notes: [docs/PROVIDERS.md](https://github.com/ultradyn/hark/blob/master/docs/PROVIDERS.md).
 
 | Option | Role |
 |--------|------|

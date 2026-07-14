@@ -33,8 +33,8 @@ if (!fs.existsSync(path.join(src, "hark", "SKILL.md"))) {
   process.exit(0);
 }
 
-// Extra markdown docs shipped beside SKILL.md (setup / local STT).
-const extraDocs = ["SETUP.md", "WAKE_STT.md"];
+// Extra markdown docs shipped beside SKILL.md (post-install / setup / local STT).
+const extraDocs = ["POST_INSTALL.md", "SETUP.md", "WAKE_STT.md"];
 
 for (const name of names) {
   const from = path.join(src, name, "SKILL.md");

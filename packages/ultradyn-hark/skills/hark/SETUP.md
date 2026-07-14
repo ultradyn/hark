@@ -4,8 +4,9 @@ Canonical **question order** for agent-driven and CLI setup.
 CLI: `hark setup` (flags: `--yes`, `--persona`, `--wake-engine`, `--voice`, …).  
 Flag file: `~/.local/state/hark/setup-complete.json` (includes **`hark_version`**).
 
-Related: [WAKE_STT.md](WAKE_STT.md) (local wake; **prefer Sherpa KWS** for product names), [SKILL.md](SKILL.md),
-`docs/CUSTOM_WAKE.md`, `docs/plans/B069-local-stt-survey.md`.
+Related: [POST_INSTALL.md](POST_INSTALL.md) (CLI + Python/system deps after `npx skills`),
+[WAKE_STT.md](WAKE_STT.md) (local wake; **prefer Sherpa KWS** for product names),
+[SKILL.md](SKILL.md), `docs/CUSTOM_WAKE.md`, `docs/plans/B069-local-stt-survey.md`.
 
 ---
 

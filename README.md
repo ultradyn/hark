@@ -127,6 +127,9 @@ npx skills add ultradyn/hark -g -y
 ```
 
 You still need the **Python `hark` CLI** on `PATH` for the handsfree loop.
+Skills install does **not** install Python packages, PortAudio, or wake models —
+see [`skill/hark/POST_INSTALL.md`](skill/hark/POST_INSTALL.md) (agent-facing
+checklist after `npx skills`).
 
 **Monitor-capable harness required.** Arm a long-lived wake on:
 

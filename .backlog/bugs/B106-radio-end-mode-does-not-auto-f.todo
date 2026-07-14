@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-14T05:10:53Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-14T05:12:07Z"
 complexity: medium
 created_at: "2026-07-14T04:36:09Z"
 depends_on: []
+duration_minutes: 1.2394035375499999
 estimate_hours: 1
 id: B106
 priority: high
 started_at: "2026-07-14T05:10:53Z"
-status: in_progress
+status: done
 tags: []
 title: 'radio end_mode does not auto-finalize on end phrases: operator said ''over'' and ''that''s all'' multiple times but the listen stream never finalized (end_phrase stayed unset); only a manual ''hark listen-end'' (agent:finish) stopped it after ~61s. Repro: hark tts --listen with [listen] end_mode=radio, speak a prompt then ''over''. Expected: soft/product end phrase finalizes the stream. Actual: stream stays open until agent finish. stream_id s19f5ee747a3ea8ab3.'
-updated_at: "2026-07-14T05:10:53Z"
+updated_at: "2026-07-14T05:12:07Z"
 ---
 
 radio end_mode does not auto-finalize on end phrases: operator said 'over' and 'that's all' multiple times but the listen stream never finalized (end_phrase stayed unset); only a manual 'hark listen-end' (agent:finish) stopped it after ~61s. Repro: hark tts --listen with [listen] end_mode=radio, speak a prompt then 'over'. Expected: soft/product end phrase finalizes the stream. Actual: stream stays open until agent finish. stream_id s19f5ee747a3ea8ab3.

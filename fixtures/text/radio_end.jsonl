@@ -22,6 +22,9 @@
 {"id":"soft-on-prosign-over-no-period","input":"please implement the fix over","expect_kind":"end","expect_phrase":"over","expect_body_contains":"implement","soft_end_phrases_enabled":true}
 {"id":"soft-on-joined-thanks-over","input":"Yeah, you can restart Ambient, thanks. Oh, and over.","expect_kind":"end","expect_phrase":"over","expect_body_contains":"restart","soft_end_phrases_enabled":true}
 {"id":"soft-on-okay-over-after-content","input":"ship the branch okay over","expect_kind":"end","expect_phrase":"okay over","expect_body_contains":"ship","soft_end_phrases_enabled":true}
+{"id":"soft-on-over-thank-you","input":"please implement the fix over thank you","expect_kind":"end","expect_phrase":"over","expect_body_contains":"implement","soft_end_phrases_enabled":true}
+{"id":"soft-on-thats-all-thanks","input":"refactor the module that's all, thanks","expect_kind":"end","expect_phrase":"that's all","expect_body_contains":"refactor","soft_end_phrases_enabled":true}
+{"id":"soft-on-product-send-thank-you","input":"please use black formatting okay hark send thank you","expect_kind":"end","expect_phrase":"okay hark send","expect_body_contains":"formatting","soft_end_phrases_enabled":true}
 {"id":"soft-no-mid-clause-thats-all","input":"that's all I know about the auth bug","expect_kind":null,"soft_end_phrases_enabled":true}
 {"id":"soft-no-mid-send-it-production","input":"please just send it to production","expect_kind":null,"soft_end_phrases_enabled":true}
 {"id":"soft-no-mid-over-weekend","input":"think about over the weekend and continue","expect_kind":null,"soft_end_phrases_enabled":true}

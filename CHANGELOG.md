@@ -6,6 +6,11 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- fix(radio, B106): soft/product end phrases still finalize when the operator
+  appends trailing politeness (`over thank you`, `that's all, thanks`,
+  `okay hark send thank you`). Courtesy tails are stripped before match so
+  utterance-final soft ends work in dogfood without requiring bare `over` alone.
+
 ## 0.1.9
 
 - **Post-install skill doc:** `skill/hark/POST_INSTALL.md` — what `npx skills add`

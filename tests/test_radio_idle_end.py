@@ -281,6 +281,55 @@ def test_radio_soft_end_still_finishes_sooner(monkeypatch):
     assert len(calls) == 1
 
 
+def test_radio_soft_end_over_thank_you_finishes(monkeypatch):
+    """B106: multi-segment content + 'over thank you' finalizes as soft end."""
+    import hark.speech as speech
+    from types import SimpleNamespace
+
+    cfg = HarkConfig(
+        listen=ListenConfig(
+            end_mode="radio",
+            radio_idle_end_silence_s=30.0,
+            soft_end_phrases_enabled=True,
+            stream_partials=True,
+            strip_phrase=True,
+        )
+    )
+    transcripts = [
+        "please implement the fix on the auth branch",
+        "over thank you",
+    ]
+    idx = {"n": 0}
+
+    def fake_capture(**kwargs):
+        on_opened = kwargs.get("on_opened")
+        if on_opened is not None:
+            on_opened()
+        return _cap(40)
+
+    def fake_transcribe(_wav):
+        i = min(idx["n"], len(transcripts) - 1)
+        idx["n"] += 1
+        return SimpleNamespace(text=transcripts[i], provider="fake")
+
+    _stub_listen_deps(monkeypatch, speech)
+    monkeypatch.setattr(speech, "capture_utterance", fake_capture)
+    monkeypatch.setattr(
+        speech,
+        "resolve_stt",
+        lambda *args, **kwargs: SimpleNamespace(
+            name="fake", transcribe=fake_transcribe
+        ),
+    )
+
+    result = speech.run_listen(cfg, end_mode="radio", post_tts_guard_s=0)
+    assert result.cancelled is False
+    assert result.end_phrase == "over"
+    assert "auth branch" in (result.text or "").lower()
+    assert "thank" not in (result.text or "").lower()
+    assert "over" not in (result.text or "").lower()
+
+
 def test_silence_mode_ignores_radio_idle(monkeypatch):
     """Silence end_mode still uses end_silence_s only."""
     import hark.speech as speech

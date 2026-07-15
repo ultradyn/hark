@@ -1,7 +1,12 @@
-"""Answer Window policy: everything the session needs that is not a runtime dep.
+"""Answer Window / ListenSession policy (P1.M1 + P1.M6).
 
-Built at the call seam (profile + overrides). Session loops must not re-read
-``cfg.ambient`` — streaming / idle clamps live on this object (M6 alignment).
+Everything the session needs that is not a runtime dep. Built at the call seam
+(profile + overrides). Session loops must not re-read ``cfg.ambient`` —
+streaming / idle clamps live on this object.
+
+**M6 naming:** :class:`ListenSessionPolicy` is an alias of
+:class:`AnswerWindowPolicy`. Prefer either name; same type.
+See ``docs/plans/P1-M6-listen-session-policy.md``.
 """
 
 from __future__ import annotations
@@ -18,11 +23,17 @@ from hark.listen_end import (
 )
 
 AnswerWindowProfile = Literal["bound_answer", "post_wake", "confirm"]
+# M6 product name for the same profile set.
+ListenSessionProfile = AnswerWindowProfile
 
 
 @dataclass(frozen=True)
 class AnswerWindowPolicy:
-    """Frozen inputs for one ``open(policy)`` capture."""
+    """Frozen inputs for one ``open(policy)`` / listen-session capture.
+
+    Construct via :func:`policy_from_config` / :func:`listen_session_policy_from_config`
+    or explicit field kwargs for tests (typed construction; no ambient getattr).
+    """
 
     profile: AnswerWindowProfile
     end_mode: EndMode
@@ -231,3 +242,30 @@ def policy_from_config(
     if overrides:
         base = replace(base, **overrides)
     return base
+
+
+# --- P1.M6 aliases (same type / same builder) ---------------------------------
+
+ListenSessionPolicy = AnswerWindowPolicy
+
+
+def listen_session_policy_from_config(
+    cfg: Any,
+    profile: AnswerWindowProfile = "bound_answer",
+    **overrides: Any,
+) -> AnswerWindowPolicy:
+    """M6 name for :func:`policy_from_config`."""
+    return policy_from_config(cfg, profile, **overrides)
+
+
+# Classmethod-style seam for tests that prefer ListenSessionPolicy.from_config
+def _listen_session_policy_from_config(
+    cfg: Any,
+    profile: AnswerWindowProfile = "bound_answer",
+    **overrides: Any,
+) -> AnswerWindowPolicy:
+    return policy_from_config(cfg, profile, **overrides)
+
+
+ListenSessionPolicy.from_config = staticmethod(_listen_session_policy_from_config)  # type: ignore[attr-defined]
+AnswerWindowPolicy.from_config = staticmethod(policy_from_config)  # type: ignore[attr-defined]

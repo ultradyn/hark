@@ -138,3 +138,4 @@ bugs:
     - file: B137-partial-worker-spawn-leaves-an.todo
     - file: B138-agent-start-bypasses-safe-alia.todo
     - file: B139-agent-resolver-overrides-bypas.todo
+    - file: B140-live-monitor-ingests-synthetic.todo

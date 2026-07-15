@@ -3,7 +3,8 @@
 **Status:** design locked for E1 (implementation follows E2–E5)  
 **Date:** 2026-07-15  
 **Backlog:** `P1.M1` · architecture review candidate 1 (Strong)  
-**ADRs in force:** 008 (event-driven answer windows), 009 (half-duplex), 014 / 014b (radio soft-end + prosign)
+**ADRs in force:** 008 (event-driven answer windows), 009 (half-duplex), 014 / 014b (radio soft-end + prosign)  
+**E1.T003:** acceptance criteria + non-goals below are **LOCKED** (2026-07-15) — implement against them; change only via backlog amend + plan edit
 
 ## Goal
 
@@ -337,27 +338,34 @@ Primary seam = `open_answer_window(policy, deps=fakes)` or facade `run_listen` a
 
 ---
 
-## Non-goals (M1)
+## Non-goals (M1) — LOCKED
 
-- **No Mode B / harkd dialogue FSM** inside this module.
-- **No LLM judgment** of transcript completeness or delivery.
-- **`listen_end` stays pure** — no I/O, no session state.
-- **Answering / delivery / fingerprint revalidation** stay outside (M2).
-- **Speak-then-listen handoff** not fully relocated (M4 may deepen later); M1 may leave `speak_and_listen` as a caller of Answer Window.
-- **No provider rewrite** (STT/TTS adapters unchanged).
-- **No HEP schema version bump** for partials/finals.
-- **No redesign of wake / KWS** — post_wake profile only.
+These are hard scope fences for the milestone (from backlog + design grill):
 
-## Acceptance criteria (milestone)
+1. **No Mode B / harkd dialogue FSM** in the Answer Window library module.
+2. **No LLM judgment** of transcript completeness, routing, or delivery targets.
+3. **`listen_end` stays pure** — phrase evaluation only; no I/O, no session state.
+4. **Answering / delivery / fingerprint revalidation stay separate** (M2 owns Answerability).
+5. **Speak-then-listen handoff** is not fully relocated here (M4 may deepen later); `speak_and_listen` may remain a caller of Answer Window.
+6. **No STT/TTS provider rewrite** and **no HEP schema version bump** for partials/finals.
+7. **No wake/KWS redesign** — only the post_wake *listen* profile is in scope.
 
-1. Deep module exists with **small** external interface `open(policy) → ListenResult` (plus policy builders).
-2. Radio and silence paths live as session implementations behind that interface.
-3. `run_listen` is a **thin facade** (or deleted after call sites migrate).
-4. Ambient post-wake and CLI listen/ask build **profiles**, not gate-kwargs soup.
-5. Session loop does **not** `getattr(cfg.ambient, "streaming")` (or equivalent ambient leak).
-6. Existing radio/silence/soft-end/endpointing/echo/empty-stt tests green (ported to deep seam where needed).
-7. ADR-014/014b behaviors intact; partial HEP shapes stable; Mode A exit codes stable.
-8. `ARCHITECTURE.md` + `CHANGELOG` document Answer Window; domain terms in `CONTEXT.md`.
+## Acceptance criteria (milestone) — LOCKED
+
+A milestone is **done** only when all of the following hold:
+
+| # | Criterion | How we know |
+|---|-----------|-------------|
+| AC1 | Deep module with small external interface `open(policy) → ListenResult` (+ policy builders) | Public surface documented; callers do not need radio/silence internals |
+| AC2 | Radio and silence paths are session implementations behind that interface | RadioSession + SilenceSession (or equiv.) exist; not kwargs on the public surface |
+| AC3 | `run_listen` is a thin facade (or removed after migration) | Implementation bulk is not in the facade body |
+| AC4 | Ambient post-wake and CLI listen/ask build **profiles**, not gate-kwargs soup | Call sites use profile builders / policy |
+| AC5 | Session loop does **not** read `[ambient]` (e.g. no `getattr(cfg.ambient, "streaming")`) | Grep-clean inside session; streaming/idle from policy fields |
+| AC6 | Radio/silence/soft-end/endpointing/echo/empty-stt tests green (ported to deep seam where needed) | CI / targeted pytest |
+| AC7 | ADR-014/014b behaviors intact; partial HEP shapes stable; Mode A CLI exit codes stable | Regression suite + fixtures |
+| AC8 | `ARCHITECTURE.md` + `CHANGELOG` note Answer Window; domain terms in `CONTEXT.md` | Docs present |
+
+**Exit gate for E1:** this plan section is locked; E2–E5 implement against AC1–AC8 and the non-goals list.
 
 ## Residual risks
 

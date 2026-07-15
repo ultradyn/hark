@@ -19,7 +19,7 @@ tasks:
       file: T001-refactor-watch-to-call-pane-un.todo
       id: T001
       priority: high
-      status: in_progress
+      status: done
       tags: []
       title: Refactor watch to call Pane Understanding only
     - complexity: low

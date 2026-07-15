@@ -18,7 +18,7 @@ tasks:
       file: T001-design-speakthenlisten-interfa.todo
       id: T001
       priority: high
-      status: in_progress
+      status: done
       tags: []
       title: Design SpeakThenListen interface + half-duplex states
     - complexity: low

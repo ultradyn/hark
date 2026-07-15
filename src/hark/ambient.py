@@ -92,10 +92,15 @@ def primary_wake_label(cfg: HarkConfig) -> str:
 
 
 def ambient_boot_tts_text(cfg: HarkConfig) -> str:
-    """Startup TTS line; cache is keyed by voice + this full string (includes label)."""
+    """Startup TTS line; cache is keyed by voice + this full string (includes label).
+
+    Includes the primary wake phrase always; when listen end_mode is radio, also
+    a brief how-to-finish hint (B115).
+    """
     from hark.audio.cues import ambient_boot_line
 
-    return ambient_boot_line(primary_wake_label(cfg))
+    end_mode = getattr(getattr(cfg, "listen", None), "end_mode", None)
+    return ambient_boot_line(primary_wake_label(cfg), end_mode=end_mode)
 
 
 def wake_label_change_tts_text(old_label: str, new_label: str) -> str:

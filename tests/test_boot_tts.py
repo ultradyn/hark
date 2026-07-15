@@ -1,4 +1,4 @@
-"""Ambient startup TTS text + cache keying by primary name / custom phrase (B034)."""
+"""Ambient startup TTS text + cache keying by primary name / custom phrase (B034 / B115)."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from hark.ambient import (
     wake_label_change_tts_text,
 )
 from hark.audio.cues import ambient_boot_line, tts_boot_cache_path, tts_cache_path
-from hark.config import AmbientConfig, HarkConfig
+from hark.config import AmbientConfig, HarkConfig, ListenConfig
 
 
-def _cfg(*, phrases=None, names=None, wake_mode=None) -> HarkConfig:
+def _cfg(*, phrases=None, names=None, wake_mode=None, end_mode=None) -> HarkConfig:
     amb = AmbientConfig(
         enabled=True,
         activation_phrases=list(phrases or ["hey hark", "hey herald"]),
@@ -20,7 +20,10 @@ def _cfg(*, phrases=None, names=None, wake_mode=None) -> HarkConfig:
         amb.names = list(names)  # type: ignore[attr-defined]
     if wake_mode is not None:
         amb.wake_mode = wake_mode  # type: ignore[attr-defined]
-    return HarkConfig(ambient=amb)
+    listen = ListenConfig()
+    if end_mode is not None:
+        listen.end_mode = end_mode
+    return HarkConfig(ambient=amb, listen=listen)
 
 
 def test_default_boot_uses_first_activation_phrase():
@@ -34,7 +37,9 @@ def test_default_boot_uses_first_activation_phrase():
     # name, so the boot label is equally "the first activation phrase".
     assert AmbientConfig().activation_phrases[0] == expected
     assert primary_wake_label(cfg) == expected
-    assert ambient_boot_tts_text(cfg) == ambient_boot_line(expected)
+    assert ambient_boot_tts_text(cfg) == ambient_boot_line(
+        expected, end_mode=cfg.listen.end_mode
+    )
     assert expected in ambient_boot_tts_text(cfg)
 
 
@@ -55,6 +60,37 @@ def test_names_mode_uses_first_name():
     cfg = _cfg(phrases=["hey hark"], names=["alice", "bob"], wake_mode="names")
     assert primary_wake_label(cfg) == "hey alice"
     assert "alice" in ambient_boot_tts_text(cfg)
+
+
+def test_silence_boot_names_wake_label_without_radio_hint():
+    """B115: silence boot always speaks the primary wake phrase; no radio finish tip."""
+    cfg = _cfg(names=["iris"], wake_mode="names", end_mode="silence")
+    label = primary_wake_label(cfg)
+    assert label == "hey iris"
+    text = ambient_boot_tts_text(cfg)
+    assert label in text
+    assert text == ambient_boot_line(label, end_mode="silence")
+    low = text.lower()
+    assert "okay hark send" not in low
+    assert "radio" not in low
+
+
+def test_radio_boot_names_wake_label_and_finish_hint():
+    """B115: radio boot names the wake phrase and briefly how to finish a turn."""
+    cfg = _cfg(names=["iris"], wake_mode="names", end_mode="radio")
+    label = primary_wake_label(cfg)
+    assert label == "hey iris"
+    text = ambient_boot_tts_text(cfg)
+    assert label in text
+    assert text == ambient_boot_line(label, end_mode="radio")
+    low = text.lower()
+    assert "okay hark send" in low
+    # Soft end / natural pause guidance (short for TTS)
+    assert "pause" in low or "soft" in low
+    # Silence boot must differ so TTS cache keys (full text) diverge by end_mode
+    silence = ambient_boot_line(label, end_mode="silence")
+    assert text != silence
+    assert label in silence
 
 
 def test_boot_cache_path_keyed_on_label():
@@ -79,6 +115,14 @@ def test_different_labels_different_cache_paths():
         for label in ("hey hark", "hey herald", "start prompt", "hey alice")
     }
     assert len(paths) == 4
+
+
+def test_radio_vs_silence_boot_cache_paths_differ():
+    """Full boot text (incl. radio hint) drives TTS cache path (B115)."""
+    label = "hey iris"
+    silence = ambient_boot_line(label, end_mode="silence")
+    radio = ambient_boot_line(label, end_mode="radio")
+    assert tts_cache_path("eve", silence) != tts_cache_path("eve", radio)
 
 
 def test_wake_label_change_tts_text():

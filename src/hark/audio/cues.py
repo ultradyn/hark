@@ -218,10 +218,21 @@ def tts_cache_path(voice: str, text: str) -> Path:
     return TTS_CACHE_DIR / voice / f"{slug}-{h}.mp3"
 
 
-def ambient_boot_line(wake_label: str) -> str:
-    """Full ambient startup sentence for a primary name / custom phrase label."""
+def ambient_boot_line(wake_label: str, *, end_mode: str | None = None) -> str:
+    """Full ambient startup sentence for a primary name / custom phrase label.
+
+    Always names the wake activation phrase. When ``end_mode`` is radio, appends
+    a short finish hint (end phrase / soft end / natural pause) for TTS (B115).
+    """
     label = (wake_label or "hey hark").strip() or "hey hark"
-    return f"Hark ambient is listening. Say {label} when you need me."
+    line = f"Hark ambient is listening. Say {label} when you need me."
+    mode = (end_mode or "").strip().lower()
+    if mode == "radio":
+        # Keep short for spoken TTS; cover product end phrase + soft/idle finish.
+        line += (
+            " Radio mode: finish with okay hark send, a soft end, or a natural pause."
+        )
+    return line
 
 
 COMMON_PHRASES: tuple[str, ...] = (

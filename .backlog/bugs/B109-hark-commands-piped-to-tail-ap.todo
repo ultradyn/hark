@@ -1,0 +1,34 @@
+---
+complexity: low
+created_at: "2026-07-15T03:31:25Z"
+depends_on: []
+estimate_hours: 1
+id: B109
+priority: medium
+status: pending
+tags:
+    - cli
+    - ux
+    - github
+title: hark commands piped to | tail appear to hang / show no output (buffering)
+updated_at: "2026-07-15T03:31:25Z"
+---
+## GitHub
+https://github.com/ultradyn/hark/issues/3
+
+**Acceptance:** fix and close GitHub issue #3 as part of completing this bug (comment with resolution + close).
+
+## Summary
+Piping any hark command to `| tail` (or similar) suppresses all incremental output. For long-running / interactive commands (`hark tts --listen`, `hark monitor`) the command appears to hang: nothing prints until the process fully closes stdout.
+
+## Repro
+`hark tts --listen "..." | tail -15` → no output during recording; only prints after the stream finalizes.
+
+## Expected
+Line-buffered/streaming stdout so piped consumers see progress, and/or a warning when stdout is a non-tty pipe on interactive commands, and/or docs + skill guidance that agents must never pipe interactive hark commands to `tail`.
+
+## Actual
+Full buffering; looks hung; hides recording state.
+
+## Notes
+Agents wrapping hark often append `| tail` and break interactive flows.

@@ -128,3 +128,4 @@ bugs:
     - file: B127-worker-stop-can-signal-an-unre.todo
     - file: B128-hark-start-reports-healthy-whe.todo
     - file: B129-dashboard-static-path-traversa.todo
+    - file: B130-dashboard-sse-reconnect-can-sk.todo

@@ -1,0 +1,32 @@
+---
+complexity: medium
+created_at: "2026-07-15T21:01:16Z"
+depends_on: []
+estimate_hours: 1
+id: B130
+priority: high
+status: pending
+tags:
+    - dashboard
+    - sse
+    - event-loss
+    - state-feed
+title: Dashboard SSE reconnect can skip unseen backfill after the hello frame
+updated_at: "2026-07-15T21:01:16Z"
+---
+## Evidence
+DashboardHandler._handle_stream sends a hello envelope before replay. The hello cursor is TailPump.composite_cursor at current EOF, and _sse_write emits every envelope cursor as the SSE id. When a client requests since=watch:0 with two unseen events, the first frame is hello with id watch:2. If the connection drops then, EventSource reconnects with watch:2 and GET events since that id returns no backfill. The web ingest path also adopts hello.cursor immediately. Replay events are likewise stamped with the final page cursor rather than a per-record cursor, so a disconnect midway can skip the remainder. A live-server harness reproduced an empty replay after reconnect. The full suite still passes.
+
+## Expected
+Reconnect after any delivered frame resumes no later than the last event actually delivered. The REST-page to SSE handoff is gapless.
+
+## Actual
+The hello frame and every replay frame can advertise an EOF cursor ahead of unseen records, causing silent event loss on reconnect.
+
+## Acceptance criteria
+- A hello frame does not advance Last-Event-ID beyond the requested or already-delivered cursor.
+- Every replay event carries a cursor no later than that specific event.
+- Disconnect and reconnect after hello and after each replay event delivers every unseen record; documented duplicates may be acceptable, loss is not.
+- Test the REST page, append, then SSE transition for a gapless handoff.
+- Cover browser ingest behavior as well as HTTP server frames.
+- Preserve source filtering and live-event cursor behavior.

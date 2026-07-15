@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from contextlib import contextmanager
 
+import pytest
+
 from hark.config import HarkConfig
 from hark.speech import ListenResult, run_ask, speak_and_listen
 from hark.speak_then_listen import HandoffState, attach_tts_info
@@ -215,6 +217,75 @@ def test_run_ask_confirm_cancel_on_no(monkeypatch):
     assert out["ok"] is False
     assert out.get("cancelled") is True
     assert out.get("confirm_reply") == "cancel"
+
+
+@pytest.mark.parametrize(
+    ("confirm", "configured_mode", "risk", "expect_confirm"),
+    [
+        ("never", "always", "R0", False),
+        ("never", "always", "R1", False),
+        ("never", "always", "R2", False),
+        ("never", "always", "R3", False),
+        ("auto", "always", "R0", False),
+        ("auto", "always", "R1", False),
+        ("auto", "always", "R2", True),
+        ("auto", "always", "R3", True),
+        ("always", "never", "R0", True),
+        ("always", "never", "R1", True),
+        ("always", "never", "R2", True),
+        ("always", "never", "R3", True),
+        (None, "never", "R0", False),
+        (None, "never", "R1", False),
+        (None, "never", "R2", True),
+        (None, "never", "R3", True),
+    ],
+)
+def test_run_ask_confirmation_policy_by_risk(
+    monkeypatch, confirm, configured_mode, risk, expect_confirm
+):
+    cfg = HarkConfig()
+    cfg.confirm.mode = configured_mode
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "hark.speech.speak_and_listen",
+        lambda *a, **k: (
+            {"ok": True},
+            ListenResult(
+                text="three slices is fine",
+                provider="mock",
+                duration_ms=10,
+                end_mode="silence",
+                stream_id="answer",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "hark.speech.run_tts",
+        lambda *a, **k: calls.append("tts") or {"ok": True},
+    )
+    monkeypatch.setattr(
+        "hark.speech.run_listen",
+        lambda *a, **k: calls.append("listen")
+        or ListenResult(
+            text="  Yes. ",
+            provider="mock",
+            duration_ms=10,
+            end_mode="silence",
+            stream_id="confirm",
+        ),
+    )
+
+    out = run_ask(
+        cfg,
+        "Should I publish this package?",
+        confirm=confirm,
+        risk_hint=risk,
+    )
+
+    assert out["ok"] is True
+    assert out.get("cancelled") is not True
+    assert ("listen" in calls) is expect_confirm
 
 
 def test_run_ask_timeout_preserves_tts_info(monkeypatch):

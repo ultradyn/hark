@@ -30,7 +30,8 @@ def run_ask(
     """
     from hark import speech as speech_mod
 
-    confirm_mode = confirm or cfg.confirm.mode
+    explicit_confirm = confirm is not None
+    confirm_mode = confirm if explicit_confirm else cfg.confirm.mode
     try:
         tts_info, listened = speech_mod.speak_and_listen(
             cfg,
@@ -81,7 +82,7 @@ def run_ask(
     need_confirm = confirm_required(risk, confirm_mode)
     if confirm_mode == "always":
         need_confirm = True
-    if confirm_mode == "never" and risk not in ("R2", "R3"):
+    if explicit_confirm and confirm_mode == "never":
         need_confirm = False
 
     if need_confirm:

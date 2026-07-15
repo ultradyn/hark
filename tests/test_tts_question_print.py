@@ -218,10 +218,12 @@ def test_run_ask_prints_via_speak_and_listen(monkeypatch, capsys):
 def test_cmd_ask_uses_run_ask_print_path(monkeypatch, capsys):
     """CLI ask surfaces question on stderr before JSON on stdout."""
     printed: list[str] = []
+    seen_kwargs: list[dict] = []
 
     def fake_run_ask(cfg, prompt, **kwargs):
         maybe_print_tts_question(cfg, prompt)
         printed.append(prompt)
+        seen_kwargs.append(kwargs)
         return {
             "ok": True,
             "text": "yes",
@@ -234,7 +236,7 @@ def test_cmd_ask_uses_run_ask_print_path(monkeypatch, capsys):
     monkeypatch.setattr("hark.speech.run_ask", fake_run_ask)
     args = argparse.Namespace(
         text=["One:", "health.", "Two:", "sessions?"],
-        confirm=None,
+        confirm="never",
         end_mode=None,
         provider=None,
         json=True,
@@ -243,6 +245,9 @@ def test_cmd_ask_uses_run_ask_print_path(monkeypatch, capsys):
     code = cli.cmd_ask(args, HarkConfig())
     assert code == OK
     assert printed
+    assert seen_kwargs == [
+        {"confirm": "never", "end_mode": None, "provider": None}
+    ]
     captured = capsys.readouterr()
     assert "hark question" in captured.err
     assert '"ok": true' in captured.out.lower() or '"ok": true' in captured.out

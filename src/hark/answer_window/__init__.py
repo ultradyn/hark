@@ -8,6 +8,7 @@ and listen-control polling are implementation details. See
 from __future__ import annotations
 
 from hark.answer_window.deps import AnswerWindowDeps
+from hark.answer_window.open_window import open_answer_window
 from hark.answer_window.policy import (
     AnswerWindowPolicy,
     AnswerWindowProfile,
@@ -62,6 +63,7 @@ __all__ = [
     "log_empty_stt",
     "log_no_open",
     "monotonic_partial_text",
+    "open_answer_window",
     "policy_from_config",
     "prefer_complete_transcript",
     "radio_transition",

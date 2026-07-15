@@ -29,3 +29,5 @@ class AnswerWindowDeps:
     syslog: Callable[..., None] | None = None
     usage_store: Any | None = None
     endpoint_strategy: Any | None = None
+    # Temporary until E4.T002 fully injects STT/cues/duck without config.
+    cfg: Any | None = None

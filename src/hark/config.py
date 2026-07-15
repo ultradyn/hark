@@ -91,6 +91,7 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "conference_process_names",
         "conference_fail_open",
         "conference_check_audio",
+        "conference_browser_av_heuristic",
         "conference_poll_ms",
         "conference_max_hold_s",
         # Media ducking during TTS/STT (B045/B046 / I002)
@@ -300,6 +301,8 @@ class AudioConfig:
     conference_fail_open: bool = True
     # Also scan pactl/pw-cli stream names when available
     conference_check_audio: bool = True
+    # B118/B117: browser Playback sink-input + mic RecordStream source-output → conference
+    conference_browser_av_heuristic: bool = True
     # Poll interval while waiting for the call to end
     conference_poll_ms: int = 2000
     # Max seconds to hold (0 = wait until free / no cap). On timeout, speak anyway.
@@ -595,6 +598,8 @@ conference_chime_only = true # soft cue while held; full question after call end
 # conference_process_names = ["zoom", "teams", "webex", "discord", "slack"]
 conference_fail_open = true  # missing /proc or tools → allow TTS
 conference_check_audio = true
+# Browser Teams/Meet: Chromium Playback + Chromium input RecordStream → hold (B118)
+conference_browser_av_heuristic = true
 conference_poll_ms = 2000
 conference_max_hold_s = 30  # seconds; 0 = wait until free (can hang if Discord idle-matched)
 # Duck other media while TTS/STT runs (I002 / B045–B047) — never changes master/sink volume
@@ -1349,6 +1354,9 @@ def load_config(path: Path | None = None) -> HarkConfig:
             ),
             conference_fail_open=bool(audio_raw.get("conference_fail_open", True)),
             conference_check_audio=bool(audio_raw.get("conference_check_audio", True)),
+            conference_browser_av_heuristic=bool(
+                audio_raw.get("conference_browser_av_heuristic", True)
+            ),
             conference_poll_ms=int(audio_raw.get("conference_poll_ms", 2000)),
             conference_max_hold_s=float(audio_raw.get("conference_max_hold_s", 0)),
             # Media ducking (I002 / B045–B047). Env HARK_* supplies defaults
@@ -1618,6 +1626,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "conference_process_names": list(cfg.audio.conference_process_names),
             "conference_fail_open": cfg.audio.conference_fail_open,
             "conference_check_audio": cfg.audio.conference_check_audio,
+            "conference_browser_av_heuristic": cfg.audio.conference_browser_av_heuristic,
             "conference_poll_ms": cfg.audio.conference_poll_ms,
             "conference_max_hold_s": cfg.audio.conference_max_hold_s,
             "duck_media_during_tts": cfg.audio.duck_media_during_tts,

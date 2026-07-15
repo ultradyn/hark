@@ -443,3 +443,226 @@ Sink Input #9
     )
     assert match.active is True
     assert any(m.startswith("stream:") for m in match.matched)
+
+
+# ---------------------------------------------------------------------------
+# B118 / B117: browser Teams / Chromium VC (Playback + RecordStream)
+# ---------------------------------------------------------------------------
+
+# Dogfood-shaped pactl dumps (2026-07-15 teams-vc-check): browser Teams only
+# exposes application.name "Chromium" / "Chromium input" — no teams markers.
+
+_CHROMIUM_PLAYBACK_BLOB = """
+Sink Input #401
+	Driver: PipeWire
+	Owner Module: n/a
+	Client: 400
+	Sink: 42
+	Sample Specification: float32le 2ch 48000Hz
+	Corked: no
+	Mute: no
+	Properties:
+		application.name = "Chromium"
+		media.name = "Playback"
+		media.class = "Stream/Output/Audio"
+		application.process.id = "3174230"
+"""
+
+_CHROMIUM_PLAYBACK_BLOB_2 = """
+Sink Input #402
+	Driver: PipeWire
+	Corked: no
+	Mute: no
+	Properties:
+		application.name = "Chromium"
+		media.name = "Playback"
+		application.process.id = "3174230"
+"""
+
+_CHROMIUM_INPUT_RECORD_BLOB = """
+Source Output #510
+	Driver: PipeWire
+	Owner Module: n/a
+	Client: 509
+	Source: 43
+	Sample Specification: float32le 1ch 48000Hz
+	Corked: no
+	Mute: no
+	Properties:
+		application.name = "Chromium input"
+		media.name = "RecordStream"
+		media.class = "Stream/Input/Audio"
+		application.process.id = "3174230"
+"""
+
+
+def test_browser_teams_chromium_playback_plus_recordstream_active():
+    """B118 dogfood: Chromium Playback sink-inputs + Chromium input RecordStream."""
+    match = detect_conference(
+        proc_entries=[
+            ("1", "systemd", "/sbin/init"),
+            ("3174230", "chromium", "/usr/lib/chromium/chromium"),
+        ],
+        stream_blobs=[
+            _CHROMIUM_PLAYBACK_BLOB + _CHROMIUM_PLAYBACK_BLOB_2,
+            _CHROMIUM_INPUT_RECORD_BLOB,
+        ],
+        check_audio=True,
+    )
+    assert match.active is True
+    assert any("browser-av" in m for m in match.matched)
+    assert "audio" in match.sources
+
+
+def test_browser_chromium_playback_only_stays_free():
+    """Casual browser media (YouTube etc.) must not hold TTS."""
+    match = detect_conference(
+        proc_entries=[("3174230", "chromium", "/usr/lib/chromium/chromium")],
+        stream_blobs=[_CHROMIUM_PLAYBACK_BLOB],
+        check_audio=True,
+    )
+    assert match.active is False
+    assert not any("browser-av" in m for m in match.matched)
+
+
+def test_browser_chromium_recordstream_only_stays_free():
+    """Mic capture alone without conference-like playback stays free."""
+    match = detect_conference(
+        proc_entries=[("3174230", "chromium", "/usr/lib/chromium/chromium")],
+        stream_blobs=[_CHROMIUM_INPUT_RECORD_BLOB],
+        check_audio=True,
+    )
+    assert match.active is False
+    assert not any("browser-av" in m for m in match.matched)
+
+
+def test_browser_chrome_and_firefox_av_heuristic():
+    chrome_play = """
+Sink Input #10
+    Properties:
+        application.name = "Google Chrome"
+        media.name = "Playback"
+"""
+    chrome_rec = """
+Source Output #11
+    Properties:
+        application.name = "Chrome input"
+        media.name = "RecordStream"
+"""
+    match = detect_conference(
+        proc_entries=[("1", "bash", "bash")],
+        stream_blobs=[chrome_play, chrome_rec],
+        check_audio=True,
+    )
+    assert match.active is True
+    assert any("browser-av" in m for m in match.matched)
+
+    ff_play = """
+Sink Input #20
+    Properties:
+        application.name = "Firefox"
+        media.name = "Playback"
+"""
+    ff_rec = """
+Source Output #21
+    Properties:
+        application.name = "Firefox"
+        media.name = "RecordStream"
+"""
+    match_ff = detect_conference(
+        proc_entries=[("1", "bash", "bash")],
+        stream_blobs=[ff_play, ff_rec],
+        check_audio=True,
+    )
+    assert match_ff.active is True
+    assert any("browser-av" in m for m in match_ff.matched)
+
+
+def test_browser_av_heuristic_disabled_via_flag():
+    """Optional conference_browser_av_heuristic=false keeps prior behavior."""
+    match = detect_conference(
+        proc_entries=[("1", "bash", "bash")],
+        stream_blobs=[_CHROMIUM_PLAYBACK_BLOB, _CHROMIUM_INPUT_RECORD_BLOB],
+        check_audio=True,
+        browser_av_heuristic=False,
+    )
+    assert match.active is False
+    assert not any("browser-av" in m for m in match.matched)
+
+
+def test_browser_av_heuristic_config_default_on(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text("version = 1\n", encoding="utf-8")
+    cfg = load_config(path)
+    assert cfg.audio.conference_browser_av_heuristic is True
+
+    path2 = tmp_path / "config2.toml"
+    path2.write_text(
+        """
+[audio]
+conference_browser_av_heuristic = false
+""",
+        encoding="utf-8",
+    )
+    cfg2 = load_config(path2)
+    assert cfg2.audio.conference_browser_av_heuristic is False
+
+    # is_conference_active respects config
+    assert (
+        is_conference_active(
+            cfg,
+            proc_entries=[("1", "bash", "bash")],
+            stream_blobs=[_CHROMIUM_PLAYBACK_BLOB, _CHROMIUM_INPUT_RECORD_BLOB],
+            check_audio=True,
+        )
+        is True
+    )
+    assert (
+        is_conference_active(
+            cfg2,
+            proc_entries=[("1", "bash", "bash")],
+            stream_blobs=[_CHROMIUM_PLAYBACK_BLOB, _CHROMIUM_INPUT_RECORD_BLOB],
+            check_audio=True,
+        )
+        is False
+    )
+
+
+def test_browser_av_ignores_non_browser_playback_plus_chromium_mic():
+    """Non-browser music + Chromium mic alone is not a conference."""
+    music = """
+Sink Input #7
+    Properties:
+        application.name = "Spotify"
+        media.name = "playback"
+"""
+    match = detect_conference(
+        proc_entries=[("1", "bash", "bash")],
+        stream_blobs=[music, _CHROMIUM_INPUT_RECORD_BLOB],
+        check_audio=True,
+    )
+    assert match.active is False
+
+
+def test_browser_av_four_playback_streams_dogfood_shape():
+    """Multiple Chromium Playback streams + one RecordStream (Teams dogfood)."""
+    plays = "".join(
+        f"""
+Sink Input #{400 + i}
+    Corked: no
+    Properties:
+        application.name = "Chromium"
+        media.name = "Playback"
+        application.process.id = "3174230"
+"""
+        for i in range(4)
+    )
+    match = detect_conference(
+        proc_entries=[
+            ("3174230", "chromium", "/usr/lib/chromium/chromium --type=renderer"),
+        ],
+        stream_blobs=[plays, _CHROMIUM_INPUT_RECORD_BLOB],
+        check_audio=True,
+    )
+    assert match.active is True
+    assert any("browser-av" in m for m in match.matched)

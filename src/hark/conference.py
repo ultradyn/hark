@@ -13,6 +13,12 @@ on), TTS play paths:
 Detection is fail-open by default: missing tools / unreadable ``/proc`` means
 "not in conference" so handsfree still works on stripped environments.
 
+Browser Teams/Meet (B118/B117): Pulse often only shows ``Chromium`` Playback
+sink-inputs plus ``Chromium input`` RecordStream source-outputs — no
+teams/meet markers. When ``conference_browser_av_heuristic`` is on (default),
+that dual-direction pair counts as conference-active. Playback-only or
+capture-only browser streams stay free.
+
 Deep module: one public decision surface for callers (``is_conference_active``,
 ``apply_conference_hold``); internals stay private.
 """
@@ -21,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -72,6 +79,26 @@ DEFAULT_STREAM_MARKERS: tuple[str, ...] = (
     "chromium",
     "firefox",
 )
+
+# B118/B117: browser WebRTC/Teams — only "Chromium" / "Chromium input" in Pulse
+# application.name. Simultaneous Playback (sink-input) + RecordStream
+# (source-output) is treated as conference when both directions are browser.
+_BROWSER_APP_RE = re.compile(
+    r"(chromium|google chrome|chrome|firefox|brave|"
+    r"msedge|microsoft edge|opera)(?:\s+input)?\b",
+    re.IGNORECASE,
+)
+_STREAM_BLOCK_HEADER = re.compile(
+    r"^(Sink Input|Source Output)\s*#(\d+)\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+_PROP_LINE = re.compile(
+    r'^\s*([A-Za-z0-9_.-]+)\s*=\s*"([^"]*)"\s*$',
+    re.MULTILINE,
+)
+# Chromium/WebRTC media.name values (dogfood: Playback + RecordStream)
+_BROWSER_PLAYBACK_MEDIA = ("playback",)
+_BROWSER_CAPTURE_MEDIA = ("recordstream", "record stream")
 
 # Soft dual-tone conference-hold chime (Hz).
 _CHIME_FREQS: tuple[float, float] = (523.25, 392.0)  # C5 → G4 soft drop
@@ -170,6 +197,14 @@ def max_hold_s_from_config(cfg: "HarkConfig | AudioConfig | None") -> float:
     if audio is None:
         return _DEFAULT_MAX_HOLD_S
     return max(0.0, float(getattr(audio, "conference_max_hold_s", _DEFAULT_MAX_HOLD_S)))
+
+
+def browser_av_heuristic_from_config(cfg: "HarkConfig | AudioConfig | None") -> bool:
+    """B118: browser Playback + mic RecordStream heuristic (default on)."""
+    audio = _audio_cfg(cfg)
+    if audio is None:
+        return True
+    return bool(getattr(audio, "conference_browser_av_heuristic", True))
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +357,109 @@ def _match_stream_blobs(
     return hits
 
 
+def _is_browser_app_name(app_name: str) -> bool:
+    """True when Pulse application.name looks like a browser (or browser input)."""
+    name = (app_name or "").strip()
+    if not name:
+        return False
+    # Common exact-ish forms: "Chromium", "Chromium input", "Google Chrome", "Firefox"
+    low = name.lower()
+    if low in {
+        "chromium",
+        "chromium input",
+        "google chrome",
+        "chrome",
+        "chrome input",
+        "firefox",
+        "firefox input",
+        "brave",
+        "brave input",
+        "msedge",
+        "microsoft edge",
+        "opera",
+        "opera input",
+    }:
+        return True
+    return bool(_BROWSER_APP_RE.search(name))
+
+
+def _media_matches(media_name: str, needles: Iterable[str]) -> bool:
+    low = (media_name or "").strip().lower()
+    if not low:
+        return False
+    # Collapse spaces so "Record Stream" matches recordstream needle variants
+    compact = low.replace(" ", "")
+    for n in needles:
+        nlow = (n or "").strip().lower()
+        if not nlow:
+            continue
+        if nlow in low or nlow.replace(" ", "") in compact:
+            return True
+    return False
+
+
+def _iter_stream_blocks(blob: str) -> list[tuple[str, str]]:
+    """Yield (kind, block) for Sink Input / Source Output sections in a dump."""
+    text = blob or ""
+    headers = list(_STREAM_BLOCK_HEADER.finditer(text))
+    if not headers:
+        return []
+    out: list[tuple[str, str]] = []
+    for i, m in enumerate(headers):
+        kind = m.group(1).strip().lower()
+        start = m.end()
+        end = headers[i + 1].start() if i + 1 < len(headers) else len(text)
+        out.append((kind, text[start:end]))
+    return out
+
+
+def _props_from_block(block: str) -> dict[str, str]:
+    props: dict[str, str] = {}
+    for pm in _PROP_LINE.finditer(block or ""):
+        props[pm.group(1).lower()] = pm.group(2)
+    return props
+
+
+def _match_browser_av_heuristic(blobs: Iterable[str]) -> list[str]:
+    """Detect browser conference via simultaneous playback + mic capture.
+
+    Browser-based Teams/Meet often only expose Pulse ``application.name``
+    values like ``Chromium`` / ``Chromium input`` with ``media.name``
+    ``Playback`` (sink-input) and ``RecordStream`` (source-output). Neither
+    alone is enough (casual media or mic-only); both directions required.
+    """
+    has_playback = False
+    has_capture = False
+
+    for blob in blobs:
+        text = blob or ""
+        if not text.strip():
+            continue
+        blocks = _iter_stream_blocks(text)
+        if not blocks:
+            # Unstructured / short dumps: property scan alone is too loose.
+            continue
+        for kind, block in blocks:
+            props = _props_from_block(block)
+            app = props.get("application.name", "") or props.get(
+                "application.process.binary", ""
+            )
+            media = props.get("media.name", "")
+            if not _is_browser_app_name(app):
+                continue
+            if kind == "sink input":
+                if _media_matches(media, _BROWSER_PLAYBACK_MEDIA):
+                    has_playback = True
+            elif kind == "source output":
+                if _media_matches(media, _BROWSER_CAPTURE_MEDIA):
+                    has_capture = True
+
+    if has_playback and has_capture:
+        # Stable single hit key for logs / queue / tests
+        return ["stream:browser-av"]
+    return []
+
+
 def detect_conference(
     *,
     process_names: Iterable[str] | None = None,
@@ -329,11 +467,16 @@ def detect_conference(
     stream_blobs: list[str] | None = None,
     check_audio: bool = True,
     fail_open: bool = True,
+    browser_av_heuristic: bool = True,
     proc_root: Path | str = "/proc",
 ) -> ConferenceMatch:
     """Inspect processes (and optionally audio streams) for conference apps.
 
     Parameters allow full mocking in tests (no real Zoom).
+
+    ``browser_av_heuristic`` (B118/B117, default on): treat simultaneous
+    browser Playback sink-input + browser mic RecordStream source-output as
+    an active conference even without teams/meet/zoom stream markers.
     """
     names = list(process_names) if process_names is not None else list(DEFAULT_PROCESS_NAMES)
     sources: list[str] = []
@@ -364,6 +507,8 @@ def detect_conference(
                 matched.extend(
                     _match_stream_blobs(blobs, process_names=names)
                 )
+                if browser_av_heuristic:
+                    matched.extend(_match_browser_av_heuristic(blobs))
         except Exception as exc:  # pragma: no cover
             errors.append(f"audio scan: {exc}")
 
@@ -442,6 +587,7 @@ def is_conference_active(
     stream_blobs: list[str] | None = None,
     check_audio: bool | None = None,
     fail_open: bool | None = None,
+    browser_av_heuristic: bool | None = None,
     detect: Callable[..., ConferenceMatch] | None = None,
 ) -> bool:
     """Return True when a known conference app appears active."""
@@ -454,6 +600,11 @@ def is_conference_active(
     audio = _audio_cfg(cfg)
     if check_audio is None:
         check_audio = bool(getattr(audio, "conference_check_audio", True)) if audio else True
+    bav = (
+        browser_av_heuristic_from_config(cfg)
+        if browser_av_heuristic is None
+        else browser_av_heuristic
+    )
     detector = detect or detect_conference
     match = detector(
         process_names=names,
@@ -461,6 +612,7 @@ def is_conference_active(
         stream_blobs=stream_blobs,
         check_audio=check_audio,
         fail_open=fo,
+        browser_av_heuristic=bav,
     )
     return match.active
 
@@ -635,6 +787,7 @@ def _default_detect(cfg: "HarkConfig | AudioConfig | None") -> ConferenceMatch:
         process_names=process_names_from_config(cfg),
         check_audio=check_audio,
         fail_open=fail_open_from_config(cfg),
+        browser_av_heuristic=browser_av_heuristic_from_config(cfg),
     )
 
 

@@ -66,6 +66,122 @@ def test_clean_completion_not_pending() -> None:
     assert not hit
 
 
+# ---------------------------------------------------------------------------
+# B111: idle Claude Code empty ❯ must not look like numbered_menu
+# ---------------------------------------------------------------------------
+
+CLAUDE_IDLE_PANE = """\
+I finished the review of the agent-session-forwarder.
+
+Want me to walk through any specific part?
+
+╭──────────────────────────────────────────────────────────────╮
+│ ❯                                                            │
+╰──────────────────────────────────────────────────────────────╯
+  ~/s/agent-session-forwarder  main   Opus 4.8 (1M context)
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+"""
+
+CLAUDE_IDLE_WITH_PROSE_LIST = """\
+I made three changes:
+
+1. Updated the watcher to ignore empty prompts
+2. Aligned with hark queue stale treatment
+3. Added fixtures for Claude Code chrome
+
+Want me to walk through any specific part?
+
+❯
+────────────────────────────────────
+   ~/s/agent-session-forwarder  main   Opus 4.8 (1M context)
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+"""
+
+CLAUDE_PERMISSION_MENU = """\
+Claude wants to edit package.json
+
+Do you want to proceed?
+❯ 1. Yes
+  2. Yes, and don't ask again for this session
+  3. No, and tell Claude what to do differently
+"""
+
+
+def test_claude_idle_empty_prompt_not_pending() -> None:
+    """Empty ❯ + box-drawing / status chrome alone is conversational turn-end."""
+    hit = looks_like_pending_question(CLAUDE_IDLE_PANE)
+    assert not hit
+    assert "numbered_menu" not in hit.reasons
+
+
+def test_claude_idle_prose_numbered_list_not_pending() -> None:
+    """Assistant enumeration in scrollback above idle ❯ is not a menu (B111)."""
+    hit = looks_like_pending_question(CLAUDE_IDLE_WITH_PROSE_LIST)
+    assert not hit
+    assert "numbered_menu" not in hit.reasons
+
+
+def test_claude_permission_menu_still_pending() -> None:
+    """Real Claude selection UI (❯ 1. Yes / 2. / 3.) remains false-done."""
+    hit = looks_like_pending_question(CLAUDE_PERMISSION_MENU)
+    assert hit
+    assert "numbered_menu" in hit.reasons
+    assert len(hit.choices) >= 2
+
+
+def test_menu_immediately_above_empty_prompt_still_pending() -> None:
+    """Typed-reply menus: contiguous options then bare ❯ still count (B016)."""
+    text = (
+        "Which path should I use?\n\n"
+        "1. Use the default path\n"
+        "2. Custom path under /opt\n"
+        "3. Skip worker setup\n\n"
+        "❯"
+    )
+    hit = looks_like_pending_question(text)
+    assert hit
+    assert "numbered_menu" in hit.reasons
+
+
+def test_edge_tracker_idle_claude_no_needs_input() -> None:
+    """Watch must not emit agent.needs_input for idle empty Claude prompts."""
+    tracker = EdgeTracker()
+    interest = {"blocked", "done"}
+    tracker.process(
+        [_agent("working")],
+        interest=interest,
+        question_for=lambda _a: None,
+    )
+    events = tracker.process(
+        [_agent("done")],
+        interest=interest,
+        question_for=lambda _a: CLAUDE_IDLE_WITH_PROSE_LIST,
+        detect_false_done=True,
+    )
+    kinds = [e["kind"] for e in events]
+    assert "agent.needs_input" not in kinds
+    assert "agent.completed" in kinds
+    completed = next(e for e in events if e["kind"] == "agent.completed")
+    assert completed.get("false_done") is not True
+
+
+def test_ansi_wrapped_empty_prompt_not_pending() -> None:
+    """Colorized idle ❯ must still suppress scrollback numbered lists."""
+    text = (
+        "I made three changes:\n\n"
+        "1. Updated the watcher\n"
+        "2. Aligned with queue\n"
+        "3. Added fixtures\n\n"
+        "Want me to walk through any specific part?\n\n"
+        "\x1b[38;5;245m❯\x1b[0m\n"
+        "────────────────────────────────────\n"
+        "  ~/src/foo  main\n"
+    )
+    hit = looks_like_pending_question(text)
+    assert not hit
+    assert "numbered_menu" not in hit.reasons
+
+
 def _agent(status: str = "done") -> AgentInfo:
     return AgentInfo(
         session_id="local",

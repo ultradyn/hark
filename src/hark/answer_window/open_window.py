@@ -290,7 +290,12 @@ def open_answer_window(
             exclude_conference=True,
         ),
     ):
-        register_active_listen(stream, mode=mode.value)
+        register_active_listen(
+            stream,
+            mode=mode.value,
+            streaming=bool(policy.streaming),
+            streaming_ack_min_quiet_s=float(policy.streaming_ack_min_quiet_s or 2.0),
+        )
         try:
             if mode is EndMode.SILENCE:
                 # Recovery decision + attempt bookkeeping live on SilenceSession.

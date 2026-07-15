@@ -41,21 +41,34 @@ def voice_activity_path() -> Path:
     return listen_control_dir() / "voice.json"
 
 
-def register_active_listen(stream_id: str, *, mode: str = "radio") -> Path:
-    """Mark a listen session active so agents can target it."""
+def register_active_listen(
+    stream_id: str,
+    *,
+    mode: str = "radio",
+    streaming: bool = False,
+    streaming_ack_min_quiet_s: float | None = None,
+) -> Path:
+    """Mark a listen session active so agents can target it.
+
+    ``streaming`` / ``streaming_ack_min_quiet_s`` come from ListenSessionPolicy
+    at the open seam (P1.M6) so TTS quiet-gate does not re-read ambient TOML.
+    """
     d = listen_control_dir()
     d.mkdir(parents=True, exist_ok=True)
     # clear stale command for this stream
     command_path(stream_id).unlink(missing_ok=True)
     command_path(None).unlink(missing_ok=True)
-    payload = {
+    payload: dict[str, Any] = {
         "stream_id": stream_id,
         "mode": mode,
+        "streaming": bool(streaming),
         "pid": os.getpid(),
         "started_at": time.time(),
         "end_cmd": f"hark listen-end --stream-id {stream_id}",
         "cancel_cmd": f"hark listen-end --stream-id {stream_id} --cancel",
     }
+    if streaming_ack_min_quiet_s is not None:
+        payload["streaming_ack_min_quiet_s"] = float(streaming_ack_min_quiet_s)
     path = active_path()
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     # Fresh capture: clear prior voice activity so quiet is measured from start.

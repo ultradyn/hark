@@ -26,8 +26,11 @@ def test_effective_radio_idle_streaming_clamps_to_quiet_window():
             radio_idle_end_silence_s=6.3,
         ),
     )
-    assert effective_radio_idle_end_s(cfg) == pytest.approx(2.1)
-    assert effective_radio_idle_end_s(cfg, streaming=True) == pytest.approx(2.1)
+    # P1.M6: omit kwargs → bound_answer (no ambient leak) → classic 6.3
+    assert effective_radio_idle_end_s(cfg) == pytest.approx(6.3)
+    assert effective_radio_idle_end_s(
+        cfg, streaming=True, streaming_ack_min_quiet_s=2.0
+    ) == pytest.approx(2.1)
 
 
 def test_effective_radio_idle_streaming_uses_ack_when_higher():
@@ -35,7 +38,9 @@ def test_effective_radio_idle_streaming_uses_ack_when_higher():
         ambient=AmbientConfig(streaming=True, streaming_ack_min_quiet_s=3.0),
         listen=ListenConfig(end_silence_s=2.1, radio_idle_end_silence_s=6.3),
     )
-    assert effective_radio_idle_end_s(cfg) == pytest.approx(3.0)
+    assert effective_radio_idle_end_s(
+        cfg, streaming=True, streaming_ack_min_quiet_s=3.0
+    ) == pytest.approx(3.0)
 
 
 def test_effective_radio_idle_respects_faster_explicit_idle():
@@ -44,7 +49,9 @@ def test_effective_radio_idle_respects_faster_explicit_idle():
         ambient=AmbientConfig(streaming=True, streaming_ack_min_quiet_s=2.0),
         listen=ListenConfig(end_silence_s=2.1, radio_idle_end_silence_s=1.0),
     )
-    assert effective_radio_idle_end_s(cfg) == pytest.approx(1.0)
+    assert effective_radio_idle_end_s(
+        cfg, streaming=True, streaming_ack_min_quiet_s=2.0
+    ) == pytest.approx(1.0)
 
 
 def test_radio_streaming_uses_clamped_idle_timeout(monkeypatch):

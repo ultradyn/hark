@@ -502,16 +502,9 @@ def run_tts(
                     # Synth may already be done; same-PID capture is ignored so
                     # in-listen nudges still speak.
                     if bool(getattr(cfg.audio, "defer_tts_while_listening", True)):
-                        ambient_cfg = getattr(cfg, "ambient", None)
-                        streaming_ack = bool(
-                            getattr(ambient_cfg, "streaming", False)
-                        )
-                        min_quiet = float(
-                            getattr(
-                                ambient_cfg, "streaming_ack_min_quiet_s", 2.0
-                            )
-                            or 2.0
-                        )
+                        # P1.M6: quiet-gate from active listen policy / explicit
+                        # seam — not raw [ambient].streaming getattr (bound HOLD).
+                        streaming_ack, min_quiet = _tts_defer_streaming_params(cfg)
                         defer = wait_until_tts_play_allowed(
                             streaming=streaming_ack,
                             min_quiet_s=min_quiet,
@@ -534,7 +527,7 @@ def run_tts(
                                     "streaming acks do not barge into continuous "
                                     "speech (B105). "
                                     "Set [audio].defer_tts_while_listening = false "
-                                    "to disable; [ambient].streaming_ack_min_quiet_s "
+                                    "to disable; policy streaming_ack_min_quiet_s "
                                     "tunes the quiet gate."
                                 )
                             else:
@@ -843,6 +836,39 @@ def _transcribe_logged(
 # live in hark.answer_window.text_join (owned by RadioSession); imported above.
 
 
+def _tts_defer_streaming_params(cfg: HarkConfig) -> tuple[bool, float]:
+    """Resolve TTS quiet-gate streaming flags at the TTS call seam (P1.M6).
+
+    Prefer active listen registration (policy written at open). Fall back to
+    ``policy_from_config(cfg, \"post_wake\")`` only when no active listen is
+    registered (should rarely quiet-gate). Bound opens register ``streaming=False``.
+    """
+    try:
+        from hark.listen_control import read_active
+
+        active = read_active()
+    except Exception:
+        active = None
+    if active and active.get("stream_id"):
+        streaming_ack = bool(active.get("streaming", False))
+        raw_q = active.get("streaming_ack_min_quiet_s")
+        if raw_q is not None:
+            try:
+                min_quiet = float(raw_q)
+            except (TypeError, ValueError):
+                min_quiet = 2.0
+        else:
+            from hark.answer_window.policy import policy_from_config
+
+            min_quiet = float(
+                policy_from_config(cfg, "post_wake").streaming_ack_min_quiet_s or 2.0
+            )
+        return streaming_ack, max(0.0, min_quiet)
+
+    # No active listen: HOLD path (streaming=False); min_quiet unused.
+    return False, 2.0
+
+
 def effective_radio_idle_end_s(
     cfg: HarkConfig,
     *,
@@ -852,22 +878,32 @@ def effective_radio_idle_end_s(
     """Post-speech quiet before radio auto-finish (B074 + B112 streaming).
 
     Prefer :func:`hark.answer_window.policy.effective_radio_idle_s` with an
-    :class:`AnswerWindowPolicy` built at the call seam. This helper remains for
-    callers that still pass cfg; it must not be used *inside* a session loop to
-    re-read ``cfg.ambient`` — pass ``streaming`` / ``streaming_ack_min_quiet_s``
-    explicitly from policy fields instead.
+    :class:`AnswerWindowPolicy` built at the call seam. When kwargs are omitted,
+    uses **bound_answer** profile via :func:`policy_from_config` (streaming off
+    by default — no ambient leak; P1.M6).
     """
-    from hark.answer_window.policy import AnswerWindowPolicy, effective_radio_idle_s
+    from hark.answer_window.policy import (
+        AnswerWindowPolicy,
+        effective_radio_idle_s,
+        policy_from_config,
+    )
     from hark.listen_end import EndMode as _EM
 
-    # Seam-only defaults for legacy callers that omit streaming flags.
-    if streaming is None:
-        streaming = bool(getattr(getattr(cfg, "ambient", None), "streaming", False))
-    if streaming_ack_min_quiet_s is None:
-        streaming_ack_min_quiet_s = float(
-            getattr(getattr(cfg, "ambient", None), "streaming_ack_min_quiet_s", 2.0)
-            or 2.0
+    if streaming is None and streaming_ack_min_quiet_s is None:
+        pol = policy_from_config(cfg, "bound_answer")
+        return effective_radio_idle_s(
+            AnswerWindowPolicy(
+                profile=pol.profile,
+                end_mode=_EM.RADIO,
+                max_listen_s=1.0,
+                end_silence_s=float(pol.end_silence_s),
+                radio_idle_end_silence_s=float(pol.radio_idle_end_silence_s or 0.0),
+                streaming=bool(pol.streaming),
+                streaming_ack_min_quiet_s=float(pol.streaming_ack_min_quiet_s or 2.0),
+            )
         )
+
+    pol_base = policy_from_config(cfg, "bound_answer")
     pol = AnswerWindowPolicy(
         profile="bound_answer",
         end_mode=_EM.RADIO,
@@ -876,8 +912,12 @@ def effective_radio_idle_end_s(
         radio_idle_end_silence_s=float(
             getattr(cfg.listen, "radio_idle_end_silence_s", 0.0) or 0.0
         ),
-        streaming=bool(streaming),
-        streaming_ack_min_quiet_s=float(streaming_ack_min_quiet_s),
+        streaming=bool(streaming) if streaming is not None else bool(pol_base.streaming),
+        streaming_ack_min_quiet_s=float(
+            streaming_ack_min_quiet_s
+            if streaming_ack_min_quiet_s is not None
+            else (pol_base.streaming_ack_min_quiet_s or 2.0)
+        ),
     )
     return effective_radio_idle_s(pol)
 

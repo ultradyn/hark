@@ -117,3 +117,4 @@ bugs:
     - file: B116-when-hark-is-run-the-user-shou.todo
     - file: B117-teams-vc-detection-miss-at-4-3.todo
     - file: B118-b017-browser-teams-chromium-vc.todo
+    - file: B119-tts-mute-mic-cuts-off-operator.todo

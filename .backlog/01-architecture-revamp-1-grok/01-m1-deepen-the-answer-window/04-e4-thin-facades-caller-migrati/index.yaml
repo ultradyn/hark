@@ -30,7 +30,7 @@ tasks:
       file: T002-migrate-ambient-complete-after.todo
       id: T002
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: Migrate ambient complete_after_wake + CLI cmd_listen
     - complexity: medium
@@ -40,6 +40,6 @@ tasks:
       file: T003-remove-obsolete-kwargs-from-pu.todo
       id: T003
       priority: medium
-      status: pending
+      status: in_progress
       tags: []
       title: Remove obsolete kwargs from public call sites

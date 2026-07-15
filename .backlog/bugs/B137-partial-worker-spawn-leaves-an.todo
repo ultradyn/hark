@@ -1,17 +1,18 @@
 ---
+claimed_at: "2026-07-15T21:06:39Z"
+claimed_by: codex-urban-morn-b847
+completed_at: null
 complexity: medium
 created_at: "2026-07-15T21:03:22Z"
 depends_on: []
 estimate_hours: 1
 id: B137
 priority: high
-status: pending
-tags:
-    - workers
-    - process-lifecycle
-    - rollback
+started_at: "2026-07-15T21:06:39Z"
+status: in_progress
+tags: []
 title: Partial worker spawn leaves an untracked live child
-updated_at: "2026-07-15T21:03:22Z"
+updated_at: "2026-07-15T21:06:39Z"
 ---
 ## Evidence
 daemon.spawn_mode_a_workers starts watch, then starts ambient, and writes mode-a.pids only after both Popen calls succeed. If the second spawn raises OSError, start_workers catches the exception but has no access to the first child. A deterministic reproduction reported start_ok false, first_child_alive true, and pidfile_exists false. The orphan can keep watching or holding resources while status says no workers. This is distinct from completed B015 and from B127/B128.

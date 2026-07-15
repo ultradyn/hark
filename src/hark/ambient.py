@@ -446,6 +446,29 @@ def _wait_for_wake(
                     scored=dbg["scored"],
                     skipped_quiet=dbg["skipped_quiet"],
                 )
+                # B120/B123: near-zero RMS often means Pulse stuck Mute:yes after
+                # half-duplex TTS. Lightweight self-heal on the debug cadence.
+                if rms < 0.002:
+                    try:
+                        from hark.audio.mic_mute import (
+                            default_source,
+                            ensure_unmuted,
+                            source_is_muted,
+                        )
+
+                        src = default_source()
+                        if src and source_is_muted(src) is True:
+                            ensure_unmuted(source=src)
+                            syslog(
+                                "ambient.mute_self_heal",
+                                component="ambient",
+                                level="warn",
+                                message="Pulse source muted with near-zero RMS; unmuted",
+                                source=src,
+                                rms=round(rms, 5),
+                            )
+                    except Exception:
+                        pass
         return None
     finally:
         _close_stream()

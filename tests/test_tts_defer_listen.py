@@ -474,3 +474,139 @@ def test_run_tts_skips_defer_when_disabled(monkeypatch, tmp_path):
     assert out["ok"]
     assert defer_called["n"] == 0
     assert "listen_defer" not in out
+
+
+def test_run_tts_skips_mute_while_capture_still_active(monkeypatch, tmp_path):
+    """B119: streaming quiet-gate may allow play mid-listen; do not mute mic.
+
+    Short acks after operator quiet are OK; cutting open radio capture is not.
+    """
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    clear_active_listen()
+    clear_ambient_pause()
+
+    from hark.listen_control import active_path, listen_control_dir
+    from hark.mic_coord import DeferResult
+
+    listen_control_dir().mkdir(parents=True, exist_ok=True)
+    # Foreign live PID (init) so ignore_own_pid=True still sees capture
+    active_path().write_text(
+        json.dumps(
+            {
+                "stream_id": "sopenradio",
+                "mode": "radio",
+                "pid": 1,
+                "started_at": 0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mute_kwargs: list[dict] = []
+    set_mute_calls: list[tuple] = []
+
+    def fake_wait(**kwargs):
+        # Quiet-gate path: deferred but capture remains active
+        return DeferResult(
+            deferred=True,
+            wait_ms=80,
+            timed_out=False,
+            reason="listen:radio:sopenradio",
+            sources=["listen.active"],
+            gate="quiet",
+            quiet_s=2.1,
+            min_quiet_s=2.0,
+        )
+
+    class FakeMute:
+        def __init__(self, **kw):
+            mute_kwargs.append(kw)
+
+        def __enter__(self):
+            # enabled=False → no Pulse mute; was_muted unused
+            return SimpleNamespace(applied=False, was_muted=None)
+
+        def __exit__(self, *a):
+            return False
+
+    class FakeDuck:
+        def __enter__(self):
+            return SimpleNamespace(
+                as_meta=lambda: {
+                    "media_ducked": False,
+                    "duck_level": 0.15,
+                    "duck_count": 0,
+                    "duck_indices": [],
+                    "mpris_paused": [],
+                    "duck_error": None,
+                    "duck_nested": False,
+                }
+            )
+
+        def __exit__(self, *a):
+            return False
+
+    class FakeTts:
+        def synthesize(self, text, voice=None):
+            return SimpleNamespace(
+                audio=b"ID3fake",
+                provider="xai",
+                content_type="audio/mpeg",
+                voice=voice or "eve",
+            )
+
+    @contextmanager
+    def _fake_exclusive(ticket=None, wait_timeout_s=None, **_kw):
+        yield
+
+    play_calls: list[int] = []
+
+    monkeypatch.setattr("hark.speech.wait_until_tts_play_allowed", fake_wait)
+    monkeypatch.setattr("hark.speech.resolve_tts", lambda *a, **k: FakeTts())
+    monkeypatch.setattr("hark.speech.lookup_cached_tts", lambda *a, **k: None)
+    monkeypatch.setattr("hark.speech.store_cached_tts", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "hark.speech.play_wav_bytes",
+        lambda *a, **k: play_calls.append(1) or SimpleNamespace(duration_ms=10),
+    )
+    monkeypatch.setattr("hark.speech.mic_muted_during_tts", lambda **k: FakeMute(**k))
+    monkeypatch.setattr("hark.speech.duck_media", lambda *a, **k: FakeDuck())
+    monkeypatch.setattr(
+        "hark.speech.repair_tts_mute_after_play",
+        lambda **k: {"repaired": False},
+    )
+    monkeypatch.setattr(
+        "hark.conference.apply_conference_hold",
+        lambda *a, **k: SimpleNamespace(
+            skipped=False, as_meta=lambda: {"held": False}
+        ),
+    )
+    monkeypatch.setattr("hark.speech.exclusive_playback", _fake_exclusive)
+    monkeypatch.setattr("hark.speech.claim_tts_play_ticket", lambda: 0)
+    monkeypatch.setattr("hark.speech.abandon_tts_play_ticket", lambda t: None)
+    # Guard: if real mute path is ever used, set_source_mute(True) must not fire
+    monkeypatch.setattr(
+        "hark.audio.mic_mute.set_source_mute",
+        lambda src, mute: set_mute_calls.append((src, mute)) or True,
+    )
+
+    class U:
+        def record_tts(self, **k):
+            return None
+
+    monkeypatch.setattr("hark.speech.UsageStore", U)
+
+    cfg = HarkConfig()
+    cfg.audio.defer_tts_while_listening = True
+    cfg.audio.mute_mic_during_tts = True
+    cfg.audio.hold_during_conference = False
+    out = run_tts(cfg, "got it", play=True, conference_policy="force")
+    assert out["ok"] is True
+    assert play_calls == [1]
+    assert len(mute_kwargs) == 1
+    assert mute_kwargs[0].get("enabled") is False
+    assert out.get("mute_skipped_capture") is True
+    assert out.get("mic_muted") is False
+    assert not any(mute is True for _, mute in set_mute_calls)
+    clear_active_listen()

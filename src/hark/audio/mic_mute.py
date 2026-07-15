@@ -268,11 +268,18 @@ def repair_tts_mute_after_play(
     *,
     mute_was_enabled: bool,
     mute_applied: bool = False,
+    was_muted_before: bool | None = None,
 ) -> dict[str, object]:
-    """Post-``run_tts`` safety: depth must be 0; source unmuted if we muted.
+    """Post-``run_tts`` safety: depth must be 0; source unmuted if stuck.
+
+    Always verifies Pulse unmute after mute-enabled TTS paths (B120/B123), even
+    when ``mute_applied`` is False (crash/skip/desync can leave the source muted
+    without a clean hold exit). Does **not** fight intentional user pre-mute:
+    when ``was_muted_before is True`` (or we know mute was never applied and
+    source was already muted), leave Pulse as-is after clearing depth holds.
 
     Logs ``mic.mute_desync`` when a repair was required. Safe to call when mute
-    was disabled (no-op check for stuck depth from a prior turn).
+    was disabled (still clears stuck depth from a prior turn).
     """
     report: dict[str, object] = {
         "depth": tts_mute_depth(),
@@ -286,9 +293,11 @@ def repair_tts_mute_after_play(
         reasons.append("depth_nonzero")
         report["repaired"] = True
 
-    # If we applied mute (or mute was requested), verify Pulse is not stuck muted.
-    # Do not fight a user who was already muted before TTS (was_muted=True → not applied).
-    if mute_was_enabled and (mute_applied or report["repaired"]):
+    # After any mute-enabled play path, verify Pulse is not stuck muted (B120/B123).
+    # Skip only when we know the user/source was already muted before TTS and we
+    # did not apply mute (was_muted=True → mute not applied by design).
+    user_pre_muted = was_muted_before is True and not mute_applied
+    if mute_was_enabled and not user_pre_muted:
         src = default_source()
         if src and _which("pactl"):
             muted = source_is_muted(src)
@@ -310,6 +319,7 @@ def repair_tts_mute_after_play(
                 component="audio",
                 reasons=reasons,
                 mute_applied=mute_applied,
+                was_muted_before=was_muted_before,
                 depth=report["depth"],
                 source=report.get("source"),
             )

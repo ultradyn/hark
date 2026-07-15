@@ -45,6 +45,7 @@ from hark.listen_control import (
 from hark.endpointing import build_endpoint_strategy  # noqa: F401 — open_answer_window
 from hark.mic_coord import (
     pause_ambient_for_mic,  # noqa: F401 — open_answer_window / tests
+    user_capture_active,
     wait_until_tts_play_allowed,
 )
 from hark.providers.base import ProviderError
@@ -409,6 +410,8 @@ def run_tts(
     audio_parts: list[bytes] = []
     play_ms = 0
     mute_applied = False
+    mute_was_muted: bool | None = None
+    mute_skipped_capture = False
     mute_repair: dict[str, Any] | None = None
     duck_meta: dict[str, Any] | None = None
     defer_meta: dict[str, Any] | None = None
@@ -547,8 +550,35 @@ def run_tts(
                         ticket=play_ticket,
                         wait_timeout_s=play_wait_timeout_s,
                     ):
-                        with mic_muted_during_tts(enabled=do_mute) as mute_state:
-                            mute_applied = mute_state.applied
+                        # B119: re-probe at play time. Streaming quiet-gate (B105)
+                        # may allow short acks while listen is STILL ACTIVE — that
+                        # must not system-mute the mic (cuts open radio / mid-thought).
+                        # Same-PID capture is ignored so in-listen nudges can mute.
+                        play_mute = bool(do_mute)
+                        if play_mute:
+                            try:
+                                cap = user_capture_active(ignore_own_pid=True)
+                                if cap.active:
+                                    play_mute = False
+                                    mute_skipped_capture = True
+                                    syslog(
+                                        "tts.mute_skipped_capture",
+                                        component="tts",
+                                        level="info",
+                                        reason=cap.reason,
+                                        sources=list(cap.sources),
+                                        stream_id=cap.stream_id,
+                                        mode=cap.mode,
+                                        message=(
+                                            "skip mic mute while operator "
+                                            "listen/radio capture is open (B119)"
+                                        ),
+                                    )
+                            except Exception:
+                                pass
+                        with mic_muted_during_tts(enabled=play_mute) as mute_state:
+                            mute_applied = bool(getattr(mute_state, "applied", False))
+                            mute_was_muted = getattr(mute_state, "was_muted", None)
                             with duck_media(
                                 cfg, enabled=do_duck, exclude_conference=True
                             ) as duck_state:
@@ -599,11 +629,12 @@ def run_tts(
                     _apply_synth(ab, pn, ct, vu, fch)
     finally:
         if play:
-            # B086: never leave depth>0 or Pulse stuck muted after TTS
+            # B086 / B120 / B123: never leave depth>0 or Pulse stuck muted after TTS
             try:
                 mute_repair = repair_tts_mute_after_play(
                     mute_was_enabled=bool(do_mute),
                     mute_applied=mute_applied,
+                    was_muted_before=mute_was_muted,
                 )
             except Exception:
                 mute_repair = None
@@ -657,6 +688,8 @@ def run_tts(
         result["media_duck"] = duck_meta
     if defer_meta is not None:
         result["listen_defer"] = defer_meta
+    if mute_skipped_capture:
+        result["mute_skipped_capture"] = True
     if mute_repair is not None and mute_repair.get("repaired"):
         result["mute_repaired"] = mute_repair
     return result

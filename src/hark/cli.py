@@ -1720,16 +1720,18 @@ def cmd_listen_end(args: argparse.Namespace) -> int:
 
 
 def cmd_ask(args: argparse.Namespace, cfg) -> int:
+    from hark.audio.capture import capture_interrupt_signals
     from hark.speech import run_ask
 
     prompt = " ".join(args.text)
-    result = run_ask(
-        cfg,
-        prompt,
-        confirm=args.confirm,
-        end_mode=args.end_mode,
-        provider=args.provider,
-    )
+    with capture_interrupt_signals():
+        result = run_ask(
+            cfg,
+            prompt,
+            confirm=args.confirm,
+            end_mode=args.end_mode,
+            provider=args.provider,
+        )
     if not result.get("ok"):
         result["exit"] = normalize_failure_exit(result.get("exit"), fallback=ERROR)
     result["for_event"] = getattr(args, "event_id", None)

@@ -132,7 +132,17 @@ def speak_and_listen(
     handoff["tts_done_at"] = time.monotonic()
 
     if listen_thread is not None:
-        listen_thread.join()
+        try:
+            listen_thread.join()
+        except BaseException:
+            # The capture may be blocked inside PortAudio on the overlap worker.
+            # Abort only this process's registered stream, then give its normal
+            # Answer Window finally/context cleanup a bounded chance to finish.
+            from hark.audio.capture import cancel_active_capture
+
+            cancel_active_capture()
+            listen_thread.join(timeout=2.0)
+            raise
         err = listen_box.get("error")
         if err is not None:
             raise attach_tts_info(err, tts_info)

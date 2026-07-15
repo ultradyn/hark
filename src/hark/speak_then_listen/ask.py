@@ -33,7 +33,7 @@ def _provider_failure_result(
     return result
 
 
-def run_ask(
+def _run_ask(
     cfg: HarkConfig,
     prompt: str,
     *,
@@ -168,3 +168,37 @@ def run_ask(
         "tts": tts_info,
         "exit": OK,
     }
+
+
+def run_ask(
+    cfg: HarkConfig,
+    prompt: str,
+    *,
+    confirm: str | None = None,
+    end_mode: str | None = None,
+    provider: str | None = None,
+    risk_hint: str | None = None,
+) -> dict[str, Any]:
+    """Run an ask turn and translate process interruption into cancellation."""
+    try:
+        return _run_ask(
+            cfg,
+            prompt,
+            confirm=confirm,
+            end_mode=end_mode,
+            provider=provider,
+            risk_hint=risk_hint,
+        )
+    except KeyboardInterrupt as exc:
+        signal_name = getattr(exc, "signal_name", None)
+        end_phrase = f"signal:{signal_name}" if signal_name else "interrupt"
+        return {
+            "ok": False,
+            "cancelled": True,
+            "error": "interrupted",
+            "text": "",
+            "end_phrase": end_phrase,
+            "signal": signal_name,
+            "exit": ABORT,
+            "tts": getattr(exc, "tts_info", None),
+        }

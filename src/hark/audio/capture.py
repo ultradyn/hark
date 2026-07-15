@@ -5,13 +5,15 @@ from __future__ import annotations
 import io
 import fcntl
 import os
+import signal
 import struct
 import threading
 import time
 import wave
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import numpy as np
 
@@ -26,6 +28,84 @@ except ImportError:  # pragma: no cover
 
 class MicBusyError(RuntimeError):
     pass
+
+
+class CaptureInterrupted(KeyboardInterrupt):
+    """Process signal interrupted an active one-shot microphone capture."""
+
+    def __init__(self, signum: int) -> None:
+        self.signum = signum
+        try:
+            signal_name = signal.Signals(signum).name
+        except ValueError:
+            signal_name = str(signum)
+        self.signal_name = signal_name
+        super().__init__(f"capture interrupted by {signal_name}")
+
+
+_active_input_stream: Any | None = None
+
+
+def _abort_input_stream(stream: Any) -> None:
+    try:
+        stream.abort()
+    except Exception:
+        # The stream may already have stopped as the signal unwound read().
+        pass
+
+
+def cancel_active_capture() -> bool:
+    """Abort this process's active input stream, if any.
+
+    No PID lookup or process signalling is performed: this is deliberately
+    scoped to the PortAudio stream registered by this Python process.
+    """
+    stream = _active_input_stream
+    if stream is None:
+        return False
+    _abort_input_stream(stream)
+    return True
+
+
+@contextmanager
+def _registered_input_stream(stream: Any) -> Iterator[None]:
+    global _active_input_stream
+    previous = _active_input_stream
+    _active_input_stream = stream
+    try:
+        yield
+    except BaseException:
+        # PortAudio's blocking Pa_ReadStream may not make progress on its own.
+        # Abort before InputStream.__exit__ closes it, then preserve the exact
+        # cancellation/interrupt exception for the orchestration boundary.
+        _abort_input_stream(stream)
+        raise
+    finally:
+        if _active_input_stream is stream:
+            _active_input_stream = previous
+
+
+@contextmanager
+def capture_interrupt_signals() -> Iterator[None]:
+    """Scope SIGINT/SIGTERM to graceful cancellation of one-shot capture."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    watched = (signal.SIGINT, signal.SIGTERM)
+    previous = {signum: signal.getsignal(signum) for signum in watched}
+
+    def _interrupt(signum: int, _frame: object) -> None:
+        cancel_active_capture()
+        raise CaptureInterrupted(signum)
+
+    try:
+        for signum in watched:
+            signal.signal(signum, _interrupt)
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 class MicLease:
@@ -646,7 +726,7 @@ def capture_utterance(
             dtype="float32",
             blocksize=block,
             device=device,
-        ) as stream:
+        ) as stream, _registered_input_stream(stream):
             open_mono = time.monotonic()
             # Phase 0: drop leading audio (overlap pre-arm / fixed discard window)
             if discard_leading_ms > 0 or audio_ok_after is not None:

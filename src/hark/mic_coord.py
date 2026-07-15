@@ -27,9 +27,12 @@ races ``end_silence_s``; silence-mode streams must auto-finalize on pause.
 
 from __future__ import annotations
 
+import fcntl
 import json
+import math
 import os
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +44,9 @@ from hark.syslog import log as syslog
 
 DEFAULT_YIELD_TIMEOUT_S = 15.0
 _POLL_S = 0.05
+AMBIENT_PAUSE_VERSION = 2
+DEFAULT_PAUSE_OWNER_MAX_AGE_S = 4 * 60 * 60
+_FUTURE_SKEW_S = 5.0
 
 # ambient.pause reasons that mean bound speech capture (not wake-enroll etc.)
 _LISTEN_PAUSE_REASONS = frozenset({"listen", "ask", "tts-listen", "radio"})
@@ -54,18 +60,156 @@ def pause_path() -> Path:
     return state_dir() / "ambient.pause"
 
 
+def _pause_lock_path() -> Path:
+    return state_dir() / "ambient.pause.lock"
+
+
+@contextmanager
+def _pause_lock() -> Iterator[None]:
+    path = _pause_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _boot_id() -> str | None:
+    try:
+        value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return value.strip() or None
+
+
+def _process_start_time(pid: int) -> str | None:
+    """Return Linux procfs start ticks for *pid* (stable across PID reuse)."""
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        # comm is parenthesized and may itself contain spaces or parentheses.
+        after_comm = raw[raw.rfind(")") + 2 :].split()
+        return after_comm[19]
+    except (OSError, IndexError):
+        return None
+
+
+def _owner_is_live(owner: dict[str, Any], *, now: float) -> bool:
+    pid = owner.get("pid")
+    requested_at = owner.get("requested_at")
+    token = owner.get("token")
+    process_start = owner.get("process_start")
+    boot_id = owner.get("boot_id")
+    reason = owner.get("reason")
+    if (
+        not isinstance(pid, int)
+        or isinstance(pid, bool)
+        or not isinstance(requested_at, (int, float))
+        or isinstance(requested_at, bool)
+        or not isinstance(token, str)
+        or not isinstance(process_start, str)
+        or not isinstance(boot_id, str)
+        or not isinstance(reason, str)
+    ):
+        return False
+    if (
+        pid <= 0
+        or not token
+        or not process_start
+        or not boot_id
+        or not reason
+        or not math.isfinite(requested_at)
+        or requested_at > now + _FUTURE_SKEW_S
+        or now - requested_at > DEFAULT_PAUSE_OWNER_MAX_AGE_S
+    ):
+        return False
+    return _boot_id() == boot_id and _process_start_time(pid) == process_start
+
+
+def _read_live_owners_unlocked(*, now: float) -> tuple[list[dict[str, Any]], bool]:
+    path = pause_path()
+    if not path.is_file():
+        return [], False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return [], True
+    if not isinstance(payload, dict) or payload.get("version") != AMBIENT_PAUSE_VERSION:
+        return [], True
+    raw_owners = payload.get("owners")
+    if not isinstance(raw_owners, list):
+        return [], True
+    owners = [
+        owner
+        for owner in raw_owners
+        if isinstance(owner, dict) and _owner_is_live(owner, now=now)
+    ]
+    return owners, len(owners) != len(raw_owners)
+
+
+def _payload_for_owners(owners: list[dict[str, Any]]) -> dict[str, Any]:
+    latest = owners[-1]
+    return {
+        "version": AMBIENT_PAUSE_VERSION,
+        # Keep the original top-level shape for existing pause readers.
+        "reason": latest["reason"],
+        "pid": latest["pid"],
+        "requested_at": latest["requested_at"],
+        "token": latest["token"],
+        "owners": owners,
+    }
+
+
+def _fsync_parent(path: Path) -> None:
+    directory_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _write_owners_unlocked(owners: list[dict[str, Any]]) -> None:
+    path = pause_path()
+    if not owners:
+        existed = path.exists()
+        path.unlink(missing_ok=True)
+        if existed:
+            _fsync_parent(path)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(_payload_for_owners(owners), handle, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_parent(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def ambient_pause_requested() -> bool:
-    return pause_path().is_file()
+    return read_ambient_pause() is not None
 
 
 def read_ambient_pause() -> dict[str, Any] | None:
-    """Parse ``state/ambient.pause`` if present."""
-    path = pause_path()
-    if not path.is_file():
-        return None
+    """Read active pause owners, pruning dead, reused, expired, or bad state."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        with _pause_lock():
+            owners, dirty = _read_live_owners_unlocked(now=time.time())
+            if dirty:
+                _write_owners_unlocked(owners)
+            return _payload_for_owners(owners) if owners else None
+    except OSError:
+        # An unreadable marker is safer treated as a pause than ignored.
+        if pause_path().is_file():
+            return {"reason": "unknown", "pid": None, "owners": []}
         return None
 
 
@@ -73,31 +217,73 @@ def request_ambient_pause(
     *,
     reason: str = "listen",
     pid: int | None = None,
-) -> Path:
-    path = pause_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
+) -> str:
+    """Acquire a pause owner and return the token required to release it."""
+    owner_pid = pid if pid is not None else os.getpid()
+    if not isinstance(owner_pid, int) or isinstance(owner_pid, bool) or owner_pid <= 0:
+        raise ValueError("ambient pause owner pid must be a positive integer")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("ambient pause reason must be a non-empty string")
+    process_start = _process_start_time(owner_pid)
+    boot_id = _boot_id()
+    if process_start is None or boot_id is None:
+        raise RuntimeError(
+            f"cannot verify ambient pause owner identity for pid {owner_pid}"
+        )
+    token = uuid.uuid4().hex
+    owner = {
+        "token": token,
         "reason": reason,
-        "pid": pid if pid is not None else os.getpid(),
+        "pid": owner_pid,
         "requested_at": time.time(),
+        "process_start": process_start,
+        "boot_id": boot_id,
     }
-    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    with _pause_lock():
+        owners, _dirty = _read_live_owners_unlocked(now=time.time())
+        owners.append(owner)
+        _write_owners_unlocked(owners)
     syslog(
         "ambient.pause_request",
         component="mic",
         level="info",
         reason=reason,
-        pid=payload["pid"],
+        pid=owner_pid,
+        token=token,
     )
-    return path
+    return token
 
 
-def clear_ambient_pause() -> None:
-    path = pause_path()
+def clear_ambient_pause(token: str | None = None) -> None:
+    """Release exactly *token*, or a sole pause owner held by this process.
+
+    The tokenless form retains compatibility with existing cleanup callers but
+    refuses ambiguous overlapping state and never removes a newer live request.
+    """
     try:
-        if path.is_file():
-            path.unlink(missing_ok=True)
-            syslog("ambient.pause_clear", component="mic", level="info")
+        with _pause_lock():
+            owners, dirty = _read_live_owners_unlocked(now=time.time())
+            if token is None:
+                pid = os.getpid()
+                process_start = _process_start_time(pid)
+                boot_id = _boot_id()
+                sole_owner_is_ours = len(owners) == 1 and (
+                    owners[0].get("pid") == pid
+                    and owners[0].get("process_start") == process_start
+                    and owners[0].get("boot_id") == boot_id
+                )
+                retained = [] if sole_owner_is_ours else owners
+            else:
+                retained = [owner for owner in owners if owner.get("token") != token]
+            if dirty or len(retained) != len(owners):
+                _write_owners_unlocked(retained)
+                syslog(
+                    "ambient.pause_clear",
+                    component="mic",
+                    level="info",
+                    token=token,
+                    remaining=len(retained),
+                )
     except OSError:
         pass
 
@@ -130,12 +316,12 @@ def pause_ambient_for_mic(
 
     Use around bound listen/ask so ambient wake scanning does not raise mic busy.
     """
-    request_ambient_pause(reason=reason)
+    token = request_ambient_pause(reason=reason)
     try:
         wait_for_mic_free(timeout_s=timeout_s)
         yield
     finally:
-        clear_ambient_pause()
+        clear_ambient_pause(token)
 
 
 def _pid_alive(pid: int | None) -> bool:
@@ -242,8 +428,14 @@ def user_capture_active(*, ignore_own_pid: bool = True) -> UserCaptureState:
                 reason = f"{reason}:{stream_id}"
 
     pause = read_ambient_pause()
-    if pause and _listen_like_reason(str(pause.get("reason") or "")):
-        raw_pid = pause.get("pid")
+    pause_owners = pause.get("owners", []) if pause else []
+    if pause and not pause_owners:
+        # Fail-closed compatibility for an unreadable marker.
+        pause_owners = [pause]
+    for pause_owner in reversed(pause_owners):
+        if not _listen_like_reason(str(pause_owner.get("reason") or "")):
+            continue
+        raw_pid = pause_owner.get("pid")
         try:
             pid = int(raw_pid) if raw_pid is not None else None
         except (TypeError, ValueError):
@@ -252,9 +444,10 @@ def user_capture_active(*, ignore_own_pid: bool = True) -> UserCaptureState:
             sources.append("ambient.pause")
             if owner_pid is None:
                 owner_pid = pid
-            pr = str(pause.get("reason") or "listen")
+            pr = str(pause_owner.get("reason") or "listen")
             if reason is None:
                 reason = f"ambient.pause:{pr}"
+            break
 
     if not sources:
         return UserCaptureState(active=False)
@@ -321,9 +514,7 @@ def wait_until_user_capture_idle(
     """
     sleep = sleep_fn or time.sleep
     mono = monotonic_fn or time.monotonic
-    probe = probe_fn or (
-        lambda: user_capture_active(ignore_own_pid=ignore_own_pid)
-    )
+    probe = probe_fn or (lambda: user_capture_active(ignore_own_pid=ignore_own_pid))
     poll_s = max(0.02, float(poll_ms) / 1000.0)
     quiet_s = max(0.0, float(quiet_ms) / 1000.0)
     cap = float(max_wait_s)
@@ -468,9 +659,7 @@ def wait_until_tts_play_allowed(
       Quiet-gate mid-capture TTS races silence endpointing (mute freezes silence
       clocks). Live streaming acks apply to **radio** captures only.
     """
-    probe = probe_fn or (
-        lambda: user_capture_active(ignore_own_pid=ignore_own_pid)
-    )
+    probe = probe_fn or (lambda: user_capture_active(ignore_own_pid=ignore_own_pid))
 
     # B108: silence-mode streams must finalize on end_silence_s. Streaming quiet
     # gate is radio-only; force HOLD when the active capture is silence mode.

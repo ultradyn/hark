@@ -17,8 +17,9 @@ from hark.risk import classify_question
 # Statuses that Herdr may report while a human menu is still on screen (false done).
 _IDLE_LIKE = frozenset({"done", "idle", "completed", "complete"})
 
-# Numbered / lettered choice lines (menus).
-_MENU_LINE = re.compile(r"^\s*(?:\d+|[A-Da-d])[\).\]]\s+\S", re.M)
+# Numbered / lettered choice lines (menus). Optional leading ❯ for Claude-style
+# selection (``❯ 1. Yes``); bare empty ``❯`` does not match.
+_MENU_LINE = re.compile(r"^\s*(?:❯[ \t]+)?(?:\d+|[A-Da-d])[\).\]]\s+\S", re.M)
 # Explicit choice / reply prompts.
 _CHOICE_PHRASE = re.compile(
     r"(?i)\b("
@@ -35,6 +36,28 @@ _YN_PROMPT = re.compile(
 )
 # Trailing question that looks like it needs an answer (not rhetorical dump).
 _TRAILING_QUESTION = re.compile(r"\?\s*$")
+
+# Idle input chrome (Claude Code / Grok Build empty prompt). Box borders optional.
+_EMPTY_PROMPT_LINE = re.compile(
+    r"^[ \t]*[│|┃]?[ \t]*❯[ \t]*[│|┃]?[ \t]*$"
+)
+# Prompt with typed/selected content (active menu or partial input).
+_PROMPT_WITH_INPUT = re.compile(
+    r"^[ \t]*[│|┃]?[ \t]*❯[ \t]+\S"
+)
+# Pure box-drawing / horizontal rules — not menu content (B111).
+_BOX_DRAWING_LINE = re.compile(
+    r"^[ \t]*[─━═╌╍┄┅┈┉╭╮╯╰┌┐└┘├┤┬┴┼╱╲╳│┃+\-|]{2,}[ \t]*$"
+)
+# Status footer chrome under the prompt box.
+_STATUS_CHROME_LINE = re.compile(
+    r"(?i)^[ \t]*(?:"
+    r"⏵|bypass\s+permissions|shift\+tab|"
+    r"(?:opus|sonnet|haiku|grok|claude|codex)\b|"
+    r"\d+(?:\.\d+)?%\s*(?:context|used)?|"
+    r"[~.]?/[^\n]{0,120}\b(?:main|master|trunk|dev|develop|HEAD)\b"
+    r")"
+)
 
 
 def new_event_id() -> str:
@@ -64,13 +87,92 @@ class PendingQuestionHit:
         return self.matched
 
 
+def _is_prompt_chrome_line(line: str) -> bool:
+    """True for empty prompt, box-drawing, or status footer — not ask body."""
+    s = line.rstrip()
+    if not s.strip():
+        return True
+    if _EMPTY_PROMPT_LINE.match(s):
+        return True
+    if _BOX_DRAWING_LINE.match(s):
+        return True
+    if _STATUS_CHROME_LINE.search(s):
+        return True
+    return False
+
+
+def _menu_scan_region(raw: str) -> str:
+    """Text region that may hold an *active* numbered menu (B111).
+
+    Numbered lists in assistant scrollback above an idle empty ``❯`` prompt
+    must not count as ``numbered_menu``. Real menus either:
+
+    * sit on a content prompt (``❯ 1. Yes`` / following ``2. No``), or
+    * form a contiguous block immediately above an empty prompt (typed reply), or
+    * appear with no empty-prompt chrome (classic multi-line ask, B016).
+
+    Box-drawing / trailing ``❯`` alone never produce menu lines.
+    """
+    lines = raw.splitlines()
+    if not lines:
+        return raw
+
+    # Prefer the lowest content prompt (Claude selection UI) in the viewport.
+    last_content_i: int | None = None
+    last_empty_i: int | None = None
+    # Search near the bottom — scrollback prompts are noise.
+    start = max(0, len(lines) - 50)
+    for i in range(len(lines) - 1, start - 1, -1):
+        ln = lines[i]
+        if _PROMPT_WITH_INPUT.match(ln):
+            last_content_i = i
+            break
+        if _EMPTY_PROMPT_LINE.match(ln):
+            # Empty idle prompt at the bottom wins; older content prompts above
+            # are scrollback and must not re-open the menu region.
+            last_empty_i = i
+            break
+
+    if last_content_i is not None:
+        # Active selection UI from the selected line through following options.
+        return "\n".join(lines[last_content_i:])
+
+    if last_empty_i is not None:
+        # Idle empty prompt: only a contiguous menu block immediately above it
+        # (blank / chrome lines allowed between items; any other prose stops).
+        block: list[str] = []
+        j = last_empty_i - 1
+        while j >= 0 and _is_prompt_chrome_line(lines[j]):
+            j -= 1
+        while j >= 0:
+            ln = lines[j]
+            if not ln.strip() or _BOX_DRAWING_LINE.match(ln):
+                j -= 1
+                continue
+            if _MENU_LINE.match(ln):
+                block.append(ln)
+                j -= 1
+                continue
+            break
+        return "\n".join(reversed(block))
+
+    return raw
+
+
 def looks_like_pending_question(text: str | None) -> PendingQuestionHit:
     """Heuristic: does trailing pane text still look like it needs human input?
 
     Used when Herdr reports done/idle but the bottom of the pane still shows a
     multi-option menu or explicit ask (false done / false idle).
+
+    Idle Claude Code empty ``❯`` prompts (with box-drawing / status chrome) are
+    *not* pending. Numbered lists in completed assistant prose above that
+    chrome do not trigger ``numbered_menu`` (B111). Real menus still match
+    (inverse of B016).
     """
-    raw = (text or "").strip()
+    # Strip ANSI so prompt-chrome detection sees bare ``❯`` (Herdr may still
+    # hand colorized captures depending on source).
+    raw = strip_ansi(text or "").strip()
     if not raw:
         return PendingQuestionHit(matched=False, reasons=())
 
@@ -78,7 +180,13 @@ def looks_like_pending_question(text: str | None) -> PendingQuestionHit:
     choices: list[str] = []
     confidence = 0.0
 
-    menu_lines = [m.group(0).strip() for m in _MENU_LINE.finditer(raw)]
+    # Menu lines only from the active ask region — not scrollback above idle ❯.
+    menu_region = _menu_scan_region(raw)
+    menu_lines = [
+        ln.strip()
+        for ln in menu_region.splitlines()
+        if ln.strip() and _MENU_LINE.match(ln)
+    ]
     if len(menu_lines) >= 2:
         reasons.append("numbered_menu")
         choices = menu_lines[:12]
@@ -112,6 +220,7 @@ def looks_like_pending_question(text: str | None) -> PendingQuestionHit:
 
     # Require a solid signal: menu (≥2 lines), or choice/yn phrase, or
     # single menu line + question-ish trail.
+    # Idle empty prompt alone (or box-drawing alone) never matches.
     matched = False
     if "numbered_menu" in reasons:
         matched = True

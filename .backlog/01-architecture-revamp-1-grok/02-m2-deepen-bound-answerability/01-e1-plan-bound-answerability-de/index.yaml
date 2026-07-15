@@ -18,7 +18,7 @@ tasks:
       file: T001-specify-answerable-status-matr.todo
       id: T001
       priority: critical
-      status: in_progress
+      status: done
       tags: []
       title: Specify answerable status matrix (blocked, needs_input, …)
     - complexity: low

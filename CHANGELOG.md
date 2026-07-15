@@ -6,6 +6,8 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+## 0.1.10
+
 - feat(ambient/streaming, B121 + B122): `[ambient].streaming = true` is
   **conversation mode**, not radio-with-acks. After first wake, stay in an open
   post-wake session — operator quiet ends an `ambient.turn` (full TTS reply OK);
@@ -13,6 +15,17 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   (`streaming_conversation_idle_s`, default 45s) or product end phrase / cancel
   re-arms wake. Skill + PROTOCOL updated; bound_answer windows still do not
   inherit conversation re-arm (P1.M6).
+- fix(B115): ambient boot TTS names the configured wake phrase and radio finish
+  guidance so radio-mode start no longer omits how to activate / end.
+- fix(B116): force voice-session bootstrap before arming handsfree so `/hark`
+  setup (Herdr target, etc.) runs before watch/ambient start.
+- fix(B117/B118): detect browser Teams/Chromium VC via Chromium Playback +
+  RecordStream (not only process name) so conference mute does not miss VC.
+- fix(B119/B120/B123): skip TTS mic mute while a listen is already open; harden
+  post-play unmute so half-duplex TTS does not cut the operator or leave the
+  mic muted until manual `hark unmute`.
+- fix(B124): play stop/end cue when config reload aborts an active ambient
+  listen so the channel does not drop silently mid-conversation.
 - refactor(listen-session-policy, P1.M6): stop ambient streaming leaking into
   bound listen. `ListenSessionPolicy` aliases `AnswerWindowPolicy`; profiles
   `bound_answer` / `post_wake` / `confirm` own streaming defaults. `run_listen`

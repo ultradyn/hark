@@ -589,6 +589,111 @@ def test_stream_queue_overflow_durably_catches_up_and_reconnects(
         server.shutdown()
 
 
+def test_overflow_drain_discards_only_cursor_covered_envelopes():
+    from hark.dashboard.server import _durable_envelope_covered
+
+    def envelope(source, cursor, payload=None):
+        return {"source": source, "cursor": cursor, "payload": payload or {}}
+
+    highwater = "watch:4,bound:2,delivery:3"
+    assert _durable_envelope_covered(envelope("watch", "watch:4"), highwater)
+    assert not _durable_envelope_covered(envelope("watch", "watch:5"), highwater)
+    assert _durable_envelope_covered(
+        envelope("delivery", "bound:2", {"type": "bound"}), highwater
+    )
+    assert not _durable_envelope_covered(
+        envelope("delivery", "delivery:4", {"type": "outcome"}), highwater
+    )
+    assert not _durable_envelope_covered(envelope("serve", "serve:1"), highwater)
+
+
+def test_overflow_drain_retains_append_after_replay_snapshot(
+    state, tmp_path, monkeypatch
+):
+    import hark.dashboard.server as dashboard_server
+
+    monkeypatch.setattr(dashboard_server, "SUBSCRIBER_QUEUE_SIZE", 3)
+    real_read_page = dashboard_server.read_page
+    real_replay = dashboard_server.DashboardHandler._sse_replay
+    initial_snapshot = threading.Event()
+    release_initial = threading.Event()
+    recovery_snapshot = threading.Event()
+    release_recovery = threading.Event()
+    replay_calls = 0
+
+    def paused_read_page(*args, **kwargs):
+        result = real_read_page(*args, **kwargs)
+        if not initial_snapshot.is_set():
+            initial_snapshot.set()
+            assert release_initial.wait(10)
+        return result
+
+    def paused_replay(handler, since, wanted):
+        nonlocal replay_calls
+        replay_calls += 1
+        result = real_replay(handler, since, wanted)
+        if replay_calls == 2:
+            recovery_snapshot.set()
+            assert release_recovery.wait(10)
+        return result
+
+    monkeypatch.setattr(dashboard_server, "read_page", paused_read_page)
+    monkeypatch.setattr(dashboard_server.DashboardHandler, "_sse_replay", paused_replay)
+    server = _server(tmp_path)
+    connection = None
+    try:
+        connection, response = _open_stream(
+            server, "/api/v1/stream?sources=watch&since=watch%3A0"
+        )
+        _read_sse_event(response)  # hello
+        assert initial_snapshot.wait(5)
+
+        _write_jsonl(
+            state / "watch.jsonl",
+            *(
+                {**HEP_BLOCKED, "event_id": f"race-{n}", "n": n}
+                for n in range(4)
+            ),
+        )
+        with server.hub._lock:
+            subscriber = server.hub._subs[0]
+        deadline = time.monotonic() + 5
+        while not subscriber.overflowed and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert subscriber.overflowed
+        subscriber.get_nowait()  # create one slot without clearing overflow
+
+        release_initial.set()
+        assert recovery_snapshot.wait(10)
+        assert not subscriber.overflowed
+
+        # The disk snapshot/high-water is watch:4.  This append is published
+        # into the newly available queue slot without overflowing, so recovery
+        # must retain it instead of treating every queued item as covered.
+        _write_jsonl(
+            state / "watch.jsonl", {**HEP_BLOCKED, "event_id": "race-4", "n": 4}
+        )
+        deadline = time.monotonic() + 5
+        while subscriber.qsize() < 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert subscriber.qsize() == 3
+        assert not subscriber.overflowed
+        release_recovery.set()
+
+        seen = []
+        for expected in range(5):
+            cursor, event = _read_sse_event(response)
+            seen.append(event["payload"]["n"])
+            assert parse_cursor(cursor)["watch"] == expected + 1
+        assert seen == [0, 1, 2, 3, 4]
+    finally:
+        release_initial.set()
+        release_recovery.set()
+        if connection is not None:
+            connection.close()
+        server.shutdown()
+
+
 def test_stream_spectrum_coalesced(state, tmp_path):
     """B087: serve.spectrum frames appear on SSE without advancing history."""
     from hark.audio.spectrum import make_spectrum_payload

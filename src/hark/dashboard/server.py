@@ -27,7 +27,7 @@ from hark.dashboard import api
 from hark.dashboard.tailer import MultiTailer, read_page, records_with_cursors
 from hark.events import utc_now_iso
 from hark.paths import state_dir
-from hark.state_feed import canonicalize_cursor
+from hark.state_feed import canonicalize_cursor, parse_cursor
 from hark.syslog import log
 
 SCHEMA = "hark.dashboard.v1"
@@ -38,6 +38,31 @@ MAX_JSON_BODY = 1 << 20  # 1 MiB
 MAX_AUDIO_BODY = 32 << 20  # 32 MiB
 LOCALHOST_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 SUBSCRIBER_QUEUE_SIZE = 1000
+_DURABLE_CURSOR_KEYS = {
+    "watch": "watch",
+    "ambient": "ambient",
+    "system": "system",
+    "usage": "usage",
+}
+
+
+def _durable_envelope_covered(envelope: dict[str, Any], highwater: str) -> bool:
+    """Whether a queued durable envelope is proven included in *highwater*."""
+    source = envelope.get("source")
+    if source == "delivery":
+        payload = envelope.get("payload") or {}
+        cursor_key = "bound" if payload.get("type") == "bound" else "delivery"
+    else:
+        cursor_key = _DURABLE_CURSOR_KEYS.get(source)
+    if cursor_key is None:
+        return False
+    envelope_seq = parse_cursor(envelope.get("cursor")).get(cursor_key)
+    highwater_seq = parse_cursor(highwater).get(cursor_key)
+    return (
+        envelope_seq is not None
+        and highwater_seq is not None
+        and envelope_seq <= highwater_seq
+    )
 
 
 class SubscriberQueue(queue.Queue):
@@ -561,8 +586,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         The queue remains subscribed throughout.  Clearing the flag before the
         durable scan means any publication racing the scan sets it again and
         forces another pass.  Once a pass completes without overflow, every
-        persisted item already in the full queue is covered by the scan and
-        can be discarded.  Non-durable serve events are retained for delivery.
+        queued durable items are discarded only when their own cursor key is
+        proven covered by the scan high-water.  Anything newer (including a
+        publish after the snapshot but before the drain) and non-durable serve
+        events are retained for delivery.
         """
         while True:
             subscriber.clear_overflow()
@@ -577,8 +604,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     envelope = subscriber.get_nowait()
                 except queue.Empty:
                     break
-                if envelope["source"] == "serve" and (
-                    wanted is None or "serve" in wanted
+                source = envelope["source"]
+                if wanted is not None and source not in wanted:
+                    continue
+                if source == "serve" or not _durable_envelope_covered(
+                    envelope, stream_cursor
                 ):
                     retained.append(envelope)
             if subscriber.overflowed:

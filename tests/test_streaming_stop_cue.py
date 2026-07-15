@@ -167,7 +167,10 @@ def test_radio_end_phrase_suppresses_stop_when_streaming(monkeypatch):
             stream_partials=False,
         ),
     )
-    result = speech.run_listen(cfg, end_mode="radio", post_tts_guard_s=0)
+    # Explicit streaming (or profile=post_wake): bound default no longer inherits ambient TOML (P1.M6).
+    result = speech.run_listen(
+        cfg, end_mode="radio", post_tts_guard_s=0, streaming=True
+    )
     assert result.end_phrase == "over"
     assert result.cancelled is False
     # Start cue still plays; end beep suppressed (B110)
@@ -208,7 +211,9 @@ def test_radio_idle_end_suppresses_stop_when_streaming(monkeypatch):
             soft_end_phrases_enabled=False,
         ),
     )
-    result = speech.run_listen(cfg, end_mode="radio", post_tts_guard_s=0)
+    result = speech.run_listen(
+        cfg, end_mode="radio", post_tts_guard_s=0, streaming=True
+    )
     assert result.end_phrase == "radio_idle"
     assert result.cancelled is False
     assert stop_calls == []
@@ -274,7 +279,9 @@ def test_silence_mode_suppresses_stop_when_streaming(monkeypatch):
         ambient=AmbientConfig(streaming=True),
         listen=ListenConfig(end_mode="silence", empty_stt_retry=False, empty_stt_nudge=False),
     )
-    result = speech.run_listen(cfg, end_mode="silence", post_tts_guard_s=0)
+    result = speech.run_listen(
+        cfg, end_mode="silence", post_tts_guard_s=0, streaming=True
+    )
     assert result.text == "option two"
     assert stop_calls == []
     assert any(e == "listen.stop_cue_suppressed" for e, _ in logs)

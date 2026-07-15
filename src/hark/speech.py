@@ -898,39 +898,42 @@ def run_listen(
     audio_ok_after: Any | None = None,
     # Prefer profile builders (policy_from_config) for gate knobs.
     profile: AnswerWindowProfile | None = None,
+    policy: Any | None = None,
+    streaming: bool | None = None,
 ) -> ListenResult:
     """Capture speech. Radio mode streams partials via on_partial when enabled.
 
-    Prefer ``profile=`` (``bound_answer`` / ``post_wake`` / ``confirm``) so gate
-    knobs (``abs_open_db``, ``arm_cue``, ``lead_in_ms``, ``no_open_*``, …) come
-    from :func:`policy_from_config` + config. Tests that need one-off gate
-    overrides should call ``open_answer_window(policy_from_config(...), deps=...)``
-    rather than passing gate kwargs here.
+    Prefer ``profile=`` (``bound_answer`` / ``post_wake`` / ``confirm``) or an
+    explicit ``policy=`` so gate knobs come from :func:`policy_from_config`.
+    Default profile is **bound_answer** (streaming off — does **not** inherit
+    ``[ambient].streaming``; P1.M6). Ambient post-wake must pass
+    ``profile="post_wake"``. Optional ``streaming=`` overrides the profile default.
 
-    on_partial(event_dict) is called for each non-final radio transcript so the orchestrator
-    agents can start thinking early. Events always set partial=true. HOLD warnings
-    apply unless streaming is enabled on the policy (post_wake inherits
-    ``[ambient].streaming``; bound_answer defaults off).
+    on_partial(event_dict) is called for each non-final radio transcript so the
+    orchestrator can start thinking early. Events always set partial=true.
 
-    Empty STT recovery (silence mode): log ``speech.empty_stt``, optionally
-    re-listen once (``empty_stt_retry``), then TTS nudge + re-listen
-    (``empty_stt_nudge``) before failing.
-
-    No-open recovery (silence mode, B031): when the energy gate never opens
-    (``no speech detected``), log ``speech.no_open``, optionally re-listen
-    (``no_open_retry``), then TTS nudge + re-listen (``no_open_nudge``).
-
-    Overlap pre-arm: pass ``audio_ok_after`` (callable → monotonic deadline or None)
-    and/or ``discard_leading_ms`` so TTS tail / residual echo is dropped before the
-    energy gate runs.
-
-    Post-wake / soft gate: use ``profile="post_wake"`` (ambient post_wake_* knobs).
+    Empty STT / no-open recovery (silence mode) and overlap pre-arm
+    (``audio_ok_after`` / ``discard_leading_ms``) are unchanged.
     """
 
-    # Thin facade (P1.M1.E4): build policy + deps, open answer window.
+    # Thin facade (P1.M1.E4 / P1.M6): build policy + deps, open answer window.
+    # No cfg.ambient reads in this function — ambient is only consumed inside
+    # policy_from_config at the seam.
     from hark.answer_window.deps import AnswerWindowDeps
     from hark.answer_window.open_window import open_answer_window
-    from hark.answer_window.policy import policy_from_config
+    from hark.answer_window.policy import AnswerWindowPolicy, policy_from_config
+
+    if policy is not None:
+        if not isinstance(policy, AnswerWindowPolicy):
+            raise TypeError(
+                f"policy must be AnswerWindowPolicy/ListenSessionPolicy, got {type(policy)!r}"
+            )
+        deps = AnswerWindowDeps(
+            cfg=cfg,
+            on_partial=on_partial,
+            audio_ok_after=audio_ok_after,
+        )
+        return open_answer_window(policy, deps=deps)
 
     # Explicit post_tts_guard always wins. Pre-arm (already_armed) used to zero
     # the guard and race mute-unmute / residual TTS into the energy gate.
@@ -956,35 +959,16 @@ def run_listen(
     }
     if end_mode is not None:
         overrides["end_mode"] = end_mode
+    if streaming is not None:
+        overrides["streaming"] = bool(streaming)
 
-    # Legacy seam (no explicit profile): preserve pre-facade ambient streaming
-    # leak so existing tests / Mode A dogfood that omit profile= keep behavior.
-    # Explicit profiles own streaming via policy_from_config (bound off; post_wake
-    # inherits [ambient].streaming). Historical pre-profile gate defaults:
-    # no lead-in / no arm cue unless profile or config encodes them.
-    if profile is None:
-        ambient = getattr(cfg, "ambient", None)
-        ambient_streaming = (
-            bool(getattr(ambient, "streaming", False)) if ambient else False
-        )
-        if ambient is not None:
-            streaming_ack_min_quiet_s = float(
-                getattr(ambient, "streaming_ack_min_quiet_s", 2.0) or 2.0
-            )
-        else:
-            streaming_ack_min_quiet_s = 2.0
-        overrides["streaming"] = ambient_streaming
-        overrides["streaming_ack_min_quiet_s"] = streaming_ack_min_quiet_s
-        overrides["lead_in_ms"] = 0
-        overrides["arm_cue"] = False
-
-    policy = policy_from_config(cfg, effective_profile, **overrides)
+    built = policy_from_config(cfg, effective_profile, **overrides)
     deps = AnswerWindowDeps(
         cfg=cfg,
         on_partial=on_partial,
         audio_ok_after=audio_ok_after,
     )
-    return open_answer_window(policy, deps=deps)
+    return open_answer_window(built, deps=deps)
 
 
 

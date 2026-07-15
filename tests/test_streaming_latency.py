@@ -123,7 +123,9 @@ def test_radio_streaming_uses_clamped_idle_timeout(monkeypatch):
     )
     monkeypatch.setattr(speech, "duck_media", lambda *a, **k: NullContext())
 
-    result = speech.run_listen(cfg, end_mode="radio", post_tts_guard_s=0)
+    result = speech.run_listen(
+        cfg, end_mode="radio", post_tts_guard_s=0, streaming=True
+    )
     assert result.end_phrase == "radio_idle"
     assert len(calls) >= 2
     # Second segment (post-open) must use clamped ~2.1s, not 6.3s

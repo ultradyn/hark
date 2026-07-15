@@ -19,7 +19,7 @@ tasks:
       file: T001-confirm-profile-readback-silen.todo
       id: T001
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: 'Confirm profile: readback + silence listen + lexicon'
     - complexity: medium
@@ -29,6 +29,6 @@ tasks:
       file: T002-wire-run-ask-cmd-ask-cmd-tts-l.todo
       id: T002
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: Wire run_ask / cmd_ask / cmd_tts --listen

@@ -28,6 +28,6 @@ tasks:
       file: T002-dependency-check-vs-m1-answer.todo
       id: T002
       priority: medium
-      status: pending
+      status: in_progress
       tags: []
       title: Dependency check vs M1 Answer Window

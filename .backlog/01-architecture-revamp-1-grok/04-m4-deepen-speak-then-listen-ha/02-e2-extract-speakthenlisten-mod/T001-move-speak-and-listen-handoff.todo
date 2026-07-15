@@ -1,4 +1,6 @@
 ---
+claimed_at: "2026-07-15T05:53:07Z"
+claimed_by: cli-user
 completed_at: null
 complexity: high
 created_at: "2026-07-15T04:30:08Z"
@@ -8,11 +10,11 @@ depends_on:
 estimate_hours: 3
 id: P1.M4.E2.T001
 priority: high
-started_at: null
-status: pending
+started_at: "2026-07-15T05:53:07Z"
+status: in_progress
 tags: []
 title: Move speak_and_listen handoff into module
-updated_at: "2026-07-15T04:30:08Z"
+updated_at: "2026-07-15T05:53:07Z"
 ---
 # Move speak_and_listen handoff into module
 

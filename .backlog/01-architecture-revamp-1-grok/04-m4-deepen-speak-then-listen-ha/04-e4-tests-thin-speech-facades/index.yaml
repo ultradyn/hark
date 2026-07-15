@@ -19,7 +19,7 @@ tasks:
       file: T001-port-handoff-overlap-arm-cue-t.todo
       id: T001
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: Port handoff/overlap/arm-cue tests
     - complexity: low
@@ -29,6 +29,6 @@ tasks:
       file: T002-docs-half-duplex-module-locali.todo
       id: T002
       priority: low
-      status: pending
+      status: in_progress
       tags: []
       title: 'Docs: half-duplex module locality'

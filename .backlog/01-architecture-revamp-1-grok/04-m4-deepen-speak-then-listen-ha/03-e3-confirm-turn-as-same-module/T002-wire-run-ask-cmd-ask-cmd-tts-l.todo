@@ -1,4 +1,6 @@
 ---
+claimed_at: "2026-07-15T05:53:07Z"
+claimed_by: cli-user
 completed_at: null
 complexity: medium
 created_at: "2026-07-15T04:30:08Z"
@@ -7,11 +9,11 @@ depends_on:
 estimate_hours: 1
 id: P1.M4.E3.T002
 priority: high
-started_at: null
-status: pending
+started_at: "2026-07-15T05:53:07Z"
+status: in_progress
 tags: []
 title: Wire run_ask / cmd_ask / cmd_tts --listen
-updated_at: "2026-07-15T04:30:08Z"
+updated_at: "2026-07-15T05:53:07Z"
 ---
 # Wire run_ask / cmd_ask / cmd_tts --listen
 

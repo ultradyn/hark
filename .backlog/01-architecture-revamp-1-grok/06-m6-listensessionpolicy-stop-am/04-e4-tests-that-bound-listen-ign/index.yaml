@@ -19,7 +19,7 @@ tasks:
       file: T001-test-bound-radio-unaffected-by.todo
       id: T001
       priority: high
-      status: in_progress
+      status: done
       tags: []
       title: 'Test: bound radio unaffected by ambient.streaming TOML'
     - complexity: medium

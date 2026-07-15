@@ -1,19 +1,20 @@
 ---
 claimed_at: "2026-07-15T06:01:03Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-15T06:02:13Z"
 complexity: medium
 created_at: "2026-07-15T04:30:09Z"
 depends_on:
     - P1.M6.E3.T002
+duration_minutes: 1.1782585445
 estimate_hours: 1
 id: P1.M6.E4.T001
 priority: high
 started_at: "2026-07-15T06:01:03Z"
-status: in_progress
+status: done
 tags: []
 title: 'Test: bound radio unaffected by ambient.streaming TOML'
-updated_at: "2026-07-15T06:01:03Z"
+updated_at: "2026-07-15T06:02:13Z"
 ---
 # Test: bound radio unaffected by ambient.streaming TOML
 

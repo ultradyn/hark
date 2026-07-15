@@ -236,12 +236,76 @@ request_ambient_pause(reason="abrupt-exit")
 def test_pid_reuse_identity_is_pruned(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     starts = {4242: "old-start"}
-    monkeypatch.setattr(mic_coord, "_process_start_time", starts.get)
+
+    def process_stat(pid):
+        return mic_coord._ProcessStat(state="S", start_time=starts[pid])
+
+    monkeypatch.setattr(mic_coord, "_process_stat", process_stat)
     request_ambient_pause(reason="reused", pid=4242)
 
     starts[4242] = "new-start"
 
     assert not ambient_pause_requested()
+
+
+def test_transient_process_stat_failure_retains_owner(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    token = request_ambient_pause(reason="proc-transient")
+
+    def fail_stat(_pid):
+        raise OSError("transient procfs failure")
+
+    monkeypatch.setattr(mic_coord, "_process_stat", fail_stat)
+    state = read_ambient_pause()
+    assert state is not None
+    assert [owner["token"] for owner in state["owners"]] == [token]
+    assert mic_coord.pause_path().is_file()
+
+
+def test_transient_boot_id_failure_retains_owner(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    token = request_ambient_pause(reason="boot-transient")
+
+    def fail_boot_id():
+        raise OSError("transient boot-id failure")
+
+    monkeypatch.setattr(mic_coord, "_boot_id", fail_boot_id)
+    state = read_ambient_pause()
+    assert state is not None
+    assert [owner["token"] for owner in state["owners"]] == [token]
+    assert mic_coord.pause_path().is_file()
+
+
+def test_unreaped_zombie_owner_is_pruned(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    code = """
+import os
+from hark.mic_coord import request_ambient_pause
+token = request_ambient_pause(reason="zombie")
+print(token, flush=True)
+os._exit(0)
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", code],
+        stdout=subprocess.PIPE,
+        text=True,
+        env=_child_env(),
+    )
+    try:
+        token = _read_child_token(child)
+        assert token
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if mic_coord._process_stat(child.pid).state in {"Z", "X", "x"}:
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError("child did not become an unreaped zombie")
+
+        assert not ambient_pause_requested()
+        assert not mic_coord.pause_path().exists()
+    finally:
+        child.wait(timeout=5)
 
 
 def test_pause_owner_expires_after_bounded_age(tmp_path, monkeypatch):
@@ -260,6 +324,28 @@ def test_malformed_pause_state_is_pruned(tmp_path, monkeypatch):
     path = mic_coord.pause_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{not-json\n", encoding="utf-8")
+
+    assert not ambient_pause_requested()
+    assert not path.exists()
+
+
+def test_invalid_utf8_pause_state_is_pruned(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    path = mic_coord.pause_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xfe")
+
+    assert not ambient_pause_requested()
+    assert not path.exists()
+
+
+def test_unbounded_json_integer_is_pruned_without_overflow(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    request_ambient_pause(reason="huge-time")
+    path = mic_coord.pause_path()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["owners"][0]["requested_at"] = 10**1000
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
     assert not ambient_pause_requested()
     assert not path.exists()
@@ -289,7 +375,11 @@ def test_malformed_owner_is_pruned_without_losing_valid_owner(tmp_path, monkeypa
 
 def test_acquisition_fails_when_process_identity_is_unverifiable(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    monkeypatch.setattr(mic_coord, "_process_start_time", lambda _pid: None)
+
+    def fail_stat(_pid):
+        raise OSError("transient procfs failure")
+
+    monkeypatch.setattr(mic_coord, "_process_stat", fail_stat)
 
     try:
         request_ambient_pause(reason="unverifiable")
@@ -297,6 +387,117 @@ def test_acquisition_fails_when_process_identity_is_unverifiable(tmp_path, monke
     except RuntimeError as exc:
         assert "cannot verify" in str(exc)
     assert not mic_coord.pause_path().exists()
+
+
+def test_failed_parent_fsync_rolls_back_only_attempted_owner(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    retained_token = request_ambient_pause(reason="retained")
+
+    def fail_fsync(_path):
+        raise OSError("injected directory fsync failure")
+
+    monkeypatch.setattr(mic_coord, "_fsync_parent", fail_fsync)
+    try:
+        request_ambient_pause(reason="attempted")
+        raise AssertionError("expected OSError")
+    except OSError as exc:
+        assert "injected" in str(exc)
+
+    state = read_ambient_pause()
+    assert state is not None
+    assert [owner["token"] for owner in state["owners"]] == [retained_token]
+
+
+def test_failed_parent_fsync_does_not_strand_first_owner(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+
+    def fail_fsync(_path):
+        raise OSError("injected directory fsync failure")
+
+    monkeypatch.setattr(mic_coord, "_fsync_parent", fail_fsync)
+    try:
+        request_ambient_pause(reason="attempted")
+        raise AssertionError("expected OSError")
+    except OSError as exc:
+        assert "injected" in str(exc)
+    assert not mic_coord.pause_path().exists()
+
+
+def test_live_legacy_single_owner_is_migrated(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    path = mic_coord.pause_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "reason": "listen",
+                "pid": os.getpid(),
+                "requested_at": time.time(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = read_ambient_pause()
+    assert state is not None
+    assert state["version"] == mic_coord.AMBIENT_PAUSE_VERSION
+    assert state["reason"] == "listen"
+    assert state["owners"][0]["process_start"]
+    assert state["owners"][0]["boot_id"]
+    assert "legacy" not in state["owners"][0]
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted == state
+
+
+def test_dead_legacy_single_owner_is_pruned(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    path = mic_coord.pause_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "reason": "listen",
+                "pid": 2_147_483_646,
+                "requested_at": time.time(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert not ambient_pause_requested()
+    assert not path.exists()
+
+
+def test_unverifiable_legacy_owner_is_retained_then_migrated(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    path = mic_coord.pause_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "reason": "listen",
+                "pid": os.getpid(),
+                "requested_at": time.time(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    real_process_stat = mic_coord._process_stat
+
+    def fail_stat(_pid):
+        raise OSError("transient procfs failure")
+
+    monkeypatch.setattr(mic_coord, "_process_stat", fail_stat)
+    state = read_ambient_pause()
+    assert state is not None
+    assert state["owners"][0]["legacy"] is True
+    assert path.is_file()
+
+    monkeypatch.setattr(mic_coord, "_process_stat", real_process_stat)
+    migrated = read_ambient_pause()
+    assert migrated is not None
+    assert "legacy" not in migrated["owners"][0]
+    assert migrated["owners"][0]["process_start"]
 
 
 def test_pause_state_keeps_legacy_top_level_fields(tmp_path, monkeypatch):

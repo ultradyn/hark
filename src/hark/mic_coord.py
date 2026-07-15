@@ -35,6 +35,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -79,31 +80,67 @@ def _pause_lock() -> Iterator[None]:
             os.close(fd)
 
 
-def _boot_id() -> str | None:
+def _boot_id() -> str:
+    value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8")
+    boot_id = value.strip()
+    if not boot_id:
+        raise ValueError("empty Linux boot id")
+    return boot_id
+
+
+@dataclass(frozen=True)
+class _ProcessStat:
+    state: str
+    start_time: str
+
+
+def _process_stat(pid: int) -> _ProcessStat:
+    """Return proc state/start ticks while preserving read failure semantics."""
+    raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    # comm is parenthesized and may itself contain spaces or parentheses.
+    after_comm = raw[raw.rfind(")") + 2 :].split()
     try:
-        value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8")
-    except OSError:
-        return None
-    return value.strip() or None
+        return _ProcessStat(state=after_comm[0], start_time=after_comm[19])
+    except IndexError as exc:
+        raise ValueError(f"malformed /proc/{pid}/stat") from exc
 
 
-def _process_start_time(pid: int) -> str | None:
+def _process_start_time(pid: int) -> str:
     """Return Linux procfs start ticks for *pid* (stable across PID reuse)."""
+    return _process_stat(pid).start_time
+
+
+class _OwnerState(Enum):
+    LIVE = auto()
+    STALE = auto()
+    UNVERIFIABLE = auto()
+
+
+def _identity_state(owner: dict[str, Any]) -> _OwnerState:
+    """Compare stored process identity without confusing absence with I/O failure."""
     try:
-        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-        # comm is parenthesized and may itself contain spaces or parentheses.
-        after_comm = raw[raw.rfind(")") + 2 :].split()
-        return after_comm[19]
-    except (OSError, IndexError):
-        return None
+        boot_id = _boot_id()
+    except (OSError, UnicodeError, ValueError):
+        return _OwnerState.UNVERIFIABLE
+    if boot_id != owner["boot_id"]:
+        return _OwnerState.STALE
+    try:
+        process = _process_stat(owner["pid"])
+    except (FileNotFoundError, ProcessLookupError):
+        return _OwnerState.STALE
+    except (OSError, UnicodeError, ValueError):
+        return _OwnerState.UNVERIFIABLE
+    if process.state in {"Z", "X", "x"}:
+        return _OwnerState.STALE
+    if process.start_time != owner["process_start"]:
+        return _OwnerState.STALE
+    return _OwnerState.LIVE
 
 
-def _owner_is_live(owner: dict[str, Any], *, now: float) -> bool:
+def _common_owner_state(owner: dict[str, Any], *, now: float) -> _OwnerState:
     pid = owner.get("pid")
     requested_at = owner.get("requested_at")
     token = owner.get("token")
-    process_start = owner.get("process_start")
-    boot_id = owner.get("boot_id")
     reason = owner.get("reason")
     if (
         not isinstance(pid, int)
@@ -111,23 +148,69 @@ def _owner_is_live(owner: dict[str, Any], *, now: float) -> bool:
         or not isinstance(requested_at, (int, float))
         or isinstance(requested_at, bool)
         or not isinstance(token, str)
-        or not isinstance(process_start, str)
-        or not isinstance(boot_id, str)
         or not isinstance(reason, str)
     ):
-        return False
+        return _OwnerState.STALE
     if (
         pid <= 0
         or not token
-        or not process_start
-        or not boot_id
         or not reason
-        or not math.isfinite(requested_at)
+        or (isinstance(requested_at, float) and not math.isfinite(requested_at))
+        # Compare against precomputed bounds rather than subtracting the input:
+        # JSON integers are unbounded and float conversion/subtraction can overflow.
         or requested_at > now + _FUTURE_SKEW_S
-        or now - requested_at > DEFAULT_PAUSE_OWNER_MAX_AGE_S
+        or requested_at < now - DEFAULT_PAUSE_OWNER_MAX_AGE_S
     ):
-        return False
-    return _boot_id() == boot_id and _process_start_time(pid) == process_start
+        return _OwnerState.STALE
+    return _OwnerState.LIVE
+
+
+def _normalize_owner(
+    owner: dict[str, Any], *, now: float
+) -> tuple[dict[str, Any], _OwnerState, bool]:
+    if _common_owner_state(owner, now=now) is _OwnerState.STALE:
+        return owner, _OwnerState.STALE, False
+    if owner.get("legacy") is True:
+        try:
+            boot_id = _boot_id()
+            process = _process_stat(owner["pid"])
+        except (FileNotFoundError, ProcessLookupError):
+            return owner, _OwnerState.STALE, False
+        except (OSError, UnicodeError, ValueError):
+            return owner, _OwnerState.UNVERIFIABLE, False
+        if process.state in {"Z", "X", "x"}:
+            return owner, _OwnerState.STALE, False
+        migrated = dict(owner)
+        migrated.pop("legacy", None)
+        migrated["boot_id"] = boot_id
+        migrated["process_start"] = process.start_time
+        return migrated, _OwnerState.LIVE, True
+
+    if (
+        not isinstance(owner.get("process_start"), str)
+        or not owner["process_start"]
+        or not isinstance(owner.get("boot_id"), str)
+        or not owner["boot_id"]
+    ):
+        return owner, _OwnerState.STALE, False
+    return owner, _identity_state(owner), False
+
+
+def _legacy_owner(payload: dict[str, Any]) -> dict[str, Any]:
+    reason = payload.get("reason")
+    pid = payload.get("pid")
+    requested_at = payload.get("requested_at")
+    token = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"hark:ambient.pause:{pid!r}:{requested_at!r}:{reason!r}",
+    ).hex
+    return {
+        "legacy": True,
+        "token": token,
+        "reason": reason,
+        "pid": pid,
+        "requested_at": requested_at,
+    }
 
 
 def _read_live_owners_unlocked(*, now: float) -> tuple[list[dict[str, Any]], bool]:
@@ -136,19 +219,36 @@ def _read_live_owners_unlocked(*, now: float) -> tuple[list[dict[str, Any]], boo
         return [], False
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (UnicodeDecodeError, ValueError):
         return [], True
-    if not isinstance(payload, dict) or payload.get("version") != AMBIENT_PAUSE_VERSION:
+    if not isinstance(payload, dict):
         return [], True
-    raw_owners = payload.get("owners")
-    if not isinstance(raw_owners, list):
+    if payload.get("version") == AMBIENT_PAUSE_VERSION:
+        raw_owners = payload.get("owners")
+        if not isinstance(raw_owners, list):
+            return [], True
+        dirty = False
+    elif {"reason", "pid", "requested_at"} <= payload.keys():
+        # Rolling upgrade from the singleton format. Until procfs and boot id
+        # can be read, the explicit legacy marker remains a fail-closed owner.
+        raw_owners = [_legacy_owner(payload)]
+        dirty = True
+    else:
         return [], True
-    owners = [
-        owner
-        for owner in raw_owners
-        if isinstance(owner, dict) and _owner_is_live(owner, now=now)
-    ]
-    return owners, len(owners) != len(raw_owners)
+    owners = []
+    for owner in raw_owners:
+        if not isinstance(owner, dict):
+            dirty = True
+            continue
+        normalized, state, normalized_dirty = _normalize_owner(owner, now=now)
+        dirty = dirty or normalized_dirty
+        # Transient identity I/O failures fail closed: retain the pause until a
+        # later read can prove that its owner is stale.
+        if state is not _OwnerState.STALE:
+            owners.append(normalized)
+        else:
+            dirty = True
+    return owners, dirty
 
 
 def _payload_for_owners(owners: list[dict[str, Any]]) -> dict[str, Any]:
@@ -224,9 +324,14 @@ def request_ambient_pause(
         raise ValueError("ambient pause owner pid must be a positive integer")
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError("ambient pause reason must be a non-empty string")
-    process_start = _process_start_time(owner_pid)
-    boot_id = _boot_id()
-    if process_start is None or boot_id is None:
+    try:
+        process = _process_stat(owner_pid)
+        boot_id = _boot_id()
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise RuntimeError(
+            f"cannot verify ambient pause owner identity for pid {owner_pid}"
+        ) from exc
+    if process.state in {"Z", "X", "x"} or not process.start_time or not boot_id:
         raise RuntimeError(
             f"cannot verify ambient pause owner identity for pid {owner_pid}"
         )
@@ -236,13 +341,24 @@ def request_ambient_pause(
         "reason": reason,
         "pid": owner_pid,
         "requested_at": time.time(),
-        "process_start": process_start,
+        "process_start": process.start_time,
         "boot_id": boot_id,
     }
     with _pause_lock():
         owners, _dirty = _read_live_owners_unlocked(now=time.time())
-        owners.append(owner)
-        _write_owners_unlocked(owners)
+        attempted = [*owners, owner]
+        try:
+            _write_owners_unlocked(attempted)
+        except OSError:
+            # os.replace may have succeeded before directory fsync failed. Roll
+            # back this exact token while still holding the registry lock. A
+            # second fsync failure is suppressed only after the on-disk content
+            # has been restored (replace/unlink happens before parent fsync).
+            try:
+                _write_owners_unlocked(owners)
+            except OSError:
+                pass
+            raise
     syslog(
         "ambient.pause_request",
         component="mic",

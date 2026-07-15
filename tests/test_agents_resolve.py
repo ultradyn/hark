@@ -108,6 +108,75 @@ def test_override_wins(tmp_path: Path):
     assert Path(r.command).name == "my-claude"
 
 
+@pytest.mark.parametrize(
+    ("agent", "override", "target_name"),
+    (("claude", "cc", "gcc"), ("cursor-agent", "cr", "coderabbit")),
+)
+def test_override_path_token_applies_collision_rejects(
+    tmp_path: Path, agent: str, override: str, target_name: str
+):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    target = bindir / target_name
+    target.write_text("#!/bin/sh\n")
+    target.chmod(0o755)
+    (bindir / override).symlink_to(target)
+
+    with pytest.raises(
+        ResolveError, match=rf"agent {agent!r}.*{override!r}"
+    ) as exc_info:
+        resolve_agent_argv(agent, overrides={agent: override}, path=str(bindir))
+
+    assert exc_info.value.reason is ResolveFailureReason.INVALID_OVERRIDE
+
+
+@pytest.mark.parametrize("relative", (False, True))
+@pytest.mark.parametrize(
+    "invalid_kind", ("missing", "broken", "directory", "non-executable")
+)
+def test_override_path_requires_regular_executable(
+    tmp_path: Path, monkeypatch, relative: bool, invalid_kind: str
+):
+    target = tmp_path / "override-agent"
+    if invalid_kind == "broken":
+        target.symlink_to(tmp_path / "missing-target")
+    elif invalid_kind == "directory":
+        target.mkdir()
+    elif invalid_kind == "non-executable":
+        target.write_text("not executable\n")
+        target.chmod(0o644)
+
+    monkeypatch.chdir(tmp_path)
+    override = f"./{target.name}" if relative else str(target)
+
+    with pytest.raises(
+        ResolveError, match=rf"agent 'codex'.*{target.name}"
+    ) as exc_info:
+        resolve_agent_argv("codex", overrides={"codex": override})
+
+    assert exc_info.value.reason is ResolveFailureReason.INVALID_OVERRIDE
+
+
+@pytest.mark.parametrize("relative", (False, True))
+def test_override_safe_path_preserves_prefix_and_extra_args(
+    tmp_path: Path, monkeypatch, relative: bool
+):
+    target = tmp_path / "custom-codex"
+    target.write_text("#!/bin/sh\n")
+    target.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    override = f"./{target.name}" if relative else str(target)
+
+    resolved = resolve_agent_argv(
+        "codex",
+        overrides={"codex": [override, "--configured"]},
+        extra_args=["--requested"],
+    )
+
+    assert resolved.argv == [override, "--configured", "--requested"]
+    assert resolved.source == "override"
+
+
 def test_adhoc_argv(tmp_path: Path):
     path = _fake_path(tmp_path, {"opencode": "self"})
     r = resolve_adhoc_argv("opencode", extra_args=["--foo"], path=path)

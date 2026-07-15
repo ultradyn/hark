@@ -185,6 +185,36 @@ def _is_regular_executable(path: str) -> bool:
         return False
 
 
+def _resolve_override_executable(
+    agent_key: str, command: str, *, path: str | None = None
+) -> str:
+    """Validate and resolve an override command without bypassing safety policy."""
+    is_path = (
+        Path(command).is_absolute()
+        or command.startswith(".")
+        or os.sep in command
+        or (os.altsep is not None and os.altsep in command)
+    )
+    resolved = command if is_path else _which(command, path=path)
+    if resolved is None:
+        raise ResolveError(
+            f"override command not found on PATH for agent {agent_key!r}: {command!r}",
+            reason=ResolveFailureReason.INVALID_OVERRIDE,
+        )
+    if not _is_regular_executable(resolved):
+        raise ResolveError(
+            f"override for agent {agent_key!r} is not a regular executable: "
+            f"{command!r}",
+            reason=ResolveFailureReason.INVALID_OVERRIDE,
+        )
+    if _is_rejected(command, resolved):
+        raise ResolveError(
+            f"unsafe override for agent {agent_key!r} rejected: {command!r}",
+            reason=ResolveFailureReason.INVALID_OVERRIDE,
+        )
+    return resolved
+
+
 def _spec_for_key(key: str) -> AgentSpec | None:
     key_l = key.strip().lower()
     mapped = _KEY_BY_TOKEN.get(key_l)
@@ -260,22 +290,9 @@ def resolve_agent_argv(
                     f"empty override for agent {spec.key!r}",
                     reason=ResolveFailureReason.INVALID_OVERRIDE,
                 )
-            # Allow absolute path without PATH
             first = prefix[0]
-            if not (first.startswith("/") or first.startswith(".")):
-                found = _which(first, path=path)
-                if not found:
-                    raise ResolveError(
-                        f"override command not found on PATH for agent "
-                        f"{spec.key!r}: {first!r}",
-                        reason=ResolveFailureReason.INVALID_OVERRIDE,
-                    )
-                prefix = [found, *prefix[1:]]
-            elif not Path(first).exists() and not _which(first, path=path):
-                raise ResolveError(
-                    f"override path not found for agent {spec.key!r}: {first!r}",
-                    reason=ResolveFailureReason.INVALID_OVERRIDE,
-                )
+            executable = _resolve_override_executable(spec.key, first, path=path)
+            prefix = [executable, *prefix[1:]]
             argv = [*prefix, *[str(a) for a in extra_args]]
             return ResolvedCli(
                 agent_key=spec.key,

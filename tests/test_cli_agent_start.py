@@ -393,6 +393,38 @@ def test_agent_start_unsafe_override_symlink_does_not_fall_back(
     assert "codex" in captured.err
 
 
+@pytest.mark.parametrize(
+    ("agent", "override", "target_name"),
+    (("claude", "cc", "gcc"), ("cursor-agent", "cr", "coderabbit")),
+)
+def test_agent_start_rejected_override_does_not_start_pane(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+    agent: str,
+    override: str,
+    target_name: str,
+):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    target = _executable(bindir / target_name)
+    (bindir / override).symlink_to(target)
+
+    code, client, captured, _ = _run_agent_start(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        [agent],
+        overrides={agent: override},
+    )
+
+    assert code == USAGE
+    assert client.started == []
+    assert agent in captured.err
+    assert override in captured.err
+    assert "override" in captured.err
+
+
 def test_agent_start_malformed_override_does_not_fall_back(
     monkeypatch, capsys, tmp_path: Path
 ):
@@ -480,6 +512,26 @@ def test_agent_start_valid_override_regression(monkeypatch, capsys, tmp_path: Pa
 
     assert code == OK
     assert client.started[0][1] == [str(custom)]
+    assert '"source": "override"' in captured.out
+
+
+def test_agent_start_valid_override_prefix_regression(
+    monkeypatch, capsys, tmp_path: Path
+):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    custom = _executable(bindir / "my-codex")
+
+    code, client, captured, _ = _run_agent_start(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["codex", "--json"],
+        overrides={"codex": "my-codex --configured"},
+    )
+
+    assert code == OK
+    assert client.started[0][1] == [str(custom), "--configured"]
     assert '"source": "override"' in captured.out
 
 

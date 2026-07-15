@@ -36,7 +36,7 @@ epics:
       locked: false
       name: 'E4: Thin facades + caller migration'
       path: 04-e4-thin-facades-caller-migrati
-      status: pending
+      status: done
     - complexity: medium
       depends_on: []
       description: Re-home tests onto the deep interface; keep radio/soft-end/endpointing coverage green. Document module in ARCHITECTURE.md; note locality/leverage. No behavior regressions vs ADR-014/014b.

@@ -10,7 +10,7 @@ stats:
     in_progress: 0
     pending: 3
     total: 3
-status: pending
+status: done
 tasks:
     - complexity: medium
       depends_on:
@@ -40,6 +40,6 @@ tasks:
       file: T003-remove-obsolete-kwargs-from-pu.todo
       id: T003
       priority: medium
-      status: in_progress
+      status: done
       tags: []
       title: Remove obsolete kwargs from public call sites

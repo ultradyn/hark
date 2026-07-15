@@ -1,4 +1,6 @@
 ---
+claimed_at: "2026-07-15T06:00:14Z"
+claimed_by: cli-user
 completed_at: null
 complexity: high
 created_at: "2026-07-15T04:30:09Z"
@@ -7,11 +9,11 @@ depends_on:
 estimate_hours: 2
 id: P1.M6.E3.T002
 priority: high
-started_at: null
-status: pending
+started_at: "2026-07-15T06:00:14Z"
+status: in_progress
 tags: []
 title: ambient + CLI + TTS quiet-gate build policy at seam
-updated_at: "2026-07-15T04:30:09Z"
+updated_at: "2026-07-15T06:00:14Z"
 ---
 # ambient + CLI + TTS quiet-gate build policy at seam
 

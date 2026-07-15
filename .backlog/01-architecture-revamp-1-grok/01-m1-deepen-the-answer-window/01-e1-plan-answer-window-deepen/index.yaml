@@ -28,7 +28,7 @@ tasks:
       file: T002-update-context-md-domain-terms.todo
       id: T002
       priority: medium
-      status: pending
+      status: in_progress
       tags: []
       title: Update CONTEXT.md / domain terms if missing
     - complexity: low
@@ -38,6 +38,6 @@ tasks:
       file: T003-lock-acceptance-criteria-non-g.todo
       id: T003
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: Lock acceptance criteria + non-goals

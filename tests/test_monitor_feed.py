@@ -165,7 +165,7 @@ def test_compact_ambient_partial_must_listen_end_language():
 
 
 def test_compact_ambient_partial_streaming_language():
-    """B098: streaming=true flips compact instructions off hard HOLD."""
+    """B098/B121: streaming=true → conversation compact (full TTS, not hard HOLD)."""
     c = compact_mode_a_event(
         {
             "kind": "ambient.partial",
@@ -178,10 +178,12 @@ def test_compact_ambient_partial_streaming_language():
         }
     )
     assert c["streaming"] is True
-    assert "STREAMING" in c["instructions"]
-    assert "MUST" in c["instructions"]
+    assert "STREAMING" in c["instructions"] or "CONVERSATION" in c["instructions"]
+    assert "HOLD" not in c["instructions"] or "CONVERSATION" in c["instructions"]
     assert "listen-end" in c["instructions"]
     assert "pane" in c["instructions"].lower()
+    # Full TTS allowed; not radio-with-acks-only
+    assert "full TTS" in c["instructions"] or "TTS reply" in c["instructions"]
 
 
 def test_compact_ambient_partial_includes_fragment():

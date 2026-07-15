@@ -1168,6 +1168,9 @@ def test_ambient_wake_idle_does_not_import_run_listen_duck():
     assert "duck_media" not in src
     assert "ContinuousMicStream" in src
     assert "run_listen" not in src
-    # Post-wake STT is separate and goes through run_listen
-    complete_src = inspect.getsource(ambient.complete_after_wake)
-    assert "run_listen" in complete_src
+    # Post-wake STT is separate and goes through run_listen (B121: helpers,
+    # not the thin complete_after_wake dispatcher).
+    single_src = inspect.getsource(ambient._single_post_wake_listen)
+    assert "run_listen" in single_src
+    conv_src = inspect.getsource(ambient._conversation_after_wake)
+    assert "run_listen" in conv_src

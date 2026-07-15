@@ -6,10 +6,19 @@ from pathlib import Path
 
 import pytest
 
+from hark.agents.resolve import AGENT_CATALOG
 from hark.cli import build_parser
 from hark.config import AgentsConfig, HarkConfig, SessionConfig
 from hark.exitcodes import OK, USAGE
 from hark.herdr.client import AgentInfo, NamedSessionInfo
+
+
+MULTIWORD_CATALOG_NAMES = tuple(
+    (name, spec.key, spec.canonical)
+    for spec in AGENT_CATALOG
+    for name in (*spec.aliases, *spec.names)
+    if " " in name
+)
 
 
 class RecordingClient:
@@ -245,6 +254,67 @@ def test_agent_start_quoted_safe_catalog_command_preserves_args(
     assert code == OK
     assert client.started[0][1] == [str(codex), "--version"]
     assert '"agent_key": "codex"' in captured.out
+
+
+@pytest.mark.parametrize(
+    ("catalog_name", "expected_key", "canonical"),
+    MULTIWORD_CATALOG_NAMES,
+)
+def test_agent_start_multiword_catalog_names_use_longest_match(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+    catalog_name: str,
+    expected_key: str,
+    canonical: str,
+):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    executable = _executable(bindir / canonical)
+    first_word = bindir / catalog_name.split()[0]
+    if first_word != executable:
+        _executable(first_word)
+
+    code, client, captured, _ = _run_agent_start(
+        monkeypatch, capsys, tmp_path, [f"{catalog_name} --probe", "--json"]
+    )
+
+    assert code == OK
+    assert client.started[0][1] == [str(executable), "--probe"]
+    assert f'"agent_key": "{expected_key}"' in captured.out
+    assert '"source": "canonical"' in captured.out
+
+
+def test_agent_start_catalog_prefix_ambiguity_keeps_unknown_command_adhoc(
+    monkeypatch, capsys, tmp_path: Path
+):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    executable = _executable(bindir / "open")
+
+    code, client, captured, _ = _run_agent_start(
+        monkeypatch, capsys, tmp_path, ["open sesame", "--json"]
+    )
+
+    assert code == OK
+    assert client.started[0][1] == [str(executable), "sesame"]
+    assert '"agent_key": "adhoc"' in captured.out
+
+
+def test_agent_start_singleword_catalog_prefix_keeps_remaining_args(
+    monkeypatch, capsys, tmp_path: Path
+):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    executable = _executable(bindir / "claude")
+
+    code, client, captured, _ = _run_agent_start(
+        monkeypatch, capsys, tmp_path, ["claude custom", "--json"]
+    )
+
+    assert code == OK
+    assert client.started[0][1] == [str(executable), "custom"]
+    assert '"agent_key": "claude"' in captured.out
 
 
 def test_agent_start_unknown_non_executable_does_not_start_pane(

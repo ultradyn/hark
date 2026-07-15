@@ -196,6 +196,15 @@ def _spec_for_key(key: str) -> AgentSpec | None:
     return None
 
 
+def _longest_catalog_prefix(parts: Sequence[str]) -> tuple[str, list[str]]:
+    """Split argv at the longest leading token recognized by the catalog."""
+    for end in range(len(parts), 0, -1):
+        candidate = " ".join(parts[:end])
+        if _spec_for_key(candidate) is not None:
+            return candidate, list(parts[end:])
+    return parts[0], list(parts[1:])
+
+
 def resolve_agent_argv(
     name_or_alias: str,
     *,
@@ -421,7 +430,7 @@ def resolve_flexible(
             prefer_aliases=prefer_aliases,
             path=path,
         )
-    command_head, *embedded_args = command_parts
+    command_head, embedded_args = _longest_catalog_prefix(command_parts)
     try:
         return resolve_agent_argv(
             command_head,

@@ -7,12 +7,21 @@ from pathlib import Path
 import pytest
 
 from hark.agents.resolve import (
+    AGENT_CATALOG,
     ResolveError,
     ResolveFailureReason,
     is_safe_executable,
     resolve_adhoc_argv,
     resolve_agent_argv,
     resolve_flexible,
+)
+
+
+MULTIWORD_CATALOG_NAMES = tuple(
+    (name, spec.key, spec.canonical)
+    for spec in AGENT_CATALOG
+    for name in (*spec.aliases, *spec.names)
+    if " " in name
 )
 
 
@@ -169,6 +178,46 @@ def test_flexible_quoted_safe_catalog_command_preserves_embedded_args(tmp_path: 
 
     assert resolved.agent_key == "codex"
     assert resolved.argv[-1] == "--version"
+
+
+@pytest.mark.parametrize(
+    ("catalog_name", "expected_key", "canonical"),
+    MULTIWORD_CATALOG_NAMES,
+)
+def test_flexible_prefers_longest_multiword_catalog_name(
+    tmp_path: Path, catalog_name: str, expected_key: str, canonical: str
+):
+    path = _fake_path(
+        tmp_path,
+        {
+            canonical: "self",
+            catalog_name.split()[0]: "self",
+        },
+    )
+
+    resolved = resolve_flexible(f"{catalog_name} --probe", path=path)
+
+    assert resolved.agent_key == expected_key
+    assert resolved.source == "canonical"
+    assert resolved.argv == [str(Path(path) / canonical), "--probe"]
+
+
+def test_flexible_catalog_prefix_ambiguity_keeps_unknown_command_adhoc(tmp_path: Path):
+    path = _fake_path(tmp_path, {"open": "self"})
+
+    resolved = resolve_flexible("open sesame", path=path)
+
+    assert resolved.agent_key == "adhoc"
+    assert resolved.argv == [str(Path(path) / "open"), "sesame"]
+
+
+def test_flexible_singleword_catalog_prefix_keeps_remaining_args(tmp_path: Path):
+    path = _fake_path(tmp_path, {"claude": "self"})
+
+    resolved = resolve_flexible("claude custom", path=path)
+
+    assert resolved.agent_key == "claude"
+    assert resolved.argv == [str(Path(path) / "claude"), "custom"]
 
 
 @pytest.mark.parametrize(

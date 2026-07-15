@@ -6,6 +6,12 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- refactor(pane-understanding, P1.M3): deepen watch classify into
+  `hark.pane_understanding` — `PaneClassifier` + pure heuristics (false-done
+  menus, busy-subagent Tasks strip, question_changed). `watch` is I/O only
+  (list/read/emit/register + lifecycle invalidation). HEP `make_agent_*` stay
+  pack-only; `EdgeTracker` is a compat alias. See
+  `docs/plans/P1-M3-pane-understanding.md`, `docs/ARCHITECTURE.md`.
 - refactor(answerability, P1.M2): deepen bound delivery gates into
   `hark.answerability` — pure `assess_snapshot` + injectable live re-read.
   Compatible state includes **false-done** (`agent.needs_input` + idle-like

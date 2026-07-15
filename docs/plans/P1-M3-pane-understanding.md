@@ -1,6 +1,6 @@
 # P1.M3 — Deepen Pane Understanding
 
-**Status:** design locked for E1 (implementation follows E2–E4)  
+**Status:** implemented (E1–E4 complete 2026-07-15)  
 **Date:** 2026-07-15  
 **Backlog:** `P1.M3` · architecture review candidate 3  
 **Depends on:** M2 Bound Answerability (delivery side; emission is independent)  

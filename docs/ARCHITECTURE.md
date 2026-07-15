@@ -93,6 +93,27 @@ re-read.
 
 **Compatible state** is codified here (not only `status==blocked`). SAFETY.md Routing and [plans/P1-M2-answerability.md](plans/P1-M2-answerability.md) are normative. Delivery store age/idempotency remain in `delivery.py`.
 
+## Pane Understanding (deep watch classify)
+
+Watch no longer owns false-done / busy-subagent policy. Status edges become
+HEP facts in a single deep module (`hark.pane_understanding`):
+**`PaneClassifier.process_observations(obs) → HEP events`** (stateful, no Herdr
+I/O). Pure heuristics (`looks_like_pending_question`, `detect_active_subagents`)
+live in the same package; `events.make_agent_*` remain **pack-only** builders.
+
+| Layer | Owns |
+|-------|------|
+| **External interface** | `PaneObservation`, `ClassifyPolicy`, `PaneUnderstandingState`, `PaneClassifier` (`EdgeTracker` alias) |
+| **Implementation** | Status edge machine, false-done → `agent.needs_input`, busy-subagent → reclassified working, question_changed, fingerprint dedupe, pane_capture split |
+| **Thin watch** | List agents, read pane, build observations, emit, register; lifecycle `target.invalidated` on pane closed/moved |
+| **Thin HEP** | `make_agent_status_event` / `needs_input` / `busy_subagent` / `question_changed` pack already-decided fields |
+
+**Former name:** `EdgeTracker` in `watch.py` — retired as the home of policy;
+compat alias points at `PaneClassifier`. Design note:
+[plans/P1-M3-pane-understanding.md](plans/P1-M3-pane-understanding.md).
+Answerability (M2) **consumes** `agent.needs_input`; Pane Understanding
+**emits** it.
+
 ## Monitor / harness compatibility
 
 Handsfree needs the orchestrator to wake on **`hark monitor --for-monitor`** (unified Herdr + ambient feed). Prefer that over bare `hark watch` alone. Availability by harness:

@@ -48,6 +48,13 @@ may still deliver when Answerability re-check finds menu + fingerprint match.
 _Avoid_: trusting status=done alone; “completed” without pane judgment; refusing
 `hark answer` solely because status is not `blocked`
 
+**Pane Understanding**:
+Deep module (`hark.pane_understanding`) that turns agent status + pane text into
+HEP facts (blocked, needs_input, busy-subagent, question_changed). Watch only
+does I/O. Former informal name: EdgeTracker.
+_Avoid_: embedding false-done policy in `watch.py`; calling EdgeTracker the
+product name for the deep module
+
 ### Listening and speech
 
 **Answer Window**:

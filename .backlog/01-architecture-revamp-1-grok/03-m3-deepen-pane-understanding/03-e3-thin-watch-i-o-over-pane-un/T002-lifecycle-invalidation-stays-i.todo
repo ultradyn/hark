@@ -1,4 +1,6 @@
 ---
+claimed_at: "2026-07-15T05:51:36Z"
+claimed_by: cli-user
 completed_at: null
 complexity: low
 created_at: "2026-07-15T04:29:54Z"
@@ -7,11 +9,11 @@ depends_on:
 estimate_hours: 1
 id: P1.M3.E3.T002
 priority: medium
-started_at: null
-status: pending
+started_at: "2026-07-15T05:51:36Z"
+status: in_progress
 tags: []
 title: Lifecycle invalidation stays in watch (or document split)
-updated_at: "2026-07-15T04:29:54Z"
+updated_at: "2026-07-15T05:51:36Z"
 ---
 # Lifecycle invalidation stays in watch (or document split)
 

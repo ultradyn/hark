@@ -29,6 +29,6 @@ tasks:
       file: T002-lifecycle-invalidation-stays-i.todo
       id: T002
       priority: medium
-      status: pending
+      status: in_progress
       tags: []
       title: Lifecycle invalidation stays in watch (or document split)

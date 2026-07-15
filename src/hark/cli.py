@@ -89,6 +89,51 @@ def build_parser() -> argparse.ArgumentParser:
         help="do not download Sherpa model when engine=sherpa_kws",
     )
 
+    # B125: structured startup interview answers (scope / autonomy / role / mode)
+    sp = sub.add_parser(
+        "session-profile",
+        help=(
+            "handsfree session profile from startup interview "
+            "(scope, autonomy, role, mode); drives watch start + ambient mode"
+        ),
+    )
+    sp.add_argument("--json", action="store_true")
+    sp_sub = sp.add_subparsers(dest="session_profile_cmd")
+    sp_show = sp_sub.add_parser("show", help="print current profile (default)")
+    sp_show.add_argument("--json", action="store_true")
+    sp_set = sp_sub.add_parser("set", help="set profile fields from interview answers")
+    sp_set.add_argument(
+        "--scope",
+        default=None,
+        help="session_local | herdr (session-local skips Herdr watch)",
+    )
+    sp_set.add_argument(
+        "--autonomy",
+        default=None,
+        help="silent | blocked_only | proactive | babysit",
+    )
+    sp_set.add_argument("--role", default=None, help="free-text purpose of this session")
+    sp_set.add_argument(
+        "--mode",
+        default=None,
+        help="auto_end | radio | conversation",
+    )
+    sp_set.add_argument(
+        "--apply",
+        action="store_true",
+        help="also write mode into config.toml (streaming / end_mode)",
+    )
+    sp_set.add_argument("--json", action="store_true")
+    sp_apply = sp_sub.add_parser(
+        "apply",
+        help="apply saved profile mode to config.toml",
+    )
+    sp_apply.add_argument("--json", action="store_true")
+    sp_clear = sp_sub.add_parser(
+        "clear", help="remove session profile (revert start defaults)"
+    )
+    sp_clear.add_argument("--json", action="store_true")
+
     c = sub.add_parser("config", help="config path | init | show")
     cs = c.add_subparsers(dest="config_cmd", required=True)
     cs.add_parser("path")
@@ -736,6 +781,11 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
         from hark.setup_flow import cmd_setup
 
         return cmd_setup(args)
+
+    if cmd == "session-profile":
+        from hark.session_profile import cmd_session_profile
+
+        return cmd_session_profile(args)
 
     if cmd == "config":
         if args.config_cmd == "path":

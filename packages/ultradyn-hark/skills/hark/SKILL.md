@@ -22,7 +22,7 @@ You keep the human in the loop with Herdr-hosted agents **by voice**. You do
 Once `/hark` or `/handsfree` is invoked, you enter **TTS mode**:
 
 1. **Prefer speaking over typing.** Use `hark tts "…"` for almost all operator-facing messages (status, setup questions, confirmations, errors).
-2. **Session + voice bootstrap is mandatory before arming** — see **Session + voice bootstrap (hard rule)** below. Do **not** start ambient/watch/monitor with silent local-only defaults.
+2. **Session + voice bootstrap is mandatory before arming** — see **Session + voice bootstrap (hard rule)** and **Structured startup interview (B125)** below. Do **not** start ambient/watch/monitor with silent defaults or jump to “Hark is ready” before the interview.
 3. **Question → record → answer loop** for every operator decision:
    - Speak the question (`hark tts` or `hark ask`)
    - Start listening (`hark listen` / `hark ask` already listens)
@@ -30,30 +30,81 @@ Once `/hark` or `/handsfree` is invoked, you enter **TTS mode**:
 4. Chat/text is for **tool output, event_ids, and debugging** — not the main operator UI.
 5. **Ambient voice → TTS reply (hard rule).** On every final `ambient.prompt`, every conversation `ambient.turn`, and after you act on a finished radio stream, **speak your response with `hark tts`**. Do **not** answer ambient operator speech with chat-only prose. Short acks count; long plans can be summarized by voice with detail in chat if needed. Radio **partials** (HOLD, `streaming=false`): think privately until final. **Conversation mode** (`streaming=true`): full TTS on each `ambient.turn` / streaming partial — see **Streaming / conversation mode**.
 
-## Session + voice bootstrap (hard rule — B116)
+## Session + voice bootstrap (hard rule — B116 + B125)
 
-**Before** `hark start` / ambient / watch workers **or** arming `hark monitor`, you **MUST** resolve setup by voice. Skipping this is a skill bug.
+**Before** `hark start` / ambient / watch workers **or** arming `hark monitor`, you **MUST** complete bootstrap **and** the **structured startup interview**. Skipping either is a skill bug. One question per TTS turn.
+
+### A. Install / doctor / Herdr sockets (B116)
 
 1. Ensure CLI exists (`command -v hark`). If not → [POST_INSTALL.md](POST_INSTALL.md). Run `hark doctor` (text OK for tools). If doctor warns **setup incomplete** / missing sessions → treat as incomplete.
-2. **Herdr sessions — always ask by voice** (every skill start of `/hark` or `/handsfree`), unless the operator **already stated** session targets in this conversation:
+2. **If setup incomplete** (no `setup-complete.json`, empty sessions, schema stale): voice-ask persona / wake / TTS (or `hark setup` / `hark setup --force`). See [SETUP.md](SETUP.md).
+3. **Wake name:** if unclear, confirm by voice before enabling ambient.
+
+### B. Structured startup interview (B125) — required every skill start
+
+Ask by voice **one at a time**, unless the operator **already stated** that answer in this conversation. After all four core answers (plus follow-ups), **pass them through** with `hark session-profile set … --apply` **before** `hark start`.
+
+| # | Topic | Spoken question (example) | Pass-through |
+|---|--------|---------------------------|--------------|
+| 1 | **Scope** | “Should I stay session-local only, or also listen to Herdr agents?” | `session_local` vs `herdr` |
+| 2 | **Autonomy** | “How active should I be: mostly silent, speak when blocked, proactive status, or hands-on babysit?” | `silent` / `blocked_only` / `proactive` / `babysit` |
+| 3 | **Role** | “What is this handsfree session for?” (free-form) | `--role "…"` |
+| 4 | **Mode** | “Which mode: auto-end on pause, radio with end phrases, or conversation after wake?” | `auto_end` / `radio` / `conversation` |
+
+**Persist + apply (required):**
+
+```bash
+hark session-profile set \
+  --scope session_local|herdr \
+  --autonomy silent|blocked_only|proactive|babysit \
+  --role "operator free text" \
+  --mode auto_end|radio|conversation \
+  --apply
+# --apply writes [ambient].streaming + [listen].end_mode
+hark session-profile show   # confirm; note start_watch=
+```
+
+| Mode answer | Config effect | Operator-facing behavior |
+|-------------|---------------|---------------------------|
+| **auto_end** | `streaming=false`, `end_mode=silence` | Wake → speak → auto-finish on pause / Smart Turn |
+| **radio** | `streaming=false`, `end_mode=radio` | Classic HOLD; finish with over / okay hark send |
+| **conversation** | `streaming=true` | After first wake, stay open; full TTS on `ambient.turn`; no re-wake |
+
+| Scope answer | Runtime effect |
+|--------------|----------------|
+| **session_local** | `hark start` **skips Herdr watch** (no `agent.blocked` / done noise). Ambient + monitor still run for voice. Override: `hark start --force-watch`. |
+| **herdr** | Watch starts (default product path). Then ask which sockets (below). |
+
+| Autonomy | How chatty you are after ready |
+|----------|--------------------------------|
+| **silent** | TTS only for hard blocks / direct ambient asks |
+| **blocked_only** | Speak on blocked / needs_input / ambient; skip routine done |
+| **proactive** | Short status when useful (queue, meaningful completions) |
+| **babysit** | Announce blocks promptly, offer next steps; still never invent pane answers |
+
+**Role** biases tone and what you offer (unblock agents, pair on a feature, review-only, AFK babysit, …). Do not start coding agents if role is clearly “review only / listen only” unless they ask.
+
+### C. Follow-up decision tree (one question each, only when needed)
+
+After core answers 1–4:
+
+1. **If scope = herdr** → ask Herdr sessions (local / SSH / mix) and write `[[herdr.sessions]]` (B116).  
    ```bash
    hark ask --confirm never "Which Herdr sessions should I watch? Local only, a remote SSH host, or both?"
    ```
-   - **Local only** → ensure `[[herdr.sessions]]` with local `id` (no `ssh`).
-   - **SSH / remote only** → ask host (`user@host` or SSH alias), write `ssh = "…"`.
-   - **Mix / both** → local block **and** remote block(s).
-   - Write `~/.config/hark/config.toml` (or `HARK_CONFIG`). See **Herdr sessions** below.
-   - If setup already completed earlier, a **short reconfirm** is enough (“Still watching local only, or add a remote host?”) — do **not** silently assume.
-3. **If setup incomplete** (`~/.local/state/hark/setup-complete.json` missing, schema stale, empty `answers.sessions`, or doctor setup warning): also voice-ask **persona / wake name** and **TTS voice** preferences (one question at a time). Prefer guided CLI when interactive is fine:
-   ```bash
-   hark setup          # interactive; sessions + persona + wake engine
-   hark setup --force  # re-run after a bad/empty sessions config
-   ```
-   Full question order: [SETUP.md](SETUP.md). After voice answers, write config + setup-complete (or finish via `hark setup`).
-4. **Wake name:** if the operator’s preferred wake name is unclear, confirm by voice before enabling ambient (“Should I listen for hey iris, or a different name?”).
-5. **Never** arm ambient/watch/monitor “to save time” and ask later. Session targeting first; then ready TTS / queue / monitors.
+2. **If scope = session_local** → **do not** start watch; skip session socket questions unless they volunteer remote work later.
+3. **If autonomy = babysit or proactive** → short confirm: “I’ll still always confirm risky (R2/R3) actions — OK?”
+4. **If mode = radio** → ready TTS reminds end phrases (over / okay hark send).
+5. **If mode = conversation** → ready TTS: keep talking after wake, no re-wake between turns.
+6. **If mode = auto_end** → ready TTS: finishes on a natural pause.
+7. **If role mentions review-only / no spawn** → do not offer `hark agent-start` unprompted.
+8. **If setup incomplete** (still) → persona / wake / voice questions (B116 §A).
 
-CLI reference: `hark setup`, [SETUP.md](SETUP.md), `docs/HERDR.md`.
+### D. Arm only after A–C
+
+Never arm ambient/watch/monitor “to save time” and interview later. Order: doctor → interview → `session-profile set --apply` → sessions (if herdr) → status/queue → ready TTS (use `mode` wording) → `hark start` → **one** monitor.
+
+CLI: `hark session-profile show|set|apply|clear`, `hark setup`, [SETUP.md](SETUP.md), `docs/HERDR.md`.
 
 Mic mutes automatically during TTS (`mute_mic_during_tts`). After TTS/ask, the **record beep plays when listen is ready** (`answer_arm_cue`, default on) — not when speech opens. Leading silence/noise is still trimmed before content is kept.
 
@@ -354,15 +405,22 @@ If `~/.local/state/hark/setup-complete.json` is missing (or schema older than cu
 
 ## On skill start (voice bootstrap)
 
-**Order is mandatory.** Do not arm workers/monitor before step 2.
+**Order is mandatory.** Do not arm workers/monitor before steps 2–3.
 
 1. Ensure CLI exists (`command -v hark`). If not → [POST_INSTALL.md](POST_INSTALL.md). Then `hark doctor` (text OK for tools). Note setup / sessions warnings.
-2. **Hard rule (B116):** complete **Session + voice bootstrap** — voice-ask Herdr sessions (local / SSH / mix); if setup incomplete, also persona/voice/wake; write `[[herdr.sessions]]` + setup-complete as needed. See [SETUP.md](SETUP.md) / `hark setup`.
-3. `hark status` + `hark queue --announce` — **announce any already-blocked / pending by TTS**. `hark queue --announce` speaks the waiting count itself when more than one agent is waiting (JSON always carries `count` / `announcement` / distinct `targets`). Hark watch also emits on load; still speak a short rollup so the operator hears it.  
-4. TTS: “Hark is ready. I'll speak from here.” Remind the configured wake name (e.g. hey iris) when ambient will be on. If streaming/conversation is off, also remind: radio mode ends with over or okay hark send. If streaming is on: after wake, keep talking — no re-wake between turns.
-5. **Required:** arm **one** **`hark monitor --for-monitor`** (persistent) if not already armed. One feed for Herdr + ambient (includes `wake_near_miss`). Do **not** arm a second monitor on restart/dual skill boots — check first (`hark start --status` / existing Monitor). Do **not** arm only `hark watch` or only ambient tails. Start workers (`hark start`) if not running **after** sessions are configured.
+2. **Hard rule (B116 + B125):** complete **Session + voice bootstrap** including the **structured startup interview** (scope → autonomy → role → mode), then follow-ups. Persist with:
+   ```bash
+   hark session-profile set --scope … --autonomy … --role "…" --mode … --apply
+   ```
+   Write `[[herdr.sessions]]` only when scope is **herdr**. If setup incomplete, also persona/voice/wake. See [SETUP.md](SETUP.md).
+3. `hark status` + (if scope is herdr) `hark queue --announce` — announce pending by TTS when Herdr is in scope. Skip queue noise for session-local.  
+4. TTS ready line matching **mode** (and wake name). Examples: conversation → no re-wake; radio → over / okay hark send; auto_end → pause finishes. Speak a one-line ack of scope + autonomy + role.
+5. **Required:** start workers then arm **one** **`hark monitor --for-monitor`** (persistent) if not already armed.  
+   - `hark start` **honors session profile**: session_local → **no watch worker** (ambient only).  
+   - Herdr scope → ambient + watch.  
+   - Do **not** arm a second monitor; check `hark start --status` / existing Monitor first.
 6. Prefer `hark tts --listen "…"` or `hark ask` so recording arms after you speak (**beep when listen ready**, not when speech opens). **Ambient auto-pauses** for listen/ask (mic lease yield); no manual kill needed.  
-7. **Idle and wait for that Monitor** to deliver the next line. Do not poll.
+7. **Idle and wait for that Monitor** to deliver the next line. Gate chattiness by **autonomy**. Do not poll.
 
 ## On `agent.blocked` / blocked monitor line
 
@@ -465,6 +523,7 @@ Use PATH binaries only (Herdr cannot see fish functions). Overrides: `[agents]` 
 | `hark session list\|ensure` | Named Herdr sessions (voice spawn) |
 | `hark agent-start` | Start coding agent + optional kickoff prompt |
 | `hark mute` / `unmute` | System mic mute |
+| `hark session-profile set\|show\|apply\|clear` | B125 startup interview → scope/mode/autonomy/role; start skips watch when session_local |
 
 ## Failures
 

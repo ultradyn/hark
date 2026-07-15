@@ -22,7 +22,7 @@ Related: [POST_INSTALL.md](POST_INSTALL.md) (CLI + Python/system deps after `npx
 
 Schema version lives in code as `SETUP_SCHEMA_VERSION` (`hark.setup_flow`).
 
-**Agent hard rule (B116):** on every `/hark` or `/handsfree` skill start, **before** ambient/watch/monitor, ask by voice which Herdr sessions to watch (short reconfirm OK if setup-complete exists). If setup incomplete, also ask persona / wake name / TTS voice. Do not arm with silent defaults. See SKILL.md **Session + voice bootstrap**.
+**Agent hard rule (B116 + B125):** on every `/hark` or `/handsfree` skill start, **before** ambient/watch/monitor, run the **structured startup interview** (scope session-local vs Herdr, autonomy, role, mode) and `hark session-profile set … --apply`. If scope is **herdr**, also ask which Herdr sessions (local / SSH / mix). If setup incomplete, also ask persona / wake name / TTS voice. Do not arm with silent defaults. See SKILL.md **Session + voice bootstrap** and **Structured startup interview**.
 
 ---
 

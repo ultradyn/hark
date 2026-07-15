@@ -406,7 +406,21 @@ def cmd_start(args: Any) -> int:
             print(f"state_dir: {st['state_dir']}")
         return OK
 
-    do_watch = not bool(getattr(args, "no_watch", False))
+    # B125: session-local profile skips Herdr watch unless --force-watch.
+    # Explicit --no-watch always wins; --force-watch overrides session_local.
+    force_watch = bool(getattr(args, "force_watch", False))
+    no_watch = bool(getattr(args, "no_watch", False))
+    if no_watch:
+        do_watch = False
+    elif force_watch:
+        do_watch = True
+    else:
+        try:
+            from hark.session_profile import should_start_watch
+
+            do_watch = should_start_watch()
+        except Exception:
+            do_watch = True
     do_ambient = not bool(getattr(args, "no_ambient", False))
     if not do_watch and not do_ambient:
         print("hark start: nothing to start (--no-watch and --no-ambient)", file=sys.stderr)
@@ -416,6 +430,16 @@ def cmd_start(args: Any) -> int:
         do_watch=do_watch,
         do_ambient=do_ambient,
     )
+    if not do_watch and result.get("ok"):
+        result = {
+            **result,
+            "watch_skipped": True,
+            "watch_skip_reason": (
+                "session_profile.scope=session_local"
+                if not no_watch
+                else "--no-watch"
+            ),
+        }
     return _print_result(result, as_json=bool(getattr(args, "json", False)))
 
 
@@ -430,7 +454,19 @@ def cmd_stop(args: Any) -> int:
 
 
 def cmd_restart(args: Any) -> int:
-    do_watch = not bool(getattr(args, "no_watch", False))
+    force_watch = bool(getattr(args, "force_watch", False))
+    no_watch = bool(getattr(args, "no_watch", False))
+    if no_watch:
+        do_watch = False
+    elif force_watch:
+        do_watch = True
+    else:
+        try:
+            from hark.session_profile import should_start_watch
+
+            do_watch = should_start_watch()
+        except Exception:
+            do_watch = True
     do_ambient = not bool(getattr(args, "no_ambient", False))
     if not do_watch and not do_ambient:
         print(
@@ -462,6 +498,13 @@ def add_lifecycle_parsers(sub: Any) -> None:
         "--no-watch",
         action="store_true",
         help="do not start Herdr watch",
+    )
+    st.add_argument(
+        "--force-watch",
+        action="store_true",
+        help=(
+            "start Herdr watch even if session profile scope is session_local (B125)"
+        ),
     )
     st.add_argument(
         "--no-ambient",
@@ -508,6 +551,11 @@ def add_lifecycle_parsers(sub: Any) -> None:
         "--no-watch",
         action="store_true",
         help="after stop: do not start Herdr watch",
+    )
+    rs.add_argument(
+        "--force-watch",
+        action="store_true",
+        help="after stop: start watch even if session profile is session_local (B125)",
     )
     rs.add_argument(
         "--no-ambient",

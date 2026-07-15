@@ -128,6 +128,31 @@ compat alias points at `PaneClassifier`. Design note:
 Answerability (M2) **consumes** `agent.needs_input`; Pane Understanding
 **emits** it.
 
+## State Feed Follower (deep JSONL follow)
+
+Producers append state JSONL; consumers share one deep follower
+(`hark.state_feed`): **`StateFeedFollower`** + **`SourceFollower`**.
+
+```text
+  watch / ambient / system / usage / delivery writers
+       │  append JSONL (prefer full events)
+       ▼
+  StateFeedFollower (partial buffer · inode rotation · composite cursor)
+       │
+       ├── hark monitor adapter — kinds + singleflight lock + present_for_monitor
+       └── dashboard MultiTailer — source map + SSE envelopes + read_page
+```
+
+| Layer | Owns |
+|-------|------|
+| **External interface** | `StateFeedFollower` (poll, composite cursor), `SourceFollower`, `parse_cursor` / `format_cursor`, `present_for_monitor` |
+| **Implementation** | Partial-line buffer, inode/dev rotation, truncation reopen, per-source seq |
+| **Monitor adapter** | `MODE_A_WAKE_KINDS`, `MonitorFeedLock` (B102), replay, NDJSON emit |
+| **Dashboard adapter** | Source map (`watch`/`ambient`/…/`bound`+`delivery`), envelope transforms, SSE resume |
+| **Presentation** | **Once** at the consumer edge that needs compact lines (`present_for_monitor`); `compact_mode_a_event` is an alias |
+
+**Cursor token** (dashboard SSE compatible): `key:seq,key:seq,…` e.g. `watch:184,ambient:42,bound:12`. Design note: [plans/P1-M5-state-feed-follower.md](plans/P1-M5-state-feed-follower.md).
+
 ## Monitor / harness compatibility
 
 Handsfree needs the orchestrator to wake on **`hark monitor --for-monitor`** (unified Herdr + ambient feed). Prefer that over bare `hark watch` alone. Availability by harness:

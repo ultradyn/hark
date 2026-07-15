@@ -100,6 +100,16 @@ Optional early capture near TTS end (`audio.overlap_prearm`) while discarding
 frames until TTS finishes plus `overlap_discard_ms` (ADR-009 no barge-in).
 _Avoid_: true full-duplex; treating discarded TTS tail as operator speech
 
+**State Feed Follower**:
+Deep multi-path JSONL follower for state files (watch, ambient, …) with partial
+buffer, rotation, and composite cursor; monitor and dashboard are adapters.
+_Avoid_: a second hand-rolled tail loop per consumer; double monitor_profile
+
+**present_for_monitor** (Mode-A compact):
+Single presentation function at the harness-monitor emit edge (agent + ambient +
+tts compact). Prefer full events on disk.
+_Avoid_: compacting at write *and* read for the same pipeline
+
 ### Orchestration
 
 **Orchestrator** (handsfree agent):
@@ -120,3 +130,4 @@ _Avoid_: tmux as the product name; equating Herdr with Hark
 - Answer Window deepen design: [docs/plans/P1-M1-answer-window.md](docs/plans/P1-M1-answer-window.md)
 - Bound Answerability design: [docs/plans/P1-M2-answerability.md](docs/plans/P1-M2-answerability.md)
 - SpeakThenListen deepen design: [docs/plans/P1-M4-speak-then-listen.md](docs/plans/P1-M4-speak-then-listen.md)
+- State Feed Follower design: [docs/plans/P1-M5-state-feed-follower.md](docs/plans/P1-M5-state-feed-follower.md)

@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable, TextIO
 
-from hark.events import monitor_profile
+from hark.state_feed import SourceFollower, StateFeedFollower, present_for_monitor
 from hark.exitcodes import ERROR
 from hark.paths import state_dir
 from hark import paths as hark_paths
@@ -327,161 +327,8 @@ class MonitorFeedLock:
 
 
 def compact_mode_a_event(event: dict[str, Any]) -> dict[str, Any]:
-    """Compact line for harness Monitors (short, actionable)."""
-    kind = str(event.get("kind") or "")
-    if kind.startswith("agent.") or kind in ("watch.armed", "watch.error", "target.invalidated"):
-        return monitor_profile(event)
-
-    compact: dict[str, Any] = {
-        "schema": event.get("schema") or "hark.event.v1",
-        "kind": kind,
-        "event_id": event.get("event_id"),
-        "observed_at": event.get("observed_at"),
-    }
-
-    if kind == "ambient.prompt":
-        text = event.get("text")
-        if isinstance(text, str) and len(text) > 400:
-            text = text[:397] + "…"
-        compact.update(
-            {
-                "phrase": event.get("phrase"),
-                "text": text,
-                "stream_id": event.get("stream_id"),
-                "final": True,
-                "partial": False,
-                "instructions": (
-                    "FINAL operator voice prompt. Reply with hark tts. "
-                    "Not bound to a pane unless they ask. Then idle for next Monitor event."
-                ),
-            }
-        )
-    elif kind == "ambient.partial":
-        from hark.partial import partial_compact_instructions
-
-        text = event.get("text")
-        full_len = len(text) if isinstance(text, str) else 0
-        if isinstance(text, str) and len(text) > 400:
-            text = text[:397] + "…"
-        frag = event.get("fragment")
-        if isinstance(frag, str) and len(frag) > 240:
-            frag = frag[:237] + "…"
-        streaming = bool(event.get("streaming"))
-        compact.update(
-            {
-                "stream_id": event.get("stream_id"),
-                "seq": event.get("seq"),
-                # Prefer delta for the orchestrator / logs; keep full body truncated as text
-                "fragment": frag if frag is not None else text,
-                "text": text,
-                "text_len": full_len or None,
-                "partial": True,
-                "final": False,
-                "streaming": streaming,
-                "instructions": partial_compact_instructions(streaming=streaming),
-            }
-        )
-        # B105: surface quiet gate when streaming
-        if streaming and event.get("ack_min_quiet_s") is not None:
-            try:
-                compact["ack_min_quiet_s"] = float(event["ack_min_quiet_s"])
-            except (TypeError, ValueError):
-                compact["ack_min_quiet_s"] = 2.0
-    elif kind == "ambient.wake_near_miss":
-        attempts = event.get("attempts") or []
-        texts = []
-        if isinstance(attempts, list):
-            for a in attempts[:5]:
-                if isinstance(a, dict) and a.get("text"):
-                    texts.append(str(a["text"]))
-                elif isinstance(a, str):
-                    texts.append(a)
-        compact.update(
-            {
-                "count": event.get("count"),
-                "total_near_misses": event.get("total_near_misses"),
-                "group_index": event.get("group_index"),
-                "attempts": texts or attempts,
-                "priority": event.get("priority", 35),
-                "instructions": (
-                    "Failed wake attempt(s) — not a prompt. Review attempts; "
-                    "learning may auto-expand aliases (wake_learned). "
-                    "Optional: adjust ambient names / extra_trigger_phrases. See docs/CUSTOM_WAKE.md."
-                ),
-            }
-        )
-    elif kind == "ambient.wake_learned":
-        compact.update(
-            {
-                "learn_kind": event.get("learn_kind"),
-                "value": event.get("value"),
-                "canonical": event.get("canonical"),
-                "wake_mode": event.get("wake_mode"),
-                "instructions": (
-                    "Learned a new wake alternate (no restart). "
-                    "Optional: pin in config (names / trigger_phrases)."
-                ),
-            }
-        )
-    elif kind == "ambient.error":
-        compact.update(
-            {
-                "error": event.get("error") or event.get("message"),
-                "reason": event.get("reason"),
-                "phrase": event.get("phrase"),
-                "stream_id": event.get("stream_id"),
-                "instructions": "Ambient/listen error — speak briefly if useful; fix or retry.",
-            }
-        )
-    elif kind in ("ambient.cancelled", "ambient.reloaded", "ambient.armed"):
-        compact.update(
-            {
-                "phrase": event.get("phrase"),
-                "wake_mode": event.get("wake_mode"),
-                "names": event.get("names"),
-                "phrases": event.get("phrases"),
-                "instructions": event.get("instructions")
-                or f"{kind}: informational; continue idle with monitors armed.",
-            }
-        )
-    elif kind == "tts.truncated":
-        compact.update(
-            {
-                "original_chars": event.get("original_chars"),
-                "kept_chars": event.get("kept_chars"),
-                "max_chars": event.get("max_chars"),
-                "text_preview": event.get("text_preview"),
-                "instructions": event.get("instructions")
-                or (
-                    "TTS text was truncated to tts.max_chars. Full agent text was NOT spoken. "
-                    "Raise [tts].max_chars (0=unlimited) or shorten the reply."
-                ),
-            }
-        )
-    elif kind == "tts.chunked":
-        compact.update(
-            {
-                "chars": event.get("chars"),
-                "n_chunks": event.get("n_chunks"),
-                "chunk_chars": event.get("chunk_chars"),
-                "instructions": event.get("instructions")
-                or "Long TTS multi-chunk play (informational).",
-            }
-        )
-    else:
-        # Pass through compact non-null subset
-        for key in (
-            "text",
-            "phrase",
-            "error",
-            "stream_id",
-            "instructions",
-            "priority",
-        ):
-            if event.get(key) is not None:
-                compact[key] = event[key]
-
-    return {k: v for k, v in compact.items() if v is not None}
+    """Compact line for harness Monitors — alias of :func:`present_for_monitor`."""
+    return present_for_monitor(event)
 
 
 def parse_event_line(line: str) -> dict[str, Any] | None:
@@ -513,7 +360,7 @@ def emit_line(
 ) -> None:
     if for_monitor:
         try:
-            payload = compact_mode_a_event(obj)
+            payload = present_for_monitor(obj)
         except Exception as exc:
             # Never kill the whole feed on one malformed line (dogfood: string
             # question/target crashed monitor_profile). Fall back to a minimal
@@ -580,7 +427,8 @@ def follow_state_files(
 ) -> int:
     """Follow JSONL state files; print matching handsfree wake events forever.
 
-    Expects workers (or equivalent) to be writing watch.jsonl + ambient.jsonl.
+    Uses :class:`~hark.state_feed.StateFeedFollower` (partial buffer, inode
+    rotation, truncation) — same core as the dashboard MultiTailer adapter.
     """
     out = out or sys.stdout
     # Ensure files exist so first open works
@@ -589,42 +437,25 @@ def follow_state_files(
         if not path.is_file():
             path.touch()
 
-    handles: list[tuple[Path, Any]] = []
+    sources = [
+        SourceFollower(path, source=path.name, cursor_key=path.stem) for path in paths
+    ]
+    follower = StateFeedFollower(sources)
     try:
-        for path in paths:
-            fh = path.open("r", encoding="utf-8", errors="replace")
-            fh.seek(0, 2)  # end
-            handles.append((path, fh))
-
+        follower.start_live()
         while True:
             progressed = False
-            for path, fh in handles:
-                # Detect truncation/rotation
-                try:
-                    pos = fh.tell()
-                    size = path.stat().st_size
-                    if size < pos:
-                        fh.seek(0)
-                except OSError:
-                    continue
-                while True:
-                    line = fh.readline()
-                    if not line:
-                        break
-                    progressed = True
-                    obj = parse_event_line(line)
-                    if obj and should_surface(obj, kinds):
-                        emit_line(obj, for_monitor=for_monitor, out=out)
+            for rec in follower.poll():
+                progressed = True
+                obj = rec.payload
+                if obj and should_surface(obj, kinds):
+                    emit_line(obj, for_monitor=for_monitor, out=out)
             if not progressed:
                 time.sleep(poll_s)
     except KeyboardInterrupt:
         return 0
     finally:
-        for _, fh in handles:
-            try:
-                fh.close()
-            except Exception:
-                pass
+        follower.close()
     return 0
 
 

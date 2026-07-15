@@ -6,6 +6,12 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- refactor(state-feed, P1.M5): unify JSONL followers into `hark.state_feed` —
+  `StateFeedFollower` / `SourceFollower` with partial-line buffer, inode
+  rotation, and composite cursors. `hark monitor` and dashboard `MultiTailer`
+  are thin adapters over the same core; `present_for_monitor` is the single
+  Mode-A presentation function (`compact_mode_a_event` alias). See
+  `docs/plans/P1-M5-state-feed-follower.md`, `docs/ARCHITECTURE.md`.
 - refactor(speak-then-listen, P1.M4): deepen TTS→listen handoff and confirm
   turns into `hark.speak_then_listen` — half-duplex states (speaking/armed/
   listening/confirming), overlap pre-arm + discard ownership (ADR-009),

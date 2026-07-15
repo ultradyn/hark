@@ -1,17 +1,18 @@
 ---
+claimed_at: "2026-07-15T22:50:26Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-15T21:02:06Z"
 depends_on: []
 estimate_hours: 1
 id: B132
 priority: medium
-status: pending
-tags:
-    - ambient
-    - conversation
-    - error-reporting
+started_at: "2026-07-15T22:50:26Z"
+status: in_progress
+tags: []
 title: Ambient conversation misreports later-turn listen failures as conversation_idle
-updated_at: "2026-07-15T21:02:06Z"
+updated_at: "2026-07-15T22:50:26Z"
 ---
 ## Evidence
 In ambient._conversation_after_wake, the listen exception path computes whether the error is a no-speech timeout. The first turn distinguishes no_open from listen_failed, but every exception after a successful turn unconditionally emits ambient.conversation_end with reason conversation_idle. A reproduction with one successful turn followed by RuntimeError("provider unavailable") emitted conversation_idle. Existing tests cover a later no-speech TimeoutError, not provider, mic, or internal failures.

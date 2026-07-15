@@ -1,0 +1,33 @@
+---
+complexity: high
+created_at: "2026-07-15T21:02:45Z"
+depends_on: []
+estimate_hours: 1
+id: B134
+priority: critical
+status: pending
+tags:
+    - delivery
+    - concurrency
+    - safety
+    - idempotency
+title: Concurrent bound answers can double-send the same event
+updated_at: "2026-07-15T21:02:45Z"
+---
+## Evidence
+answer_bound_event performs get, already_delivered, pending check, live Answerability, Herdr send, then DeliveryStore.mark. already_delivered scans only historical delivered records and mark appends after the send; there is no atomic acquisition across threads or processes. A deterministic two-thread reproduction against one bound event produced send_count=2, returned delivered twice, and appended two delivered records. docs/HARKD.md promises library idempotency and no silent double-send.
+
+## Expected
+At most one caller owns a Bound delivery attempt for an event. Concurrent callers cannot both cross the send seam. A crash or transport ambiguity leaves a durable uncertain state that is never blindly retried.
+
+## Actual
+Concurrent calls can both observe pending and not-delivered, both send to Herdr, and only then record duplicate successful outcomes.
+
+## Acceptance criteria
+- Atomically acquire durable per-event delivery ownership before live validation and send, across threads and processes.
+- Only the owner may send; competitors receive a stable in-progress, already-delivered, rejected, or uncertain result.
+- Persist transitions for acquired, validating, sending or equivalent, delivered, rejected, and uncertain with crash-safe ordering.
+- Never auto-retry after an ambiguous write.
+- Preserve Answerability as the existing deep gate and Bound event fingerprint/revision checks.
+- Add deterministic thread and multi-process races, owner crash points, transport error, stale owner recovery, and duplicate dashboard/CLI submission tests.
+- Existing single-call delivery, queue, and false-done tests remain green.

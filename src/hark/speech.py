@@ -65,6 +65,7 @@ from hark.answer_window.silence import (
     NO_OPEN_NUDGE_TEXT,
     SilenceEvent,
     SilenceSession,
+    _echo_overlap,  # re-export for tests / radio branch (canonical: answer_window.silence)
     is_no_open_timeout as _is_no_open_timeout_impl,
     log_empty_stt as _log_empty_stt_impl,
     log_no_open as _log_no_open_impl,
@@ -723,33 +724,6 @@ def _tag_meta_command(result: "ListenResult") -> "ListenResult":
     return result
 
 
-def _echo_overlap(transcript: str, last_tts: str | None) -> bool:
-    """True when *transcript* looks like residual TTS, not a real answer.
-
-    Short answers that *quote a word from the question* (e.g. ``BitLocker.`` after
-    the prompt asked about BitLocker) must **not** match — dogfood B093: that
-    used to wipe the whole radio assembly via ``pieces.clear()``.
-    """
-    if not last_tts or not transcript:
-        return False
-    a = re.sub(r"\W+", " ", transcript.lower()).strip()
-    b = re.sub(r"\W+", " ", last_tts.lower()).strip()
-    # Need substantial text on both sides; one-word replies are never "echo"
-    if len(a) < 24 or len(b) < 24:
-        return False
-    # Substring only when the transcript is long enough to be residual TTS bleed
-    if len(a) >= 40 and (a in b or b in a):
-        return True
-    aw, bw = set(a.split()), set(b.split())
-    if not aw or not bw:
-        return False
-    # Require enough shared mass that a short answer cannot clear the session
-    if len(aw) < 6:
-        return False
-    j = len(aw & bw) / max(1, len(aw | bw))
-    return j >= 0.7
-
-
 def _log_empty_stt(
     *,
     duration_ms: int,
@@ -1372,7 +1346,8 @@ def run_listen(
                             "heard audio but STT returned empty text "
                             "(try speaking clearer, or check mic device)"
                         )
-                    if _echo_overlap(tr.text, last_tts):
+                    # Echo reject uses policy.last_tts owned by SilenceSession (E3.T003)
+                    if silence_sess.should_reject_echo(tr.text):
                         store.record_stt(
                             text=tr.text,
                             provider=tr.provider,

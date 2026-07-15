@@ -1,4 +1,4 @@
-"""E3.T001–T002: SilenceSession, endpoint strategy, empty/no-open recovery."""
+"""E3.T001–T003: SilenceSession, endpoint strategy, empty/no-open, echo reject."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from hark.answer_window import (
     SilenceEvent,
     SilenceSession,
     SilenceState,
+    echo_overlap,
     is_no_open_timeout,
     log_no_open,
     resolve_endpoint_strategy,
@@ -265,6 +266,45 @@ def test_agent_cancel():
     assert s.state is SilenceState.CANCELLED
     assert s.cancelled
     assert s.end_phrase == "agent:cancel"
+
+
+def test_should_reject_echo_uses_policy_last_tts():
+    """E3.T003: echo decision owns last_tts via policy, not free kwargs."""
+    tts = (
+        "Please answer what you know about the laptop state including Windows version "
+        "BitLocker encryption local admin disk size free space and dual boot status "
+        "when you are ready to continue with the backup plan to the NAS device."
+    )
+    s = SilenceSession(policy=_policy(last_tts=tts))
+    # Short quote of a word from the prompt is not residual TTS (B093)
+    assert s.should_reject_echo("BitLocker.") is False
+    assert s.should_reject_echo("on") is False
+    # Near-full re-speak of the prompt is echo
+    assert s.should_reject_echo(tts) is True
+    almost = tts[10:-10]
+    assert len(almost) >= 40
+    assert s.should_reject_echo(almost) is True
+
+
+def test_should_reject_echo_false_when_no_last_tts():
+    s = SilenceSession(policy=_policy(last_tts=None))
+    longish = (
+        "Please answer what you know about the laptop state including Windows version "
+        "BitLocker encryption local admin disk size free space."
+    )
+    assert s.should_reject_echo(longish) is False
+
+
+def test_echo_overlap_helper_matches_session():
+    """Pure helper and session method share the same decision."""
+    tts = (
+        "Please answer what you know about the laptop state including Windows version "
+        "BitLocker encryption local admin disk size free space and dual boot status "
+        "when you are ready to continue with the backup plan to the NAS device."
+    )
+    s = SilenceSession(policy=_policy(last_tts=tts))
+    assert echo_overlap("BitLocker.", tts) is s.should_reject_echo("BitLocker.")
+    assert echo_overlap(tts, tts) is s.should_reject_echo(tts)
 
 
 def test_policy_from_config_endpoint_fields():

@@ -19,7 +19,7 @@ tasks:
       file: T001-port-false-done-busy-subagent.todo
       id: T001
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: Port false-done / busy-subagent / binding tests
     - complexity: low

@@ -1,17 +1,18 @@
 ---
 claimed_at: "2026-07-15T23:12:47Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-15T23:52:34Z"
 complexity: medium
 created_at: "2026-07-15T23:09:48Z"
 depends_on: []
+duration_minutes: 39.7874329623
 estimate_hours: 1
 id: B140
 priority: high
 started_at: "2026-07-15T23:12:47Z"
-status: in_progress
+status: done
 tags: []
 title: Live monitor ingests synthetic ambient test events
-updated_at: "2026-07-15T23:12:47Z"
+updated_at: "2026-07-15T23:52:34Z"
 ---
 While dogfooding conversation mode from /home/xertrov/src/amaroo on 2026-07-16, a single live 'hark monitor --for-monitor' consumer received bursts of synthetic-looking events from ~/.local/state/hark/ambient.jsonl, including text values 'successful turn', 'status of deploy', 'first turn', and event_id 't1' with text 'hello'. Multiple events shared near-identical timestamps and failure reasons such as listen_provider_error, listen_mic_busy, and listen_failed. These were interleaved with the real operator session, making the unified feed unsafe to treat as live voice input. Tests or fixtures should use isolated state paths and the monitor should distinguish replay/test data from current live events.

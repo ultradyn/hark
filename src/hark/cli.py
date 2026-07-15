@@ -961,7 +961,7 @@ def cmd_session(args: argparse.Namespace, cfg) -> int:
 
 def cmd_agent_start(args: argparse.Namespace, cfg) -> int:
     """``hark agent-start`` — resolve CLI, start in Herdr, optional kickoff (B057)."""
-    from hark.agents.resolve import ResolveError, resolve_adhoc_argv, resolve_agent_argv
+    from hark.agents.resolve import ResolveError, resolve_flexible
 
     session_id = (
         args.session
@@ -986,19 +986,13 @@ def cmd_agent_start(args: argparse.Namespace, cfg) -> int:
 
     extra = list(getattr(args, "extra", None) or [])
     try:
-        if bool(getattr(args, "adhoc", False)):
-            resolved = resolve_adhoc_argv(str(args.agent), extra_args=extra)
-        else:
-            try:
-                resolved = resolve_agent_argv(
-                    str(args.agent),
-                    extra_args=extra,
-                    overrides=override_map,
-                    prefer_aliases=prefer,
-                )
-            except ResolveError:
-                # Fall back to ad-hoc when token is an unknown PATH binary
-                resolved = resolve_adhoc_argv(str(args.agent), extra_args=extra)
+        resolved = resolve_flexible(
+            str(args.agent),
+            extra_args=extra,
+            overrides=override_map,
+            prefer_aliases=prefer,
+            adhoc=bool(getattr(args, "adhoc", False)),
+        )
     except ResolveError as exc:
         eprint(f"hark agent-start: {exc}")
         return USAGE

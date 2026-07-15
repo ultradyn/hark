@@ -14,15 +14,36 @@ Pitfalls (see ``docs/plans/I005-voice-herdr-agent-control.md``):
 from __future__ import annotations
 
 import os
-import re
+import shlex
 import shutil
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
+class ResolveFailureReason(str, Enum):
+    """Machine-readable reason that CLI resolution failed."""
+
+    OTHER = "other"
+    UNKNOWN_AGENT = "unknown_agent"
+    EMPTY_COMMAND = "empty_command"
+    INVALID_OVERRIDE = "invalid_override"
+    NO_SAFE_EXECUTABLE = "no_safe_executable"
+    INVALID_ADHOC_COMMAND = "invalid_adhoc_command"
+
+
 class ResolveError(ValueError):
     """Could not resolve a coding-agent CLI."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: ResolveFailureReason = ResolveFailureReason.OTHER,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -182,41 +203,62 @@ def resolve_agent_argv(
     """
     token = (name_or_alias or "").strip()
     if not token:
-        raise ResolveError("empty agent name")
+        raise ResolveError(
+            "empty agent name",
+            reason=ResolveFailureReason.EMPTY_COMMAND,
+        )
 
     spec = _spec_for_key(token)
     if spec is None:
         raise ResolveError(
             f"unknown agent {token!r}; use a catalog name "
-            f"({', '.join(s.key for s in AGENT_CATALOG)}) or ad-hoc argv"
+            f"({', '.join(s.key for s in AGENT_CATALOG)}) or ad-hoc argv",
+            reason=ResolveFailureReason.UNKNOWN_AGENT,
         )
 
     # Overrides (config or caller)
     if overrides:
-        ovr = overrides.get(spec.key) or overrides.get(token)
-        if ovr is None:
-            for a in spec.aliases:
-                if a in overrides:
-                    ovr = overrides[a]
-                    break
-        if ovr is not None:
+        override_key = next(
+            (
+                key
+                for key in dict.fromkeys((spec.key, token, *spec.aliases))
+                if key in overrides
+            ),
+            None,
+        )
+        if override_key is not None:
+            ovr = overrides[override_key]
             if isinstance(ovr, str):
-                prefix = _split_simple(ovr)
+                try:
+                    prefix = _split_simple(ovr)
+                except ValueError as exc:
+                    raise ResolveError(
+                        f"malformed override for agent {spec.key!r}: {exc}",
+                        reason=ResolveFailureReason.INVALID_OVERRIDE,
+                    ) from exc
             else:
                 prefix = [str(x) for x in ovr]
-            if not prefix:
-                raise ResolveError(f"empty override for agent {spec.key!r}")
+            if not prefix or not prefix[0]:
+                raise ResolveError(
+                    f"empty override for agent {spec.key!r}",
+                    reason=ResolveFailureReason.INVALID_OVERRIDE,
+                )
             # Allow absolute path without PATH
             first = prefix[0]
             if not (first.startswith("/") or first.startswith(".")):
                 found = _which(first, path=path)
                 if not found:
                     raise ResolveError(
-                        f"override command not found on PATH: {first!r}"
+                        f"override command not found on PATH for agent "
+                        f"{spec.key!r}: {first!r}",
+                        reason=ResolveFailureReason.INVALID_OVERRIDE,
                     )
                 prefix = [found, *prefix[1:]]
             elif not Path(first).exists() and not _which(first, path=path):
-                raise ResolveError(f"override path not found: {first!r}")
+                raise ResolveError(
+                    f"override path not found for agent {spec.key!r}: {first!r}",
+                    reason=ResolveFailureReason.INVALID_OVERRIDE,
+                )
             argv = [*prefix, *[str(a) for a in extra_args]]
             return ResolvedCli(
                 agent_key=spec.key,
@@ -251,8 +293,10 @@ def resolve_agent_argv(
 
     tried = ", ".join(c for c, _ in candidates)
     raise ResolveError(
-        f"no safe executable for agent {spec.key!r} (tried: {tried}). "
-        "Install the CLI, add a PATH shim for the alias, or set [agents] override."
+        f"no safe executable for token {token!r} (catalog agent {spec.key!r}; "
+        f"tried: {tried}). Install the CLI, add a PATH shim for the alias, or "
+        "set [agents] override.",
+        reason=ResolveFailureReason.NO_SAFE_EXECUTABLE,
     )
 
 
@@ -265,24 +309,39 @@ def resolve_adhoc_argv(
 ) -> ResolvedCli:
     """Resolve free-form ad-hoc argv (no catalog alias magic)."""
     if isinstance(command, str):
-        prefix = _split_simple(command)
+        try:
+            prefix = _split_simple(command)
+        except ValueError as exc:
+            raise ResolveError(
+                f"malformed ad-hoc command: {exc}",
+                reason=ResolveFailureReason.INVALID_ADHOC_COMMAND,
+            ) from exc
     else:
         prefix = [str(x) for x in command]
-    if not prefix:
-        raise ResolveError("empty ad-hoc command")
+    if not prefix or not prefix[0]:
+        raise ResolveError(
+            "empty ad-hoc command",
+            reason=ResolveFailureReason.EMPTY_COMMAND,
+        )
 
     first = prefix[0]
     if require_on_path and not first.startswith("/") and not first.startswith("."):
         found = _which(first, path=path)
         if not found:
-            raise ResolveError(f"ad-hoc command not found on PATH: {first!r}")
+            raise ResolveError(
+                f"ad-hoc command not found on PATH: {first!r}",
+                reason=ResolveFailureReason.INVALID_ADHOC_COMMAND,
+            )
         prefix = [found, *prefix[1:]]
     elif first.startswith("/") or first.startswith("."):
         if not Path(first).exists() and require_on_path:
             # still allow if which finds it
             found = _which(first, path=path)
             if not found:
-                raise ResolveError(f"ad-hoc path not found: {first!r}")
+                raise ResolveError(
+                    f"ad-hoc path not found: {first!r}",
+                    reason=ResolveFailureReason.INVALID_ADHOC_COMMAND,
+                )
             prefix = [found, *prefix[1:]]
 
     argv = [*prefix, *[str(a) for a in extra_args]]
@@ -316,16 +375,14 @@ def resolve_flexible(
             prefer_aliases=prefer_aliases,
             path=path,
         )
-    except ResolveError:
-        # If it looks like an executable name and exists on PATH, treat as ad-hoc
-        if _which(name_or_command.split()[0], path=path):
-            return resolve_adhoc_argv(
-                name_or_command, extra_args=extra_args, path=path
-            )
-        raise
-
-
-_SPLIT_RE = re.compile(r"""[^\s"']+|"([^"]*)"|'([^']*)'""")
+    except ResolveError as exc:
+        if exc.reason is not ResolveFailureReason.UNKNOWN_AGENT:
+            raise
+        # Only a genuinely unknown catalog token gets implicit ad-hoc policy.
+        # resolve_adhoc_argv retains authority over its PATH/input validation.
+        return resolve_adhoc_argv(
+            name_or_command, extra_args=extra_args, path=path
+        )
 
 
 def _split_simple(s: str) -> list[str]:
@@ -333,10 +390,7 @@ def _split_simple(s: str) -> list[str]:
     s = s.strip()
     if not s:
         return []
-    parts: list[str] = []
-    for m in _SPLIT_RE.finditer(s):
-        parts.append(m.group(1) or m.group(2) or m.group(0))
-    return parts
+    return shlex.split(s, posix=True)
 
 
 def catalog_status(

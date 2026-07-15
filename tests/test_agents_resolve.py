@@ -9,9 +9,11 @@ import pytest
 
 from hark.agents.resolve import (
     ResolveError,
+    ResolveFailureReason,
     is_safe_executable,
     resolve_adhoc_argv,
     resolve_agent_argv,
+    resolve_flexible,
 )
 
 
@@ -107,8 +109,56 @@ def test_adhoc_argv(tmp_path: Path):
 
 
 def test_unknown_agent_raises():
-    with pytest.raises(ResolveError, match="unknown agent"):
+    with pytest.raises(ResolveError, match="unknown agent") as exc_info:
         resolve_agent_argv("not-a-real-agent-xyz")
+    assert exc_info.value.reason is ResolveFailureReason.UNKNOWN_AGENT
+
+
+def test_empty_agent_has_structured_reason():
+    with pytest.raises(ResolveError, match="empty agent") as exc_info:
+        resolve_agent_argv("   ")
+    assert exc_info.value.reason is ResolveFailureReason.EMPTY_COMMAND
+
+
+def test_flexible_only_falls_back_for_unknown_catalog_token(tmp_path: Path):
+    path = _fake_path(tmp_path, {"custom-agent": "self"})
+
+    resolved = resolve_flexible("custom-agent", path=path)
+
+    assert resolved.agent_key == "adhoc"
+    assert Path(resolved.command).name == "custom-agent"
+
+
+def test_flexible_preserves_known_agent_failure(tmp_path: Path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    gcc = bindir / "gcc"
+    gcc.write_text("#!/bin/sh\n")
+    gcc.chmod(0o755)
+    (bindir / "cc").symlink_to(gcc)
+
+    with pytest.raises(ResolveError, match="no safe executable") as exc_info:
+        resolve_flexible("cc", path=str(bindir))
+
+    assert exc_info.value.reason is ResolveFailureReason.NO_SAFE_EXECUTABLE
+
+
+def test_malformed_override_has_structured_reason(tmp_path: Path):
+    path = _fake_path(tmp_path, {"codex": "self"})
+
+    with pytest.raises(ResolveError, match="malformed override") as exc_info:
+        resolve_flexible("codex", overrides={"codex": "'bad"}, path=path)
+
+    assert exc_info.value.reason is ResolveFailureReason.INVALID_OVERRIDE
+
+
+def test_unknown_unsafe_binary_reports_adhoc_failure_reason(tmp_path: Path):
+    path = _fake_path(tmp_path, {"unrelated": "self"})
+
+    with pytest.raises(ResolveError, match="not found on PATH") as exc_info:
+        resolve_flexible("custom-agent", path=path)
+
+    assert exc_info.value.reason is ResolveFailureReason.INVALID_ADHOC_COMMAND
 
 
 def test_extra_args_appended(tmp_path: Path):

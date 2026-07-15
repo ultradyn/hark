@@ -428,6 +428,57 @@ a.product-link:hover {
   word-break: break-all;
 }
 
+/* Compact picker (hero strip): tighter term chrome, slightly smaller type */
+.install-picker--compact {
+  gap: var(--s-2);
+}
+
+.install-picker--compact .segmented-control__label {
+  padding: 0.4rem 0.8rem;
+}
+
+.install-picker--compact .term {
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4), 0 0 36px rgba(232, 184, 74, 0.08);
+}
+
+.install-picker--compact .term__bar {
+  padding: 0.55rem 0.85rem;
+}
+
+.install-picker--compact .term__body {
+  padding: 0.85rem 1rem 1rem;
+  font-size: 0.8125rem;
+}
+
+.install-picker--compact .install-picker__copy {
+  padding: 0.2rem 0.55rem;
+}
+
+/* Narrow phones: keep methods on one row (scroll if needed) instead of awkward wrap */
+@media (max-width: 419px) {
+  .install-picker--compact .segmented-control {
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .install-picker--compact .segmented-control::-webkit-scrollbar {
+    display: none;
+  }
+
+  .install-picker--compact .segmented-control__opt {
+    flex: 1 0 auto;
+  }
+
+  .install-picker--compact .segmented-control__label {
+    text-align: center;
+    padding: 0.4rem 0.6rem;
+    letter-spacing: 0.05em;
+  }
+}
+
 /* --- Terminal panel --- */
 .term {
   background: linear-gradient(180deg, #0b0e16 0%, #06080e 100%);

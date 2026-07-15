@@ -231,6 +231,80 @@
         </div>
       </section>
 
+      <!-- Install strip (B114): short options under hero — full details remain in #install -->
+      <section class="hero-install" aria-labelledby="hero-install-heading">
+        <div class="shell hero-install__inner">
+          <div class="hero-install__intro">
+            <p class="eyebrow hero-install__eyebrow">Install</p>
+            <h2 id="hero-install-heading" class="hero-install__title">Get Hark in one line</h2>
+            <p class="hero-install__note">
+              Pick a method, copy, run — then <code>/hark</code> in your agent.
+              <a class="hero-install__more" href="#install">Full install notes</a>
+            </p>
+          </div>
+
+          <div
+            class="install-picker install-picker--compact"
+            data-install-picker
+            data-install-url="https://hark.xk.io/install.sh"
+            data-repo-owner="ultradyn"
+            data-repo-name="hark"
+            data-npm-package="@ultradyn/hark"
+            data-skills-repo="ultradyn/hark"
+          >
+            <fieldset class="install-picker__fieldset">
+              <legend class="sr-only">Install method</legend>
+              <div class="segmented-control" role="presentation">
+                <label class="segmented-control__opt">
+                  <input type="radio" name="install-method-hero" value="skills" checked />
+                  <span class="segmented-control__label">skills</span>
+                </label>
+                <label class="segmented-control__opt">
+                  <input type="radio" name="install-method-hero" value="bash" />
+                  <span class="segmented-control__label">bash</span>
+                </label>
+                <label class="segmented-control__opt">
+                  <input type="radio" name="install-method-hero" value="npm" />
+                  <span class="segmented-control__label">npm</span>
+                </label>
+                <label class="segmented-control__opt">
+                  <input type="radio" name="install-method-hero" value="pnpm" />
+                  <span class="segmented-control__label">pnpm</span>
+                </label>
+                <label class="segmented-control__opt">
+                  <input type="radio" name="install-method-hero" value="bun" />
+                  <span class="segmented-control__label">bun</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <div class="term">
+              <div class="term__bar">
+                <span class="term__dot"></span>
+                <span class="term__dot"></span>
+                <span class="term__dot"></span>
+                <span class="term__title" data-install-title>skills · npx</span>
+                <button
+                  type="button"
+                  class="install-picker__copy"
+                  data-install-copy
+                  aria-label="Copy install command"
+                >
+                  Copy
+                </button>
+              </div>
+              <div class="term__body">
+                <div class="install-picker__line">
+                  <span class="prompt">$</span>
+                  <span class="cmd" data-install-cmd>npx skills add ultradyn/hark -g -y</span>
+                </div>
+                <div class="dim" data-install-hint># skills only · still need hark CLI for handsfree</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <div class="band">
         <div class="shell band__inner">
           <div class="stat">

@@ -1,0 +1,27 @@
+---
+complexity: low
+created_at: "2026-07-15T21:44:15Z"
+depends_on: []
+estimate_hours: 1
+id: B139
+priority: high
+status: pending
+tags: []
+title: Agent resolver overrides bypass executable and reject-list validation
+updated_at: "2026-07-15T21:44:15Z"
+---
+## Evidence
+`resolve_agent_argv("claude", overrides={"claude": "cc"}, path="/usr/bin")` accepts `/usr/bin/cc` even when it resolves to gcc, because override PATH tokens use `_which` instead of the resolver reject checks. Existing absolute/relative override paths are checked only with `Path.exists`, so non-executable regular files and directories such as `/etc/passwd` or `/usr/bin` are returned as successful launch argv. The I005 config sketch says `cc` is valid only when it is a safe shim and that built-in rejects still apply.
+
+## Expected
+Override commands are explicit configuration authority over which command to use, but they must still identify a launchable executable and must not silently bypass the documented built-in collision rejects. Symlink targets, regular-file type, and execute permission are validated before returning `ResolvedCli`.
+
+## Actual
+The resolver reports source=`override` successfully; the failure or wrong program occurs only after Herdr starts a pane.
+
+## Acceptance criteria
+- PATH-token overrides apply the documented built-in reject checks, including `cc -> gcc` and `cr -> CodeRabbit`.
+- Absolute and relative overrides reject missing, broken, directory, and non-executable targets.
+- Safe executable override paths and argv prefixes continue to work.
+- Errors identify the agent and rejected override without starting a pane.
+- Unit and end-to-end CLI regressions cover the unsafe and safe cases.

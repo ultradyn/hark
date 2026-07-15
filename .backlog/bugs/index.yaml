@@ -137,3 +137,4 @@ bugs:
     - file: B136-normal-socket-watch-exit-leaks.todo
     - file: B137-partial-worker-spawn-leaves-an.todo
     - file: B138-agent-start-bypasses-safe-alia.todo
+    - file: B139-agent-resolver-overrides-bypas.todo

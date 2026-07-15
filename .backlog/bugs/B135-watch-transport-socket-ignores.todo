@@ -1,0 +1,32 @@
+---
+complexity: medium
+created_at: "2026-07-15T21:02:57Z"
+depends_on: []
+estimate_hours: 1
+id: B135
+priority: high
+status: pending
+tags:
+    - watch
+    - multi-session
+    - socket
+    - herdr
+title: watch --transport socket ignores configured sessions after the first
+updated_at: "2026-07-15T21:02:57Z"
+---
+## Evidence
+run_watch selects socket mode whenever transport equals socket without requiring one client. It emits watch.armed with every configured client session, then calls _watch_socket with clients[0] only. A deterministic two-session reproduction announced sessions one and two but subscribed and watched only one. The polling path iterates every client, so behavior changes silently with the transport flag. This violates ADR-003 multi-session first-class behavior.
+
+## Expected
+Every selected Herdr session is watched, or an unsupported transport combination fails explicitly before a misleading armed event.
+
+## Actual
+Explicit socket mode reports all sessions armed while ignoring every client after index zero.
+
+## Acceptance criteria
+- Socket watch supervises every selected session, with independent subscribe, reconnect, heartbeat, and failure handling; alternatively reject explicit multi-session socket mode until that is implemented.
+- watch.armed lists only sessions that are actually supervised.
+- Failure of one session does not silently stop observation of healthy sessions.
+- Per-session socket capability fallback to poll follows ADR-006.
+- Tests cover two socket-capable sessions, mixed socket and poll, one-session failure, explicit socket refusal if chosen, and truthful armed output.
+- Preserve Pane Understanding classification and self-exclusion semantics per session.

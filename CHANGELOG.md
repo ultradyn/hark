@@ -24,6 +24,11 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   we do not false-finalize. Composes with B098/B105 (partials + quiet gate),
   B106 (radio end phrases), B108/GH #2 (silence endpoint while streaming).
   Half-duplex OS mute may still drop speech that starts *during* TTS.
+- fix(B110): suppress the end-of-recording (record-stop) beep when
+  `[ambient].streaming = true`. Streaming finalizes via agent finish / end
+  phrase / idle rather than a classic one-shot capture end, so the stop cue
+  was misleading. Start/arm cues are unchanged (B113 owns ambient start/stop
+  design). Log: `listen.stop_cue_suppressed` reason=streaming.
 - fix(stdio, B109): line-buffer stdout/stderr when piped so progressive HEP /
   status streams to consumers instead of full-buffering until exit. Warn once
   on interactive commands (`tts --listen`, `listen`, `ask`, `monitor`, …) when

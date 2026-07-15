@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-15T03:33:42Z"
 claimed_by: grok-bl-fix-many
-completed_at: null
+completed_at: "2026-07-15T03:45:59Z"
 complexity: medium
 created_at: "2026-07-15T03:31:25Z"
 depends_on: []
+duration_minutes: 12.29172122645
 estimate_hours: 2
 id: B111
 priority: high
 started_at: "2026-07-15T03:33:42Z"
-status: in_progress
+status: done
 tags: []
 title: false_done/numbered_menu false positives on idle Claude Code prompts
-updated_at: "2026-07-15T03:33:42Z"
+updated_at: "2026-07-15T03:45:59Z"
 ---
 ## GitHub
 https://github.com/ultradyn/hark/issues/5

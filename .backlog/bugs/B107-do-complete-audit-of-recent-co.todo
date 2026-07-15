@@ -16,3 +16,28 @@ updated_at: "2026-07-15T02:56:02Z"
 ---
 
 Do complete audit of recent commits over handling mic termination, related to B106; doens't seem to be working very well since like near 5-7am maybe
+
+
+## B107 audit (2026-07-15)
+
+### Scope
+Recent mic-termination commits (~2026-07-14 05:00–08:30 +1000) and soft/product radio end matching (B106).
+
+### Commits reviewed
+- B097 defer TTS mute while listen active
+- B098 ambient streaming mode
+- B099 TTS play ticket heal
+- B103 soft-end `over` as end (not cancel)
+- B105 pause-gate streaming TTS acks
+- B074 radio idle end / B075 segment pad / B083–B093 STT join+echo (earlier same day)
+
+### Findings
+1. **Root cause (B106, confirmed):** soft/product ends require utterance-final match. Dogfood closers like `over thank you` / `that's all, thanks` leave a non-terminal tail → `end_phrase` stays unset until agent `listen-end` (~max window). Fix: strip conservative trailing courtesy before match (prior branch `bl/B106-radio-soft-end-courtesy` had the fix but was **never merged** to master — `bl set` reopened the bug).
+2. **No second root cause in 5–8am commits:** B097/B105 mute/play gating does not skip `evaluate_radio_transcript` after radio segments. B098 is ambient-only. B103 correctly makes bare `over` kind=end.
+3. **Variants added in this fix:** `and thank you` / `and thanks` / STT `thankyou` / `thank u`.
+4. **Non-bugs (by design):** mid-clause `that's all I know`, phrasal `turn it over`, sole `thank you`. `that's all for now` still does not soft-end (false-trigger risk).
+5. **Operational:** orchestrator must still call `hark listen-end` as backup; radio idle (~3× end_silence) only helps after post-speech quiet.
+
+### Validation
+- unit: `tests/test_listen_end.py`, `tests/test_radio_idle_end.py`, `tests/test_fixtures_parity.py`
+- probe matrix of dogfood closers before/after

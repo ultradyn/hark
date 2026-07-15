@@ -242,17 +242,22 @@ closers without agent intervention (radio dogfood).
    `radio_partial_silence_s` quiet — trailing silence required).
 2. Phrase is **utterance-final**: whole transcript equals the phrase, or the
    phrase is a word-bounded suffix after normalize + trailing punct strip.
-3. Cancel and product `end_phrases` always win over soft phrases.
-4. Mid-clause text does **not** match — e.g. `"that's all I know about X"`
+3. **Trailing politeness is ignored** (B106/B107): `thank you`, `and thank you`,
+   `thanks`, `thankyou` (STT collapse), `please`, `cheers`, and a few similar
+   closers are stripped before matching so `"… over thank you"` /
+   `"… that's all, thanks"` / `"… over and thank you"` still finalize.
+   Politeness alone is not an end phrase.
+4. Cancel and product `end_phrases` always win over soft phrases.
+5. Mid-clause text does **not** match — e.g. `"that's all I know about X"`
    never finishes on `"that's all"`, and `"please just send it to production"`
    never finishes on `"send it"`.
-5. Bare **`over`** is a radio prosign (always **end**, never cancel — B103):
+6. Bare **`over`** is a radio prosign (always **end**, never cancel — B103):
    sole `"over"`, after sentence punct (`". over"`, `", over"`, …), or any
    other utterance-final `"… over"` whose previous word is **not** a
    phrasal-verb cue. Phrasal finals such as `"turn it over"`, `"hand it over"`,
    `"take over"`, `"start over"` do **not** finish. Mid-clause
    `"over the weekend"` / `"think it over and continue"` never finish.
-6. Multi-word **`okay over`** / **`ok over`** match without sentence punct
+7. Multi-word **`okay over`** / **`ok over`** match without sentence punct
    (STT often drops the comma in “okay, over”).
 
 **Default soft list:**

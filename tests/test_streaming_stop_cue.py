@@ -175,7 +175,7 @@ def test_radio_end_phrase_suppresses_stop_when_streaming(monkeypatch):
     assert stop_calls == []
     suppressed = [d for e, d in logs if e == "listen.stop_cue_suppressed"]
     assert suppressed
-    assert suppressed[0]["reason"] == "streaming"
+    assert suppressed[0]["reason"] == "ambient.streaming"
 
 
 def test_radio_idle_end_suppresses_stop_when_streaming(monkeypatch):

@@ -674,6 +674,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    # B109: piped stdout is fully buffered by default — stream line-oriented
+    # HEP / status so Monitor, grep, and tail -f see progress. Also warn when
+    # interactive commands are piped (agents often append `| tail` which waits
+    # for EOF and looks hung).
+    try:
+        from hark.stdio import configure_stdio, maybe_warn_non_tty_stdout
+
+        configure_stdio()
+        maybe_warn_non_tty_stdout(argv)
+    except Exception:
+        pass
     parser = build_parser()
     try:
         args = parser.parse_args(argv)

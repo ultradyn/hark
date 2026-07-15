@@ -6,6 +6,12 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- fix(stdio, B109): line-buffer stdout/stderr when piped so progressive HEP /
+  status streams to consumers instead of full-buffering until exit. Warn once
+  on interactive commands (`tts --listen`, `listen`, `ask`, `monitor`, …) when
+  stdout is non-TTY — `| tail` without `-f` still waits for EOF and looks hung.
+  Skill hard rule: agents must never pipe interactive hark to `tail`.
+  `HARK_NO_PIPE_WARN=1` silences the warning.
 - fix(radio, B106/B107): soft/product end phrases still finalize when the
   operator appends trailing politeness (`over thank you`, `that's all, thanks`,
   `okay hark send thank you`, `over and thank you`, STT `thankyou`). Courtesy

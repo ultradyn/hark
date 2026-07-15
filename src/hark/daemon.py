@@ -557,6 +557,12 @@ def dispatch_daemon(args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        from hark.stdio import configure_stdio
+
+        configure_stdio()
+    except Exception:
+        pass
     parser = build_parser()
     try:
         args = parser.parse_args(argv)

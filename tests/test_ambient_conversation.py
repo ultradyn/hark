@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import io
-from types import SimpleNamespace
+import json
+
+import pytest
 
 import hark.ambient as ambient
 from hark.ambient import AmbientResult, complete_after_wake
 from hark.answer_window.result import ListenResult
 from hark.config import AmbientConfig, HarkConfig, ListenConfig
+from hark.providers.base import ProviderError
 from hark.wake import WakeHit
 
 
@@ -112,6 +115,144 @@ def test_streaming_conversation_no_rewake_between_turns(monkeypatch):
     assert "full" in (turns[0].get("instructions") or "").lower() or "TTS" in (
         turns[0].get("instructions") or ""
     )
+
+
+@pytest.mark.parametrize(
+    ("failure", "reason"),
+    [
+        (ProviderError("provider unavailable"), "listen_provider_error"),
+        (ambient.MicBusyError("mic busy (another listener)"), "listen_mic_busy"),
+        (RuntimeError("internal listener exploded: " + "x" * 400), "listen_failed"),
+        (RuntimeError(), "listen_failed"),
+    ],
+)
+def test_streaming_later_listen_failure_is_not_idle(monkeypatch, failure, reason):
+    """B132: non-timeout failures remain failures after a successful turn."""
+    cfg = HarkConfig(
+        ambient=AmbientConfig(streaming=True, streaming_conversation_idle_s=30.0),
+        listen=ListenConfig(end_mode="silence"),
+    )
+    calls = {"n": 0}
+    logs: list[tuple[str, dict]] = []
+
+    def fake_listen(cfg_arg, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ListenResult(
+                text="successful turn",
+                provider="fake-provider",
+                duration_ms=73,
+                end_mode="silence",
+                end_phrase="turn_quiet",
+                stream_id="last-success-stream",
+                partials_emitted=2,
+            )
+        raise failure
+
+    out = io.StringIO()
+    monkeypatch.setattr(ambient, "run_listen", fake_listen)
+    monkeypatch.setattr(
+        ambient, "syslog", lambda kind, **fields: logs.append((kind, fields))
+    )
+    monkeypatch.setattr(ambient, "shutdown_requested", lambda: False)
+    monkeypatch.setattr(ambient, "reload_requested", lambda: False)
+
+    result = complete_after_wake(cfg, _hit(), announce=False, out=out)
+    detail = (str(failure).strip() or type(failure).__name__)[:240]
+
+    assert result.kind == "ambient.conversation_end"
+    assert result.text == "successful turn"
+    assert result.stream_id == "last-success-stream"
+    assert result.turn == 1
+    assert result.partials_emitted == 2
+    assert result.listen
+    assert result.listen["provider"] == "fake-provider"
+    assert result.listen["duration_ms"] == 73
+    assert result.listen["reason"] == reason
+    assert result.listen["error"] == detail
+    assert len(result.listen["error"]) <= 240
+
+    events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    end = next(event for event in events if event["kind"] == "ambient.conversation_end")
+    assert end["reason"] == reason
+    assert end["reason"] != "conversation_idle"
+    assert end["listen_error"] == detail
+    assert len(end["listen_error"]) <= 240
+    assert end["last_stream_id"] == "last-success-stream"
+    assert end["last_turn"] == 1
+    assert end["last_event_id"] == result.event_id
+    assert "failure" in end["instructions"]
+
+    error_logs = [fields for kind, fields in logs if kind == "ambient.error"]
+    assert len(error_logs) == 1
+    assert error_logs[0]["reason"] == reason
+    assert error_logs[0]["listen_error"] == detail
+
+
+def test_streaming_later_runtime_with_no_speech_text_is_not_idle(monkeypatch):
+    """Idle classification requires TimeoutError, not a matching message alone."""
+    cfg = HarkConfig(ambient=AmbientConfig(streaming=True))
+    calls = {"n": 0}
+
+    def fake_listen(cfg_arg, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ListenResult(
+                text="first turn",
+                provider="fake",
+                duration_ms=5,
+                end_mode="silence",
+                stream_id="turn-1",
+            )
+        raise RuntimeError("no speech detected because decoder crashed")
+
+    out = io.StringIO()
+    monkeypatch.setattr(ambient, "run_listen", fake_listen)
+    monkeypatch.setattr(ambient, "syslog", lambda *a, **k: None)
+    monkeypatch.setattr(ambient, "shutdown_requested", lambda: False)
+    monkeypatch.setattr(ambient, "reload_requested", lambda: False)
+
+    result = complete_after_wake(cfg, _hit(), announce=False, out=out)
+
+    assert result.listen and result.listen["reason"] == "listen_failed"
+    events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    end = next(event for event in events if event["kind"] == "ambient.conversation_end")
+    assert end["reason"] == "listen_failed"
+
+
+@pytest.mark.parametrize(
+    ("failure", "reason"),
+    [
+        (TimeoutError("no speech detected within timeout"), "no_open"),
+        (ProviderError("provider unavailable"), "listen_failed"),
+    ],
+)
+def test_streaming_first_turn_failure_reason_compatibility(
+    monkeypatch, failure, reason
+):
+    """B132 does not change the established first-turn failure contract."""
+    cfg = HarkConfig(ambient=AmbientConfig(streaming=True))
+    logs: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        ambient,
+        "run_listen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(failure),
+    )
+    monkeypatch.setattr(
+        ambient, "syslog", lambda kind, **fields: logs.append((kind, fields))
+    )
+    monkeypatch.setattr(ambient, "shutdown_requested", lambda: False)
+    monkeypatch.setattr(ambient, "reload_requested", lambda: False)
+
+    result = complete_after_wake(cfg, _hit(), announce=False)
+
+    assert result.kind is None
+    assert result.skip_emit is False
+    assert result.turn is None
+    assert result.listen and result.listen["reason"] == reason
+    assert result.listen["error"] == str(failure)
+    error = next(fields for kind, fields in logs if kind == "ambient.error")
+    assert error["reason"] == reason
 
 
 def test_streaming_false_single_listen_uses_config_end_mode(monkeypatch):

@@ -35,6 +35,7 @@ from hark.listen_end import (
     evaluate_radio_transcript,
 )
 from hark.partial import make_turn_event, new_stream_id
+from hark.providers.base import ProviderError
 from hark.speech import run_listen, run_tts
 from hark.syslog import log as syslog
 from hark.wake import (
@@ -789,16 +790,43 @@ def _conversation_after_wake(
                     final=True,
                     partial=False,
                 )
-            # Later turn no-open → conversation idle; re-arm wake (no re-prompt).
-            syslog(
-                "ambient.conversation_end",
-                component="ambient",
-                level="info",
-                conversation_id=conversation_id,
-                reason="conversation_idle",
-                turns=turn,
-                idle_s=conv_idle,
-            )
+            # Later turns only become idle for the timeout raised when the
+            # silence gate genuinely expires.  A provider, microphone, or
+            # internal failure must remain distinguishable to operators and
+            # HEP consumers.
+            is_conversation_idle = isinstance(exc, TimeoutError) and is_no_open
+            if isinstance(exc, ProviderError):
+                end_reason = "listen_provider_error"
+            elif isinstance(exc, MicBusyError):
+                end_reason = "listen_mic_busy"
+            elif is_conversation_idle:
+                end_reason = "conversation_idle"
+            else:
+                end_reason = "listen_failed"
+            error_detail = (err_s.strip() or type(exc).__name__)[:240]
+
+            if is_conversation_idle:
+                syslog(
+                    "ambient.conversation_end",
+                    component="ambient",
+                    level="info",
+                    conversation_id=conversation_id,
+                    reason=end_reason,
+                    turns=turn,
+                    idle_s=conv_idle,
+                )
+            else:
+                syslog(
+                    "ambient.error",
+                    component="ambient",
+                    level="error",
+                    message=error_detail,
+                    conversation_id=conversation_id,
+                    stream_id=stream_id,
+                    reason=end_reason,
+                    listen_error=error_detail,
+                    turns=turn,
+                )
             end_ev = {
                 "schema": "hark.event.v1",
                 "kind": "ambient.conversation_end",
@@ -807,28 +835,56 @@ def _conversation_after_wake(
                 "conversation_id": conversation_id,
                 "turns": turn,
                 "phrase": hit.phrase,
-                "reason": "conversation_idle",
+                "reason": end_reason,
                 "partial": False,
                 "final": True,
                 "streaming": True,
                 "instructions": (
-                    "Conversation session ended (idle). Wake is re-armed; "
-                    "operator must say the wake name for a new session. "
-                    "No new operator prompt on this event."
+                    (
+                        "Conversation session ended (idle). Wake is re-armed; "
+                        "operator must say the wake name for a new session. "
+                        "No new operator prompt on this event."
+                    )
+                    if is_conversation_idle
+                    else (
+                        f"Conversation session ended after listen failure "
+                        f"({end_reason}). Wake is re-armed; operator must say "
+                        "the wake name for a new session."
+                    )
                 ),
             }
+            if not is_conversation_idle:
+                end_ev.update(
+                    {
+                        "listen_error": error_detail,
+                        "error_type": type(exc).__name__,
+                        "failure_stream_id": stream_id,
+                        "last_event_id": last_event_id,
+                        "last_stream_id": last_stream_id,
+                        "last_turn": turn,
+                    }
+                )
             _emit_ambient_hep(end_ev, out=out, syslog_kind="ambient.conversation_end")
+            listen_result = {
+                **(last_listen or {}),
+                "reason": end_reason,
+                "turns": turn,
+                "conversation_id": conversation_id,
+            }
+            if not is_conversation_idle:
+                listen_result.update(
+                    {
+                        "error": error_detail,
+                        "error_type": type(exc).__name__,
+                        "failure_stream_id": stream_id,
+                    }
+                )
             return AmbientResult(
                 activated=True,
                 phrase=hit.phrase,
                 text=last_text,
                 wake_backend=hit.backend,
-                listen={
-                    **(last_listen or {}),
-                    "reason": "conversation_idle",
-                    "turns": turn,
-                    "conversation_id": conversation_id,
-                },
+                listen=listen_result,
                 event_id=last_event_id or end_ev["event_id"],
                 stream_id=last_stream_id or stream_id,
                 conversation_id=conversation_id,

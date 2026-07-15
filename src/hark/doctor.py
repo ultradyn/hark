@@ -241,6 +241,9 @@ def run_doctor(
     # TTS play queue (B099) — auto-heal abandoned tickets; soft warn only
     report["tts_play_queue"] = _tts_play_queue_report()
 
+    # First-run / sessions setup posture (B116) — soft only; never hard-fail
+    report["setup"] = _setup_report(cfg)
+
     if as_json:
         out.write(json.dumps(report, indent=2) + "\n")
     else:
@@ -436,6 +439,69 @@ def _install_report() -> dict[str, Any]:
         }
 
 
+def _setup_report(cfg: HarkConfig) -> dict[str, Any]:
+    """Guided setup / herdr sessions completeness (B116). Soft; never fails doctor."""
+    try:
+        from hark.setup_flow import (
+            load_setup_complete,
+            setup_complete_path,
+            setup_needs_run,
+        )
+
+        cur = load_setup_complete()
+        needs, missing = setup_needs_run(cur)
+        answers = (
+            cur.get("answers")
+            if isinstance(cur, dict) and isinstance(cur.get("answers"), dict)
+            else {}
+        )
+        sess_answers = answers.get("sessions") if isinstance(answers, dict) else None
+        cfg_session_ids = [s.id for s in (cfg.sessions or [])]
+        warnings: list[str] = []
+        hints: list[str] = []
+        if needs:
+            warnings.append(
+                "setup incomplete — run `hark setup` or voice-ask sessions/"
+                "preferences before arming handsfree (skill/hark/SETUP.md)"
+            )
+            if missing == ["all"]:
+                hints.append("no setup-complete.json; full guided setup required")
+            elif "sessions" in missing:
+                hints.append(
+                    "answers.sessions missing or empty — ask local / ssh / mix"
+                )
+            elif missing:
+                hints.append(f"re-prompt keys: {', '.join(missing)}")
+        # Config always defaults to local when unset; still surface configured ids
+        if not cfg_session_ids:
+            warnings.append(
+                "no herdr sessions in config — add [[herdr.sessions]] or run hark setup"
+            )
+        status = "incomplete" if needs else "complete"
+        return {
+            "status": status,
+            "complete": not needs,
+            "needs_run": needs,
+            "missing": list(missing),
+            "path": str(setup_complete_path()),
+            "flag_exists": cur is not None,
+            "answers_sessions": sess_answers if isinstance(sess_answers, list) else [],
+            "config_session_ids": cfg_session_ids,
+            "warnings": warnings,
+            "hints": hints,
+        }
+    except Exception as exc:  # pragma: no cover — defensive
+        return {
+            "status": "error",
+            "complete": False,
+            "needs_run": True,
+            "missing": [],
+            "warnings": [f"setup check failed: {exc}"],
+            "hints": ["run hark setup"],
+            "error": str(exc),
+        }
+
+
 def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
     print(f"hark doctor  v{report['hark_version']}", file=out)
     print(f"  config: {report['config_path']}"
@@ -445,6 +511,16 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
         print(f"  warn: {w}", file=out)
     print(f"  state:  {report['paths']['state_dir']}", file=out)
     print(f"  herdr:  {report['herdr_bin'] or 'NOT FOUND'}", file=out)
+    setup = report.get("setup") or {}
+    if setup:
+        st = setup.get("status") or "?"
+        ids = setup.get("config_session_ids") or []
+        ids_s = ",".join(ids) if ids else "(none)"
+        print(f"  setup:  {st}  (config sessions={ids_s})", file=out)
+        for w in setup.get("warnings") or []:
+            print(f"  warn: {w}", file=out)
+        for h in setup.get("hints") or []:
+            print(f"  hint: {h}", file=out)
     print("  sessions:", file=out)
     for s in report["sessions"]:
         if s["ok"]:

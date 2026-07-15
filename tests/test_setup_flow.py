@@ -52,6 +52,70 @@ def test_setup_needs_run_when_missing():
     assert needs is True
 
 
+def test_setup_needs_run_empty_sessions():
+    """B116: setup-complete with empty sessions must re-prompt sessions."""
+    data = {
+        "setup_schema_version": SETUP_SCHEMA_VERSION,
+        "answers": {
+            "persona": "feminine",
+            "wake_engine": "vosk",
+            "tts_voice": "eve",
+            "wake_names": ["iris"],
+            "sessions": [],
+        },
+    }
+    needs, missing = setup_needs_run(data)
+    assert needs is True
+    assert "sessions" in missing
+
+
+def test_setup_needs_run_sessions_without_id():
+    data = {
+        "setup_schema_version": SETUP_SCHEMA_VERSION,
+        "answers": {
+            "persona": "feminine",
+            "wake_engine": "vosk",
+            "tts_voice": "eve",
+            "wake_names": ["iris"],
+            "sessions": [{"ssh": "box"}],  # no id
+        },
+    }
+    needs, missing = setup_needs_run(data)
+    assert needs is True
+    assert "sessions" in missing
+
+
+def test_run_setup_sessions_ssh_flag(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    cfg = tmp_path / "config" / "hark" / "config.toml"
+    code = run_setup(
+        non_interactive=True,
+        persona="feminine",
+        wake_engine="vosk",
+        sessions="local,work=ssh:workbox",
+        skip_doctor=True,
+        skip_download=True,
+        force=True,
+        config_path=cfg,
+    )
+    assert code == OK
+    text = cfg.read_text(encoding="utf-8")
+    assert "[[herdr.sessions]]" in text
+    assert 'id = "local"' in text
+    assert 'id = "work"' in text
+    assert 'ssh = "workbox"' in text
+    flag = tmp_path / "state" / "hark" / "setup-complete.json"
+    data = json.loads(flag.read_text(encoding="utf-8"))
+    assert data["answers"]["sessions"] == [
+        {"id": "local"},
+        {"id": "work", "ssh": "workbox"},
+    ]
+    needs, missing = setup_needs_run(data)
+    assert needs is False
+    assert missing == []
+
+
 def test_apply_answers_writes_engine_and_names(tmp_path):
     cfg = tmp_path / "config.toml"
     cfg.write_text(

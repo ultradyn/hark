@@ -107,6 +107,63 @@ def test_run_doctor_json_media_duck(monkeypatch):
     assert report["ok"] is True
 
 
+def test_run_doctor_setup_incomplete_soft(tmp_path, monkeypatch):
+    """B116: missing setup-complete → setup incomplete warn; doctor still OK."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(
+        "hark.doctor.shutil.which",
+        lambda name: f"/usr/bin/{name}" if name == "pactl" else None,
+    )
+    out = io.StringIO()
+    code = run_doctor(_cfg(), as_json=True, out=out, err=io.StringIO())
+    assert code == OK
+    report = json.loads(out.getvalue())
+    assert "setup" in report
+    assert report["setup"]["needs_run"] is True
+    assert report["setup"]["complete"] is False
+    assert report["setup"]["status"] == "incomplete"
+    assert any("setup incomplete" in w for w in report["setup"]["warnings"])
+    # Soft only — does not flip overall ok by itself
+    assert report["ok"] is True
+
+
+def test_run_doctor_setup_complete_with_sessions(tmp_path, monkeypatch):
+    from hark.config import SessionConfig
+    from hark.setup_flow import SetupAnswers, write_setup_complete
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    write_setup_complete(
+        SetupAnswers(
+            persona="feminine",
+            wake_engine="vosk",
+            tts_voice="eve",
+            wake_names=["iris"],
+            sessions=[{"id": "local"}],
+        ),
+        hark_version="0.0.0",
+    )
+    monkeypatch.setattr(
+        "hark.doctor.shutil.which",
+        lambda name: f"/usr/bin/{name}" if name == "pactl" else None,
+    )
+    cfg = HarkConfig(
+        audio=AudioConfig(),
+        sessions=[SessionConfig(id="local")],
+    )
+    out = io.StringIO()
+    code = run_doctor(cfg, as_json=False, out=out, err=io.StringIO())
+    assert code == OK
+    text = out.getvalue()
+    assert "setup:" in text
+    assert "complete" in text
+    report_out = io.StringIO()
+    run_doctor(cfg, as_json=True, out=report_out, err=io.StringIO())
+    report = json.loads(report_out.getvalue())
+    assert report["setup"]["complete"] is True
+    assert report["setup"]["needs_run"] is False
+    assert report["setup"]["config_session_ids"] == ["local"]
+
+
 # ---------------------------------------------------------------------------
 # dashboard report (B066)
 # ---------------------------------------------------------------------------

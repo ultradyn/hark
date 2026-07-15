@@ -22,17 +22,38 @@ You keep the human in the loop with Herdr-hosted agents **by voice**. You do
 Once `/hark` or `/handsfree` is invoked, you enter **TTS mode**:
 
 1. **Prefer speaking over typing.** Use `hark tts "…"` for almost all operator-facing messages (status, setup questions, confirmations, errors).
-2. **Initial setup is voice-first.** After doctor/health is OK, **ask by voice** what Herdr sessions to watch (local, SSH host, or both), voice preferences, etc. — do not dump long prose in chat first.
-   ```bash
-   hark ask --confirm never "Which Herdr sessions should I watch? Local only, a remote SSH host, or both?"
-   ```
-   Then write `[[herdr.sessions]]` for local-only, `ssh = "…"` remote-only, or a **mix** (see **Herdr sessions** below).
+2. **Session + voice bootstrap is mandatory before arming** — see **Session + voice bootstrap (hard rule)** below. Do **not** start ambient/watch/monitor with silent local-only defaults.
 3. **Question → record → answer loop** for every operator decision:
    - Speak the question (`hark tts` or `hark ask`)
    - Start listening (`hark listen` / `hark ask` already listens)
    - Act on the transcript; speak a short ack when useful
 4. Chat/text is for **tool output, event_ids, and debugging** — not the main operator UI.
 5. **Ambient voice → TTS reply (hard rule).** On every final `ambient.prompt` (and after you act on a finished radio stream), **speak your response with `hark tts`**. Do **not** answer ambient operator speech with chat-only prose. Short acks count; long plans can be summarized by voice with detail in chat if needed. Radio **partials:** default HOLD (think privately) unless `[ambient].streaming = true` (short live TTS acks allowed — see **Streaming mode**); when the stream is **final**, always reply by TTS.
+
+## Session + voice bootstrap (hard rule — B116)
+
+**Before** `hark start` / ambient / watch workers **or** arming `hark monitor`, you **MUST** resolve setup by voice. Skipping this is a skill bug.
+
+1. Ensure CLI exists (`command -v hark`). If not → [POST_INSTALL.md](POST_INSTALL.md). Run `hark doctor` (text OK for tools). If doctor warns **setup incomplete** / missing sessions → treat as incomplete.
+2. **Herdr sessions — always ask by voice** (every skill start of `/hark` or `/handsfree`), unless the operator **already stated** session targets in this conversation:
+   ```bash
+   hark ask --confirm never "Which Herdr sessions should I watch? Local only, a remote SSH host, or both?"
+   ```
+   - **Local only** → ensure `[[herdr.sessions]]` with local `id` (no `ssh`).
+   - **SSH / remote only** → ask host (`user@host` or SSH alias), write `ssh = "…"`.
+   - **Mix / both** → local block **and** remote block(s).
+   - Write `~/.config/hark/config.toml` (or `HARK_CONFIG`). See **Herdr sessions** below.
+   - If setup already completed earlier, a **short reconfirm** is enough (“Still watching local only, or add a remote host?”) — do **not** silently assume.
+3. **If setup incomplete** (`~/.local/state/hark/setup-complete.json` missing, schema stale, empty `answers.sessions`, or doctor setup warning): also voice-ask **persona / wake name** and **TTS voice** preferences (one question at a time). Prefer guided CLI when interactive is fine:
+   ```bash
+   hark setup          # interactive; sessions + persona + wake engine
+   hark setup --force  # re-run after a bad/empty sessions config
+   ```
+   Full question order: [SETUP.md](SETUP.md). After voice answers, write config + setup-complete (or finish via `hark setup`).
+4. **Wake name:** if the operator’s preferred wake name is unclear, confirm by voice before enabling ambient (“Should I listen for hey iris, or a different name?”).
+5. **Never** arm ambient/watch/monitor “to save time” and ask later. Session targeting first; then ready TTS / queue / monitors.
+
+CLI reference: `hark setup`, [SETUP.md](SETUP.md), `docs/HERDR.md`.
 
 Mic mutes automatically during TTS (`mute_mic_during_tts`). After TTS/ask, the **record beep plays when listen is ready** (`answer_arm_cue`, default on) — not when speech opens. Leading silence/noise is still trimmed before content is kept.
 
@@ -325,23 +346,28 @@ Constraints:
 ## First-run setup
 
 If `~/.local/state/hark/setup-complete.json` is missing (or schema older than current),
-run the guided checklist before arming handsfree:
+**or** doctor reports setup incomplete / empty sessions, run the guided checklist
+**before** arming handsfree (same order as **Session + voice bootstrap**):
 
 - **CLI / deps not installed yet:** [POST_INSTALL.md](POST_INSTALL.md) first
   (`npx skills` does not install Python).
-- **Agent script:** [SETUP.md](SETUP.md) — question order, persona (Iris→eve / Mercury→leo),
-  wake backend **Vosk vs Sherpa KWS**, setup-complete flag with `hark_version`.
+- **Agent script:** [SETUP.md](SETUP.md) — question order, **Herdr sessions first**,
+  persona (Iris→eve / Mercury→leo), wake backend **Vosk vs Sherpa KWS**,
+  setup-complete flag with `hark_version`.
 - **Web UI:** `hark webui` (aliases `dashboard`, `serve`) → http://127.0.0.1:4136 by default. See docs/DASHBOARD.md.
-- **CLI:** `hark setup` (`--yes --persona feminine --wake-engine vosk|sherpa_kws`).
+- **CLI:** `hark setup` (`--yes --persona feminine --wake-engine vosk|sherpa_kws`
+  `--sessions local` or `local,work=ssh:host`).
 - **Local wake engines / models:** [WAKE_STT.md](WAKE_STT.md) (survey: `docs/plans/B069-local-stt-survey.md`).
 
 ## On skill start (voice bootstrap)
 
-1. Ensure CLI exists (`command -v hark`). If not → [POST_INSTALL.md](POST_INSTALL.md). Then `hark doctor` (text OK for tools). If setup incomplete → [SETUP.md](SETUP.md) / `hark setup`.
-2. `hark status` + `hark queue --announce` — **announce any already-blocked / pending by TTS**. `hark queue --announce` speaks the waiting count itself when more than one agent is waiting (JSON always carries `count` / `announcement` / distinct `targets`). Hark watch also emits on load; still speak a short rollup so the operator hears it.  
-3. TTS: “Hark is ready. I'll speak from here. When you're done talking in radio mode, say over or okay hark send.”  
-4. Voice-ask session targets if not already configured (local / SSH / mix — write `[[herdr.sessions]]` accordingly).  
-5. **Required:** arm **one** **`hark monitor --for-monitor`** (persistent) if not already armed. One feed for Herdr + ambient (includes `wake_near_miss`). Do **not** arm a second monitor on restart/dual skill boots — check first (`hark start --status` / existing Monitor). Do **not** arm only `hark watch` or only ambient tails.  
+**Order is mandatory.** Do not arm workers/monitor before step 2.
+
+1. Ensure CLI exists (`command -v hark`). If not → [POST_INSTALL.md](POST_INSTALL.md). Then `hark doctor` (text OK for tools). Note setup / sessions warnings.
+2. **Hard rule (B116):** complete **Session + voice bootstrap** — voice-ask Herdr sessions (local / SSH / mix); if setup incomplete, also persona/voice/wake; write `[[herdr.sessions]]` + setup-complete as needed. See [SETUP.md](SETUP.md) / `hark setup`.
+3. `hark status` + `hark queue --announce` — **announce any already-blocked / pending by TTS**. `hark queue --announce` speaks the waiting count itself when more than one agent is waiting (JSON always carries `count` / `announcement` / distinct `targets`). Hark watch also emits on load; still speak a short rollup so the operator hears it.  
+4. TTS: “Hark is ready. I'll speak from here. When you're done talking in radio mode, say over or okay hark send.” Remind the configured wake name (e.g. hey iris) when ambient will be on.
+5. **Required:** arm **one** **`hark monitor --for-monitor`** (persistent) if not already armed. One feed for Herdr + ambient (includes `wake_near_miss`). Do **not** arm a second monitor on restart/dual skill boots — check first (`hark start --status` / existing Monitor). Do **not** arm only `hark watch` or only ambient tails. Start workers (`hark start`) if not running **after** sessions are configured.
 6. Prefer `hark tts --listen "…"` or `hark ask` so recording arms after you speak (**beep when listen ready**, not when speech opens). **Ambient auto-pauses** for listen/ask (mic lease yield); no manual kill needed.  
 7. **Idle and wait for that Monitor** to deliver the next line. Do not poll.
 

@@ -64,6 +64,16 @@ def load_setup_complete(path: Path | None = None) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def _sessions_answers_ok(sessions: Any) -> bool:
+    """True when setup answers include at least one session with an id (B116)."""
+    if not isinstance(sessions, list) or not sessions:
+        return False
+    for s in sessions:
+        if isinstance(s, dict) and str(s.get("id") or "").strip():
+            return True
+    return False
+
+
 def setup_needs_run(
     current: dict[str, Any] | None = None,
     *,
@@ -71,8 +81,8 @@ def setup_needs_run(
 ) -> tuple[bool, list[str]]:
     """Return (needs_full_or_partial, missing_question_keys).
 
-    Re-prompt when flag missing, schema older than SETUP_SCHEMA_VERSION, or
-    required answer keys absent.
+    Re-prompt when flag missing, schema older than SETUP_SCHEMA_VERSION,
+    required answer keys absent, or ``answers.sessions`` empty / invalid (B116).
     """
     cur = current if current is not None else load_setup_complete()
     if cur is None:
@@ -86,6 +96,9 @@ def setup_needs_run(
     for key in ("persona", "wake_engine", "tts_voice", "wake_names", "sessions"):
         if key not in answers:
             missing.append(key)
+    # Empty or id-less sessions → treat as not configured (B116)
+    if "sessions" not in missing and not _sessions_answers_ok(answers.get("sessions")):
+        missing.append("sessions")
     # Optional: flag hark_version for operators; do not force re-run on every bump
     _ = hark_version or __version__
     return (len(missing) > 0), missing
@@ -378,7 +391,13 @@ def run_setup(
     else:
         out.write("\nHark guided setup (see skill/hark/SETUP.md)\n\n")
 
-        # Sessions
+        # Sessions (always first preference — B116; required for handsfree)
+        out.write(
+            "Herdr sessions: which servers should Hark watch?\n"
+            "  local — this machine only\n"
+            "  ssh   — one remote host (SSH tunnel to Herdr socket)\n"
+            "  mix   — local + remote together\n"
+        )
         sess_choice = _prompt(
             "Herdr sessions: local / ssh / mix",
             "local",
@@ -501,6 +520,14 @@ def run_setup(
         f"  persona={answers.persona} voice={answers.tts_voice} "
         f"engine={answers.wake_engine} names={answers.wake_names}\n"
     )
+    sess_bits = []
+    for s in answers.sessions:
+        sid = s.get("id") or "?"
+        if s.get("ssh"):
+            sess_bits.append(f"{sid}=ssh:{s['ssh']}")
+        else:
+            sess_bits.append(sid)
+    out.write(f"  sessions: {', '.join(sess_bits) or '(none)'}\n")
     out.write(
         "Next: confirm wake (say hey iris / hey mercury), then arm handsfree "
         "(see skill/hark/SETUP.md). Optional enroll: `hark wake-enroll` (beep-paced samples; I006).\n"

@@ -16,10 +16,13 @@ Related: [POST_INSTALL.md](POST_INSTALL.md) (CLI + Python/system deps after `npx
 |-----------|--------|
 | No `setup-complete.json` | Full setup (this checklist) |
 | `setup_schema_version` older than current | Re-ask **only new** questions |
+| Empty / missing `answers.sessions` | Re-ask **Herdr sessions** (local / SSH / mix); `hark doctor` warns |
 | Operator asks to reconfigure | Full or partial; use `--force` on CLI |
-| Already complete, same schema | Skip; go arm handsfree (monitor + workers) |
+| Already complete, same schema | **Still voice-confirm sessions** on each `/hark` skill start (B116); skip full persona/engine if unchanged, then arm |
 
 Schema version lives in code as `SETUP_SCHEMA_VERSION` (`hark.setup_flow`).
+
+**Agent hard rule (B116):** on every `/hark` or `/handsfree` skill start, **before** ambient/watch/monitor, ask by voice which Herdr sessions to watch (short reconfirm OK if setup-complete exists). If setup incomplete, also ask persona / wake name / TTS voice. Do not arm with silent defaults. See SKILL.md **Session + voice bootstrap**.
 
 ---
 
@@ -47,9 +50,12 @@ If `hark start` is “invalid choice”, reinstall editable before debugging Mod
 
 1. **Health** — `hark doctor` (text OK). Fix Herdr / tunnels / speech keys if red.
    Check **install:** — if `stale` / `frozen` / missing cmds, reinstall editable first
-   (see above).
-2. **Herdr sessions** — local / SSH / mix  
+   (see above). Note **setup:** line if incomplete / empty sessions.
+2. **Herdr sessions** — local / SSH / mix (**always first preference question**; never skip)  
    Write `[[herdr.sessions]]` (local without `ssh`, remote with `ssh = "…"`).  
+   Voice: `hark ask --confirm never "Which Herdr sessions should I watch? Local only, a remote SSH host, or both?"`  
+   CLI non-interactive: `hark setup --yes --sessions local` or  
+   `--sessions local,work=ssh:workbox`.  
    See SKILL.md **Herdr sessions**.
 3. **Persona**  
    - **Feminine (default):** wake names include **Iris** (+ mercury/hark/herald); TTS **eve**  
@@ -90,7 +96,7 @@ If `hark start` is “invalid choice”, reinstall editable before debugging Mod
    No secrets in this file.
 9. **Arm handsfree** — continue SKILL.md (monitor, TTS mode, queue announce).
 
-**Voice-first:** after doctor, prefer `hark tts` / `hark ask` one question at a time when the Hark skill drives setup.
+**Voice-first:** after doctor, prefer `hark tts` / `hark ask` **one question at a time** when the Hark skill drives setup. Sessions → persona/wake → TTS voice → engine. Do not stack questions. Do not arm handsfree until sessions are answered and written.
 
 ---
 

@@ -15,9 +15,9 @@ Follow **all** instructions in [`../hark/SKILL.md`](../hark/SKILL.md), including
 
 - **Post-install:** if `hark` CLI is missing, follow [`../hark/POST_INSTALL.md`](../hark/POST_INSTALL.md) first (`npx skills` does not install Python)
 - **TTS mode** after skill start (prefer `hark tts --listen` / `hark ask` for operator communication)
-- Voice-first setup (sessions, preferences)
+- **Session + voice bootstrap (hard rule, B116):** before ambient/watch/monitor, voice-ask Herdr sessions (local / SSH / mix); if setup incomplete, also persona/voice/wake. See SKILL.md + [`SETUP.md`](../hark/SETUP.md) / `hark setup`. Do not arm with silent defaults.
 - Question → listen → act loop
-- **Required unified Monitor** on skill start: **one** `hark monitor --for-monitor` (`persistent: true`). Do not arm a second if one is already live (CLI singleflight refuses). Ambient-only or watch-only is incomplete.
+- **Required unified Monitor** on skill start: **one** `hark monitor --for-monitor` (`persistent: true`). Do not arm a second if one is already live (CLI singleflight refuses). Ambient-only or watch-only is incomplete. **Only after** session bootstrap.
 - **Never pipe interactive hark to `| tail`** (B109) — hides live listen/monitor state; use Monitor tool or bare `hark monitor --for-monitor`
 - **Antigravity (`agy`):** experimental — no native Monitor; use `hark agentapi register` + `hark agentapi deliver --follow-monitor` (see `docs/AGY.md` and the **Antigravity** section in `skill/hark/SKILL.md`).
 - Radio **partials**: **must** `hark listen-end` when partial clearly ends with a done signal (`over`, `okay hark send`, `that's all`, …); **must** `hark listen-end --cancel` when unrelated conversation / TTS bleed is being forwarded; remind operators to say over / okay hark send

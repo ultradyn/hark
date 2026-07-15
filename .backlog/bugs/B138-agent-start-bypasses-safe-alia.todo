@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-15T21:27:08Z"
 claimed_by: codex-urban-morn-b847
-completed_at: null
+completed_at: "2026-07-15T22:03:27Z"
 complexity: low
 created_at: "2026-07-15T21:03:34Z"
 depends_on: []
+duration_minutes: 36.33208937678334
 estimate_hours: 1
 id: B138
 priority: high
 started_at: "2026-07-15T21:27:08Z"
-status: in_progress
+status: done
 tags: []
 title: agent-start bypasses safe alias rejection through blanket ad-hoc fallback
-updated_at: "2026-07-15T21:27:08Z"
+updated_at: "2026-07-15T22:03:27Z"
 ---
 ## Evidence
 cmd_agent_start catches every ResolveError from resolve_agent_argv and then calls resolve_adhoc_argv, although its comment says fallback is only for an unknown PATH binary. With PATH limited to /usr/bin, catalog resolution correctly rejects cc because it resolves to the system compiler, but the fallback then resolves /usr/bin/cc as an ad-hoc agent command and cmd_agent_start returns success. This regresses the alias reject contract implemented by B055/B057. Resolver tests cover rejection while CLI tests replace the resolver, so the end-to-end invariant is absent.

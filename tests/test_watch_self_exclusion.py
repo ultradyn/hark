@@ -161,12 +161,12 @@ def test_socket_reconcile_and_wire_never_read_or_emit_self(monkeypatch):
 
     assert watch._watch_socket(
         client,
-        tracker=watch.EdgeTracker(),
+        classifier=watch.EdgeTracker(),
         interest={"blocked"},
         emit=emitted.append,
         heartbeat_s=60,
         sessions=["local"],
-        question_for=lambda agent: client.read_pane(agent.pane_id),
+        read_pane=lambda agent: client.read_pane(agent.pane_id),
         store=None,
         self_ident=SelfIdentity(pane_id="wG:p3", socket_path="/run/herdr.sock"),
     ) == 0

@@ -1,0 +1,32 @@
+---
+complexity: medium
+created_at: "2026-07-15T21:02:15Z"
+depends_on: []
+estimate_hours: 1
+id: B133
+priority: high
+status: pending
+tags:
+    - mic
+    - concurrency
+    - ambient
+    - ownership
+title: ambient.pause cleanup can erase a newer process pause request
+updated_at: "2026-07-15T21:02:15Z"
+---
+## Evidence
+request_ambient_pause writes one global ambient.pause marker containing reason, PID, and timestamp. clear_ambient_pause unconditionally unlinks the marker and pause_ambient_for_mic always calls it on exit. Reproduction: process A writes a pause, process B overwrites it with PID 222, then A clears on context exit; the marker owned by B disappears. Ambient may resume and race B for the microphone. B010 covers basic ambient yielding but not overlapping owners.
+
+## Expected
+A caller can release only its own pause ownership. Ambient remains paused while any valid owner still needs the mic.
+
+## Actual
+Any older waiter or context exit can delete the newest global request, regardless of PID or request identity.
+
+## Acceptance criteria
+- A pause acquisition returns or persists an ownership token that cleanup must match.
+- Overlapping same-process and cross-process requests retain ambient pause until the final valid owner releases.
+- Stale owners are recoverable using verified process identity and bounded age.
+- Cleanup never deletes a marker that was replaced by another owner.
+- Tests cover A acquire, B acquire, A release, B release ordering; process exit; PID reuse; nesting; timeout; and malformed state.
+- Preserve current ambient yield and mic-lease behavior for a single owner.

@@ -19,7 +19,7 @@ tasks:
       file: T001-migrate-answer-bound-event-to.todo
       id: T001
       priority: critical
-      status: pending
+      status: in_progress
       tags: []
       title: Migrate answer_bound_event to Answerability
     - complexity: medium

@@ -58,7 +58,7 @@ Every SSE `data:` line is one envelope (`stream.schema.json`):
   "schema": "hark.dashboard.v1",
   "type": "event",
   "source": "watch",
-  "cursor": "watch:184,ambient:42,system:9051,usage:77,delivery:12",
+  "cursor": "watch:184@0123456789abcdef0123456789abcdef~fedcba9876543210fedcba9876543210",
   "payload": { "schema": "hark.event.v1", "kind": "agent.blocked", "…": "…" }
 }
 ```
@@ -68,20 +68,36 @@ Every SSE `data:` line is one envelope (`stream.schema.json`):
 - `payload` is **source-shaped** (discriminated union, see below). Consumers
   MUST ignore unknown fields and unknown `source`/`kind` values.
 - `cursor` is the **composite cursor**: the full per-source position *after*
-  this event, `source:seq` pairs joined by commas. It is also set as the SSE
-  `id:` field, so `Last-Event-ID` on reconnect restores every source, not just
-  the one that happened to emit last.
+  this event, with positions joined by commas. File-backed sources use
+  `source:seq@incarnation~checkpoint`; synthetic sources such as `serve` use
+  `source:seq`. It is also set as the SSE `id:` field, so `Last-Event-ID` on
+  reconnect restores every source, not just the one that happened to emit
+  last.
 
 ### Cursor semantics
 
 - `seq` is the 1-based record index within the current incarnation of the
   backing source (line number for JSONL-backed sources). Monotonic per source
-  while the backing file is not rotated.
+  while the backing file is not rotated. Its wire grammar is one to nineteen
+  ASCII digits (`0`–`9`); malformed or oversized known-source positions replay
+  that source conservatively from sequence zero.
+- `incarnation` is an opaque hash of internal backing-file identity; raw device
+  and inode values are never exposed. `checkpoint` is a rolling hash over the
+  raw bytes of every complete line through `seq`. Resume skips those lines only
+  when both proofs match. Ordinary appends preserve the checkpoint; shorter,
+  equal, and longer replacements that change any consumed record replay from
+  the first complete record. A replacement preserving all consumed records may
+  resume after them, which is safe because no unseen prefix was skipped.
+- Legacy `source:seq` positions remain accepted, but cannot prove file
+  identity. The server conservatively replays that source from the beginning;
+  clients may see duplicates, but unseen replacement records are not skipped.
+- Incarnation-only preview tokens are also accepted as unproven legacy tokens
+  and replay conservatively.
 - Cursors are **opaque to clients** beyond equality/passthrough. Clients MUST
   NOT construct cursors except from `hello`, event envelopes, or page results.
-- If a server cannot honor a cursor (rotation, restart, unknown), it MUST fall
-  back to a recent tail (its default backfill window) rather than erroring.
-  Dashboards are monitoring UIs; a gap beats a dead stream.
+- If a server cannot prove that a cursor belongs to the current incarnation,
+  it MUST replay conservatively rather than apply the old line count to a new
+  file. Dashboards tolerate duplicates; silent loss is not recoverable.
 
 ### `hello`
 
@@ -92,7 +108,7 @@ First message on every stream connect:
   "schema": "hark.dashboard.v1",
   "type": "hello",
   "source": "serve",
-  "cursor": "watch:184,ambient:42,system:9051,usage:77,delivery:12",
+  "cursor": "watch:184@0123456789abcdef0123456789abcdef~fedcba9876543210fedcba9876543210",
   "payload": {
     "kind": "serve.hello",
     "server": "hark-serve-py",

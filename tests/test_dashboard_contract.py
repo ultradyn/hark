@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from hark.state_feed import CursorPosition, format_cursor
+
 jsonschema = pytest.importorskip("jsonschema")
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,9 +79,27 @@ def test_stream_has_hello_first() -> None:
 
 
 def test_cursor_format() -> None:
-    pat = re.compile(r"^[a-z][a-z0-9_-]*:\d+(,[a-z][a-z0-9_-]*:\d+)*$")
+    pat = re.compile(
+        r"^[a-z][a-z0-9_-]*:[0-9]{1,19}"
+        r"(?:@(?:[A-Za-z0-9._-]+|[a-f0-9]{32}~[a-f0-9]{32}))?"
+        r"(?:,[a-z][a-z0-9_-]*:[0-9]{1,19}"
+        r"(?:@(?:[A-Za-z0-9._-]+|[a-f0-9]{32}~[a-f0-9]{32}))?)*$"
+    )
     for row in STREAM_ROWS:
-        assert pat.match(row["cursor"]), row["cursor"]
+        assert pat.fullmatch(row["cursor"]), row["cursor"]
+
+    incarnation_cursor = format_cursor(
+        {
+            "watch": CursorPosition(184, "a" * 32, "b" * 32),
+            "serve": 9,
+        }
+    )
+    assert pat.fullmatch(incarnation_cursor)
+    row = {**STREAM_ROWS[0], "cursor": incarnation_cursor}
+    _validator("stream.schema.json").validate(row)
+
+    assert not pat.fullmatch("watch:１２")
+    assert not pat.fullmatch(f"watch:{'9' * 20}")
 
 
 # ---------------------------------------------------------------------------

@@ -47,8 +47,9 @@ implementation.** The deliverable boundary is `hark.dashboard.v1`:
    `ambient.*`/`announce.*` kinds are absent from `event-v1.schema.json`'s
    closed kind enum, so the stream schema is defined in `dashboard-v1`, not by
    reusing `event-v1` validation wholesale. Resume uses a **synthetic
-   per-source cursor** (`source:seq`, since `system.jsonl` etc. have no
-   `event_id`) carried as the SSE event id. Snapshot endpoints get their own
+   per-source cursor** (`source:seq@incarnation~checkpoint`, with legacy
+   `source:seq` accepted; `system.jsonl` etc. have no `event_id`) carried as the
+   SSE event id. Snapshot endpoints get their own
    schemas. Fixture-driven, exactly like the B002 Rust parity strategy —
    the Rust `hark serve` passes the same fixtures and the webui runs unmodified.
 2. **Backend** — Python v1 is deliberately thin: tail + backfill the JSONL

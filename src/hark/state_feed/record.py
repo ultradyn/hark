@@ -14,9 +14,11 @@ class FeedRecord:
     ``cursor_key`` may be finer-grained (e.g. ``bound`` vs ``delivery`` for
     delivery envelopes) and is what appears in the composite cursor token.
     ``seq`` is 1-based line index in the current file incarnation.
+    ``incarnation`` identifies that backing-file incarnation when known.
     """
 
     source: str
     cursor_key: str
     seq: int
     payload: dict[str, Any]
+    incarnation: str | None = None

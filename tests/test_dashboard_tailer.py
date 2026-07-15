@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from hark.dashboard.tailer import MultiTailer, SourceTailer, parse_cursor, read_page
+from hark.state_feed import format_cursor, parse_cursor_positions
 
 
 def _write(path: Path, *objs: dict, mode: str = "a") -> None:
@@ -56,11 +57,34 @@ def test_truncation_restarts_from_top(tmp_path):
     _write(f, {"n": 1}, {"n": 2})
     t = SourceTailer(f, source="watch")
     t.start_at_end()
+    old_incarnation = t.cursor_position.incarnation
     f.write_text("")  # truncate in place
     _write(f, {"n": 3})
     recs = list(t.poll())
     assert [r.payload["n"] for r in recs] == [3]
     assert recs[0].seq == 1  # new incarnation
+    assert recs[0].incarnation != old_incarnation
+
+
+def test_live_changed_prefix_rewrite_restarts_for_shorter_equal_and_longer(tmp_path):
+    for replacement_count in (2, 3, 5):
+        case = tmp_path / str(replacement_count)
+        case.mkdir()
+        path = case / "watch.jsonl"
+        _write(path, *({"old": n} for n in range(3)))
+        tailer = SourceTailer(path, source="watch")
+        tailer.start_at_end()
+        old_incarnation = tailer.cursor_position.incarnation
+
+        path.write_text("", encoding="utf-8")
+        _write(path, *({"new": n} for n in range(replacement_count)))
+        records = list(tailer.poll())
+
+        assert [record.payload["new"] for record in records] == list(
+            range(replacement_count)
+        )
+        assert records[0].seq == 1
+        assert records[0].incarnation != old_incarnation
 
 
 def test_rotation_by_inode_restarts(tmp_path):
@@ -119,8 +143,36 @@ def test_read_page_since_and_limit(tmp_path):
     _write(tmp_path / "watch.jsonl", *({"kind": "agent.blocked", "n": i} for i in range(5)))
     records, cursor, complete = read_page(tmp_path, since=None, limit=500)
     assert len(records) == 5 and complete
-    records2, cursor2, _ = read_page(tmp_path, since="watch:3", limit=500)
+
+    same_file = SourceTailer(tmp_path / "watch.jsonl", source="watch")
+    same_file.seek_to(3)
+    same_file_cursor = format_cursor({"watch": same_file.cursor_position})
+    same_file.close()
+    records2, cursor2, _ = read_page(tmp_path, since=same_file_cursor, limit=500)
     assert [r.payload["n"] for r in records2] == [3, 4]
     assert parse_cursor(cursor2)["watch"] == 5
+
+    # A line-only token cannot prove file identity, so duplicates beat loss.
+    legacy, _, _ = read_page(tmp_path, since="watch:3", limit=500)
+    assert [r.payload["n"] for r in legacy] == [0, 1, 2, 3, 4]
+
     records3, _, complete3 = read_page(tmp_path, since=None, limit=2)
     assert len(records3) == 2 and not complete3
+
+
+def test_read_page_stale_incarnation_replays_first_new_record(tmp_path):
+    path = tmp_path / "watch.jsonl"
+    _write(path, {"n": "new-1"}, {"n": "new-2"})
+
+    records, cursor, complete = read_page(
+        tmp_path,
+        since="watch:100@old-incarnation",
+        sources={"watch"},
+        limit=500,
+    )
+
+    assert complete
+    assert [record.payload["n"] for record in records] == ["new-1", "new-2"]
+    position = parse_cursor_positions(cursor)["watch"]
+    assert position.seq == 2
+    assert position.incarnation not in {None, "old-incarnation"}

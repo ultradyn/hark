@@ -5,14 +5,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from hark.dashboard.tailer import MultiTailer, SourceTailer
 from hark.monitor_feed import compact_mode_a_event
 from hark.state_feed import (
+    CursorPosition,
     FeedRecord,
+    InvalidCursorPosition,
     SourceFollower,
     StateFeedFollower,
     format_cursor,
     parse_cursor,
+    parse_cursor_positions,
     present_for_monitor,
 )
 
@@ -53,6 +58,241 @@ def test_composite_cursor_format_roundtrip():
     assert parse_cursor("watch:12,bound:3") == {"watch": 12, "bound": 3}
     assert format_cursor({"watch": 12, "bound": 3}) == "watch:12,bound:3"
     assert format_cursor([("a", 1), ("b", 2)]) == "a:1,b:2"
+
+    cursor = format_cursor(
+        {
+            "watch": CursorPosition(12, "a" * 32, "b" * 32),
+            "bound": CursorPosition(3, "c" * 32, "d" * 32),
+        }
+    )
+    assert cursor == f"watch:12@{'a' * 32}~{'b' * 32},bound:3@{'c' * 32}~{'d' * 32}"
+    assert parse_cursor(cursor) == {"watch": 12, "bound": 3}
+    assert parse_cursor_positions(cursor)["watch"] == CursorPosition(
+        12, "a" * 32, "b" * 32
+    )
+
+    # Incarnation-only B131-preview tokens remain parseable but unproven.
+    assert parse_cursor_positions("watch:12@old-token")["watch"] == CursorPosition(
+        12, "old-token", None
+    )
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["", "Watch", "watch,ambient", "watch:ambient", "watch\nid", "watch\rid"],
+)
+def test_format_cursor_rejects_noncanonical_or_injectable_keys(key: str):
+    with pytest.raises(ValueError):
+        format_cursor({key: 1})
+
+
+@pytest.mark.parametrize(
+    "position",
+    [
+        CursorPosition(1, None, "b" * 32),
+        CursorPosition(1, "", None),
+        CursorPosition(1, "bad,incarnation", None),
+        CursorPosition(1, "bad\nincarnation", None),
+        CursorPosition(1, "a" * 31, "b" * 32),
+        CursorPosition(1, "A" * 32, "b" * 32),
+        CursorPosition(1, "a" * 32, "B" * 32),
+        CursorPosition(1, "legacy-preview", "b" * 32),
+    ],
+)
+def test_format_cursor_rejects_partial_or_invalid_proofs(position: CursorPosition):
+    with pytest.raises(ValueError):
+        format_cursor({"watch": position})
+
+
+def test_format_cursor_accepts_safe_legacy_incarnation_only():
+    cursor = format_cursor({"watch": CursorPosition(1, "Preview_1")})
+    assert cursor == "watch:1@Preview_1"
+    assert parse_cursor_positions(cursor)["watch"] == CursorPosition(1, "Preview_1")
+
+
+@pytest.mark.parametrize("sequence", [-1, 10**19, True])
+def test_format_cursor_rejects_out_of_grammar_sequences(sequence):
+    with pytest.raises((TypeError, ValueError)):
+        format_cursor({"watch": sequence})
+
+
+def test_composite_cursor_rejects_sse_id_injection_key(tmp_path: Path):
+    source = SourceFollower(
+        tmp_path / "watch.jsonl",
+        source="watch",
+        cursor_key="watch\nid: injected",
+    )
+    follower = StateFeedFollower([source])
+    with pytest.raises(ValueError):
+        follower.composite_cursor()
+
+
+def test_invalid_sequences_are_typed_without_integer_conversion():
+    invalid = ("x", "-1", "１２", "9" * 5000)
+    for raw_sequence in invalid:
+        cursor = f"watch:{raw_sequence}"
+        position = parse_cursor_positions(cursor)["watch"]
+        assert position == InvalidCursorPosition()
+        assert parse_cursor(cursor) == {}
+
+
+def test_invalid_known_source_positions_replay_from_zero(tmp_path: Path):
+    invalid = ("x", "-1", "１２", "9" * 5000)
+    for index, raw_sequence in enumerate(invalid):
+        case = tmp_path / str(index)
+        case.mkdir()
+        path = case / "watch.jsonl"
+        _write(path, {"n": 1}, {"n": 2})
+        follower = StateFeedFollower([SourceFollower(path, source="watch")])
+
+        follower.start_from(f"watch:{raw_sequence}")
+
+        assert [record.payload["n"] for record in follower.poll()] == [1, 2]
+        follower.close()
+
+
+def test_resume_replays_rotated_replacement_of_any_length(tmp_path: Path):
+    for replacement_count in (2, 3, 5):
+        case = tmp_path / str(replacement_count)
+        case.mkdir()
+        path = case / "watch.jsonl"
+        _write(path, *({"old": n} for n in range(3)))
+        old = SourceFollower(path, source="watch")
+        old.seek_to(0)
+        assert len(list(old.poll())) == 3
+        stale_position = old.cursor_position
+        assert len(stale_position.incarnation or "") == 32
+        assert set(stale_position.incarnation or "") <= set("0123456789abcdef")
+        assert len(stale_position.checkpoint or "") == 32
+        old.close()
+
+        path.rename(case / "watch.jsonl.1")
+        _write(path, *({"new": n} for n in range(replacement_count)))
+        resumed = SourceFollower(path, source="watch")
+        resumed.seek_to(
+            stale_position.seq,
+            incarnation=stale_position.incarnation,
+            checkpoint=stale_position.checkpoint,
+        )
+        records = list(resumed.poll())
+        assert [record.payload["new"] for record in records] == list(
+            range(replacement_count)
+        )
+        assert records[0].seq == 1
+        assert resumed.cursor_position.incarnation != stale_position.incarnation
+
+
+def test_fresh_follower_replays_same_prefix_in_place_rewrite_of_any_length(
+    tmp_path: Path,
+):
+    for replacement_count in (2, 3, 5):
+        case = tmp_path / f"rewrite-{replacement_count}"
+        case.mkdir()
+        path = case / "watch.jsonl"
+        _write(path, {"n": "same"}, {"n": "old-1"}, {"n": "old-2"})
+        old = SourceFollower(path, source="watch")
+        old.seek_to(0)
+        assert len(list(old.poll())) == 3
+        stale_position = old.cursor_position
+        old.close()
+
+        # Path.write_text truncates the existing inode before the replacement
+        # records are appended, matching state writers that reuse the path.
+        path.write_text("", encoding="utf-8")
+        replacement = [{"n": "same"}] + [
+            {"n": f"new-{n}"} for n in range(1, replacement_count)
+        ]
+        _write(path, *replacement)
+        resumed = SourceFollower(path, source="watch")
+        resumed.seek_to(
+            stale_position.seq,
+            incarnation=stale_position.incarnation,
+            checkpoint=stale_position.checkpoint,
+        )
+        records = list(resumed.poll())
+
+        assert [record.payload["n"] for record in records] == [
+            record["n"] for record in replacement
+        ]
+        assert records[0].seq == 1
+        assert resumed.cursor_position.checkpoint != stale_position.checkpoint
+
+
+def test_valid_same_incarnation_resumes_at_sequence_plus_one(tmp_path: Path):
+    path = tmp_path / "watch.jsonl"
+    _write(path, *({"n": n} for n in range(2)))
+    source = SourceFollower(path, source="watch")
+    source.seek_to(0)
+    assert [record.payload["n"] for record in source.poll()] == [0, 1]
+    position = source.cursor_position
+    cursor = format_cursor({"watch": position})
+    source.close()
+
+    # The bounded first-record identity stays stable across ordinary appends.
+    _write(path, *({"n": n} for n in range(2, 4)))
+
+    follower = StateFeedFollower([SourceFollower(path, source="watch")])
+    follower.start_from(cursor)
+    records = list(follower.poll())
+    assert [record.payload["n"] for record in records] == [2, 3]
+    assert {record.incarnation for record in records} == {position.incarnation}
+    resumed_position = follower.sources[0].cursor_position
+    assert resumed_position.incarnation == position.incarnation
+    assert resumed_position.checkpoint != position.checkpoint
+
+
+def test_stale_cursor_waits_for_first_complete_replacement_record(tmp_path: Path):
+    path = tmp_path / "watch.jsonl"
+    _write(path, {"old": 1}, {"old": 2})
+    original = SourceFollower(path, source="watch")
+    original.start_at_end()
+    stale_position = original.cursor_position
+    original.close()
+
+    path.rename(tmp_path / "watch.jsonl.1")
+    path.write_text('{"new": "first', encoding="utf-8")
+    resumed = SourceFollower(path, source="watch")
+    resumed.seek_to(
+        stale_position.seq,
+        incarnation=stale_position.incarnation,
+        checkpoint=stale_position.checkpoint,
+    )
+
+    assert list(resumed.poll()) == []
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(' complete"}\n')
+
+    records = list(resumed.poll())
+    assert [(record.seq, record.payload) for record in records] == [
+        (1, {"new": "first complete"})
+    ]
+
+
+def test_legacy_line_only_cursor_prefers_duplicates(tmp_path: Path):
+    path = tmp_path / "watch.jsonl"
+    _write(path, *({"n": n} for n in range(3)))
+    for cursor in ("watch:2", "watch:2@preview-incarnation"):
+        follower = StateFeedFollower([SourceFollower(path, source="watch")])
+        follower.start_from(cursor)
+        assert [record.payload["n"] for record in follower.poll()] == [0, 1, 2]
+        follower.close()
+
+
+def test_legacy_cursor_replays_replacement_instead_of_skipping_it(tmp_path: Path):
+    path = tmp_path / "watch.jsonl"
+    _write(path, *({"old": n} for n in range(3)))
+
+    stale_cursor = "watch:3"
+    path.rename(tmp_path / "watch.jsonl.1")
+    _write(path, {"new": 1}, {"new": 2})
+
+    follower = StateFeedFollower([SourceFollower(path, source="watch")])
+    follower.start_from(stale_cursor)
+
+    assert [record.payload for record in follower.poll()] == [
+        {"new": 1},
+        {"new": 2},
+    ]
 
 
 def test_state_feed_follower_multi_source(tmp_path: Path):

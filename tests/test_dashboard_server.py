@@ -14,8 +14,10 @@ import pytest
 from hark.config import load_config
 from hark.dashboard import api as dash_api
 from hark.dashboard.server import DashboardServer
+from hark.dashboard.tailer import read_page
 from hark.delivery import BoundEvent, DeliveryStore
 from hark.herdr.client import AgentInfo
+from hark.state_feed import parse_cursor_positions
 
 
 @pytest.fixture()
@@ -154,6 +156,112 @@ def test_events_backfill_and_page(state, tmp_path):
         status, body = _get_json(server, "/api/v1/events?sources=system")
         assert {e["source"] for e in body["events"]} == {"system"}
     finally:
+        server.shutdown()
+
+
+def test_rotated_legacy_cursor_replays_new_incarnation_over_rest_and_sse(
+    state, tmp_path
+):
+    _write_jsonl(state / "watch.jsonl", {**HEP_BLOCKED, "event_id": "new", "n": 1})
+    server = _server(tmp_path)
+    connection = _conn(server)
+    try:
+        status, page = _get_json(
+            server,
+            "/api/v1/events?since=watch%3A100&sources=watch",
+        )
+        assert status == 200
+        assert [event["payload"]["n"] for event in page["events"]] == [1]
+        rest_position = parse_cursor_positions(page["cursor"])["watch"]
+        assert rest_position.seq == 1
+        assert rest_position.incarnation is not None
+
+        connection.request(
+            "GET",
+            "/api/v1/stream?sources=watch",
+            headers={"Last-Event-ID": "watch:100"},
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+
+        def read_event():
+            data = None
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                line = response.fp.readline().decode()
+                if line.startswith("data: "):
+                    data = json.loads(line[6:])
+                elif line == "\n" and data is not None:
+                    return data
+            raise AssertionError("no SSE event within timeout")
+
+        assert read_event()["type"] == "hello"
+        replay = read_event()
+        assert replay["source"] == "watch"
+        assert replay["payload"]["n"] == 1
+        sse_position = parse_cursor_positions(replay["cursor"])["watch"]
+        assert sse_position == rest_position
+    finally:
+        connection.close()
+        server.shutdown()
+
+
+@pytest.mark.parametrize("replacement_count", [2, 3, 5])
+def test_same_prefix_rewrite_replays_over_fresh_rest_and_sse(
+    state, tmp_path, replacement_count
+):
+    path = state / "watch.jsonl"
+    _write_jsonl(path, {"n": "same"}, {"n": "old-1"}, {"n": "old-2"})
+    _, old_cursor, _ = read_page(
+        state,
+        since=None,
+        sources={"watch"},
+        history_limit=100,
+    )
+    old_position = parse_cursor_positions(old_cursor)["watch"]
+    assert old_position.seq == 3
+
+    path.write_text("", encoding="utf-8")
+    expected = ["same"] + [f"new-{n}" for n in range(1, replacement_count)]
+    _write_jsonl(path, *({"n": value} for value in expected))
+    server = _server(tmp_path)
+    connection = _conn(server)
+    try:
+        status, page = _get_json(
+            server,
+            f"/api/v1/events?since={old_cursor}&sources=watch",
+        )
+        assert status == 200
+        assert [event["payload"]["n"] for event in page["events"]] == expected
+        rest_position = parse_cursor_positions(page["cursor"])["watch"]
+        assert rest_position.seq == replacement_count
+        assert rest_position.checkpoint != old_position.checkpoint
+
+        connection.request(
+            "GET",
+            "/api/v1/stream?sources=watch",
+            headers={"Last-Event-ID": old_cursor},
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+
+        def read_event():
+            data = None
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                line = response.fp.readline().decode()
+                if line.startswith("data: "):
+                    data = json.loads(line[6:])
+                elif line == "\n" and data is not None:
+                    return data
+            raise AssertionError("no SSE event within timeout")
+
+        assert read_event()["type"] == "hello"
+        replay = [read_event() for _ in range(replacement_count)]
+        assert [event["payload"]["n"] for event in replay] == expected
+        assert parse_cursor_positions(replay[-1]["cursor"])["watch"] == rest_position
+    finally:
+        connection.close()
         server.shutdown()
 
 

@@ -4,7 +4,8 @@ Thin adapter over :mod:`hark.state_feed` (P1.M5). Hardened follow lives in
 the deep core; this module owns dashboard source map, envelope transforms,
 and ``read_page`` sorting/limits.
 
-Cursor format (composite): ``key:seq,key:seq,…`` — see DASHBOARD.md.
+Cursor format (composite): ``key:seq@incarnation~checkpoint,…`` — see
+DASHBOARD.md.
 """
 
 from __future__ import annotations
@@ -18,8 +19,6 @@ from hark.state_feed import (
     StateFeedFollower,
     parse_cursor,
 )
-from hark.state_feed.follower import line_count as _line_count
-
 # Public aliases — tests and server import these names.
 Record = FeedRecord
 SourceTailer = SourceFollower

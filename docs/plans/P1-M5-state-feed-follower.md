@@ -63,9 +63,27 @@ class FeedRecord:
     cursor_key: str      # composite cursor key (may differ, e.g. bound vs delivery)
     seq: int             # 1-based line index in current file incarnation
     payload: dict[str, Any]
+    incarnation: str | None = None  # opaque file identity, when known
+
+@dataclass(frozen=True)
+class CursorPosition:
+    seq: int
+    incarnation: str | None = None  # opaque file identity
+    checkpoint: str | None = None   # complete-line prefix proof through seq
+
+@dataclass(frozen=True)
+class InvalidCursorPosition:
+    reason: str = "invalid_sequence"
 
 class SourceFollower:
-    def seek_to(self, seq: int) -> None: ...
+    def seek_to(
+        self,
+        seq: int,
+        *,
+        incarnation: str | None = None,
+        checkpoint: str | None = None,
+        conservative_legacy: bool = False,
+    ) -> None: ...
     def start_at_end(self) -> None: ...
     def poll(self) -> Iterator[FeedRecord]: ...
     def close(self) -> None: ...
@@ -79,7 +97,13 @@ class StateFeedFollower:
     def close(self) -> None: ...
 
 def parse_cursor(cursor: str | None) -> dict[str, int]: ...
-def format_cursor(positions: dict[str, int] | list[tuple[str, int]]) -> str: ...
+def parse_cursor_positions(
+    cursor: str | None,
+) -> dict[str, CursorPosition | InvalidCursorPosition]: ...
+def format_cursor(
+    positions: Mapping[str, int | CursorPosition]
+    | Iterable[tuple[str, int | CursorPosition]],
+) -> str: ...
 
 def present_for_monitor(event: dict[str, Any]) -> dict[str, Any]:
     """Single HEP presentation profile for harness Monitors (agent + ambient + tts)."""
@@ -95,13 +119,37 @@ def present_for_monitor(event: dict[str, Any]) -> dict[str, Any]:
 
 ### Cursor token (E2.T002)
 
-**Format (dashboard-compatible):** `key:seq,key:seq,…`  
-Example: `watch:184,ambient:42,bound:12,delivery:9`
+**Format (dashboard-compatible):** file positions use
+`key:seq@incarnation~checkpoint`; synthetic and line-only legacy positions use
+`key:seq`. Incarnation-only preview tokens are accepted as unproven legacy
+positions. Both proof values are opaque 128-bit hashes.
 
 - Keys = `cursor_key` per source (not always envelope source).
-- `parse_cursor` is lenient (skips bad parts).
-- Resume: `seek_to(seq)` so next emit is `seq+1`; unknown/rotated → gap preferred over dead stream (DASHBOARD.md).
-- SSE `id:` lines continue to use composite cursor; no format break.
+- Formatter keys use `[a-z][a-z0-9_-]*`; delimiters, uppercase, CR, and LF are
+  rejected so a composite cursor is always safe as one SSE `id:` line.
+- Sequence text is bounded to one through nineteen ASCII digits. An invalid
+  known-source value is retained as `InvalidCursorPosition`, causing replay
+  from zero; it is not confused with an absent source, and never reaches
+  unbounded integer conversion.
+- `parse_cursor` remains sequence-only and lenient for compatibility;
+  it omits invalid positions. `parse_cursor_positions` retains typed invalid
+  markers plus the opaque identity and prefix checkpoint for valid positions.
+- Resume skips through `seq` only when the opaque file identity and rolling
+  checkpoint over the raw bytes of every complete line through `seq` both
+  match. Ordinary appends preserve that proof. Replacement, truncation, or
+  rewriting any consumed record fails it and replays from the first complete
+  record. If all
+  consumed records are byte-equivalent, skipping them is safe.
+- Legacy `key:seq` and incarnation-only tokens cannot prove their prefix and
+  replay conservatively; duplicates are preferred over silent loss.
+- `format_cursor` accepts either no proof, a legacy incarnation matching
+  `[A-Za-z0-9._-]+`, or a complete pair of 32-character lowercase hexadecimal
+  incarnation and checkpoint values. Partial or malformed combinations raise
+  instead of producing a token outside the dashboard schema.
+- Proofs are derived from the opened file identity and bytes; no mutable
+  sidecar or generation counter can be torn or stranded by a process crash.
+- SSE `id:` lines use the proof-bearing composite cursor. Clients already
+  treat the value as opaque; legacy cursors remain accepted.
 
 ---
 

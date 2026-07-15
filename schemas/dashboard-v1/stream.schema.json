@@ -44,7 +44,7 @@
   "$defs": {
     "compositeCursor": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_-]*:[0-9]+(,[a-z][a-z0-9_-]*:[0-9]+)*$"
+      "pattern": "^[a-z][a-z0-9_-]*:[0-9]{1,19}(@([A-Za-z0-9._-]+|[a-f0-9]{32}~[a-f0-9]{32}))?(,[a-z][a-z0-9_-]*:[0-9]{1,19}(@([A-Za-z0-9._-]+|[a-f0-9]{32}~[a-f0-9]{32}))?)*$"
     },
     "hepPayload": {
       "description": "HEP hark.event.v1 passthrough. Kinds are open (ambient.*/announce.* are not in event-v1's enum); unknown fields flow through.",

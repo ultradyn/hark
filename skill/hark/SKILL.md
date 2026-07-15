@@ -30,6 +30,54 @@ Once `/hark` or `/handsfree` is invoked, you enter **TTS mode**:
 4. Chat/text is for **tool output, event_ids, and debugging** — not the main operator UI.
 5. **Ambient voice → TTS reply (hard rule).** On every final `ambient.prompt`, every conversation `ambient.turn`, and after you act on a finished radio stream, **speak your response with `hark tts`**. Do **not** answer ambient operator speech with chat-only prose. Short acks count; long plans can be summarized by voice with detail in chat if needed. Radio **partials** (HOLD, `streaming=false`): think privately until final. **Conversation mode** (`streaming=true`): full TTS on each `ambient.turn` / streaming partial — see **Streaming / conversation mode**.
 
+<!-- b141-chat-question-contract:start -->
+## Chat-visible question preamble (hard rule — B141)
+
+Codex does not render a blocking tool call's output in the transcript until the
+call returns. Hark's flushed stderr question banner is useful in a terminal, but
+no CLI flush can make it appear in Codex chat while the operator is recording.
+
+For **every operator-facing question**, first choose one authoritative question
+string, **Q**. Then perform these as two separate, ordered harness actions:
+
+1. **Emit Q verbatim in a normal visible assistant/chat update.** Put it once
+   after a label such as `Question:`; do not also show a summary, shortened
+   version, or alternate wording.
+2. **Only after that update is visible, invoke the blocking Hark command.** Pass
+   exactly Q as the prompt to `hark ask`, `hark tts --listen`, or `hark tts
+   --listen-for-user-response`.
+
+Direct example — first send this visible assistant update (not a shell command):
+
+> Question: Which Herdr sessions should I watch: local, remote, or both?
+
+Then, in a later tool call, invoke:
+
+```bash
+hark ask --confirm never "Which Herdr sessions should I watch: local, remote, or both?"
+```
+
+**Confirmation path:** `hark ask --confirm auto|always` can perform its spoken
+readback and confirmation inside that same blocking call. The visible preamble
+is still Q, emitted once before the call; do not invent a second preamble for an
+internal prompt that is not yet known. If *you* start a separate confirmation
+question, it is a new Q and needs its own visible preamble before its own call.
+
+**Retry / repeat path:** before every new blocking invocation, emit Q again in a
+new visible update. For a literal repeat, reuse the identical Q; do not say only
+"same question" or show a paraphrase. If changed context requires a revised
+question, make the revision the new Q in both places.
+
+`hark listen` has no question argument. When using separate `hark tts "Q"` then
+`hark listen`, emit Q visibly before `hark tts`; do not claim that `hark listen`
+can surface it.
+
+This preamble is a narrow exception to chat not being the primary operator UI.
+Do not substitute `echo`, `printf`, another subprocess, Hark's stderr banner, or
+another flush inside the same tool call: Codex buffers that tool call. Do not
+add the preamble to Hark stdout; stdout remains machine-parseable.
+<!-- b141-chat-question-contract:end -->
+
 ## Session + voice bootstrap (hard rule — B116 + B125)
 
 **Before** `hark start` / ambient / watch workers **or** arming `hark monitor`, you **MUST** complete bootstrap **and** the **structured startup interview**. Skipping either is a skill bug. One question per TTS turn.
@@ -88,7 +136,7 @@ hark session-profile show   # confirm; note start_watch=
 
 After core answers 1–4:
 
-1. **If scope = herdr** → ask Herdr sessions (local / SSH / mix) and write `[[herdr.sessions]]` (B116).  
+1. **If scope = herdr** → ask Herdr sessions (local / SSH / mix) and write `[[herdr.sessions]]` (B116). First emit the exact quoted question as a visible chat update per B141; then run:
    ```bash
    hark ask --confirm never "Which Herdr sessions should I watch? Local only, a remote SSH host, or both?"
    ```
@@ -427,7 +475,7 @@ If `~/.local/state/hark/setup-complete.json` is missing (or schema older than cu
 1. Note `event_id`, `session_id`, `pane_id`, `risk` if present.  
 2. **Prefer embedded `pane_capture.text`** (full recent pane / menu) on the event — enough for multi-option menus without a second fetch. Optional live re-read when needed: `hark context <session>/<pane> --lines 80`.  
 3. Classify: free text vs menu vs permission.  
-4. Speak + listen (pick one):
+4. Speak + listen (pick one). First emit the exact question verbatim as a visible chat update per B141; only then run the blocking command:
    ```bash
    hark ask --confirm auto --event-id <event_id> "…"  # upgrades to always for R2/R3 when risk known
    # or TTS then auto-record (beep when listen ready):
@@ -459,7 +507,9 @@ Herdr may report `done`/`idle` while the pane still shows a multi-option menu. W
 
 If transcript is a command: **repeat**, **skip**, **cancel**, **next**, **status** — honor it; do not send to the worker agent as a prompt. `hark tts --listen`, `hark listen`, and `hark ask` classify the reply and return a `meta_command` field (`repeat` | `skip` | `next` | `status` | `cancel`) when the whole utterance is a control phrase; `hark ask` short-circuits (no confirm/send) in that case. A `hark`-prefixed form ("hark skip", "hey hark next") is unambiguous — use it when a bare word might read as a real answer. On `meta_command`:
 
-- **repeat** → re-speak the question (`hark tts --listen "…"`).
+- **repeat** → re-emit the identical question Q in a new visible chat update,
+  then re-speak that same Q in a new blocking invocation (`hark tts --listen
+  "…"`), per B141.
 - **skip** → `hark skip <event_id>` (drops it from `hark queue`), then move on.
 - **next** → leave current event pending, go to the next waiting target.
 - **status** → speak `hark queue --announce`.

@@ -1,0 +1,39 @@
+---
+complexity: medium
+created_at: "2026-07-15T03:31:25Z"
+depends_on: []
+estimate_hours: 2
+id: B108
+priority: high
+status: pending
+tags:
+    - listen
+    - endpointing
+    - streaming
+    - github
+title: silence end_mode does not auto-finalize on pause when streaming (endpointing never fires)
+updated_at: "2026-07-15T03:31:25Z"
+---
+## GitHub
+https://github.com/ultradyn/hark/issues/2
+
+**Acceptance:** fix and close GitHub issue #2 as part of completing this bug (comment with resolution + close).
+
+## Summary
+With `[listen] end_mode = "silence"` and `end_silence_s = 2.1`, a listen stream may not auto-finalize after the operator stops speaking. Dogfood: stream stayed open ~120s until manual `hark listen-end` (`agent:finish`).
+
+## Clarification (from issue)
+Silence auto-end works when `[ambient].streaming` is OFF. With streaming ON (desired config), the silence endpoint does not fire — known interaction, not a plain VAD defect. When streaming is enabled, listen sessions need an alternative finalize path (wake-word retrigger / explicit end / designed quiet window) rather than pure silence endpointing.
+
+Also related: mic input gain too high can prevent the noise gate from ever seeing silence (see #1 comments) — doctor / gain robustness may be in scope if it still blocks silence finalize with streaming off.
+
+## Repro
+1. `[listen] end_mode = "silence"`, `end_silence_s = 2.1`
+2. Prefer also `[ambient].streaming = true`
+3. `hark tts --listen "..."` then speak a short prompt and stop
+
+## Expected
+Stream finalizes ~`end_silence_s` after speech stops (or documented streaming-mode alternative finalize works).
+
+## Actual
+Stream stays open until external `hark listen-end`.

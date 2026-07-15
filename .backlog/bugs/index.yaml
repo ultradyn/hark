@@ -106,3 +106,4 @@ bugs:
     - file: B105-streaming-mode-short-tts-acks.todo
     - file: B106-radio-end-mode-does-not-auto-f.todo
     - file: B107-do-complete-audit-of-recent-co.todo
+    - file: B108-silence-end-mode-does-not-auto.todo

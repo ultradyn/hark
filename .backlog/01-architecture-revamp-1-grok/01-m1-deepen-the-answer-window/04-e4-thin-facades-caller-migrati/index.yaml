@@ -20,7 +20,7 @@ tasks:
       file: T001-facade-run-listen-answer-windo.todo
       id: T001
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: Facade run_listen → Answer Window
     - complexity: medium

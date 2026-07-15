@@ -1,4 +1,6 @@
 ---
+claimed_at: "2026-07-15T05:12:34Z"
+claimed_by: cli-user
 completed_at: null
 complexity: medium
 created_at: "2026-07-15T04:29:39Z"
@@ -8,11 +10,11 @@ depends_on:
 estimate_hours: 2
 id: P1.M1.E4.T001
 priority: high
-started_at: null
-status: pending
+started_at: "2026-07-15T05:12:34Z"
+status: in_progress
 tags: []
 title: Facade run_listen → Answer Window
-updated_at: "2026-07-15T04:29:39Z"
+updated_at: "2026-07-15T05:12:34Z"
 ---
 # Facade run_listen → Answer Window
 

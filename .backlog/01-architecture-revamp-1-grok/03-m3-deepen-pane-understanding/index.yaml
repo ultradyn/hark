@@ -27,7 +27,7 @@ epics:
       locked: false
       name: 'E3: Thin watch I/O over Pane Understanding'
       path: 03-e3-thin-watch-i-o-over-pane-un
-      status: pending
+      status: done
     - complexity: medium
       depends_on: []
       description: Port test_false_done, test_busy_subagent, test_pane_capture, test_watch_binding to module interface.

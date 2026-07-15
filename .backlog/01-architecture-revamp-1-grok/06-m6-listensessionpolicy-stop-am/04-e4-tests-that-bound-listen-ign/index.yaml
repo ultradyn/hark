@@ -19,7 +19,7 @@ tasks:
       file: T001-test-bound-radio-unaffected-by.todo
       id: T001
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: 'Test: bound radio unaffected by ambient.streaming TOML'
     - complexity: medium
@@ -29,6 +29,6 @@ tasks:
       file: T002-test-post-wake-profile-still-s.todo
       id: T002
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: 'Test: post_wake profile still streams when configured'

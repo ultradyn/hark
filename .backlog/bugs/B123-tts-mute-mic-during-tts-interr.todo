@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-07-15T08:33:25Z"
+depends_on: []
+estimate_hours: 1
+id: B123
+priority: high
+status: pending
+tags: []
+title: TTS mute_mic_during_tts interrupted operator again (recurrence of B120/B119). Post-TTS mic not reliably restored; ambient deaf until manual hark unmute.
+updated_at: "2026-07-15T08:33:25Z"
+---
+
+TTS mute_mic_during_tts interrupted operator again (recurrence of B120/B119). Post-TTS mic not reliably restored; ambient deaf until manual hark unmute.

@@ -121,3 +121,4 @@ bugs:
     - file: B120-tts-left-system-mic-muted-mute.todo
     - file: B121-streaming-mode-should-be-conve.todo
     - file: B122-conversation-streaming-mode-se.todo
+    - file: B123-tts-mute-mic-during-tts-interr.todo

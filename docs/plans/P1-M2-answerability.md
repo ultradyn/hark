@@ -1,10 +1,11 @@
 # P1.M2 — Deepen Bound Answerability
 
-**Status:** E1.T001 status matrix specified (design expands in E1.T002)  
+**Status:** design locked for E1 (implementation follows E2–E4)  
 **Date:** 2026-07-15  
 **Backlog:** `P1.M2` · architecture review candidate 2  
 **Depends on:** M1 Answer Window (listen-only); delivery store + fingerprint remain  
 **Safety:** `docs/SAFETY.md` Routing — *compatible state* before send  
+**E1.T002:** acceptance criteria + non-goals below are **LOCKED** (2026-07-15) — implement against them; change only via backlog amend + plan edit
 
 ## Goal
 
@@ -173,10 +174,194 @@ needs_input bind.
 
 ---
 
-## Next (E1.T002+)
+## E1.T002 — Design: Answerability seam
 
-- Design note: module shape `assess` / live helpers, call sites (answering,
-  queue, dashboard), acceptance criteria for false-done delivery.
-- E2: pure core + injectable re-read helpers.  
-- E3: migrate `answer_bound_event`, `_queue_live_answerable`, dashboard.  
-- E4: fixture tests + SAFETY.md / skill notes.
+### Solution shape
+
+```text
+                    ┌──────────────────────────────────────────┐
+  answer_bound_event│  Answerability                            │
+  queue live filter │  assess_snapshot(...) → AnswerabilityVerdict │
+  dashboard /answer │  (pure)                                   │
+                    ├──────────────────────────────────────────┤
+                    │  read_live_snapshot(client, bound)        │
+                    │  → LiveAnswerSnapshot (I/O, injectable)   │
+                    │  uses: get_agent, read_pane, FP helpers   │
+                    └──────────────────────────────────────────┘
+```
+
+**Shape rule:** pure core never imports Herdr clients. Call sites either:
+
+1. Build a `LiveAnswerSnapshot` via helper + call pure `assess_snapshot`, or  
+2. Use a thin orchestrator that does both (e.g. inside `answer_bound_event`).
+
+### Module layout (implementation epic owns final path)
+
+Preferred package (mirrors Answer Window depth without forcing it on day one):
+
+```text
+src/hark/answerability/
+  __init__.py          # public: assess_snapshot, LiveAnswerSnapshot, Verdict, reasons
+  core.py              # pure assess_snapshot + status×kind matrix
+  live.py              # read_live_snapshot(client, bound) — injectable client
+  reasons.py           # stable reason string constants (optional)
+```
+
+Acceptable first cut: single module `src/hark/answerability.py` if LOC stays small
+(~150–250); split when helpers grow. **Do not** grow more status checks inside
+`cli.py` or duplicate matrix rows in `answering.py`.
+
+`answering.answer_bound_event` remains the **delivery** orchestrator (store
+lookup, mark delivered/rejected/uncertain, send_text/keys). It **calls**
+Answerability for the live-compatible + FP gate instead of inlining
+`status != "blocked"`.
+
+### Pure types
+
+```python
+@dataclass(frozen=True)
+class LiveAnswerSnapshot:
+    """Everything pure assess needs that came from live I/O (or fakes)."""
+
+    pane_exists: bool
+    live_status: str | None          # None if pane gone
+    live_revision: int | None
+    bound_revision: int
+    bound_fingerprint: str           # stripped; empty → missing
+    live_fingerprint: str | None     # None if read failed
+    fingerprint_error: bool          # True when pane read/Herdr failed
+    hep_kind: str | None             # from bound.meta.get("kind")
+    pane_still_pending: bool | None  # None = not evaluated (blocked path)
+    # True/False only required when status gate is needs_input + idle-like
+
+
+@dataclass(frozen=True)
+class AnswerabilityVerdict:
+    ok: bool                 # True → may deliver (send path) / keep (queue)
+    reason: str              # "ok" or stable refuse code
+```
+
+```python
+def assess_snapshot(snap: LiveAnswerSnapshot) -> AnswerabilityVerdict:
+    """Pure: matrix + revision + FP (+ optional menu). No I/O."""
+```
+
+### Live helper
+
+```python
+def read_live_snapshot(
+    *,
+    session_id: str,
+    pane_id: str,
+    bound_revision: int,
+    bound_fingerprint: str | None,
+    hep_kind: str | None,
+    client: Any,  # duck-typed: get_agent, read_pane
+    pane_lines: int = 40,
+    require_pending_heuristic: bool | None = None,
+) -> LiveAnswerSnapshot:
+    """I/O: get_agent + optional read_pane + extract_question_excerpt + FP.
+
+    When require_pending_heuristic is True (or auto for needs_input + idle-like),
+    also set pane_still_pending via looks_like_pending_question.
+    """
+```
+
+**No hard Herdr coupling in pure core:** tests construct `LiveAnswerSnapshot`
+directly. Live helper tests use FakeClient (same pattern as `test_cli_answer.py`).
+
+### Call sites (must converge)
+
+| Call site | Today | After M2 |
+|-----------|--------|----------|
+| `answering.answer_bound_event` | inline `status != blocked` + FP | `read_live_snapshot` + `assess_snapshot`; refuse with verdict.reason; then send |
+| `cli._queue_live_answerable` | duplicate `status != blocked` | same assess (queue mode: soft-keep on transport error **before** snapshot; on snapshot, expire only hard unanswerable reasons) |
+| `cli.cmd_queue` prune/list | via `_queue_live_answerable` | no local status strings |
+| `dashboard.api.answer_action` | `answer_bound_event` | unchanged entry; inherits Answerability |
+| `cli.cmd_answer` | `answer_bound_event` | same |
+
+**Grep exit gate for E3:** no remaining `live.status != "blocked"` (or
+`== "blocked"`) gates for answer/queue outside Answerability module (tests may
+assert reasons).
+
+### Queue vs send policy
+
+| Verdict reason | `hark answer` / dashboard | `hark queue` live filter/prune |
+|----------------|---------------------------|--------------------------------|
+| `ok` | send | keep fresh |
+| `pane_gone`, `not_compatible`, `stale_revision` | reject | expire / stale |
+| `fingerprint_mismatch` | reject | expire / stale (question moved) |
+| `fingerprint_unavailable` | reject | **keep** (transient; fail-soft) |
+| Herdr error before snapshot | n/a (caught as unavailable) | **keep** (`herdr_error:…`) |
+| `missing_question_fingerprint` | reject (store mark) | expire if present in queue |
+
+### Reason code migration
+
+- Prefer **`not_compatible`** for status-matrix refusals.  
+- Existing tests assert `not_blocked` — migration may map:
+  - `working` / wrong status → emit `not_compatible` **or** keep emitting
+    `not_blocked` as a synonym for one release if CLI/API consumers depend on it.
+  - **Decision for implementers:** new pure core returns `not_compatible`;
+    `answer_bound_event` may alias to `not_blocked` only if a grep of public
+    docs/tests shows hard dependency. Prefer updating tests to `not_compatible`
+    (clearer for needs_input world). Update `test_cli_answer` accordingly.
+
+---
+
+## Non-goals (M2) — LOCKED
+
+1. **No LLM judgment** of pane text or auto-routing (ADR-002 spirit).  
+2. **No HEP schema change** and **no watch false-done redesign** — emission of
+   `agent.needs_input` already correct; this milestone **delivers** those events.  
+3. **No Mode B / dialogue FSM** and no multi-target disambiguation changes.  
+4. **Answer Window (M1)** stays listen-only; Answerability does not open mics.  
+5. **DeliveryStore** ownership of age/supersede/idempotency stays in
+   `delivery.py`; Answerability is the live-compatible predicate only.  
+6. **No provider/STT/TTS** work.  
+7. **Pane Understanding (M3)** may later deepen question extraction; M2 uses
+   existing `extract_question_excerpt` + `question_fingerprint` +
+   `looks_like_pending_question`.
+
+---
+
+## Acceptance criteria (milestone) — LOCKED
+
+| # | Criterion | How we know |
+|---|-----------|-------------|
+| AC1 | Pure Answerability core implements status×kind matrix + FP/revision gates | Unit tests without network; table-driven status×kind cases |
+| AC2 | Live re-read helpers are injectable (`client_for` / duck client); pure core has no Herdr import | Grep + unit tests with FakeClient |
+| AC3 | `answer_bound_event` uses Answerability; **needs_input + idle-like + menu + FP match → deliver** | Green tests E4.T001 + existing answer tests |
+| AC4 | `needs_input` + idle empty pane (no menu) → refuse | Green refuse path test |
+| AC5 | `cmd_queue` live filter + prune use same module; no duplicated `status==blocked` answer gates | Grep-clean outside answerability |
+| AC6 | Dashboard `/answer` inherits AC3 via `answer_bound_event` | No forked status check in dashboard |
+| AC7 | Write path still `uncertain` on `HerdrError` (never blind-retry) | Existing / regression test |
+| AC8 | `SAFETY.md` documents compatible state including false-done; skill notes match | Docs + skill grep |
+
+### False-done delivery acceptance (explicit)
+
+| Scenario | Herdr status | HEP kind | Pane | Expected |
+|----------|--------------|----------|------|----------|
+| F1 | `done` or `idle` | `agent.needs_input` | menu-like + FP match | **deliver** (`ok`) |
+| F2 | `done` or `idle` | `agent.needs_input` | idle chrome only / empty | **refuse** `not_compatible` |
+| F3 | `done` or `idle` | `agent.needs_input` | menu but FP mismatch | **refuse** `fingerprint_mismatch` |
+| F4 | `blocked` | `agent.blocked` | FP match | **deliver** (classic path) |
+| F5 | `working` | any | any | **refuse** `not_compatible` |
+| F6 | `done` | `agent.blocked` | menu present | **refuse** (wrong HEP class; need needs_input bind) |
+| F7 | pane gone | any | — | **refuse** `pane_gone` |
+
+---
+
+## Epic map
+
+| Epic | Work |
+|------|------|
+| **E1** | Matrix + this design (done when locked) |
+| **E2** | Pure core + live snapshot helpers + unit tests |
+| **E3** | Wire answering + queue + dashboard; remove duplicate checks |
+| **E4** | Fixture tests F1–F2 (+ peers); SAFETY.md + skill notes |
+
+## Exit gate for E1
+
+This plan (matrix + seam + AC1–AC8 + F1–F7 + non-goals) is **locked**.
+E2–E4 implement against it.
+

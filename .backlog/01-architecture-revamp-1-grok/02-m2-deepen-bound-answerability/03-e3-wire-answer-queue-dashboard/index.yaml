@@ -29,6 +29,6 @@ tasks:
       file: T002-migrate-cmd-queue-live-filter.todo
       id: T002
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: Migrate cmd_queue live filter + dashboard /answer

@@ -21,6 +21,13 @@ from hark.answer_window.radio import (
     radio_transition,
 )
 from hark.answer_window.result import ListenResult
+from hark.answer_window.silence import (
+    SilenceEvent,
+    SilenceSession,
+    SilenceState,
+    resolve_endpoint_strategy,
+    silence_transition,
+)
 
 __all__ = [
     "AnswerWindowDeps",
@@ -30,7 +37,12 @@ __all__ = [
     "RadioEvent",
     "RadioSession",
     "RadioState",
+    "SilenceEvent",
+    "SilenceSession",
+    "SilenceState",
     "effective_radio_idle_s",
     "policy_from_config",
     "radio_transition",
+    "resolve_endpoint_strategy",
+    "silence_transition",
 ]

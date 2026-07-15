@@ -29,6 +29,6 @@ tasks:
       file: T002-pane-re-read-helpers-for-live.todo
       id: T002
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: Pane re-read helpers for live FP + status

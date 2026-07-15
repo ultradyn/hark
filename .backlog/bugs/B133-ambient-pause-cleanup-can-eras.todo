@@ -1,18 +1,18 @@
 ---
+claimed_at: "2026-07-15T22:12:55Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-15T21:02:15Z"
 depends_on: []
 estimate_hours: 1
 id: B133
 priority: high
-status: pending
-tags:
-    - mic
-    - concurrency
-    - ambient
-    - ownership
+started_at: "2026-07-15T22:12:55Z"
+status: in_progress
+tags: []
 title: ambient.pause cleanup can erase a newer process pause request
-updated_at: "2026-07-15T21:02:15Z"
+updated_at: "2026-07-15T22:12:55Z"
 ---
 ## Evidence
 request_ambient_pause writes one global ambient.pause marker containing reason, PID, and timestamp. clear_ambient_pause unconditionally unlinks the marker and pause_ambient_for_mic always calls it on exit. Reproduction: process A writes a pause, process B overwrites it with PID 222, then A clears on context exit; the marker owned by B disappears. Ambient may resume and race B for the microphone. B010 covers basic ambient yielding but not overlapping owners.

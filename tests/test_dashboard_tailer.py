@@ -5,7 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hark.dashboard.tailer import MultiTailer, SourceTailer, parse_cursor, read_page
+from hark.dashboard.tailer import (
+    MultiTailer,
+    SourceTailer,
+    parse_cursor,
+    read_page,
+    records_with_cursors,
+)
 
 
 def _write(path: Path, *objs: dict, mode: str = "a") -> None:
@@ -124,3 +130,29 @@ def test_read_page_since_and_limit(tmp_path):
     assert parse_cursor(cursor2)["watch"] == 5
     records3, _, complete3 = read_page(tmp_path, since=None, limit=2)
     assert len(records3) == 2 and not complete3
+
+
+def test_replay_cursor_advances_only_after_each_sorted_record(tmp_path):
+    _write(
+        tmp_path / "watch.jsonl",
+        {"kind": "agent.blocked", "n": "w1", "ts": 1.0},
+        {"kind": "agent.blocked", "n": "w2", "ts": 3.0},
+    )
+    _write(tmp_path / "ambient.jsonl", {"kind": "ambient.prompt", "n": "a1", "ts": 2.0})
+
+    records, page_cursor, complete = read_page(
+        tmp_path, since="watch:0,ambient:0", limit=None
+    )
+    replay = [
+        (record.payload["n"], cursor)
+        for record, cursor in records_with_cursors(records, "watch:0,ambient:0")
+    ]
+
+    assert complete
+    assert replay == [
+        ("w1", "watch:1,ambient:0"),
+        ("a1", "watch:1,ambient:1"),
+        ("w2", "watch:2,ambient:1"),
+    ]
+    assert parse_cursor(page_cursor)["watch"] == 2
+    assert parse_cursor(page_cursor)["ambient"] == 1

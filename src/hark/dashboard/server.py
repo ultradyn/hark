@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from hark import __version__
 from hark.config import HarkConfig
 from hark.dashboard import api
-from hark.dashboard.tailer import MultiTailer, read_page
+from hark.dashboard.tailer import MultiTailer, read_page, records_with_cursors
 from hark.events import utc_now_iso
 from hark.paths import state_dir
 from hark.syslog import log
@@ -482,14 +482,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "schema": SCHEMA,
                 "type": "event",
                 "source": r.source,
-                "cursor": cursor,
+                "cursor": record_cursor,
                 "payload": r.payload,
             }
-            for r in records
+            for r, record_cursor in records_with_cursors(records, since)
         ]
         self._send_json(
             200,
-            {"schema": SCHEMA, "ok": True, "events": events, "cursor": cursor, "complete": complete},
+            {
+                "schema": SCHEMA,
+                "ok": True,
+                "events": events,
+                "cursor": cursor,
+                "complete": complete,
+            },
         )
 
     # ---------------------------------------------------------------- stream
@@ -515,12 +521,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
         pump = self.server.pump
         q = self.server.hub.subscribe()
         try:
+            # A hello is a transport handshake, not a delivery boundary.  On
+            # resume it must repeat the client's last acknowledged position;
+            # advertising the pump's current EOF here can skip unseen replay.
+            stream_cursor = since if since is not None else pump.composite_cursor()
             self._sse_write(
                 {
                     "schema": SCHEMA,
                     "type": "hello",
                     "source": "serve",
-                    "cursor": pump.composite_cursor(),
+                    "cursor": stream_cursor,
                     "payload": {
                         "kind": "serve.hello",
                         "server": SERVER_NAME,
@@ -530,19 +540,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 }
             )
             if since:
-                records, cursor, _ = read_page(
-                    self.server.state, since=since, sources=wanted, limit=1000
+                records, _, _ = read_page(
+                    self.server.state, since=since, sources=wanted, limit=None
                 )
-                for r in records:
+                for r, record_cursor in records_with_cursors(records, since):
                     self._sse_write(
                         {
                             "schema": SCHEMA,
                             "type": "event",
                             "source": r.source,
-                            "cursor": cursor,
+                            "cursor": record_cursor,
                             "payload": r.payload,
                         }
                     )
+                    stream_cursor = record_cursor
             last_ping = time.monotonic()
             last_spec_seq = 0
             # Short timeout so spectrum can refresh near 60 fps without a
@@ -553,8 +564,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 except queue.Empty:
                     envelope = None
                 if envelope is not None:
-                    if wanted is None or envelope["source"] in wanted or envelope["type"] == "hello":
+                    if (
+                        wanted is None
+                        or envelope["source"] in wanted
+                        or envelope["type"] == "hello"
+                    ):
                         self._sse_write(envelope)
+                        stream_cursor = envelope["cursor"]
                     last_ping = time.monotonic()
                 # Live mic spectrum (B087): not stored in history; cursor unchanged
                 allow_spec = wanted is None or "serve" in wanted
@@ -567,7 +583,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                 "schema": SCHEMA,
                                 "type": "event",
                                 "source": "serve",
-                                "cursor": pump.composite_cursor(),
+                                # Spectrum is not persisted and must never move
+                                # Last-Event-ID past queued/replayable records.
+                                "cursor": stream_cursor,
                                 "payload": spec,
                             }
                         )

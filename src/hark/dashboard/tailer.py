@@ -16,9 +16,9 @@ from hark.state_feed import (
     FeedRecord,
     SourceFollower,
     StateFeedFollower,
+    format_cursor,
     parse_cursor,
 )
-from hark.state_feed.follower import line_count as _line_count
 
 # Public aliases — tests and server import these names.
 Record = FeedRecord
@@ -87,7 +87,7 @@ def read_page(
     *,
     since: str | None,
     sources: set[str] | None = None,
-    limit: int = 500,
+    limit: int | None = 500,
     history_limit: int = 2000,
 ) -> tuple[list[FeedRecord], str, bool]:
     """One-shot backfill page for GET /api/v1/events."""
@@ -103,10 +103,27 @@ def read_page(
     # interleave stably: JSONL files are append-ordered; cross-source order is
     # best-effort by per-record timestamp when present
     records.sort(key=_record_ts)
-    complete = len(records) <= limit
-    if not complete:
+    complete = limit is None or len(records) <= limit
+    if limit is not None and not complete:
         records = records[-limit:]
     return records, mt.composite_cursor(), complete
+
+
+def records_with_cursors(
+    records: list[FeedRecord], since: str | None
+) -> Iterator[tuple[FeedRecord, str]]:
+    """Pair records with a composite cursor at that exact replay boundary.
+
+    ``read_page`` sorts records across sources after polling them all, so its
+    page cursor is necessarily the high-water mark *after the whole page*.
+    Reusing that cursor on each envelope lets an SSE disconnect skip the rest
+    of the page.  Advance a copy of the client's starting positions one record
+    at a time instead; positions for sources not yet replayed stay unchanged.
+    """
+    positions = parse_cursor(since)
+    for record in records:
+        positions[record.cursor_key] = record.seq
+        yield record, format_cursor(positions)
 
 
 def _record_ts(rec: FeedRecord) -> float:
@@ -138,4 +155,5 @@ __all__ = [
     "default_tailers",
     "parse_cursor",
     "read_page",
+    "records_with_cursors",
 ]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import threading
 import time
 from http import HTTPStatus
@@ -14,6 +15,7 @@ import pytest
 from hark.config import load_config
 from hark.dashboard import api as dash_api
 from hark.dashboard.server import DashboardServer
+from hark.dashboard.tailer import parse_cursor
 from hark.delivery import BoundEvent, DeliveryStore
 from hark.herdr.client import AgentInfo
 
@@ -74,6 +76,31 @@ def _write_jsonl(path: Path, *objs: dict) -> None:
     with path.open("a", encoding="utf-8") as fh:
         for obj in objs:
             fh.write(json.dumps(obj) + "\n")
+
+
+def _open_stream(server, path: str, headers: dict[str, str] | None = None):
+    connection = _conn(server)
+    connection.request("GET", path, headers=headers or {})
+    response = connection.getresponse()
+    assert response.status == 200
+    assert response.getheader("Content-Type") == "text/event-stream"
+    return connection, response
+
+
+def _read_sse_event(response) -> tuple[str, dict]:
+    event_id = None
+    data = None
+    while True:
+        line = response.fp.readline().decode()
+        if not line:
+            raise AssertionError("SSE connection ended before an event")
+        if line.startswith("id: "):
+            event_id = line[4:].rstrip("\n")
+        elif line.startswith("data: "):
+            data = json.loads(line[6:])
+        elif line == "\n" and data is not None:
+            assert event_id == data["cursor"]
+            return event_id, data
 
 
 HEP_BLOCKED = {
@@ -151,6 +178,13 @@ def test_events_backfill_and_page(state, tmp_path):
         for e in body["events"]:
             assert e["schema"] == "hark.dashboard.v1"
 
+        system_event = next(
+            e for e in body["events"] if e["payload"].get("event") == "tts.ok"
+        )
+        watch_event = next(e for e in body["events"] if e["source"] == "watch")
+        assert parse_cursor(system_event["cursor"]) == {"system": 1}
+        assert parse_cursor(watch_event["cursor"]) == {"system": 1, "watch": 1}
+
         status, body = _get_json(server, "/api/v1/events?sources=system")
         assert {e["source"] for e in body["events"]} == {"system"}
     finally:
@@ -182,13 +216,199 @@ def test_stream_hello_and_live_event(state, tmp_path):
         assert hello["payload"]["kind"] == "serve.hello"
         assert set(hello["payload"]["sources"]) >= {"watch", "serve"}
 
-        _write_jsonl(state / "watch.jsonl", HEP_BLOCKED)
-        event = read_event()
-        assert event["source"] == "watch"
-        assert event["payload"]["kind"] == "agent.blocked"
-        assert "watch:1" in event["cursor"]
+        _write_jsonl(
+            state / "watch.jsonl",
+            {**HEP_BLOCKED, "event_id": "live-1", "n": 1},
+            {**HEP_BLOCKED, "event_id": "live-2", "n": 2},
+        )
+        first = read_event()
+        second = read_event()
+        assert first["source"] == second["source"] == "watch"
+        assert first["payload"]["kind"] == "agent.blocked"
+        assert [parse_cursor(e["cursor"])["watch"] for e in (first, second)] == [
+            1,
+            2,
+        ]
     finally:
         c.close()
+        server.shutdown()
+
+
+def test_stream_reconnect_after_hello_and_each_replay_frame_is_lossless(
+    state, tmp_path
+):
+    rows = [{**HEP_BLOCKED, "event_id": f"event-{n}", "n": n} for n in range(3)]
+    _write_jsonl(state / "watch.jsonl", *rows)
+    server = _server(tmp_path)
+    cursor = "watch:0"
+    seen: list[int] = []
+    try:
+        # First drop immediately after hello.  Its id must repeat the requested
+        # cursor rather than advertise the pump's current EOF.
+        connection, response = _open_stream(server, "/api/v1/stream?since=watch%3A0")
+        hello_id, hello = _read_sse_event(response)
+        assert hello["type"] == "hello"
+        assert hello_id == cursor
+        connection.close()
+
+        # Drop after each individual replay record and reconnect from exactly
+        # the frame the browser received.  No later record may be skipped.
+        for expected in range(3):
+            connection, response = _open_stream(
+                server,
+                "/api/v1/stream",
+                headers={"Last-Event-ID": cursor},
+            )
+            next_hello_id, next_hello = _read_sse_event(response)
+            assert next_hello["type"] == "hello"
+            assert next_hello_id == cursor
+            cursor, event = _read_sse_event(response)
+            seen.append(event["payload"]["n"])
+            assert parse_cursor(cursor)["watch"] == expected + 1
+            connection.close()
+
+        assert seen == [0, 1, 2]
+    finally:
+        server.shutdown()
+
+
+def test_stream_replay_preserves_source_filter_and_unseen_cursor(state, tmp_path):
+    _write_jsonl(
+        state / "watch.jsonl", {**HEP_BLOCKED, "event_id": "watch", "n": "watch"}
+    )
+    _write_jsonl(state / "ambient.jsonl", {"kind": "ambient.prompt", "n": "ambient"})
+    server = _server(tmp_path)
+    connection = None
+    try:
+        connection, response = _open_stream(
+            server,
+            "/api/v1/stream?sources=watch&since=watch%3A0%2Cambient%3A0",
+        )
+        hello_id, _ = _read_sse_event(response)
+        assert hello_id == "watch:0,ambient:0"
+        event_id, event = _read_sse_event(response)
+        assert event["source"] == "watch"
+        assert event["payload"]["n"] == "watch"
+        assert parse_cursor(event_id) == {"watch": 1, "ambient": 0}
+    finally:
+        if connection is not None:
+            connection.close()
+        server.shutdown()
+
+
+def test_rest_to_stream_handoff_captures_concurrent_append_and_live_reconnect(
+    state, tmp_path, monkeypatch
+):
+    import hark.dashboard.server as dashboard_server
+
+    _write_jsonl(state / "watch.jsonl", {**HEP_BLOCKED, "event_id": "event-0", "n": 0})
+    server = _server(tmp_path)
+    connection = None
+    try:
+        status, page = _get_json(server, "/api/v1/events?sources=watch")
+        assert status == 200
+        assert [e["payload"]["n"] for e in page["events"]] == [0]
+        assert parse_cursor(page["cursor"])["watch"] == 1
+
+        real_read_page = dashboard_server.read_page
+        snapshot_taken = threading.Event()
+        release_snapshot = threading.Event()
+
+        def paused_read_page(*args, **kwargs):
+            result = real_read_page(*args, **kwargs)
+            snapshot_taken.set()
+            assert release_snapshot.wait(5), "test did not release replay snapshot"
+            return result
+
+        monkeypatch.setattr(dashboard_server, "read_page", paused_read_page)
+        connection, response = _open_stream(
+            server, f"/api/v1/stream?since={page['cursor']}"
+        )
+        hello_id, hello = _read_sse_event(response)
+        assert hello["type"] == "hello"
+        assert hello_id == page["cursor"]
+        assert snapshot_taken.wait(5), "stream replay did not reach snapshot boundary"
+
+        # This append occurs after the REST/replay snapshot but after the SSE
+        # queue subscription.  It must arrive through the live side.
+        _write_jsonl(
+            state / "watch.jsonl", {**HEP_BLOCKED, "event_id": "event-1", "n": 1}
+        )
+        # Drop in the handoff gap: replay has taken its snapshot, but the
+        # queued live event has not been written.  Reconnecting from hello's
+        # unchanged id must recover the append from durable history.
+        connection.close()
+        connection = None
+        release_snapshot.set()
+        monkeypatch.setattr(dashboard_server, "read_page", real_read_page)
+        connection, response = _open_stream(
+            server,
+            "/api/v1/stream",
+            headers={"Last-Event-ID": page["cursor"]},
+        )
+        resumed_hello_id, _ = _read_sse_event(response)
+        assert resumed_hello_id == page["cursor"]
+        cursor, appended = _read_sse_event(response)
+        assert appended["payload"]["n"] == 1
+        assert parse_cursor(cursor)["watch"] == 2
+        connection.close()
+        connection = None
+
+        # Reconnect after a delivered live record, append again, and prove the
+        # next record is replayed/live without a hole.
+        _write_jsonl(
+            state / "watch.jsonl", {**HEP_BLOCKED, "event_id": "event-2", "n": 2}
+        )
+        connection, response = _open_stream(
+            server, "/api/v1/stream", headers={"Last-Event-ID": cursor}
+        )
+        replay_hello_id, _ = _read_sse_event(response)
+        assert replay_hello_id == cursor
+        final_cursor, final = _read_sse_event(response)
+        assert final["payload"]["n"] == 2
+        assert parse_cursor(final_cursor)["watch"] == 3
+    finally:
+        if connection is not None:
+            connection.close()
+        server.shutdown()
+
+
+def test_rest_to_stream_handoff_captures_rotation_after_snapshot(
+    state, tmp_path, monkeypatch
+):
+    import hark.dashboard.server as dashboard_server
+
+    watch = state / "watch.jsonl"
+    _write_jsonl(watch, {**HEP_BLOCKED, "event_id": "old", "n": "old"})
+    server = _server(tmp_path)
+    connection = None
+    try:
+        _, page = _get_json(server, "/api/v1/events?sources=watch")
+        real_read_page = dashboard_server.read_page
+        snapshot_taken = threading.Event()
+        release_snapshot = threading.Event()
+
+        def paused_read_page(*args, **kwargs):
+            result = real_read_page(*args, **kwargs)
+            snapshot_taken.set()
+            assert release_snapshot.wait(5)
+            return result
+
+        monkeypatch.setattr(dashboard_server, "read_page", paused_read_page)
+        connection, response = _open_stream(
+            server, f"/api/v1/stream?since={page['cursor']}"
+        )
+        _read_sse_event(response)  # hello
+        assert snapshot_taken.wait(5)
+
+        os.replace(watch, state / "watch.jsonl.1")
+        _write_jsonl(watch, {**HEP_BLOCKED, "event_id": "new", "n": "new"})
+        release_snapshot.set()
+        _, event = _read_sse_event(response)
+        assert event["payload"]["n"] == "new"
+    finally:
+        if connection is not None:
+            connection.close()
         server.shutdown()
 
 
@@ -243,7 +463,7 @@ def test_stream_spectrum_coalesced(state, tmp_path):
         assert not any(
             (e.get("payload") or {}).get("kind") == "serve.spectrum" for e in body["events"]
         )
-        del cursor_before
+        assert spec["cursor"] == cursor_before
     finally:
         c.close()
         server.shutdown()

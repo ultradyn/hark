@@ -102,6 +102,12 @@ First message on every stream connect:
 }
 ```
 
+On a resumed stream, `hello.cursor` MUST repeat the requested cursor (from
+`Last-Event-ID` or `since`) because the handshake has not delivered any replay
+record yet.  On a fresh live-only stream it establishes the server's current
+cursor as the starting baseline.  Clients MUST NOT adopt a hello cursor as a
+new event acknowledgement.
+
 ### Payloads by source
 
 | source | payload shape | backing |

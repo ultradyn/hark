@@ -1,0 +1,35 @@
+---
+complexity: medium
+created_at: "2026-07-15T04:30:17Z"
+depends_on: []
+estimate_hours: 16
+id: I007
+priority: low
+status: pending
+tags:
+    - architecture
+    - speculative
+    - config
+title: 'Investigate: deepen config load/write (architecture review #7)'
+updated_at: "2026-07-15T04:30:17Z"
+---
+## Source
+Architecture review 2026-07-15 candidate 7 (Speculative). Report: ~/served-html/architecture-review-hark-latest.html
+
+## Problem
+Config *types* (HarkConfig dataclasses) are deep, but:
+- `load_config` is a ~350-line shallow mega-function (field-by-field mapping)
+- `setup_flow` regex-edits TOML text as a second fragile write adapter
+- Call sites re-default via `getattr(cfg.listen, …, default)` — typed seam erodes
+
+## Investigate
+1. Finish section builders pattern (`_build_ambient_config` style) for every section
+2. Centralize env overlay rules
+3. Structured `apply_config_patch` → write TOML; route setup through it
+4. Drop call-site getattr once builders guarantee defaults
+
+## Outcome if promoted
+Phase/milestone under Architecture revamp (or revamp 2). Lower urgency than P1.M1–M6 voice/safety path.
+
+## Related
+src/hark/config.py, setup_flow.py; ADRs for listen/ambient config stay load-bearing.

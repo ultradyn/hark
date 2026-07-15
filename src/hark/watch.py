@@ -450,7 +450,12 @@ def _handle_lifecycle_event(
     emit: Callable[[dict[str, Any]], None],
     self_ident: SelfIdentity | None = None,
 ) -> bool:
-    """Invalidate bound answers from a socket lifecycle event, if present."""
+    """Invalidate bound answers from a socket lifecycle event, if present.
+
+    Stays in watch (P1.M3 E3.T002): delivery invalidation is I/O-side, not
+    Pane Understanding. Classifier is not notified; closed panes simply stop
+    appearing in list_agents observations.
+    """
     containers: list[dict[str, Any]] = []
     todo: list[dict[str, Any]] = [raw]
     event_type: str | None = None

@@ -359,3 +359,22 @@ They **may**:
 | `make_agent_question_changed` | to_status, new question text + capture |
 
 Policy for *when* to call each builder lives solely in `PaneClassifier`.
+
+## E3.T002 — Lifecycle invalidation boundary (LOCKED)
+
+**Decision:** pane lifecycle invalidation stays in **watch**, not Pane Understanding.
+
+| Event | Owner | Action |
+|-------|-------|--------|
+| `pane.closed` / `pane.exited` / `pane.moved` (socket wire) | `watch._handle_lifecycle_event` | `DeliveryStore.invalidate_target` + emit `target.invalidated` |
+| Status edge / false-done / busy-subagent | `PaneClassifier` | HEP agent.* only |
+| Self-pane filter | `watch._filter_self` | Drop before classify |
+
+**Why not module:** invalidation is delivery-store + transport lifecycle, not
+"what does this pane text mean?". Classifier state for a closed pane simply
+goes idle (no more observations); bound-answer cleanup is a separate I/O side
+effect owned by watch.
+
+**Acceptance:** existing binding tests
+(`test_socket_lifecycle_event_invalidates_bound_target`, self exclusion)
+continue to pass; `_handle_lifecycle_event` remains in `watch.py`.

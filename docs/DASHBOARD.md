@@ -176,6 +176,13 @@ appropriate HTTP status (`error.schema` in `actions.schema.json`).
 - `limit`: max events (server clamps; default 500).
 - Response: `{ok, events: [envelope…], cursor: "<composite after last>",
   complete: <bool — false if more available before now>}`.
+- With `since`, pages move forward from the cursor: when `complete` is false,
+  the response contains the earliest `limit` unseen events and its cursor is
+  after only those returned events.  Clients can pass it to the next request
+  without skipping omitted records.
+- Without `since`, the endpoint is a recent-tail snapshot.  Records older than
+  the configured history/limit window are intentionally outside that snapshot;
+  the page cursor establishes the current high-water mark for the live stream.
 
 ### `POST /api/v1/answer` — safe delivery (normative)
 

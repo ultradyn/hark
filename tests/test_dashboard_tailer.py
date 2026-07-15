@@ -129,7 +129,21 @@ def test_read_page_since_and_limit(tmp_path):
     assert [r.payload["n"] for r in records2] == [3, 4]
     assert parse_cursor(cursor2)["watch"] == 5
     records3, _, complete3 = read_page(tmp_path, since=None, limit=2)
-    assert len(records3) == 2 and not complete3
+    assert [r.payload["n"] for r in records3] == [3, 4]
+    assert not complete3
+
+    page1, page1_cursor, page1_complete = read_page(
+        tmp_path, since="watch:0", limit=2
+    )
+    assert [r.payload["n"] for r in page1] == [0, 1]
+    assert parse_cursor(page1_cursor)["watch"] == 2
+    assert not page1_complete
+    page2, page2_cursor, page2_complete = read_page(
+        tmp_path, since=page1_cursor, limit=2
+    )
+    assert [r.payload["n"] for r in page2] == [2, 3]
+    assert parse_cursor(page2_cursor)["watch"] == 4
+    assert not page2_complete
 
 
 def test_replay_cursor_advances_only_after_each_sorted_record(tmp_path):
@@ -156,3 +170,27 @@ def test_replay_cursor_advances_only_after_each_sorted_record(tmp_path):
     ]
     assert parse_cursor(page_cursor)["watch"] == 2
     assert parse_cursor(page_cursor)["ambient"] == 1
+
+
+def test_replay_order_never_reorders_nonmonotonic_cursor_key(tmp_path):
+    _write(
+        tmp_path / "watch.jsonl",
+        {"kind": "agent.blocked", "n": "w1", "ts": 3.0},
+        {"kind": "agent.blocked", "n": "w2", "ts": 1.0},
+    )
+    _write(tmp_path / "ambient.jsonl", {"kind": "ambient.prompt", "n": "a1", "ts": 2.0})
+
+    records, _, _ = read_page(
+        tmp_path, since="watch:0,ambient:0", limit=None
+    )
+    replay = [(record.payload["n"], cursor) for record, cursor in records_with_cursors(
+        records, "watch:0,ambient:0"
+    )]
+
+    # Ambient wins the cross-source head comparison, but w2 remains behind w1
+    # even though its payload timestamp is earlier.
+    assert replay == [
+        ("a1", "watch:0,ambient:1"),
+        ("w1", "watch:1,ambient:1"),
+        ("w2", "watch:2,ambient:1"),
+    ]

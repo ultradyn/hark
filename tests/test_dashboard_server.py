@@ -272,6 +272,67 @@ def test_stream_reconnect_after_hello_and_each_replay_frame_is_lossless(
         server.shutdown()
 
 
+def test_stream_reconnect_nonmonotonic_timestamps_never_skips_same_source(
+    state, tmp_path
+):
+    rows = [
+        {**HEP_BLOCKED, "event_id": "event-0", "n": 0, "ts": 30.0},
+        {**HEP_BLOCKED, "event_id": "event-1", "n": 1, "ts": 10.0},
+        {**HEP_BLOCKED, "event_id": "event-2", "n": 2, "ts": 20.0},
+    ]
+    _write_jsonl(state / "watch.jsonl", *rows)
+    server = _server(tmp_path)
+    cursor = "watch:0"
+    seen: list[int] = []
+    try:
+        for expected in range(3):
+            connection, response = _open_stream(
+                server, "/api/v1/stream", headers={"Last-Event-ID": cursor}
+            )
+            hello_id, _ = _read_sse_event(response)
+            assert hello_id == cursor
+            cursor, event = _read_sse_event(response)
+            seen.append(event["payload"]["n"])
+            assert parse_cursor(cursor)["watch"] == expected + 1
+            connection.close()
+        assert seen == [0, 1, 2]
+    finally:
+        server.shutdown()
+
+
+def test_resumed_rest_limit_cursor_does_not_skip_front_records(state, tmp_path):
+    _write_jsonl(
+        state / "watch.jsonl",
+        *(
+            {**HEP_BLOCKED, "event_id": f"event-{n}", "n": n}
+            for n in range(3)
+        ),
+    )
+    server = _server(tmp_path)
+    try:
+        status, first = _get_json(
+            server, "/api/v1/events?since=watch%3A0&sources=watch&limit=2"
+        )
+        assert status == 200
+        assert [event["payload"]["n"] for event in first["events"]] == [0, 1]
+        assert [
+            parse_cursor(event["cursor"])["watch"] for event in first["events"]
+        ] == [1, 2]
+        assert parse_cursor(first["cursor"])["watch"] == 2
+        assert first["complete"] is False
+
+        status, second = _get_json(
+            server,
+            f"/api/v1/events?since={first['cursor']}&sources=watch&limit=2",
+        )
+        assert status == 200
+        assert [event["payload"]["n"] for event in second["events"]] == [2]
+        assert parse_cursor(second["cursor"])["watch"] == 3
+        assert second["complete"] is True
+    finally:
+        server.shutdown()
+
+
 def test_stream_replay_preserves_source_filter_and_unseen_cursor(state, tmp_path):
     _write_jsonl(
         state / "watch.jsonl", {**HEP_BLOCKED, "event_id": "watch", "n": "watch"}

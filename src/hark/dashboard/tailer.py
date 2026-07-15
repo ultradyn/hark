@@ -9,6 +9,7 @@ Cursor format (composite): ``key:seq,key:seq,…`` — see DASHBOARD.md.
 
 from __future__ import annotations
 
+import heapq
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -100,13 +101,17 @@ def read_page(
     mt.start_from(since, default_tail=history_limit if since is None else 0)
     records = list(mt.poll())
     mt.close()
-    # interleave stably: JSONL files are append-ordered; cross-source order is
-    # best-effort by per-record timestamp when present
-    records.sort(key=_record_ts)
+    records = _replay_order(records)
     complete = limit is None or len(records) <= limit
     if limit is not None and not complete:
-        records = records[-limit:]
-    return records, mt.composite_cursor(), complete
+        # A fresh page is explicitly a recent-tail snapshot.  A resumed page
+        # is forward pagination: retain the earliest unseen records so its
+        # cursor cannot jump over an omitted record.
+        records = records[-limit:] if since is None and limit else records[:limit]
+    cursor = mt.composite_cursor()
+    if since is not None and not complete:
+        cursor = _cursor_after(records, since)
+    return records, cursor, complete
 
 
 def records_with_cursors(
@@ -124,6 +129,48 @@ def records_with_cursors(
     for record in records:
         positions[record.cursor_key] = record.seq
         yield record, format_cursor(positions)
+
+
+def _cursor_after(records: list[FeedRecord], since: str) -> str:
+    cursor = since
+    for _, cursor in records_with_cursors(records, since):
+        pass
+    return cursor
+
+
+def _replay_order(records: list[FeedRecord]) -> list[FeedRecord]:
+    """Timestamp-best-effort interleave without reordering a cursor stream.
+
+    Payload clocks are not guaranteed monotonic.  A global timestamp sort can
+    therefore emit ``watch:2`` before ``watch:1`` and make a mid-page resume
+    skip the unseen first record.  Treat each cursor key as an ordered chain
+    and merge only the current head of each chain by timestamp.
+    """
+    chains: dict[str, list[tuple[int, FeedRecord]]] = {}
+    for original_index, record in enumerate(records):
+        chains.setdefault(record.cursor_key, []).append((original_index, record))
+
+    heap: list[tuple[float, int, str, int]] = []
+    for cursor_key, chain in chains.items():
+        original_index, record = chain[0]
+        heapq.heappush(
+            heap, (_record_ts(record), original_index, cursor_key, 0)
+        )
+
+    ordered: list[FeedRecord] = []
+    while heap:
+        _, _, cursor_key, chain_index = heapq.heappop(heap)
+        chain = chains[cursor_key]
+        _, record = chain[chain_index]
+        ordered.append(record)
+        next_index = chain_index + 1
+        if next_index < len(chain):
+            original_index, next_record = chain[next_index]
+            heapq.heappush(
+                heap,
+                (_record_ts(next_record), original_index, cursor_key, next_index),
+            )
+    return ordered
 
 
 def _record_ts(rec: FeedRecord) -> float:

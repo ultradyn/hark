@@ -23,6 +23,7 @@ from hark.herdr.client import AgentInfo, HerdrClient, HerdrError
 from hark.herdr.socket_client import is_expected_disconnect
 from hark.herdr.tunnel import Tunnel, ensure_tunnel
 from hark.pane_understanding.classify import EdgeTracker, PaneClassifier
+from hark.pane_understanding.types import ClassifyPolicy, PaneObservation
 from hark.self_detect import SelfIdentity, detect_self
 
 # Min gap between watch.error for expected socket drops (Broken pipe, reset, …).
@@ -51,6 +52,49 @@ class _WatchErrorLimiter:
             return True, suppressed
         self._suppressed += 1
         return False, 0
+
+
+
+def _observations_for_agents(
+    agents: list[AgentInfo],
+    *,
+    read_pane: Callable[[AgentInfo], str | None] | None,
+) -> list[PaneObservation]:
+    """I/O → PaneObservation list for PaneClassifier (no policy here)."""
+    out: list[PaneObservation] = []
+    for agent in agents:
+        text_body = read_pane(agent) if read_pane is not None else None
+        out.append(
+            PaneObservation(
+                session_id=agent.session_id,
+                pane_id=agent.pane_id,
+                status=agent.status,
+                pane_text=text_body,
+                agent=agent.agent,
+                revision=int(agent.revision or 0),
+                raw_agent=agent,
+            )
+        )
+    return out
+
+
+def _classify_and_emit(
+    classifier: PaneClassifier,
+    agents: list[AgentInfo],
+    *,
+    interest: set[str],
+    detect_false_done: bool,
+    read_pane: Callable[[AgentInfo], str | None] | None,
+    emit: Callable[[dict[str, Any]], None],
+) -> None:
+    """Watch seam: build observations, classify, emit HEPs."""
+    obs = _observations_for_agents(agents, read_pane=read_pane)
+    for event in classifier.process_observations(
+        obs,
+        interest=interest,
+        detect_false_done=detect_false_done,
+    ):
+        emit(event)
 
 
 # Re-export for tests that import EdgeTracker from hark.watch.
@@ -139,10 +183,14 @@ def run_watch(
     # pane_capture to HEP is controlled separately by ``pane_capture``.
     read_lines = max(40, pane_capture_lines)
 
-    tracker = EdgeTracker(
-        pane_capture=pane_capture,
-        pane_capture_lines=pane_capture_lines,
-        pane_capture_max_chars=pane_capture_max_chars,
+    classifier = PaneClassifier(
+        ClassifyPolicy(
+            interest=frozenset(interest),
+            detect_false_done=bool(getattr(cfg.watch, "detect_false_done", True)),
+            pane_capture=pane_capture,
+            pane_capture_lines=pane_capture_lines,
+            pane_capture_max_chars=pane_capture_max_chars,
+        )
     )
     self_ident = detect_self()
     store = DeliveryStore() if register_events else None
@@ -179,13 +227,11 @@ def run_watch(
         )
     )
 
-    def question_for(agent: AgentInfo) -> str | None:
-        """Return recent pane body for EdgeTracker.
+    def read_pane(agent: AgentInfo) -> str | None:
+        """Herdr pane read for PaneObservation.pane_text (I/O only).
 
-        Always prefer the full bounded read (not only the trailing ask excerpt):
-        false-done menus live at the bottom, but active Tasks/subagent chrome
-        (B096) is often near the **top** of the Herdr UI. EdgeTracker splits
-        excerpts + optional ``pane_capture`` itself.
+        Full bounded body: menus at bottom; Tasks/subagent chrome often at top
+        (B096). Classifier splits excerpts + optional pane_capture.
         """
         if not read_questions:
             return None
@@ -207,12 +253,12 @@ def run_watch(
         try:
             return _watch_socket(
                 clients[0],
-                tracker=tracker,
+                classifier=classifier,
                 interest=interest,
                 emit=emit,
                 heartbeat_s=heartbeat_s,
                 sessions=[c.session.id for c in clients],
-                question_for=question_for if read_questions else None,
+                read_pane=read_pane if read_questions else None,
                 store=store,
                 detect_false_done=detect_false_done,
                 self_ident=self_ident,
@@ -237,13 +283,14 @@ def run_watch(
                     emit(make_watch_error(client.session.id, str(exc)))
                     continue
                 agents = _filter_self(agents, self_ident, client)
-                for event in tracker.process(
+                _classify_and_emit(
+                    classifier,
                     agents,
                     interest=interest,
-                    question_for=question_for,
                     detect_false_done=detect_false_done,
-                ):
-                    emit(event)
+                    read_pane=read_pane if read_questions else None,
+                    emit=emit,
+                )
             if once:
                 return 0
             now = time.monotonic()
@@ -285,12 +332,12 @@ def _emit_watch_error(
 def _watch_socket(
     client: HerdrClient,
     *,
-    tracker: EdgeTracker,
+    classifier: PaneClassifier,
     interest: set[str],
     emit: Callable[[dict[str, Any]], None],
     heartbeat_s: float,
     sessions: list[str],
-    question_for: Callable[[AgentInfo], str | None] | None,
+    read_pane: Callable[[AgentInfo], str | None] | None,
     store: DeliveryStore | None,
     detect_false_done: bool = True,
     self_ident: SelfIdentity | None = None,
@@ -319,13 +366,14 @@ def _watch_socket(
             emit(make_watch_error(client.session.id, str(exc)))
             return
         agents = _filter_self(agents, self_ident, client)
-        for event in tracker.process(
+        _classify_and_emit(
+            classifier,
             agents,
             interest=interest,
-            question_for=question_for,
             detect_false_done=detect_false_done,
-        ):
-            emit(event)
+            read_pane=read_pane,
+            emit=emit,
+        )
 
     def on_wire(raw: dict[str, Any]) -> None:
         if _handle_lifecycle_event(
@@ -342,13 +390,14 @@ def _watch_socket(
             emit(make_watch_error(client.session.id, str(exc)))
             return
         agents = _filter_self(agents, self_ident, client)
-        for event in tracker.process(
+        _classify_and_emit(
+            classifier,
             agents,
             interest=interest,
-            question_for=question_for,
             detect_false_done=detect_false_done,
-        ):
-            emit(event)
+            read_pane=read_pane,
+            emit=emit,
+        )
 
     # initial reconcile
     reconcile()

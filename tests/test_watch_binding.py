@@ -131,12 +131,12 @@ def test_socket_lifecycle_event_invalidates_bound_target(monkeypatch, tmp_path):
 
     assert watch._watch_socket(
         client,
-        tracker=watch.EdgeTracker(),
+        classifier=watch.EdgeTracker(),
         interest={"blocked"},
         emit=emitted.append,
         heartbeat_s=60,
         sessions=["local"],
-        question_for=None,
+        read_pane=None,
         store=store,
     ) == 0
 
@@ -174,12 +174,12 @@ def test_socket_lifecycle_event_from_self_is_not_forwarded(monkeypatch, tmp_path
 
     assert watch._watch_socket(
         client,
-        tracker=watch.EdgeTracker(),
+        classifier=watch.EdgeTracker(),
         interest={"blocked"},
         emit=emitted.append,
         heartbeat_s=60,
         sessions=["local"],
-        question_for=None,
+        read_pane=None,
         store=store,
         self_ident=SelfIdentity(pane_id="wG:p3", socket_path=str(client.socket_path)),
     ) == 0
@@ -226,12 +226,12 @@ def test_watch_socket_reconnects_quietly_on_broken_pipe(monkeypatch, tmp_path):
     assert (
         watch._watch_socket(
             client,
-            tracker=watch.EdgeTracker(),
+            classifier=watch.EdgeTracker(),
             interest={"blocked"},
             emit=emitted.append,
             heartbeat_s=60,
             sessions=["local"],
-            question_for=None,
+            read_pane=None,
             store=None,
         )
         == 0
@@ -281,12 +281,12 @@ def test_watch_socket_rate_limits_expected_disconnect_errors(monkeypatch, tmp_pa
     assert (
         watch._watch_socket(
             client,
-            tracker=watch.EdgeTracker(),
+            classifier=watch.EdgeTracker(),
             interest={"blocked"},
             emit=emitted.append,
             heartbeat_s=60,
             sessions=["local"],
-            question_for=None,
+            read_pane=None,
             store=None,
         )
         == 0
@@ -313,12 +313,12 @@ def test_watch_socket_real_failure_propagates_for_poll_fallback(monkeypatch, tmp
     try:
         watch._watch_socket(
             client,
-            tracker=watch.EdgeTracker(),
+            classifier=watch.EdgeTracker(),
             interest={"blocked"},
             emit=emitted.append,
             heartbeat_s=60,
             sessions=["local"],
-            question_for=None,
+            read_pane=None,
             store=None,
         )
         raised = False

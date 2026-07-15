@@ -56,9 +56,19 @@ from hark.providers.resolve import resolve_stt, resolve_tts
 from hark.risk import classify_question, confirm_required
 from hark.syslog import log as syslog
 from hark.usage import UsageStore
+from hark.answer_window.deps import AnswerWindowDeps
 from hark.answer_window.policy import AnswerWindowPolicy
 from hark.answer_window.radio import RadioSession
 from hark.answer_window.result import ListenResult  # canonical; facade re-export
+from hark.answer_window.silence import (
+    EMPTY_STT_NUDGE_TEXT,
+    NO_OPEN_NUDGE_TEXT,
+    SilenceEvent,
+    SilenceSession,
+    is_no_open_timeout as _is_no_open_timeout_impl,
+    log_empty_stt as _log_empty_stt_impl,
+    log_no_open as _log_no_open_impl,
+)
 from hark.answer_window.text_join import (  # re-export for back-compat
     join_radio_stt_segments,
     monotonic_partial_text,
@@ -664,15 +674,12 @@ def run_tts(
     return result
 
 
-EMPTY_STT_NUDGE_TEXT = "Sorry, I didn't catch that."
-# Gate never opened (B031) — general listen; ambient post-wake may override
-NO_OPEN_NUDGE_TEXT = "I didn't hear anything. Please speak after the beep."
+# EMPTY_STT_NUDGE_TEXT / NO_OPEN_NUDGE_TEXT: imported from answer_window.silence
 
 
 def _is_no_open_timeout(exc: BaseException) -> bool:
     """True when energy gate never opened (vs empty STT after open)."""
-    msg = str(exc).lower()
-    return "no speech detected" in msg or "no speech captured" in msg
+    return _is_no_open_timeout_impl(exc)
 
 
 def _log_no_open(
@@ -688,42 +695,17 @@ def _log_no_open(
     abs_open_db: float | None = None,
 ) -> None:
     """Structured metric when capture times out before speech opens."""
-    # Best-effort parse peak/open from TimeoutError message
-    if peak_db is None:
-        m = re.search(r"peak_db=(-?[\d.]+)", error)
-        if m:
-            try:
-                peak_db = float(m.group(1))
-            except ValueError:
-                pass
-    if peak_rms is None:
-        m = re.search(r"peak_rms=(-?[\d.]+)", error)
-        if m:
-            try:
-                peak_rms = float(m.group(1))
-            except ValueError:
-                pass
-    if open_thresh is None:
-        m = re.search(r"open_thresh≈(-?[\d.]+)", error)
-        if m:
-            try:
-                open_thresh = float(m.group(1))
-            except ValueError:
-                pass
-    syslog(
-        "speech.no_open",
-        component="stt",
-        level="warn",
-        message="energy gate never opened",
-        peak_db=round(peak_db, 2) if peak_db is not None else None,
-        rms=round(peak_rms, 6) if peak_rms is not None else None,
-        open_thresh=round(open_thresh, 2) if open_thresh is not None else None,
-        abs_open_db=abs_open_db,
+    _log_no_open_impl(
+        peak_rms=peak_rms,
+        peak_db=peak_db,
+        open_thresh=open_thresh,
         after_tts=after_tts,
         attempt=attempt,
         stream_id=stream_id,
         phase=phase,
-        error=error[:240],
+        error=error,
+        abs_open_db=abs_open_db,
+        syslog_fn=syslog,
     )
 
 
@@ -781,21 +763,17 @@ def _log_empty_stt(
     phase: str,
 ) -> None:
     """Structured metric for empty STT rate / residual-TTS diagnosis."""
-    syslog(
-        "speech.empty_stt",
-        component="stt",
-        level="warn",
-        message="STT returned empty transcript",
+    _log_empty_stt_impl(
         duration_ms=duration_ms,
-        audio_ms=duration_ms,
-        rms=round(peak_rms, 6) if peak_rms is not None else None,
-        peak_db=round(peak_db, 2) if peak_db is not None else None,
+        peak_rms=peak_rms,
+        peak_db=peak_db,
         wait_speech_ms=wait_speech_ms,
         after_tts=after_tts,
         attempt=attempt,
         provider=provider,
         stream_id=stream_id,
         phase=phase,
+        syslog_fn=syslog,
     )
 
 
@@ -1188,12 +1166,42 @@ def run_listen(
         register_active_listen(stream, mode=mode.value)
         try:
             if mode is EndMode.SILENCE:
-                # attempt: 0 = first, 1 = empty/no-open retry, 2 = after nudge
-                attempt = 0
-                did_retry = False
-                did_nudge = False
-                did_no_open_retry = False
-                did_no_open_nudge = False
+                # Recovery decision + attempt bookkeeping live on SilenceSession
+                # (E3.T002). Capture/STT still run here until E3/E4 finish the move.
+                silence_policy = AnswerWindowPolicy(
+                    profile="bound_answer",
+                    end_mode=EndMode.SILENCE,
+                    max_listen_s=max_listen,
+                    stream_id=stream,
+                    last_tts=last_tts,
+                    empty_stt_retry=bool(cfg.listen.empty_stt_retry),
+                    empty_stt_nudge=bool(cfg.listen.empty_stt_nudge),
+                    no_open_retry=allow_no_open_retry,
+                    no_open_nudge=allow_no_open_nudge,
+                    no_open_nudge_text=nudge_no_open_text,
+                    abs_open_db=gate_abs_open,
+                    open_margin_db=gate_open_margin,
+                    initial_timeout_s=gate_timeout_s,
+                    end_silence_s=float(end_silence),
+                    endpoint_strategy_name=str(
+                        getattr(cfg.listen, "endpoint_strategy", "energy") or "energy"
+                    ),
+                    smart_turn_model_path=getattr(
+                        cfg.listen, "smart_turn_model_path", None
+                    ),
+                    smart_turn_threshold=getattr(
+                        cfg.listen, "smart_turn_threshold", None
+                    ),
+                )
+                silence_sess = SilenceSession(
+                    policy=silence_policy,
+                    deps=AnswerWindowDeps(
+                        syslog=syslog,
+                        endpoint_strategy=endpoint_strategy,
+                    ),
+                    stream_id=stream,
+                )
+                silence_sess.apply(SilenceEvent.START)
                 settle = guard
                 if lead_in_ms > 0:
                     time.sleep(max(0.0, lead_in_ms / 1000.0))
@@ -1210,6 +1218,7 @@ def run_listen(
                         _arm_cue_if_requested()
                     try:
                         # Overlap discard only on first attempt after TTS
+                        attempt = silence_sess.attempt
                         lead_discard = discard_leading_ms if attempt == 0 else 0
                         lead_ok = audio_ok_after if attempt == 0 else None
                         # Skip double beep when we already armed; still log speech open
@@ -1253,47 +1262,21 @@ def run_listen(
                             error=err_s[:200],
                         )
                         if _is_no_open_timeout(exc):
-                            phase = (
-                                "nudge"
-                                if did_no_open_nudge
-                                else ("retry" if did_no_open_retry else "initial")
-                            )
-                            _log_no_open(
+                            decision = silence_sess.on_no_open(
                                 after_tts=after_tts,
-                                attempt=attempt,
-                                stream_id=stream,
-                                phase=phase,
                                 error=err_s,
                                 abs_open_db=gate_abs_open,
                             )
-                            if allow_no_open_retry and not did_no_open_retry:
-                                did_no_open_retry = True
-                                attempt = max(attempt, 1)
-                                syslog(
-                                    "speech.no_open_retry",
-                                    component="stt",
-                                    level="info",
-                                    after_tts=after_tts,
-                                    stream_id=stream,
-                                    abs_open_db=gate_abs_open,
+                            if decision.action is SilenceEvent.RETRY:
+                                settle = max(
+                                    0.05, min(0.2, guard if guard > 0 else 0.1)
                                 )
-                                settle = max(0.05, min(0.2, guard if guard > 0 else 0.1))
                                 continue
-                            if allow_no_open_nudge and not did_no_open_nudge:
-                                did_no_open_nudge = True
-                                attempt = 2
-                                syslog(
-                                    "speech.no_open_nudge",
-                                    component="stt",
-                                    level="info",
-                                    after_tts=after_tts,
-                                    stream_id=stream,
-                                    text=nudge_no_open_text,
-                                )
+                            if decision.action is SilenceEvent.NUDGE:
                                 try:
                                     run_tts(
                                         cfg,
-                                        nudge_no_open_text,
+                                        decision.nudge_text or nudge_no_open_text,
                                         provider=provider,
                                         play=True,
                                         mute_mic=cfg.audio.mute_mic_during_tts,
@@ -1306,7 +1289,9 @@ def run_listen(
                                         error=str(nudge_exc)[:200],
                                         stream_id=stream,
                                     )
-                                settle = max(0.1, cfg.audio.post_tts_guard_ms / 1000.0)
+                                settle = max(
+                                    0.1, cfg.audio.post_tts_guard_ms / 1000.0
+                                )
                                 continue
                         raise
                     agent_act = consume_listen_action(stream)
@@ -1346,22 +1331,6 @@ def run_listen(
                         sample_rate=cap.sample_rate,
                     )
                     if not (tr.text or "").strip():
-                        phase = (
-                            "nudge"
-                            if did_nudge
-                            else ("retry" if did_retry else "initial")
-                        )
-                        _log_empty_stt(
-                            duration_ms=cap.duration_ms,
-                            peak_rms=getattr(cap, "peak_rms", None),
-                            peak_db=getattr(cap, "peak_db", None),
-                            wait_speech_ms=cap.wait_speech_ms,
-                            after_tts=after_tts,
-                            attempt=attempt,
-                            provider=tr.provider,
-                            stream_id=stream,
-                            phase=phase,
-                        )
                         store.record_stt(
                             text="",
                             provider=tr.provider,
@@ -1370,35 +1339,21 @@ def run_listen(
                             ok=False,
                             error="empty transcript",
                         )
-                        # One automatic re-listen (residual TTS / mute race)
-                        if cfg.listen.empty_stt_retry and not did_retry:
-                            did_retry = True
-                            attempt = 1
-                            syslog(
-                                "speech.empty_stt_retry",
-                                component="stt",
-                                level="info",
-                                after_tts=after_tts,
-                                stream_id=stream,
-                                duration_ms=cap.duration_ms,
-                            )
+                        decision = silence_sess.on_empty_stt(
+                            duration_ms=cap.duration_ms,
+                            peak_rms=getattr(cap, "peak_rms", None),
+                            peak_db=getattr(cap, "peak_db", None),
+                            wait_speech_ms=cap.wait_speech_ms,
+                            after_tts=after_tts,
+                            provider=tr.provider,
+                        )
+                        if decision.action is SilenceEvent.RETRY:
                             continue
-                        # Operator nudge + one more listen
-                        if cfg.listen.empty_stt_nudge and not did_nudge:
-                            did_nudge = True
-                            attempt = 2
-                            syslog(
-                                "speech.empty_stt_nudge",
-                                component="stt",
-                                level="info",
-                                after_tts=after_tts,
-                                stream_id=stream,
-                                text=EMPTY_STT_NUDGE_TEXT,
-                            )
+                        if decision.action is SilenceEvent.NUDGE:
                             try:
                                 run_tts(
                                     cfg,
-                                    EMPTY_STT_NUDGE_TEXT,
+                                    decision.nudge_text or EMPTY_STT_NUDGE_TEXT,
                                     provider=provider,
                                     play=True,
                                     mute_mic=cfg.audio.mute_mic_during_tts,
@@ -1436,6 +1391,7 @@ def run_listen(
                         latency_ms=latency_ms,
                         ok=True,
                     )
+                    attempt = silence_sess.attempt
                     if cap.wait_speech_ms or agent_act or attempt:
                         syslog(
                             "listen.ok",

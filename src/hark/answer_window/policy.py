@@ -49,7 +49,8 @@ class AnswerWindowPolicy:
     # Silence recovery
     no_open_retry: bool = True
     no_open_nudge: bool = True
-    no_open_nudge_text: str = "I didn't catch that."
+    # Product default matches speech/silence NO_OPEN_NUDGE_TEXT (B031).
+    no_open_nudge_text: str = "I didn't hear anything. Please speak after the beep."
     empty_stt_retry: bool = True
     empty_stt_nudge: bool = True
 

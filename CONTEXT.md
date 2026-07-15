@@ -31,6 +31,11 @@ Sending text or keys to a Herdr pane only for a previously registered event,
 after fingerprint, pane liveness, revision, and compatible-status checks.
 _Avoid_: free-form “reply to session”; guessing the target pane from the LLM
 
+**Answerability**:
+Pure live-compatible gate (`hark.answerability`) for bound delivery: status ×
+HEP kind × pane heuristics → deliver or refuse (shared by answer, queue, dashboard).
+_Avoid_: scattering `status==blocked` checks; treating done/idle as always unanswerable
+
 **Bound event**:
 A pending interaction registered from HEP (typically blocked or needs-input)
 that carries the delivery target and question fingerprint for later answer.
@@ -38,8 +43,10 @@ _Avoid_: unbound chat message; generic notification
 
 **False-done**:
 Herdr reports done/idle while the pane still shows a menu or ask; surfaced as
-`agent.needs_input` and treated as still needing an operator turn.
-_Avoid_: trusting status=done alone; “completed” without pane judgment
+`agent.needs_input` and treated as still needing an operator turn. Bound answer
+may still deliver when Answerability re-check finds menu + fingerprint match.
+_Avoid_: trusting status=done alone; “completed” without pane judgment; refusing
+`hark answer` solely because status is not `blocked`
 
 ### Listening and speech
 
@@ -92,3 +99,4 @@ _Avoid_: tmux as the product name; equating Herdr with Hark
 - Event schema: [docs/PROTOCOL.md](docs/PROTOCOL.md)
 - Product goals: [docs/PRODUCT.md](docs/PRODUCT.md)
 - Answer Window deepen design: [docs/plans/P1-M1-answer-window.md](docs/plans/P1-M1-answer-window.md)
+- Bound Answerability design: [docs/plans/P1-M2-answerability.md](docs/plans/P1-M2-answerability.md)

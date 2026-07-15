@@ -27,9 +27,24 @@ Merged from prior `SECURITY.md` + risk policy, adapted for handsfree + library.
 
 - Targets are **opaque** session + pane (+ terminal) IDs — never “the focused pane.”  
 - Prefer **bound delivery**: `event_id` + `expected.pane_revision` + `question_fingerprint`.  
-- Before send: re-check pane exists, still compatible state, fingerprint unchanged.  
+- Before send: re-check pane exists, still **compatible state**, fingerprint unchanged.  
 - On mismatch: refuse send; speak/notify “question changed; repeating…”  
 - **Idempotency key** for each successful logical send; reconnect must reconcile, not blindly resend.  
+
+**Compatible state** (implemented by `hark.answerability`, used by `hark answer`,
+`hark queue` live filter, and dashboard `/answer`):
+
+| Compatible when | Not compatible |
+|-----------------|----------------|
+| Herdr live status is **`blocked`**, and fingerprint (+ revision when set) match | Status is **`working`** (or unknown) |
+| Bound HEP kind is **`agent.needs_input`** (false-done / false-idle), Herdr status is **idle-like** (`done` / `idle` / `completed` / `complete`), fingerprint matches, and the live pane **still looks like a pending menu/ask** | Idle-like with an **`agent.blocked`** bind only (no needs_input re-bind) |
+| | Pane gone, stale revision, or fingerprint mismatch |
+
+False-done: watch may emit `agent.needs_input` while Herdr reports done/idle but a
+menu remains. Bound answer **must still deliver** when the live re-check agrees
+(menu + fingerprint). Empty idle chrome (e.g. bare Claude `❯`) is **not**
+compatible — refuse. Write failures stay **`uncertain`** (never blind-retry).
+See [plans/P1-M2-answerability.md](plans/P1-M2-answerability.md).
 
 ### Voice
 

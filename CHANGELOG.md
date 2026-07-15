@@ -6,6 +6,13 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- refactor(answerability, P1.M2): deepen bound delivery gates into
+  `hark.answerability` — pure `assess_snapshot` + injectable live re-read.
+  Compatible state includes **false-done** (`agent.needs_input` + idle-like
+  Herdr status + menu still present + fingerprint match), not only
+  `status==blocked`. Shared by `hark answer`, `hark queue` live filter/prune,
+  and dashboard `/answer`. See `docs/plans/P1-M2-answerability.md`,
+  `docs/SAFETY.md`, `docs/ARCHITECTURE.md`.
 - refactor(answer-window, P1.M1): deepen listen into `hark.answer_window` —
   `open(policy) → ListenResult` with radio/silence sessions behind a small
   external interface. `run_listen` is a thin facade; ambient post-wake and CLI

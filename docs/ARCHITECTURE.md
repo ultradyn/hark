@@ -73,9 +73,25 @@ Capture after TTS or ambient wake is a single deep module
 | **External interface** | `open_answer_window(policy, deps=…)`, `AnswerWindowPolicy` profiles (`bound_answer` / `post_wake` / `confirm`), `ListenResult` |
 | **Implementation** | `RadioSession` (segments, partial HEP, soft/hard end, agent control, idle clamp) · `SilenceSession` (endpoint strategy, empty/no-open recovery, echo) |
 | **Thin facades** | `speech.run_listen` builds policy + deps then opens the window; ambient post-wake and CLI listen pass **profiles**, not gate-kwargs soup |
-| **Stays pure / separate** | `listen_end` phrase evaluation (no I/O); `listen_control` IPC for `hark listen-end`; answering/delivery (bound fingerprint) |
+| **Stays pure / separate** | `listen_end` phrase evaluation (no I/O); `listen_control` IPC for `hark listen-end` |
 
 **Locality:** radio soft-end, streaming idle clamp, and partial HEP shapes live behind one seam. **Leverage:** Mode A CLI, ambient, speak-then-listen, and dashboard dictation share the same open path. Streaming / idle knobs are **policy fields** (not re-read from `[ambient]` inside the session loop). Design note: [plans/P1-M1-answer-window.md](plans/P1-M1-answer-window.md). Domain terms: root [CONTEXT.md](../CONTEXT.md).
+
+## Bound Answerability (deep delivery gate)
+
+Whether a bound event is still safe to answer is a single deep module
+(`hark.answerability`): **`assess_snapshot(live) → Verdict`** (pure) plus
+injectable **`read_live_snapshot` / `assess_live`** for status + fingerprint
+re-read.
+
+| Layer | Owns |
+|-------|------|
+| **External interface** | `assess_snapshot`, `LiveAnswerSnapshot`, `AnswerabilityVerdict`, reason codes; live helpers for Herdr-like clients |
+| **Matrix** | Herdr `live.status` × HEP kind (`agent.blocked` / `agent.needs_input` / …) × pane heuristics → deliver\|refuse |
+| **Orchestrators** | `answering.answer_bound_event` (store + send); `cli._queue_live_answerable`; dashboard `/answer` via the same answer path |
+| **False-done** | `agent.needs_input` + idle-like status + menu still present + FP match → **deliver**; empty idle chrome → refuse |
+
+**Compatible state** is codified here (not only `status==blocked`). SAFETY.md Routing and [plans/P1-M2-answerability.md](plans/P1-M2-answerability.md) are normative. Delivery store age/idempotency remain in `delivery.py`.
 
 ## Monitor / harness compatibility
 

@@ -404,3 +404,17 @@ No backlog epic rewrites required from this design. Optional later: rename task 
 - Deep-module vocabulary: codebase-design skill (module, interface, depth, seam, adapter, leverage, locality).
 - Audio product rules: `docs/AUDIO_DESIGN.md`, `docs/ENDPOINTING.md`.
 - Phase backlog: `.backlog/01-architecture-revamp-1-grok/`.
+
+## E5.T003 regression receipt (2026-07-15)
+
+ADR-014 / 014b soft-end, listen-end IPC, partial HEP shapes, exit-code paths
+verified green after deepen:
+
+```text
+uv run pytest tests/test_listen_end.py tests/test_listen_control.py \
+  tests/test_radio_partial_silence.py tests/test_radio_idle_end.py \
+  tests/test_answer_window_radio.py tests/test_answer_window_silence.py \
+  tests/test_empty_stt.py tests/test_echo_overlap.py \
+  tests/test_streaming_stop_cue.py tests/test_fixtures_parity.py -q
+→ 261 passed
+```

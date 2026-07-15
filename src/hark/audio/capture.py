@@ -540,6 +540,10 @@ def capture_utterance(
     endpoint_probe_silence_s: float | None = None,
     endpoint_max_silence_s: float | None = None,
     on_endpoint_event: Callable[[str, dict], None] | None = None,
+    # B108: hang hysteresis / relative-to-peak drop for high-gain robustness
+    hang_margin_db: float = 4.0,
+    speech_drop_db: float = 18.0,
+    peak_gate_slack_db: float = 12.0,
 ) -> CaptureResult:
     """Energy-gated capture until turn end or should_stop or max.
 
@@ -559,6 +563,12 @@ def capture_utterance(
     Overlap pre-arm: open the stream early and discard frames while
     ``audio_ok_after()`` is None or before its deadline (TTS still ending /
     residual echo). Gate timeout clocks start only after discard completes.
+
+    Hang decision (B108): classic hysteresis uses ``open_thresh - hang_margin_db``.
+    When the utterance peak sits well above the open threshold (high input gain /
+    loud close-talk), frames must also stay within ``speech_drop_db`` of that peak
+    to count as continued speech — otherwise elevated room noise that never falls
+    below a frozen low ``abs_open_db`` hang floor would keep the stream open forever.
     """
     _require_sd()
     if post_tts_guard_s > 0:
@@ -752,7 +762,24 @@ def capture_utterance(
                         )
                 else:
                     chunks.append(samples.copy())
-                    if open_thresh is not None and db >= open_thresh - 4:
+                    # Classic hysteresis hang floor (open_thresh freezes at open).
+                    hang_floor = (
+                        float(open_thresh) - float(hang_margin_db)
+                        if open_thresh is not None
+                        else float("-inf")
+                    )
+                    # B108: when peak is far above open_thresh, also require a
+                    # relative drop from peak — high mic gain can leave room noise
+                    # forever above a low frozen abs_open hang floor.
+                    if (
+                        open_thresh is not None
+                        and peak_db > float(open_thresh) + float(peak_gate_slack_db)
+                    ):
+                        hang_floor = max(
+                            hang_floor, float(peak_db) - float(speech_drop_db)
+                        )
+                    still_speech = open_thresh is not None and db >= hang_floor
+                    if still_speech:
                         silent_blocks = 0
                         speech_blocks += 1
                         _emit_voice()

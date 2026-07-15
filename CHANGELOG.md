@@ -6,6 +6,14 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- fix(listen/silence, B108): silence `end_mode` auto-finalizes again when
+  `[ambient].streaming` is on. Two root causes: (1) energy-gate hang now uses a
+  **relative-to-peak** floor when the utterance peak is well above `open_thresh`,
+  so high mic gain / elevated room noise cannot keep the stream open forever
+  above a frozen low `abs_open_db` hang; (2) streaming quiet-gate TTS is
+  **radio-only** — silence captures force HOLD (wait for capture end) so
+  mid-capture mute cannot race `end_silence_s` (B084 freeze). Radio + streaming
+  acks unchanged.
 - fix(radio, B106/B107): soft/product end phrases still finalize when the
   operator appends trailing politeness (`over thank you`, `that's all, thanks`,
   `okay hark send thank you`, `over and thank you`, STT `thankyou`). Courtesy

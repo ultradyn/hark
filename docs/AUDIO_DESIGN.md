@@ -176,6 +176,21 @@ operator speech energy; play + mic mute wait until quiet ≥
 is not barged into. HOLD mode still waits for capture idle (B097). Half-duplex
 mute-during-TTS still applies in the allowed quiet window.
 
+**Silence end_mode + streaming (B108):** silence answer windows still finalize on
+`end_silence_s` after speech stops — streaming does **not** disable silence
+endpointing. Two guards:
+
+1. **Hang floor** — classic `open_thresh − hang_margin` hysteresis, plus a
+   relative-to-peak floor when the utterance peak is well above open (high input
+   gain must not leave elevated room noise forever above a frozen low
+   `abs_open_db` hang).
+2. **TTS defer** — the B105 quiet gate applies to **radio** captures only.
+   While a silence-mode listen is active, TTS waits for capture end (HOLD) so
+   mid-capture mute cannot freeze silence clocks (B084) and race finalize.
+
+Radio + streaming keep pause-gated short acks; use end phrases / soft end /
+`radio_idle_end_silence_s` / `hark listen-end` for radio turn end.
+
 #### Radio segment boundary pad (B075) + ring overlap (B085)
 
 Energy-gate segment cuts can clip edge phonemes when the gate closes a little

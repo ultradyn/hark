@@ -1,19 +1,20 @@
 ---
 claimed_at: "2026-07-15T05:58:11Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-15T05:58:49Z"
 complexity: medium
 created_at: "2026-07-15T04:30:09Z"
 depends_on:
     - P1.M6.E1.T001
+duration_minutes: 0.6408358724166666
 estimate_hours: 2
 id: P1.M6.E2.T001
 priority: high
 started_at: "2026-07-15T05:58:11Z"
-status: in_progress
+status: done
 tags: []
 title: Add ListenSessionPolicy dataclass + from_config
-updated_at: "2026-07-15T05:58:11Z"
+updated_at: "2026-07-15T05:58:49Z"
 ---
 # Add ListenSessionPolicy dataclass + from_config
 

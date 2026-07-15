@@ -19,7 +19,7 @@ tasks:
       file: T001-add-listensessionpolicy-datacl.todo
       id: T001
       priority: high
-      status: in_progress
+      status: done
       tags: []
       title: Add ListenSessionPolicy dataclass + from_config
     - complexity: medium

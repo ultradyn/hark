@@ -57,6 +57,7 @@ from hark.providers.resolve import (
 from hark.risk import classify_question, confirm_required
 from hark.syslog import log as syslog
 from hark.usage import UsageStore
+from hark.answer_window.policy import AnswerWindowProfile
 from hark.answer_window.result import ListenResult  # canonical; facade re-export
 from hark.answer_window.silence import (
     EMPTY_STT_NUDGE_TEXT,  # noqa: F401 — re-export for tests
@@ -898,21 +899,28 @@ def run_listen(
     partial_kind: str = "ambient.partial",
     discard_leading_ms: int = 0,
     audio_ok_after: Any | None = None,
-    # B031: energy-gate / post-wake overrides (None = config defaults)
+    # Prefer profile builders (policy_from_config) over gate kwargs at call sites.
+    profile: AnswerWindowProfile | None = None,
+    # B031: energy-gate / post-wake overrides (None = leave to profile/config)
     abs_open_db: float | None = None,
     open_margin_db: float | None = None,
     initial_timeout_s: float | None = None,
-    lead_in_ms: int = 0,
-    arm_cue: bool = False,
+    lead_in_ms: int | None = None,
+    arm_cue: bool | None = None,
     no_open_retry: bool | None = None,
     no_open_nudge: bool | None = None,
     no_open_nudge_text: str | None = None,
 ) -> ListenResult:
     """Capture speech. Radio mode streams partials via on_partial when enabled.
 
+    Prefer ``profile=`` (``bound_answer`` / ``post_wake`` / ``confirm``) so gate
+    knobs come from :func:`policy_from_config`. Compat gate kwargs remain for
+    tests and transitional callers; omit them when the profile encodes them.
+
     on_partial(event_dict) is called for each non-final radio transcript so the orchestrator
     agents can start thinking early. Events always set partial=true. HOLD warnings
-    apply unless ``[ambient].streaming`` is true (short live TTS allowed; B098).
+    apply unless streaming is enabled on the policy (post_wake inherits
+    ``[ambient].streaming``; bound_answer defaults off).
 
     Empty STT recovery (silence mode): log ``speech.empty_stt``, optionally
     re-listen once (``empty_stt_retry``), then TTS nudge + re-listen
@@ -926,13 +934,11 @@ def run_listen(
     and/or ``discard_leading_ms`` so TTS tail / residual echo is dropped before the
     energy gate runs.
 
-    Post-wake / soft gate: ``abs_open_db``, ``open_margin_db``, ``initial_timeout_s``
-    override ``[listen]`` defaults. ``lead_in_ms`` settles before the first capture;
-    ``arm_cue`` plays record-start when listen arms (not only when speech opens).
-    ``no_open_nudge_text`` overrides the default no-open TTS line.
+    Post-wake / soft gate: use ``profile="post_wake"`` (or pass ``abs_open_db``,
+    ``lead_in_ms``, ``arm_cue``, ``no_open_*`` overrides when needed).
     """
 
-    # Thin facade (P1.M1.E4.T001): build policy + deps, open answer window.
+    # Thin facade (P1.M1.E4): build policy + deps, open answer window.
     from hark.answer_window.deps import AnswerWindowDeps
     from hark.answer_window.open_window import open_answer_window
     from hark.answer_window.policy import policy_from_config
@@ -945,18 +951,9 @@ def run_listen(
         # already_armed or not: still settle briefly for mute unmute / echo residual
         guard = max(0.0, cfg.audio.post_tts_guard_ms / 1000.0)
 
-    # Ambient streaming read **once** at this call seam only (parity with pre-facade
-    # run_listen). Bound profile defaults streaming off via policy_from_config;
-    # override here so Mode A / ambient dogfood keep current public behavior until
-    # E4.T002 migrates call sites to explicit profiles.
-    ambient = getattr(cfg, "ambient", None)
-    ambient_streaming = bool(getattr(ambient, "streaming", False)) if ambient else False
-    if ambient is not None:
-        streaming_ack_min_quiet_s = float(
-            getattr(ambient, "streaming_ack_min_quiet_s", 2.0) or 2.0
-        )
-    else:
-        streaming_ack_min_quiet_s = 2.0
+    effective_profile: AnswerWindowProfile = (
+        profile if profile is not None else "bound_answer"
+    )
 
     overrides: dict[str, Any] = {
         "max_listen_s": float(max_s if max_s is not None else cfg.listen.max_listen_s),
@@ -966,12 +963,7 @@ def run_listen(
         "stream_id": stream_id,
         "partial_kind": partial_kind,
         "discard_leading_ms": int(discard_leading_ms or 0),
-        "lead_in_ms": int(lead_in_ms or 0),
-        "arm_cue": bool(arm_cue),
         "stt_provider": provider,
-        # Preserve pre-facade ambient leak at the seam only (not inside the loop).
-        "streaming": ambient_streaming,
-        "streaming_ack_min_quiet_s": streaming_ack_min_quiet_s,
     }
     if end_mode is not None:
         overrides["end_mode"] = end_mode
@@ -981,6 +973,10 @@ def run_listen(
         overrides["open_margin_db"] = float(open_margin_db)
     if initial_timeout_s is not None:
         overrides["initial_timeout_s"] = float(initial_timeout_s)
+    if lead_in_ms is not None:
+        overrides["lead_in_ms"] = int(lead_in_ms or 0)
+    if arm_cue is not None:
+        overrides["arm_cue"] = bool(arm_cue)
     if no_open_retry is not None:
         overrides["no_open_retry"] = bool(no_open_retry)
     if no_open_nudge is not None:
@@ -988,7 +984,30 @@ def run_listen(
     if no_open_nudge_text is not None:
         overrides["no_open_nudge_text"] = no_open_nudge_text
 
-    policy = policy_from_config(cfg, "bound_answer", **overrides)
+    # Legacy seam (no explicit profile): preserve pre-facade ambient streaming
+    # leak so existing tests / Mode A dogfood that omit profile= keep behavior.
+    # Explicit profiles own streaming via policy_from_config (bound off; post_wake
+    # inherits [ambient].streaming).
+    if profile is None:
+        ambient = getattr(cfg, "ambient", None)
+        ambient_streaming = (
+            bool(getattr(ambient, "streaming", False)) if ambient else False
+        )
+        if ambient is not None:
+            streaming_ack_min_quiet_s = float(
+                getattr(ambient, "streaming_ack_min_quiet_s", 2.0) or 2.0
+            )
+        else:
+            streaming_ack_min_quiet_s = 2.0
+        overrides["streaming"] = ambient_streaming
+        overrides["streaming_ack_min_quiet_s"] = streaming_ack_min_quiet_s
+        # Historical defaults when gate kwargs omitted (pre-profile API).
+        if lead_in_ms is None:
+            overrides["lead_in_ms"] = 0
+        if arm_cue is None:
+            overrides["arm_cue"] = False
+
+    policy = policy_from_config(cfg, effective_profile, **overrides)
     deps = AnswerWindowDeps(
         cfg=cfg,
         on_partial=on_partial,
@@ -1040,6 +1059,7 @@ def speak_and_listen(
         try:
             listen_box["result"] = run_listen(
                 cfg,
+                profile="bound_answer",
                 provider=provider,
                 end_mode=end_mode,
                 last_tts=text,
@@ -1048,7 +1068,6 @@ def speak_and_listen(
                 on_partial=on_partial,
                 partial_kind=partial_kind,
                 audio_ok_after=audio_ok_after,
-                arm_cue=bool(getattr(cfg.audio, "answer_arm_cue", True)),
             )
         except BaseException as exc:  # noqa: BLE001 — surface to joiner
             listen_box["error"] = exc
@@ -1116,6 +1135,7 @@ def speak_and_listen(
     try:
         listened = run_listen(
             cfg,
+            profile="bound_answer",
             provider=provider,
             end_mode=end_mode,
             last_tts=text,
@@ -1123,9 +1143,7 @@ def speak_and_listen(
             already_armed=arm_event.is_set(),
             on_partial=on_partial,
             partial_kind=partial_kind,
-            # Immediate record-start beep when listen is ready (not when speech opens).
-            # Dogfood: post-ask lag felt like a broken handoff when cue waited for gate.
-            arm_cue=bool(getattr(cfg.audio, "answer_arm_cue", True)),
+            # arm_cue from [audio].answer_arm_cue via bound_answer profile
         )
     except BaseException as exc:
         raise _attach_tts(exc) from exc
@@ -1203,10 +1221,10 @@ def run_ask(
         try:
             conf = run_listen(
                 cfg,
+                profile="confirm",
                 provider=provider,
                 end_mode="silence",
                 last_tts=readback,
-                arm_cue=bool(getattr(cfg.audio, "answer_arm_cue", True)),
             )
         except TimeoutError:
             return {

@@ -471,7 +471,6 @@ def complete_after_wake(
     del announce
     event_id = new_event_id()
     stream_id = new_stream_id()
-    amb = cfg.ambient
 
     def _emit_partial(ev: dict[str, Any]) -> None:
         ev = {**ev, "phrase": hit.phrase}
@@ -493,23 +492,15 @@ def complete_after_wake(
             warning=ev.get("warning"),
         )
 
-    # Post-wake gate overrides (B031)
-    post_abs = getattr(amb, "post_wake_abs_open_db", None)
-    if post_abs is None:
-        post_abs = getattr(cfg.listen, "abs_open_db", -48.0)
-    post_timeout = getattr(amb, "post_wake_timeout_s", None)
-    if post_timeout is None:
-        post_timeout = getattr(cfg.listen, "initial_timeout_s", 45.0)
-    lead_in_ms = int(getattr(amb, "post_wake_lead_in_ms", 150) or 0)
-    arm_cue = bool(getattr(amb, "post_wake_arm_cue", True))
-    no_open_nudge = bool(getattr(amb, "post_wake_no_open_nudge", True))
-    no_open_tts = str(
-        getattr(
-            amb,
-            "post_wake_no_open_tts",
-            "I heard the wake but not your prompt.",
-        )
-        or "I heard the wake but not your prompt."
+    # Post-wake gate / arm / no-open knobs live on the post_wake Answer Window
+    # profile (policy_from_config) — do not re-read ambient gate fields here.
+    from hark.answer_window.policy import policy_from_config
+
+    pw_policy = policy_from_config(
+        cfg,
+        "post_wake",
+        stream_id=stream_id,
+        partial_kind="ambient.partial",
     )
 
     syslog(
@@ -519,25 +510,21 @@ def complete_after_wake(
         phrase=hit.phrase,
         wake_backend=hit.backend,
         stream_id=stream_id,
-        abs_open_db=float(post_abs),
-        initial_timeout_s=float(post_timeout),
-        lead_in_ms=lead_in_ms,
-        arm_cue=arm_cue,
+        abs_open_db=float(pw_policy.abs_open_db),
+        initial_timeout_s=float(pw_policy.initial_timeout_s),
+        lead_in_ms=int(pw_policy.lead_in_ms),
+        arm_cue=bool(pw_policy.arm_cue),
     )
 
     try:
+        # profile=post_wake encodes softer gate, lead_in, arm cue, no-open nudge.
         listened = run_listen(
             cfg,
+            profile="post_wake",
             end_mode=cfg.listen.end_mode,
             on_partial=_emit_partial if cfg.listen.end_mode == "radio" else None,
             stream_id=stream_id,
             partial_kind="ambient.partial",
-            abs_open_db=float(post_abs),
-            initial_timeout_s=float(post_timeout),
-            lead_in_ms=lead_in_ms,
-            arm_cue=arm_cue,
-            no_open_nudge=no_open_nudge,
-            no_open_nudge_text=no_open_tts,
         )
     except Exception as exc:
         err_s = str(exc)
@@ -558,8 +545,8 @@ def complete_after_wake(
             event_id=event_id,
             reason="no_open" if is_no_open else "listen_failed",
             listen_error=err_s[:240],
-            abs_open_db=float(post_abs),
-            initial_timeout_s=float(post_timeout),
+            abs_open_db=float(pw_policy.abs_open_db),
+            initial_timeout_s=float(pw_policy.initial_timeout_s),
         )
         return AmbientResult(
             activated=True,
@@ -569,8 +556,8 @@ def complete_after_wake(
             listen={
                 "error": err_s,
                 "reason": "no_open" if is_no_open else "listen_failed",
-                "abs_open_db": float(post_abs),
-                "initial_timeout_s": float(post_timeout),
+                "abs_open_db": float(pw_policy.abs_open_db),
+                "initial_timeout_s": float(pw_policy.initial_timeout_s),
             },
             event_id=event_id,
             stream_id=stream_id,

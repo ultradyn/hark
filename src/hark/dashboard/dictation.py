@@ -160,6 +160,7 @@ class HostDictation:
                     self._publish(publish, "recording", stream_id=stream_id)
                     result = run_listen(
                         cfg,
+                        profile="bound_answer",
                         stream_id=stream_id,
                         on_partial=lambda ev: publish(
                             {

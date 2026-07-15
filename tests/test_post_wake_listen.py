@@ -276,6 +276,9 @@ def test_run_listen_passes_gate_overrides(monkeypatch, tmp_path):
 
 
 def test_complete_after_wake_passes_post_wake_knobs(monkeypatch):
+    """E4.T002: post_wake profile; no gate kwargs — knobs live on policy."""
+    from hark.answer_window import policy_from_config
+
     calls: list[dict] = []
     listened = SimpleNamespace(
         text="deploy now",
@@ -318,13 +321,29 @@ def test_complete_after_wake_passes_post_wake_knobs(monkeypatch):
     assert result.text == "deploy now"
     assert len(calls) == 1
     kw = calls[0]
-    assert kw["abs_open_db"] == -50.0
-    assert kw["initial_timeout_s"] == 12.0
-    assert kw["lead_in_ms"] == 200
-    assert kw["arm_cue"] is True
-    assert kw["no_open_nudge"] is True
-    assert kw["no_open_nudge_text"] == "I heard the wake but not your prompt."
+    assert kw["profile"] == "post_wake"
+    # Gate knobs must not be passed as run_listen kwargs (encoded in profile).
+    for gate in (
+        "abs_open_db",
+        "initial_timeout_s",
+        "lead_in_ms",
+        "arm_cue",
+        "no_open_nudge",
+        "no_open_nudge_text",
+    ):
+        assert gate not in kw
+    pol = policy_from_config(cfg, "post_wake")
+    assert pol.abs_open_db == -50.0
+    assert pol.initial_timeout_s == 12.0
+    assert pol.lead_in_ms == 200
+    assert pol.arm_cue is True
+    assert pol.no_open_nudge is True
+    assert pol.no_open_nudge_text == "I heard the wake but not your prompt."
     assert any(e == "ambient.post_wake_listen" for e, _ in logs)
+    pw_logs = [d for e, d in logs if e == "ambient.post_wake_listen"]
+    assert pw_logs[0]["abs_open_db"] == -50.0
+    assert pw_logs[0]["lead_in_ms"] == 200
+    assert pw_logs[0]["arm_cue"] is True
 
 
 def test_complete_after_wake_no_open_error_metrics(monkeypatch):

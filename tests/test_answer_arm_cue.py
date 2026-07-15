@@ -183,8 +183,10 @@ def test_radio_without_arm_cue_beeps_on_speech_open(monkeypatch, tmp_path):
     assert "listen.speech_opened" in logs
 
 
-def test_speak_and_listen_passes_answer_arm_cue(monkeypatch):
-    """ask/tts --listen wiring: answer_arm_cue flows into run_listen.arm_cue."""
+def test_speak_and_listen_uses_bound_answer_profile(monkeypatch):
+    """ask/tts --listen: bound_answer profile (arm_cue from policy, not kwargs)."""
+    from hark.answer_window import policy_from_config
+
     seen: list[dict] = []
 
     def fake_tts(cfg, text, **kwargs):
@@ -210,9 +212,13 @@ def test_speak_and_listen_passes_answer_arm_cue(monkeypatch):
     cfg = HarkConfig()
     assert cfg.audio.answer_arm_cue is True
     speak_and_listen(cfg, "question?")
-    assert seen[-1]["arm_cue"] is True
+    assert seen[-1]["profile"] == "bound_answer"
+    assert "arm_cue" not in seen[-1]
+    assert policy_from_config(cfg, "bound_answer").arm_cue is True
 
     seen.clear()
     cfg_off = HarkConfig(audio=AudioConfig(answer_arm_cue=False))
     speak_and_listen(cfg_off, "question?")
-    assert seen[-1]["arm_cue"] is False
+    assert seen[-1]["profile"] == "bound_answer"
+    assert "arm_cue" not in seen[-1]
+    assert policy_from_config(cfg_off, "bound_answer").arm_cue is False

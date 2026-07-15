@@ -193,7 +193,12 @@ def policy_from_config(
         ),
         duck_media_during_stt=bool(_g(audio, "duck_media_during_stt", True)),
         pause_media_during_stt=bool(_g(audio, "pause_media_during_stt", False)),
-        arm_cue=bool(_g(audio, "answer_arm_cue", False)) if profile == "bound_answer" else False,
+        # bound_answer / confirm: answer-window arm beep from [audio].answer_arm_cue
+        arm_cue=(
+            bool(_g(audio, "answer_arm_cue", True))
+            if profile in ("bound_answer", "confirm")
+            else False
+        ),
     )
 
     # Profile-specific defaults applied before explicit overrides.
@@ -220,6 +225,7 @@ def policy_from_config(
         )
     elif profile == "confirm":
         # Confirm turns are short; streaming stays off (profile default).
+        # arm_cue already set from answer_arm_cue above.
         pass
 
     if overrides:

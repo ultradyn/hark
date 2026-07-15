@@ -1167,6 +1167,27 @@ def run_listen(
                 mode=mode.value,
             )
 
+    def _cue_stop_if_cued() -> None:
+        """Play end-of-recording cue once speech was cued, unless streaming (B110).
+
+        With ``[ambient].streaming``, capture finalizes differently (agent finish /
+        end phrase / idle) and the standard stop beep is misleading — suppress it.
+        Start/arm cues are unchanged (B113 owns ambient start/stop design).
+        """
+        if not recording_cued:
+            return
+        if ambient_streaming:
+            syslog(
+                "listen.stop_cue_suppressed",
+                component="stt",
+                level="info",
+                stream_id=stream,
+                mode=mode.value,
+                reason="streaming",
+            )
+            return
+        play_record_stop()
+
     def _agent_wants_stop(_pcm: bytes, _elapsed: float) -> bool:
         return poll_listen_action(stream) is not None
 
@@ -1247,8 +1268,7 @@ def run_listen(
                             mute_edge_pad_ms=gate_mute_pad_ms,
                         )
                     except TimeoutError as exc:
-                        if recording_cued:
-                            play_record_stop()
+                        _cue_stop_if_cued()
                         err_s = str(exc)
                         store.record_stt(
                             text="",
@@ -1314,8 +1334,7 @@ def run_listen(
                                 continue
                         raise
                     agent_act = consume_listen_action(stream)
-                    if recording_cued:
-                        play_record_stop()
+                    _cue_stop_if_cued()
                     if agent_act == "cancel":
                         store.record_stt(
                             text="",
@@ -1526,8 +1545,7 @@ def run_listen(
                         break
                     # B074: post-speech continuous quiet → auto-finish (not cancel)
                     if pieces and speech_opened_once:
-                        if recording_cued:
-                            play_record_stop()
+                        _cue_stop_if_cued()
                         wav = write_wav_bytes(
                             b"".join(pieces), last_sample_rate or 16000
                         )
@@ -1623,8 +1641,7 @@ def run_listen(
                         )
                     if pieces:
                         continue
-                    if recording_cued:
-                        play_record_stop()
+                    _cue_stop_if_cued()
                     store.record_stt(
                         text="",
                         provider=getattr(stt, "name", None),
@@ -1695,8 +1712,7 @@ def run_listen(
                 # Agent may have requested end while we were capturing/STT
                 agent_act = consume_listen_action(stream)
                 if agent_act == "cancel":
-                    if recording_cued:
-                        play_record_stop()
+                    _cue_stop_if_cued()
                     body = (tr.text or "").strip()
                     store.record_stt(
                         text=body,
@@ -1717,8 +1733,7 @@ def run_listen(
                         partials_emitted=partial_seq,
                     )
                 if agent_act == "finish":
-                    if recording_cued:
-                        play_record_stop()
+                    _cue_stop_if_cued()
                     body = (tr.text or "").strip()
                     store.record_stt(
                         text=body,
@@ -1804,8 +1819,7 @@ def run_listen(
                             final=False,
                         )
                     continue
-                if recording_cued:
-                    play_record_stop()
+                _cue_stop_if_cued()
                 body = hit.body if cfg.listen.strip_phrase else tr.text
                 store.record_stt(
                     text=body,
@@ -1838,8 +1852,7 @@ def run_listen(
 
             # Exit loop: agent finish with pieces, or max timeout
             agent_act = consume_listen_action(stream)
-            if recording_cued:
-                play_record_stop()
+            _cue_stop_if_cued()
             if pieces and agent_act in ("finish", None):
                 # Primary: per-segment join (B083). Optional full-audio re-STT is a
                 # *candidate only* — never replace a longer joined body (word loss).

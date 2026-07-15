@@ -6,6 +6,11 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- fix(B110): suppress the end-of-recording (record-stop) beep when
+  `[ambient].streaming = true`. Streaming finalizes via agent finish / end
+  phrase / idle rather than a classic one-shot capture end, so the stop cue
+  was misleading. Start/arm cues are unchanged (B113 owns ambient start/stop
+  design). Log: `listen.stop_cue_suppressed` reason=streaming.
 - fix(radio, B106/B107): soft/product end phrases still finalize when the
   operator appends trailing politeness (`over thank you`, `that's all, thanks`,
   `okay hark send thank you`, `over and thank you`, STT `thankyou`). Courtesy

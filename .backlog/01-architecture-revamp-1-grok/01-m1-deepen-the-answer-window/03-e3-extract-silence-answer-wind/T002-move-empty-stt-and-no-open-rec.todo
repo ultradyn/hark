@@ -1,19 +1,20 @@
 ---
 claimed_at: "2026-07-15T05:04:54Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-15T05:09:09Z"
 complexity: high
 created_at: "2026-07-15T04:29:39Z"
 depends_on:
     - P1.M1.E3.T001
+duration_minutes: 4.252971771883333
 estimate_hours: 3
 id: P1.M1.E3.T002
 priority: high
 started_at: "2026-07-15T05:04:54Z"
-status: in_progress
+status: done
 tags: []
 title: Move empty-STT and no-open recovery into SilenceSession
-updated_at: "2026-07-15T05:04:54Z"
+updated_at: "2026-07-15T05:09:09Z"
 ---
 # Move empty-STT and no-open recovery into SilenceSession
 

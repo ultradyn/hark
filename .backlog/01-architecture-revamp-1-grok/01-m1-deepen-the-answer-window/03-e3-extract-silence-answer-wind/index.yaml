@@ -29,7 +29,7 @@ tasks:
       file: T002-move-empty-stt-and-no-open-rec.todo
       id: T002
       priority: high
-      status: in_progress
+      status: done
       tags: []
       title: Move empty-STT and no-open recovery into SilenceSession
     - complexity: medium

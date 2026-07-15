@@ -29,7 +29,7 @@ tasks:
       file: T002-move-segment-stt-join-partial.todo
       id: T002
       priority: high
-      status: in_progress
+      status: done
       tags: []
       title: Move segment STT join + partial emit into RadioSession
     - complexity: medium

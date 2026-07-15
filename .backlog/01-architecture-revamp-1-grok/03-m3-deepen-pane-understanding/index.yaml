@@ -18,7 +18,7 @@ epics:
       locked: false
       name: 'E2: Extract Pane Understanding module'
       path: 02-e2-extract-pane-understanding
-      status: pending
+      status: done
     - complexity: medium
       depends_on: []
       description: 'watch.run_watch / socket path only: list agents, read pane, emit, register. No false-done policy left in watch.py.'

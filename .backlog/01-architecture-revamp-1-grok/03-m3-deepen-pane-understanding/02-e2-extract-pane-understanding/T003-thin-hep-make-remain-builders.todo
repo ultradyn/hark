@@ -1,19 +1,20 @@
 ---
 claimed_at: "2026-07-15T05:49:51Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-15T05:50:16Z"
 complexity: low
 created_at: "2026-07-15T04:29:54Z"
 depends_on:
     - P1.M3.E2.T002
+duration_minutes: 0.4201791519
 estimate_hours: 2
 id: P1.M3.E2.T003
 priority: medium
 started_at: "2026-07-15T05:49:51Z"
-status: in_progress
+status: done
 tags: []
 title: Thin HEP make_* remain builders only
-updated_at: "2026-07-15T05:49:51Z"
+updated_at: "2026-07-15T05:50:16Z"
 ---
 # Thin HEP make_* remain builders only
 

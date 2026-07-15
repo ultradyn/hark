@@ -10,7 +10,7 @@ stats:
     in_progress: 0
     pending: 3
     total: 3
-status: pending
+status: done
 tasks:
     - complexity: medium
       depends_on:
@@ -39,6 +39,6 @@ tasks:
       file: T003-thin-hep-make-remain-builders.todo
       id: T003
       priority: medium
-      status: in_progress
+      status: done
       tags: []
       title: Thin HEP make_* remain builders only

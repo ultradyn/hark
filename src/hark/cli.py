@@ -1532,6 +1532,8 @@ _ANSWER_REJECT_HINTS = {
     "stale_revision": "stale pane revision",
     "fingerprint_mismatch": "question fingerprint mismatch (stale)",
     "fingerprint_unavailable": "unable to verify question fingerprint",
+    "delivery_in_progress": "delivery already in progress (idempotent refuse)",
+    "delivery_ownership_lost": "delivery ownership changed; inspect current status",
 }
 
 
@@ -1552,7 +1554,7 @@ def cmd_answer(args: argparse.Namespace, cfg) -> int:
         store=DeliveryStore(),
         client_for=lambda session_id: _client_for(cfg, session_id),
     )
-    if result.status == "rejected":
+    if result.status in ("rejected", "in_progress"):
         hint = _ANSWER_REJECT_HINTS.get(
             result.reason or "", result.reason or "rejected"
         )
@@ -1573,7 +1575,9 @@ def cmd_answer(args: argparse.Namespace, cfg) -> int:
 
 def cmd_skip(args: argparse.Namespace) -> int:
     store = DeliveryStore()
-    store.mark(args.event_id, "skipped")
+    if not store.mark(args.event_id, "skipped"):
+        eprint("hark skip: event is already being sent or is no longer pending")
+        return ABORT
     print(json.dumps({"ok": True, "event_id": args.event_id, "status": "skipped"}))
     return OK
 

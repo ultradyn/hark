@@ -2,19 +2,33 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from hark.paths import state_dir
 
 # Undelivered bound events older than this are treated as stale for queue
 # listing/announce (B101). Override with env HARK_QUEUE_MAX_AGE_S (seconds).
 DEFAULT_QUEUE_MAX_AGE_S = 4 * 3600
+
+# An owner that has not advanced its durable state in this long may be
+# superseded before it reaches the irreversible send boundary.  Once an owner
+# has entered ``sending``, expiry becomes ``uncertain`` instead of retryable.
+DEFAULT_DELIVERY_OWNER_STALE_S = 30.0
+_ACTIVE_DELIVERY_STATES = frozenset({"acquired", "validating", "sending"})
+_DELIVERY_TRANSITIONS = {
+    "acquired": frozenset({"validating", "rejected"}),
+    "validating": frozenset({"sending", "rejected"}),
+    "sending": frozenset({"delivered", "uncertain"}),
+}
 
 
 def queue_max_age_s(override: float | None = None) -> float:
@@ -49,9 +63,20 @@ class BoundEvent:
     question_fingerprint: str | None
     question_text: str | None = None
     risk: str | None = None
-    status: str = "pending"  # pending | delivered | rejected | skipped | expired | invalidated
+    # pending | delivered | rejected | skipped | expired | invalidated
+    status: str = "pending"
     created_at: float = field(default_factory=time.time)
     meta: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DeliveryClaim:
+    """Result of atomically trying to own one bound-event delivery."""
+
+    owned: bool
+    status: str
+    token: str | None = None
+    reason: str | None = None
 
 
 class DeliveryStore:
@@ -59,6 +84,261 @@ class DeliveryStore:
         self.path = path or (state_dir() / "events.jsonl")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._deliveries = self.path.parent / "deliveries.jsonl"
+        self._delivery_lock = self.path.parent / "deliveries.lock"
+
+    @contextmanager
+    def _locked_delivery_state(self) -> Iterator[None]:
+        """Serialize delivery state changes across threads and processes."""
+        fd = os.open(self._delivery_lock, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    def _append_delivery_unlocked(self, record: dict[str, Any]) -> None:
+        """Append and fsync one transition while ``_delivery_lock`` is held."""
+        created = not self._deliveries.exists()
+        with self._deliveries.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, separators=(",", ":")) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        if created:
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            parent_fd = os.open(self._deliveries.parent, flags)
+            try:
+                # File fsync makes the contents durable; directory fsync makes
+                # the first deliveries.jsonl directory entry durable.
+                os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
+
+    def _latest_delivery_unlocked(self, event_id: str) -> dict[str, Any] | None:
+        latest: dict[str, Any] | None = None
+        if not self._deliveries.is_file():
+            return None
+        with self._deliveries.open(encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(data, dict) and data.get("event_id") == event_id:
+                    latest = data
+        return latest
+
+    @staticmethod
+    def _owner_is_stale(
+        record: dict[str, Any], *, now: float, stale_after_s: float
+    ) -> bool:
+        try:
+            age = max(0.0, now - float(record.get("ts")))
+        except (TypeError, ValueError):
+            return True
+        if age >= stale_after_s:
+            return True
+
+        try:
+            pid = int(record.get("owner_pid"))
+        except (TypeError, ValueError):
+            return True
+        if pid == os.getpid():
+            try:
+                owner_thread = int(record.get("owner_thread"))
+            except (TypeError, ValueError):
+                return False
+            return not any(
+                thread.ident == owner_thread for thread in threading.enumerate()
+            )
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        except OSError:
+            return True
+        return False
+
+    def acquire_delivery(
+        self,
+        event_id: str,
+        *,
+        now: float | None = None,
+        stale_after_s: float = DEFAULT_DELIVERY_OWNER_STALE_S,
+        owner_token: str | None = None,
+        owner_pid: int | None = None,
+        owner_thread: int | None = None,
+        event_status: str = "pending",
+    ) -> DeliveryClaim:
+        """Atomically acquire durable ownership before validation and send.
+
+        ``acquired`` and ``validating`` owners may be superseded after their
+        lease expires (or their process/thread dies).  An abandoned ``sending``
+        record is instead made terminally ``uncertain`` because the write may
+        already have landed.
+        """
+        ts = time.time() if now is None else float(now)
+        token = owner_token or uuid.uuid4().hex
+        pid = os.getpid() if owner_pid is None else int(owner_pid)
+        thread_id = (
+            threading.get_ident()
+            if owner_thread is None and pid == os.getpid()
+            else owner_thread
+        )
+        stale_after = max(0.0, float(stale_after_s))
+
+        with self._locked_delivery_state():
+            latest = self._latest_delivery_unlocked(event_id)
+            if latest is None and event_status != "pending":
+                if event_status == "delivered":
+                    return DeliveryClaim(False, "delivered", reason="already_delivered")
+                if event_status == "uncertain":
+                    return DeliveryClaim(
+                        False, "uncertain", reason="delivery_uncertain"
+                    )
+                return DeliveryClaim(
+                    False,
+                    "rejected",
+                    reason=f"not_pending:{event_status}",
+                )
+            if latest is not None:
+                status = str(latest.get("status") or "")
+                reason = latest.get("reason")
+                reason_s = str(reason) if reason is not None else None
+                if status == "delivered":
+                    return DeliveryClaim(False, status, reason="already_delivered")
+                if status == "uncertain":
+                    return DeliveryClaim(False, status, reason=reason_s)
+                if status not in _ACTIVE_DELIVERY_STATES:
+                    return DeliveryClaim(
+                        False, "rejected", reason=reason_s or f"not_pending:{status}"
+                    )
+                if not self._owner_is_stale(latest, now=ts, stale_after_s=stale_after):
+                    return DeliveryClaim(
+                        False, "in_progress", reason="delivery_in_progress"
+                    )
+                if status == "sending":
+                    reason_s = "owner_lost_after_send_started"
+                    self._append_delivery_unlocked(
+                        {
+                            "event_id": event_id,
+                            "status": "uncertain",
+                            "ts": ts,
+                            "reason": reason_s,
+                            "owner_token": latest.get("owner_token"),
+                            "owner_pid": latest.get("owner_pid"),
+                            "owner_thread": latest.get("owner_thread"),
+                        }
+                    )
+                    return DeliveryClaim(False, "uncertain", reason=reason_s)
+
+            record: dict[str, Any] = {
+                "event_id": event_id,
+                "status": "acquired",
+                "ts": ts,
+                "owner_token": token,
+                "owner_pid": pid,
+            }
+            if thread_id is not None:
+                record["owner_thread"] = int(thread_id)
+            if latest is not None:
+                record["recovered_from"] = latest.get("status")
+                record["previous_owner_token"] = latest.get("owner_token")
+            self._append_delivery_unlocked(record)
+            return DeliveryClaim(True, "acquired", token=token)
+
+    def advance_delivery(
+        self,
+        event_id: str,
+        owner_token: str,
+        status: str,
+        *,
+        now: float | None = None,
+        **extra: Any,
+    ) -> bool:
+        """Durably compare-and-set an owned delivery transition."""
+        ts = time.time() if now is None else float(now)
+        with self._locked_delivery_state():
+            latest = self._latest_delivery_unlocked(event_id)
+            if latest is None or latest.get("owner_token") != owner_token:
+                return False
+            previous = str(latest.get("status") or "")
+            if status not in _DELIVERY_TRANSITIONS.get(previous, frozenset()):
+                return False
+            record = {
+                "event_id": event_id,
+                "status": status,
+                "ts": ts,
+                "owner_token": owner_token,
+                "owner_pid": latest.get("owner_pid"),
+                "owner_thread": latest.get("owner_thread"),
+                **extra,
+            }
+            self._append_delivery_unlocked(record)
+            return True
+
+    def current_delivery(
+        self, event_id: str, *, event_status: str = "pending"
+    ) -> DeliveryClaim:
+        """Read the stable delivery outcome without acquiring or recovering."""
+        with self._locked_delivery_state():
+            latest = self._latest_delivery_unlocked(event_id)
+            if latest is None:
+                if event_status == "delivered":
+                    return DeliveryClaim(False, "delivered", reason="already_delivered")
+                if event_status == "uncertain":
+                    return DeliveryClaim(
+                        False, "uncertain", reason="delivery_uncertain"
+                    )
+                return DeliveryClaim(
+                    False, "rejected", reason=f"not_pending:{event_status}"
+                )
+            status = str(latest.get("status") or "")
+            reason = latest.get("reason")
+            reason_s = str(reason) if reason is not None else None
+            if status == "delivered":
+                return DeliveryClaim(False, status, reason="already_delivered")
+            if status == "uncertain":
+                return DeliveryClaim(False, status, reason=reason_s)
+            if status in _ACTIVE_DELIVERY_STATES:
+                return DeliveryClaim(
+                    False, "in_progress", reason="delivery_in_progress"
+                )
+            return DeliveryClaim(
+                False, "rejected", reason=reason_s or f"not_pending:{status}"
+            )
+
+    def ensure_uncertain_after_send(
+        self, event_id: str, owner_token: str, *, reason: str
+    ) -> str:
+        """Make a failed post-send CAS durably safe.
+
+        This is intentionally stronger than an external terminal write: once
+        the send boundary was crossed, any conflicting non-delivered state is
+        unsafe to retry and must become ``uncertain``.
+        """
+        with self._locked_delivery_state():
+            latest = self._latest_delivery_unlocked(event_id)
+            current = str((latest or {}).get("status") or "")
+            if current in ("delivered", "uncertain"):
+                return current
+            self._append_delivery_unlocked(
+                {
+                    "event_id": event_id,
+                    "status": "uncertain",
+                    "ts": time.time(),
+                    "reason": reason,
+                    "owner_token": owner_token,
+                    "owner_pid": (latest or {}).get("owner_pid"),
+                    "owner_thread": (latest or {}).get("owner_thread"),
+                    "superseded_status": current or None,
+                }
+            )
+            return "uncertain"
 
     def save_event(self, event: BoundEvent) -> None:
         with self.path.open("a", encoding="utf-8") as fh:
@@ -78,11 +358,13 @@ class DeliveryStore:
                 except json.JSONDecodeError:
                     continue
                 if data.get("event_id") == event_id:
-                    found = BoundEvent(**{
-                        k: data[k]
-                        for k in BoundEvent.__dataclass_fields__
-                        if k in data
-                    })
+                    found = BoundEvent(
+                        **{
+                            k: data[k]
+                            for k in BoundEvent.__dataclass_fields__
+                            if k in data
+                        }
+                    )
         if found is not None:
             status = self._latest_statuses().get(event_id)
             if status:
@@ -94,7 +376,9 @@ class DeliveryStore:
         question = hep.get("question") or {}
         ev = BoundEvent(
             event_id=str(hep.get("event_id") or uuid.uuid4().hex),
-            session_id=str(hep.get("session_id") or target.get("server_instance") or "local"),
+            session_id=str(
+                hep.get("session_id") or target.get("server_instance") or "local"
+            ),
             pane_id=str(target.get("pane_id") or ""),
             pane_revision=int(target.get("pane_revision") or 0),
             question_fingerprint=question.get("fingerprint"),
@@ -105,15 +389,32 @@ class DeliveryStore:
         self.save_event(ev)
         return ev
 
-    def mark(self, event_id: str, status: str, **extra: Any) -> None:
-        rec = {
-            "event_id": event_id,
-            "status": status,
-            "ts": time.time(),
-            **extra,
-        }
-        with self._deliveries.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    def mark(self, event_id: str, status: str, **extra: Any) -> bool:
+        """Apply an external terminal transition if it cannot race a send.
+
+        External actions may fence an owner before the irreversible boundary,
+        but they never replace ``sending`` or any already-terminal outcome.
+        Returns whether the requested transition was appended.
+        """
+        with self._locked_delivery_state():
+            latest = self._latest_delivery_unlocked(event_id)
+            previous = str((latest or {}).get("status") or "pending")
+            if previous == "sending" or (
+                latest is not None
+                and previous not in ("pending", "acquired", "validating")
+            ):
+                return False
+            rec = {
+                "event_id": event_id,
+                "status": status,
+                "ts": time.time(),
+                **extra,
+            }
+            if previous in ("acquired", "validating"):
+                rec["superseded_owner_token"] = (latest or {}).get("owner_token")
+                rec["superseded_status"] = previous
+            self._append_delivery_unlocked(rec)
+            return True
 
     def _latest_statuses(self) -> dict[str, str]:
         statuses: dict[str, str] = {}
@@ -152,7 +453,8 @@ class DeliveryStore:
                     and data.get("pane_id") == pane_id
                     and statuses.get(event_id, "pending") == "pending"
                 ):
-                    self.mark(event_id, "invalidated", reason=reason)
+                    if not self.mark(event_id, "invalidated", reason=reason):
+                        continue
                     invalidated.append(
                         BoundEvent(
                             **{
@@ -173,7 +475,10 @@ class DeliveryStore:
                     data = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if data.get("event_id") == event_id and data.get("status") == "delivered":
+                if (
+                    data.get("event_id") == event_id
+                    and data.get("status") == "delivered"
+                ):
                     return True
         return False
 
@@ -332,8 +637,8 @@ class DeliveryStore:
             if not isinstance(eid, str) or not eid:
                 continue
             reason = str(item.get("_stale_reason") or "stale")
-            self.mark(eid, "expired", reason=reason)
-            expired.append(item)
+            if self.mark(eid, "expired", reason=reason):
+                expired.append(item)
 
         if is_answerable is not None:
             for item in classified["fresh"]:
@@ -348,8 +653,8 @@ class DeliveryStore:
                     continue
                 tagged = dict(item)
                 tagged["_stale_reason"] = reason or "not_answerable"
-                self.mark(eid, "expired", reason=tagged["_stale_reason"])
-                expired.append(tagged)
+                if self.mark(eid, "expired", reason=tagged["_stale_reason"]):
+                    expired.append(tagged)
 
         return expired
 

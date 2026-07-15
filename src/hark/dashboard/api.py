@@ -276,7 +276,7 @@ def answer_action(cfg: HarkConfig, body: dict[str, Any]) -> tuple[int, dict[str,
         register_fallback=find_hep_event,
     )
     payload = result.to_payload()
-    if result.status == "rejected":
+    if result.status in ("rejected", "in_progress"):
         status = {
             "bad_request": 400,
             "unknown_event": 404,

@@ -29,6 +29,6 @@ tasks:
       file: T002-profiles-bound-answer-post-wak.todo
       id: T002
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: 'Profiles: bound_answer, post_wake, confirm'

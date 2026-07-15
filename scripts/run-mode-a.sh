@@ -38,6 +38,64 @@ FORCE=0
 SESSION="${HARK_SESSION:-default}"
 # Max wait for an in-flight recording (seconds)
 STOP_GRACE="${HARK_STOP_GRACE_S:-120}"
+PIDFILE_LOCK_DEPTH=0
+PIDFILE_LOCK_FD=""
+START_LOCK_FD=""
+START_LOCK_CONTENDED=0
+
+# Shell starts hold this lock across their final recheck, spawn, and ownership
+# publication. Python helpers inherit the descriptor and validate it before
+# treating their own pidfile lock acquisition as reentrant.
+acquire_pidfile_lock() {
+  if ((PIDFILE_LOCK_DEPTH > 0)); then
+    PIDFILE_LOCK_DEPTH=$((PIDFILE_LOCK_DEPTH + 1))
+    return 0
+  fi
+  exec {PIDFILE_LOCK_FD}>"${PIDFILE}.lock" || return $?
+  if ! flock -x "$PIDFILE_LOCK_FD"; then
+    exec {PIDFILE_LOCK_FD}>&-
+    PIDFILE_LOCK_FD=""
+    return 1
+  fi
+  PIDFILE_LOCK_DEPTH=1
+  export HARK_WORKER_PIDFILE_LOCK_PATH="$PIDFILE"
+  export HARK_WORKER_PIDFILE_LOCK_FD="$PIDFILE_LOCK_FD"
+  export HARK_WORKER_PIDFILE_LOCK_OWNER_PID="$$"
+}
+
+release_pidfile_lock() {
+  ((PIDFILE_LOCK_DEPTH > 0)) || return 0
+  PIDFILE_LOCK_DEPTH=$((PIDFILE_LOCK_DEPTH - 1))
+  ((PIDFILE_LOCK_DEPTH == 0)) || return 0
+  unset HARK_WORKER_PIDFILE_LOCK_PATH HARK_WORKER_PIDFILE_LOCK_FD
+  unset HARK_WORKER_PIDFILE_LOCK_OWNER_PID
+  local status=0
+  flock -u "$PIDFILE_LOCK_FD" || status=$?
+  exec {PIDFILE_LOCK_FD}>&-
+  PIDFILE_LOCK_FD=""
+  return "$status"
+}
+
+# Serializes shell start lifecycles without forcing graceful-stop waits to hold
+# the pidfile lock needed by independently launched status/stop commands.
+acquire_start_lock() {
+  exec {START_LOCK_FD}>"${PIDFILE}.start.lock" || return $?
+  if flock -xn "$START_LOCK_FD"; then
+    START_LOCK_CONTENDED=0
+    return 0
+  fi
+  START_LOCK_CONTENDED=1
+  flock -x "$START_LOCK_FD"
+}
+
+release_start_lock() {
+  [[ -n "$START_LOCK_FD" ]] || return 0
+  local status=0
+  flock -u "$START_LOCK_FD" || status=$?
+  exec {START_LOCK_FD}>&-
+  START_LOCK_FD=""
+  return "$status"
+}
 
 # reason: stop | restart — written so ambient can TTS the right line
 stage_shutdown_reason() {
@@ -78,17 +136,11 @@ collect_mode_a_pids_into() {
 write_legacy_pidfile() {
   (($# > 0)) || return 1
   local temporary="${PIDFILE}.$$.tmp"
-  local lock_fd
   local status=0
-  exec {lock_fd}>"${PIDFILE}.lock" || return $?
-  if ! flock -x "$lock_fd"; then
-    exec {lock_fd}>&-
-    return 1
-  fi
+  acquire_pidfile_lock || return $?
   printf '%s\n' "$@" >"$temporary" && mv -f "$temporary" "$PIDFILE" || status=$?
   rm -f "$temporary"
-  flock -u "$lock_fd" || status=$?
-  exec {lock_fd}>&-
+  release_pidfile_lock || status=$?
   return "$status"
 }
 
@@ -231,66 +283,120 @@ fi
 HARK=(uv run hark)
 
 # Always replace previous workers (pidfile and/or orphan ambient/watch)
-# so partial restarts cannot leave duplicate ambients.
+# for an ordinary invocation. Concurrent shell starts serialize here; a waiter
+# accepts the completed predecessor instead of immediately restarting it.
+if ! acquire_start_lock; then
+  echo "error: failed to acquire Hark worker start lock" >&2
+  exit 1
+fi
+
 _prev=()
 if ! collect_mode_a_pids_into _prev; then
   echo "error: failed to collect existing Hark worker identities; refusing to start" >&2
+  release_start_lock || true
   exit 1
 fi
 prev_count=${#_prev[@]}
+skip_start=0
+live=()
 
 if [[ $prev_count -gt 0 ]]; then
-  echo "restarting previous workers (graceful, ${#_prev[@]} pid(s))…"
-  graceful_stop 0 "restart" || graceful_stop 1 "restart"
-  # Allow ambient to finish shutdown TTS after recording
-  sleep 0.5
+  if [[ "$START_LOCK_CONTENDED" -eq 1 ]]; then
+    echo "workers already started by concurrent invocation: ${_prev[*]}"
+    live=("${_prev[@]}")
+    skip_start=1
+  else
+    echo "restarting previous workers (graceful, ${#_prev[@]} pid(s))…"
+    graceful_stop 0 "restart" || graceful_stop 1 "restart"
+    # Allow ambient to finish shutdown TTS after recording
+    sleep 0.5
+  fi
 fi
 
 started=()
+if [[ "$skip_start" -eq 0 ]]; then
+  if ! acquire_pidfile_lock; then
+    echo "error: failed to acquire Hark worker ownership lock" >&2
+    release_start_lock || true
+    exit 1
+  fi
 
-if [[ "$DO_WATCH" -eq 1 ]]; then
-  echo "starting watch → $WATCH_LOG (session=$SESSION)"
-  nohup "${HARK[@]}" watch --session "$SESSION" --for-monitor --statuses blocked,done \
-    >>"$WATCH_LOG" 2>&1 &
-  started+=("$!")
+  # Recheck only after acquiring the lock that remains held through spawn and
+  # publication. A Python start may have won while an earlier worker stopped.
+  _current=()
+  if ! collect_mode_a_pids_into _current; then
+    echo "error: failed to recheck Hark worker identities; refusing to start" >&2
+    release_pidfile_lock || true
+    release_start_lock || true
+    exit 1
+  fi
+  if ((${#_current[@]} > 0)); then
+    echo "workers appeared while preparing start: ${_current[*]}"
+    live=("${_current[@]}")
+    skip_start=1
+  fi
 fi
 
-if [[ "$DO_AMBIENT" -eq 1 ]]; then
-  echo "starting ambient loop → $AMBIENT_LOG"
-  # List configured wake/trigger phrases (custom via config [ambient])
-  PHRASE_LINE="$(
-    cd "$ROOT" && python3 -c '
+if [[ "$skip_start" -eq 0 ]]; then
+  if [[ "$DO_WATCH" -eq 1 ]]; then
+    echo "starting watch → $WATCH_LOG (session=$SESSION)"
+    (
+      unset HARK_WORKER_PIDFILE_LOCK_PATH HARK_WORKER_PIDFILE_LOCK_FD
+      unset HARK_WORKER_PIDFILE_LOCK_OWNER_PID
+      exec {PIDFILE_LOCK_FD}>&-
+      exec {START_LOCK_FD}>&-
+      exec nohup "${HARK[@]}" watch --session "$SESSION" --for-monitor \
+        --statuses blocked,done
+    ) >>"$WATCH_LOG" 2>&1 &
+    started+=("$!")
+  fi
+
+  if [[ "$DO_AMBIENT" -eq 1 ]]; then
+    echo "starting ambient loop → $AMBIENT_LOG"
+    # List configured wake/trigger phrases (custom via config [ambient])
+    PHRASE_LINE="$(
+      cd "$ROOT" && python3 -c '
 from hark.config import load_config
 ps = load_config().ambient.activation_phrases
 print("  say: " + " / ".join(ps[:10]) + (" …" if len(ps) > 10 else ""))
 ' 2>/dev/null || echo "  say: hey hark / hey herald (or custom trigger_phrases)"
-  )"
-  echo "$PHRASE_LINE"
-  nohup "${HARK[@]}" ambient \
-    >>"$AMBIENT_LOG" 2>&1 &
-  started+=("$!")
-fi
-
-sleep 1
-
-# Prefer full discovery (uv + python children) so the pidfile is complete;
-# fall back to $! list if scan is empty (race before exec).
-live=()
-if ! collect_mode_a_pids_into live; then
-  echo "error: failed to discover started Hark workers; retaining legacy ownership" >&2
-  if ((${#started[@]} > 0)); then
-    write_legacy_pidfile "${started[@]}" || true
+    )"
+    echo "$PHRASE_LINE"
+    (
+      unset HARK_WORKER_PIDFILE_LOCK_PATH HARK_WORKER_PIDFILE_LOCK_FD
+      unset HARK_WORKER_PIDFILE_LOCK_OWNER_PID
+      exec {PIDFILE_LOCK_FD}>&-
+      exec {START_LOCK_FD}>&-
+      exec nohup "${HARK[@]}" ambient
+    ) >>"$AMBIENT_LOG" 2>&1 &
+    started+=("$!")
   fi
-  exit 1
+
+  sleep 1
+
+  # Prefer full discovery (uv + python children) so the pidfile is complete;
+  # fall back to $! list if scan is empty (race before exec).
+  if ! collect_mode_a_pids_into live; then
+    echo "error: failed to discover started Hark workers; retaining legacy ownership" >&2
+    if ((${#started[@]} > 0)); then
+      write_legacy_pidfile "${started[@]}" || true
+    fi
+    release_pidfile_lock || true
+    release_start_lock || true
+    exit 1
+  fi
+  if ((${#live[@]} > 0)); then
+    : # collect_mode_a_pids already wrote canonical structured identities
+  elif ((${#started[@]} > 0)); then
+    write_legacy_pidfile "${started[@]}"
+    live=("${started[@]}")
+  else
+    : # the successful collector already canonicalized empty ownership
+  fi
 fi
-if ((${#live[@]} > 0)); then
-  : # collect_mode_a_pids already wrote canonical structured identities
-elif ((${#started[@]} > 0)); then
-  write_legacy_pidfile "${started[@]}"
-  live=("${started[@]}")
-else
-  : # the successful collector already canonicalized empty ownership
-fi
+
+release_pidfile_lock || true
+release_start_lock || true
 
 if [[ -f "$PIDFILE" ]]; then
   echo "PIDs: ${live[*]}"

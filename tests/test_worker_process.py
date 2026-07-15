@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -687,7 +688,7 @@ def test_shell_post_spawn_collection_failure_retains_legacy_pid(tmp_path: Path):
         f"  n=$(cat {count!s} 2>/dev/null || echo 0)\n"
         "  n=$((n + 1))\n"
         f"  printf '%s\\n' \"$n\" > {count!s}\n"
-        '  [ "$n" -eq 1 ] && exit 0\n'
+        '  [ "$n" -le 2 ] && exit 0\n'
         "  exit 42\n"
         "fi\n"
         'case "$*" in\n'
@@ -720,3 +721,102 @@ def test_shell_post_spawn_collection_failure_retains_legacy_pid(tmp_path: Path):
             os.kill(recorded, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+def test_two_concurrent_shell_starts_spawn_one_complete_worker_set(tmp_path: Path):
+    repo = Path(__file__).resolve().parents[1]
+    script = repo / "scripts" / "run-mode-a.sh"
+    real_uv = shutil.which("uv")
+    assert real_uv is not None
+    state = tmp_path / "state"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    spawn_log = tmp_path / "spawns"
+    fake_hark = tmp_path / "hark"
+    fake_hark.write_text(
+        "#!/usr/bin/env python3\n"
+        "import signal\n"
+        "import time\n"
+        "signal.signal(signal.SIGTERM, lambda *_args: exit(0))\n"
+        "while True:\n"
+        "    time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    fake_hark.chmod(0o755)
+    uv = fake_bin / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        'if [ "${1:-}" = run ] && [ "${2:-}" = hark ]; then\n'
+        "  shift 2\n"
+        '  printf \'%s %s\\n\' "$$" "${1:-}" >> "$SPAWN_LOG"\n'
+        "  sleep 0.2\n"
+        '  exec "$FAKE_HARK" "$@"\n'
+        "fi\n"
+        'exec "$REAL_UV" "$@"\n',
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "XDG_STATE_HOME": str(state),
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "REAL_UV": real_uv,
+            "FAKE_HARK": str(fake_hark),
+            "SPAWN_LOG": str(spawn_log),
+        }
+    )
+    processes: list[subprocess.Popen[str]] = []
+    worker_pid: int | None = None
+    try:
+        first = subprocess.Popen(
+            [str(script), "--no-ambient", "--session", "first"],
+            cwd=repo,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        processes.append(first)
+        deadline = time.monotonic() + 5
+        while not spawn_log.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert spawn_log.exists()
+
+        second = subprocess.Popen(
+            [str(script), "--no-ambient", "--session", "second"],
+            cwd=repo,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        processes.append(second)
+        first_stdout, first_stderr = first.communicate(timeout=15)
+        second_stdout, second_stderr = second.communicate(timeout=15)
+        assert first.returncode == 0, first_stderr
+        assert second.returncode == 0, second_stderr
+
+        spawn_lines = spawn_log.read_text(encoding="utf-8").splitlines()
+        assert len(spawn_lines) == 1
+        spawned_pid, role = spawn_lines[0].split()
+        assert role == "watch"
+        worker_pid = int(spawned_pid)
+        records = worker_process.collect_worker_records(state / "hark" / "mode-a.pids")
+        assert [(record.pid, record.role) for record in records] == [
+            (worker_pid, "watch")
+        ]
+        assert "starting watch" in first_stdout
+        assert "workers already started by concurrent invocation" in second_stdout
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=2)
+        if worker_pid is not None:
+            try:
+                os.kill(worker_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass

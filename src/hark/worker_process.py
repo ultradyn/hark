@@ -62,6 +62,9 @@ class PidfdUnavailableError(RuntimeError):
 
 
 _WORKER_LOCKS = threading.local()
+_INHERITED_LOCK_PATH_ENV = "HARK_WORKER_PIDFILE_LOCK_PATH"
+_INHERITED_LOCK_FD_ENV = "HARK_WORKER_PIDFILE_LOCK_FD"
+_INHERITED_LOCK_OWNER_ENV = "HARK_WORKER_PIDFILE_LOCK_OWNER_PID"
 
 
 def _load_libc_pidfd_functions():
@@ -92,6 +95,82 @@ def _lock_key(path: Path) -> Path:
     return path.resolve(strict=False)
 
 
+def _is_ancestor_process(candidate: int) -> bool:
+    pid = os.getpid()
+    for _ in range(64):
+        if pid == candidate:
+            return True
+        try:
+            status = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
+        except OSError:
+            return False
+        parent_line = next(
+            (line for line in status.splitlines() if line.startswith("PPid:")), None
+        )
+        if parent_line is None:
+            return False
+        try:
+            pid = int(parent_line.split(":", 1)[1].strip())
+        except ValueError:
+            return False
+        if pid <= 0:
+            return False
+    return False
+
+
+def _has_inherited_exclusive_lock(key: Path) -> bool:
+    """Validate and reuse an outer shell lock across helper processes."""
+    raw_path = os.environ.get(_INHERITED_LOCK_PATH_ENV)
+    raw_fd = os.environ.get(_INHERITED_LOCK_FD_ENV)
+    if not raw_path or not raw_fd:
+        return False
+    try:
+        if _lock_key(Path(raw_path)) != key:
+            return False
+        fd = int(raw_fd)
+        if fd < 0:
+            return False
+        lock_path = key.with_name(f"{key.name}.lock")
+        lock_stat = lock_path.stat()
+        try:
+            descriptor = os.fstat(fd)
+            if (descriptor.st_dev, descriptor.st_ino) == (
+                lock_stat.st_dev,
+                lock_stat.st_ino,
+            ):
+                # The inherited descriptor shares the shell's open file
+                # description, so this is a no-op and retains exclusivity.
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+        except (BlockingIOError, OSError):
+            pass
+
+        # uv may close non-standard descriptors before it launches Python.
+        # In that case, prove that the descriptor remains open and locked in
+        # an ancestor shell which is synchronously waiting for this helper.
+        owner = int(os.environ[_INHERITED_LOCK_OWNER_ENV])
+        if owner <= 0 or not _is_ancestor_process(owner):
+            return False
+        owner_descriptor = Path(f"/proc/{owner}/fd/{fd}").stat()
+        if (owner_descriptor.st_dev, owner_descriptor.st_ino) != (
+            lock_stat.st_dev,
+            lock_stat.st_ino,
+        ):
+            return False
+        probe = lock_path.open("a+b")
+        try:
+            try:
+                fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(probe.fileno(), fcntl.LOCK_UN)
+            return False
+        finally:
+            probe.close()
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
+
+
 @contextmanager
 def worker_pidfile_lock(path: Path, *, exclusive: bool = True) -> Iterator[None]:
     """Hold the cross-process lock associated with one worker pidfile.
@@ -111,6 +190,10 @@ def worker_pidfile_lock(path: Path, *, exclusive: bool = True) -> Iterator[None]
             yield
         finally:
             existing.depth -= 1
+        return
+
+    if _has_inherited_exclusive_lock(key):
+        yield
         return
 
     key.parent.mkdir(parents=True, exist_ok=True)

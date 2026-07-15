@@ -19,7 +19,7 @@ tasks:
       file: T001-tests-needs-input-deliverable.todo
       id: T001
       priority: critical
-      status: pending
+      status: in_progress
       tags: []
       title: 'Tests: needs_input deliverable when menu still present'
     - complexity: low

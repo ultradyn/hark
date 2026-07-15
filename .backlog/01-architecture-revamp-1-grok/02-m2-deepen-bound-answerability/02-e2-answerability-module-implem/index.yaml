@@ -19,7 +19,7 @@ tasks:
       file: T001-implement-answerability-pure-c.todo
       id: T001
       priority: critical
-      status: in_progress
+      status: done
       tags: []
       title: Implement Answerability pure core + reasons
     - complexity: medium

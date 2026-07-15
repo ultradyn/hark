@@ -95,8 +95,8 @@ def test_cmd_answer_rejects_when_agent_is_no_longer_blocked(monkeypatch):
     _patch_answer_dependencies(monkeypatch, store, client)
 
     assert cli.cmd_answer(_answer_args(), cfg=None) == ABORT
-    assert store.marks == [("evt1", "rejected", {"reason": "not_blocked"})]
-    assert client.read_pane_calls == []
+    assert store.marks == [("evt1", "rejected", {"reason": "not_compatible"})]
+    # Live helper may read_pane before assess refuses on status; send must not run.
     assert client.sent_text == []
     assert client.sent_keys == []
 
@@ -122,6 +122,35 @@ def test_cmd_answer_rejects_unknown_live_revision(monkeypatch):
 
     assert cli.cmd_answer(_answer_args(), cfg=None) == ABORT
     assert store.marks == [("evt1", "rejected", {"reason": "stale_revision"})]
-    assert client.read_pane_calls == []
     assert client.sent_text == []
     assert client.sent_keys == []
+
+
+def test_cmd_answer_delivers_needs_input_when_menu_still_present(monkeypatch):
+    """E3.T001 AC: false-done needs_input + idle-like + menu → deliver."""
+    from hark.events import extract_question_excerpt
+    from hark.fingerprint import question_fingerprint
+
+    menu = "Continue?\n1. Yes\n2. No\n"
+    fp = question_fingerprint(extract_question_excerpt(menu))
+    bound = BoundEvent(
+        event_id="evt1",
+        session_id="local",
+        pane_id="w1:p1",
+        pane_revision=3,
+        question_fingerprint=fp,
+        meta={"kind": "agent.needs_input"},
+    )
+    store = FakeStore(bound)
+    client = FakeClient(_live_agent(status="done", revision=3))
+
+    def _read(pane_id: str, lines: int = 60) -> str:
+        client.read_pane_calls.append((pane_id, lines))
+        return menu
+
+    client.read_pane = _read  # type: ignore[method-assign]
+    _patch_answer_dependencies(monkeypatch, store, client)
+
+    assert cli.cmd_answer(_answer_args(), cfg=None) == 0
+    assert store.marks == [("evt1", "delivered", {"text": "yes"})]
+    assert client.sent_text == [("w1:p1", "yes")]

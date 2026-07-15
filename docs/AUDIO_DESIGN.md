@@ -138,28 +138,30 @@ Env: `HARK_LISTEN_END_MODE=radio`. Disable soft end with
 |--------|------|---------|------|
 | `end_silence_s` | **silence** only | 2.1 s | Quiet that **ends** the answer window |
 | `radio_partial_silence_s` | **radio** only | 0.6 s | Quiet that ends a **segment** → cloud STT → optional `ambient.partial` (HOLD) |
-| `radio_idle_end_silence_s` | **radio** answer only | **3× `end_silence_s`** (~6.3 s) | After speech has opened at least once, continuous quiet this long **auto-finishes** (soft-end path, not cancel). Before first open: no-op (initial timeout / nudges) |
+| `radio_idle_end_silence_s` | **radio** answer only | **3× `end_silence_s`** (~6.3 s) | After speech has opened at least once, continuous quiet this long **auto-finishes** (soft-end path, not cancel). Before first open: no-op (initial timeout / nudges). **Streaming (B112):** effective idle clamped to `max(end_silence_s, streaming_ack_min_quiet_s)` |
 | `radio_segment_pad_ms` | **radio** only | 250 | Silence pad each side of a segment before STT (B075); does not change cut timing |
 | `radio_segment_overlap_ms` | **radio** only | 300 | Real PCM lookback from the prior segment into the next STT window (B085); prefers captured samples over silence pad for boundary phonemes |
 | `radio_end_silence_s` | legacy | 2.5 s | Kept for config BC; segment cadence is `radio_partial_silence_s` |
 | `stream_partials` | radio | `true` | Emit interim events when segment text grows |
-| `ambient.streaming` | ambient | `false` | When true, `ambient.partial` instructions allow short live TTS (B098); default HOLD |
-| `ambient.streaming_ack_min_quiet_s` | ambient | `2.0` | B105: when streaming, TTS play waits for this many seconds of operator quiet (or listen end) |
+| `ambient.streaming` | ambient | `false` | When true, `ambient.partial` instructions allow short live TTS (B098); default HOLD; also clamps radio idle finalize (B112) |
+| `ambient.streaming_ack_min_quiet_s` | ambient | `2.0` | B105: when streaming, TTS play waits for this many seconds of operator quiet (or listen end); also lower bound for streaming radio idle clamp |
 
 Radio does **not** finalize on short silence alone. After each short quiet
 (`radio_partial_silence_s`), Hark runs STT on accumulated audio: if an
 end/cancel/soft phrase hits, the stream finalizes; otherwise (with
 `stream_partials`) it emits a partial and keeps listening. **After speech has
-opened**, if the operator stays quiet longer than `radio_idle_end_silence_s`
-(~6.3 s by default), the answer window auto-finishes so forgotten radio closers
-do not leave the mic open indefinitely (B074). Short thinking pauses (~2 s)
-remain open. Before the first open, long quiet still uses the existing initial
-timeout / nudge path. Shorter `radio_partial_silence_s` → more frequent
-partials for the orchestrator; raise it (e.g. 1.0–1.5) to cut STT cost when pauses are
-long. Do **not** lower `end_silence_s` to chase radio partials — that would
-change normal silence-mode answer windows.
+opened**, if the operator stays quiet longer than the effective
+`radio_idle_end_silence_s` (~6.3 s classic; ~`end_silence_s` when
+`ambient.streaming` is on — B112), the answer window auto-finishes so forgotten
+radio closers do not leave the mic open indefinitely (B074). Short thinking
+pauses (~2 s) remain open in classic radio; streaming prefers prompt delivery
+after a natural pause. Before the first open, long quiet still uses the
+existing initial timeout / nudge path. Shorter `radio_partial_silence_s` → more
+frequent partials for the orchestrator; raise it (e.g. 1.0–1.5) to cut STT cost
+when pauses are long. Do **not** lower `end_silence_s` to chase radio partials —
+that would change normal silence-mode answer windows.
 
-#### Ambient streaming mode (B098 + B105 quiet gate)
+#### Ambient streaming mode (B098 + B105 quiet gate + B112 latency)
 
 ```toml
 [ambient]
@@ -175,6 +177,15 @@ operator speech energy; play + mic mute wait until quiet ≥
 `streaming_ack_min_quiet_s` (default 2s) or the listen ends, so continuous speech
 is not barged into. HOLD mode still waits for capture idle (B097). Half-duplex
 mute-during-TTS still applies in the allowed quiet window.
+
+**Prompt latency (B112 / GH #6):** with streaming on, radio post-speech idle
+auto-finish uses
+`min(radio_idle_end_silence_s, max(end_silence_s, streaming_ack_min_quiet_s))`
+so `ambient.prompt` arrives after a natural pause (~2.1s) instead of the classic
+~6.3s hold. Partials still fire on `radio_partial_silence_s`. Silence-mode
+auto-finalize while streaming is coordinated with B108 / GH #2 (endpointing).
+Mute holds **freeze** (not wipe) silence progress so mid-listen acks do not
+restart the quiet window.
 
 #### Radio segment boundary pad (B075) + ring overlap (B085)
 
@@ -194,18 +205,28 @@ samples only (never invents speech across long silence). Text reassembly stays
 with per-segment STT + `join_radio_stt_segments` (B083); join already trims
 duplicate head/tail tokens from overlap.
 
-#### Mute clock freeze (B084)
+#### Mute clock freeze (B084 + B112)
 
 While Hark holds the mic muted for half-duplex TTS (`mic_muted_during_tts` /
-`tts_mute_depth > 0`), listen clocks **do not advance**:
+`tts_mute_depth > 0`), listen clocks **do not advance** (true freeze):
 
 - `initial_timeout_s` / no-open wait
 - segment / end silence counters (radio partial + idle auto-end)
 - `max_s` capture budget
 
+Silence progress is **preserved** across a clean mute (no operator energy).
+Streaming TTS acks mid-listen therefore no longer wipe a nearly-complete quiet
+window and delay `ambient.prompt` (B112). Silence counters reset only when
+capture still sees speech-level energy during mute or the post-unmute
+`mute_edge_pad_ms` window (logged as `listen.speech_during_mute` once per hold).
+
 After unmute, `audio.mute_edge_pad_ms` (default 300) discards a short settle
 window and does not count it as user silence. Operator can speak after the
 post-TTS arm cue with the full timeout remaining.
+
+**Half-duplex limit:** OS-level mute often zeros PCM, so speech that begins
+*during* TTS may be undetectable and lost. Prefer not talking over TTS; after
+unmute, re-say the prompt if the arm cue fired without capture.
 
 #### Mute desync recovery (B086)
 

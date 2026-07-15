@@ -125,7 +125,8 @@ The orchestrator **must** finalize a stuck radio capture with `hark listen-end` 
 Consumers **MUST**:
 
 1. Treat `partial=true` as **non-authoritative** for full answers / pane delivery.  
-2. **HOLD mode:** **Not** speak a full answer to the operator or deliver to a pane based on partials alone. **Streaming mode:** short, interruptible acks / brief interim TTS are allowed (prefer HOLD during continuous speech); still no pane delivery and no full final-style answer until `final=true`. Hark enforces a **quiet gate** (`streaming_ack_min_quiet_s`, default 2s) before play so mute-during-TTS does not barge mid-thought (B105).  
+2. **HOLD mode:** **Not** speak a full answer to the operator or deliver to a pane based on partials alone. **Streaming mode:** short, interruptible acks / brief interim TTS are allowed (prefer HOLD during continuous speech); still no pane delivery and no full final-style answer until `final=true`. Hark enforces a **quiet gate** (`streaming_ack_min_quiet_s`, default 2s) before play so mute-during-TTS does not barge mid-thought (B105). With streaming on, radio idle auto-finish also uses a quieter window (~`end_silence_s`) so `ambient.prompt` is not delayed by the classic ~6.3 s hold (B112).  
+
 3. **May** begin private thinking/planning.  
 4. **Must** run `hark listen-end` when a done signal is clear and capture is still active (backup to soft/product end).  
 5. On `ambient.prompt` / final with the same `stream_id`: use that text; discard prior partials.

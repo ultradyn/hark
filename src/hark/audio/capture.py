@@ -683,36 +683,99 @@ def capture_utterance(
                     return False
 
             # While-loop so TTS mute / edge-pad do not burn max_s or initial_timeout
+            speech_during_mute = False
+            speech_during_mute_peak_db = -120.0
+
+            def _block_energy(samples_block: np.ndarray) -> tuple[float, float]:
+                r = float(np.sqrt(np.mean(samples_block**2)) + 1e-12)
+                d = 20.0 * np.log10(r)
+                return r, d
+
+            def _note_speech_during_hold(db_val: float, *, phase: str) -> None:
+                """Operator energy while TTS mute / edge-pad is held (B112).
+
+                OS-level mute often zeros PCM (undetectable). When residual path
+                still carries energy, log once per hold and force silence
+                progress reset so we do not finalize as if the operator stayed
+                quiet.
+                """
+                nonlocal speech_during_mute, speech_during_mute_peak_db
+                thresh = open_thresh if open_thresh is not None else abs_open_db
+                if db_val < thresh - 2.0:
+                    return
+                first = not speech_during_mute
+                speech_during_mute = True
+                if db_val > speech_during_mute_peak_db:
+                    speech_during_mute_peak_db = db_val
+                if not first:
+                    return
+                try:
+                    from hark.syslog import log as _syslog
+
+                    _syslog(
+                        "listen.speech_during_mute",
+                        component="stt",
+                        level="warn",
+                        phase=phase,
+                        peak_db=round(db_val, 1),
+                        open_thresh=round(float(thresh), 1),
+                        message=(
+                            "operator energy while mic muted/padded for TTS — "
+                            "half-duplex may drop speech; silence endpoint reset"
+                        ),
+                    )
+                except Exception:
+                    pass
+
             while blocks_used < max_blocks:
                 data, overflowed = stream.read(block)
                 del overflowed
                 samples = data.reshape(-1)
                 _publish_spec(samples)
 
-                # B084: while Hark holds TTS mute, freeze open/silence/max clocks
+                # B084 / B112: while Hark holds TTS mute, *freeze* open/silence/max
+                # clocks (do not advance). Do **not** unconditionally reset the
+                # silence counter — streaming TTS acks mid-listen used to wipe
+                # silence progress and delay ambient.prompt until max/agent end.
+                # Only reset when operator energy is observed during the hold.
                 muted_now = _tts_muted()
                 if muted_now:
                     was_tts_muted = True
+                    _rms_m, db_m = _block_energy(samples)
                     if opened:
-                        silent_blocks = 0
+                        _note_speech_during_hold(db_m, phase="mute")
+                    elif not opened and preroll_blocks > 0:
+                        # Keep preroll warm if OS mute does not zero the stream
+                        if db_m > (open_thresh if open_thresh is not None else abs_open_db) - 6:
+                            preroll.append(samples.copy())
                     continue
                 if was_tts_muted:
                     was_tts_muted = False
                     mute_pad_blocks = edge_pad_blocks
-                    if opened:
+                    if opened and speech_during_mute:
                         silent_blocks = 0
+                        if endpointer is not None:
+                            endpointer.on_speech()
                 if mute_pad_blocks > 0:
                     mute_pad_blocks -= 1
+                    _rms_p, db_p = _block_energy(samples)
                     if opened:
-                        silent_blocks = 0
+                        _note_speech_during_hold(db_p, phase="mute_edge_pad")
+                        if speech_during_mute:
+                            silent_blocks = 0
                     # Still seed preroll while waiting so post-pad open has history
                     if not opened and preroll_blocks > 0:
                         preroll.append(samples.copy())
                     continue
+                # Hold ended cleanly: keep prior silent_blocks (true freeze).
+                # speech_during_mute already forced a reset above when needed.
+                if speech_during_mute and opened:
+                    # Fresh speech after hold — treat as active talk turn
+                    silent_blocks = 0
+                    speech_during_mute = False
 
                 blocks_used += 1
-                rms = float(np.sqrt(np.mean(samples**2)) + 1e-12)
-                db = 20.0 * np.log10(rms)
+                rms, db = _block_energy(samples)
                 if db > peak_db:
                     peak_db = db
                     peak_rms = rms

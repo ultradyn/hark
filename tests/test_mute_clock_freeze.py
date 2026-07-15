@@ -128,13 +128,13 @@ def test_capture_freezes_max_s_while_tts_muted(monkeypatch):
     assert result.peak_rms > 0.01
 
 
-def test_mute_resets_silence_counter_while_opened(monkeypatch):
-    """During open speech, TTS mute must not count as end_silence."""
+def test_mute_freezes_silence_counter_while_opened(monkeypatch):
+    """During open speech, TTS mute must not count as end_silence (B084 freeze)."""
     block = 320
     loud = np.ones(block, dtype=np.float32) * 0.25
     quiet = np.ones(block, dtype=np.float32) * 0.00005
     # Timeline: open with loud, then quiet (would end), but inject mute mid-quiet
-    # so silence counter resets — then more speech after unmute.
+    # so silence counter freezes — then more speech after unmute.
     plan = (
         [loud] * 8  # open + min speech
         + [quiet] * 5  # building silence
@@ -179,6 +179,122 @@ def test_mute_resets_silence_counter_while_opened(monkeypatch):
     # Second speech burst should be in the buffer (mute froze silence)
     assert result.duration_ms > 400
     assert result.peak_rms > 0.01
+
+
+def test_mute_preserves_silence_progress_for_finalize(monkeypatch):
+    """B112: streaming TTS mute mid-pause must not wipe silence progress.
+
+    Operator finishes speaking; silence builds toward end_silence_s; a mid-listen
+    TTS ack mutes the mic. After unmute (quiet), capture should finish using
+    prior silence progress — not restart the full hang (perceived prompt delay).
+    """
+    block = 320
+    loud = np.ones(block, dtype=np.float32) * 0.25
+    quiet = np.ones(block, dtype=np.float32) * 0.00005
+    # end_silence = 10 blocks (0.2s). Build 8 quiet, mute 15 quiet, unmute + 4 quiet → end.
+    # If mute *reset* silence, would need 10 more after unmute (not enough in plan).
+    plan = (
+        [loud] * 8  # open + min speech
+        + [quiet] * 8  # almost at end silence
+        + [quiet] * 15  # muted — freeze, do not reset
+        + [quiet] * 6  # post-unmute (incl. edge pad) → should end
+        + [loud] * 30  # must NOT be reached if finalize preserved progress
+    )
+    state = {"i": 0}
+    mute_from, mute_to = 16, 31  # after 8 loud + 8 quiet
+
+    def fake_depth():
+        return 1 if mute_from <= state["i"] < mute_to else 0
+
+    class FakeStream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n):
+            i = min(state["i"], len(plan) - 1)
+            state["i"] += 1
+            return plan[i].reshape(-1, 1).copy(), False
+
+    monkeypatch.setattr(cap, "sd", SimpleNamespace(InputStream=lambda **k: FakeStream()))
+    monkeypatch.setattr(cap, "_require_sd", lambda: None)
+    monkeypatch.setattr("hark.audio.mic_mute.tts_mute_depth", fake_depth)
+
+    result = cap.capture_utterance(
+        sample_rate=16000,
+        max_s=10.0,
+        end_silence_s=0.2,  # 10 blocks
+        min_speech_s=0.08,
+        initial_timeout_s=2.0,
+        mute_edge_pad_ms=40,  # 2 blocks
+        preroll_ms=0,
+        open_confirm_blocks=2,
+        abs_open_db=-40.0,
+        open_margin_db=1.0,
+    )
+    # Finished on silence — did not swallow the trailing loud markers
+    assert result.pcm16
+    assert state["i"] < len(plan) - 10
+    # Duration ≈ speech + pre-mute quiet only (mute frames not appended)
+    assert result.duration_ms < 600
+
+
+def test_speech_during_mute_resets_silence_and_logs(monkeypatch):
+    """B112: energy during mute/pad resets silence so we do not false-finalize."""
+    block = 320
+    loud = np.ones(block, dtype=np.float32) * 0.25
+    quiet = np.ones(block, dtype=np.float32) * 0.00005
+    plan = (
+        [loud] * 8
+        + [quiet] * 8  # almost done
+        + [loud] * 10  # muted but loud → speech_during_mute
+        + [loud] * 6  # post-unmute more speech
+        + [quiet] * 20  # real end
+    )
+    state = {"i": 0}
+    logs: list[tuple[str, dict]] = []
+
+    def fake_depth():
+        return 1 if 16 <= state["i"] < 26 else 0
+
+    class FakeStream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n):
+            i = min(state["i"], len(plan) - 1)
+            state["i"] += 1
+            return plan[i].reshape(-1, 1).copy(), False
+
+    monkeypatch.setattr(cap, "sd", SimpleNamespace(InputStream=lambda **k: FakeStream()))
+    monkeypatch.setattr(cap, "_require_sd", lambda: None)
+    monkeypatch.setattr("hark.audio.mic_mute.tts_mute_depth", fake_depth)
+    monkeypatch.setattr(
+        "hark.syslog.log",
+        lambda event, **data: logs.append((event, data)),
+    )
+
+    result = cap.capture_utterance(
+        sample_rate=16000,
+        max_s=10.0,
+        end_silence_s=0.2,
+        min_speech_s=0.08,
+        initial_timeout_s=2.0,
+        mute_edge_pad_ms=40,
+        preroll_ms=0,
+        open_confirm_blocks=2,
+        abs_open_db=-40.0,
+        open_margin_db=1.0,
+    )
+    assert result.pcm16
+    assert any(e == "listen.speech_during_mute" for e, _ in logs)
+    # Post-mute speech kept the turn open long enough for full second burst + silence
+    assert result.duration_ms > 300
 
 
 def test_radio_stt_window_overlap_real_pcm():

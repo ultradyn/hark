@@ -170,7 +170,7 @@ uv run hark …
 Do **not** dogfood Hark against an old global tool when validating listen/TTS handoff
 or Mode A workers. If PATH rejects `hark start`, reinstall editable before pkill.  
 
-## Streaming mode (`[ambient].streaming`) — B098 + B105
+## Streaming mode (`[ambient].streaming`) — B098 + B105 + B112
 
 Config (default **off** = classic radio HOLD):
 
@@ -188,6 +188,8 @@ streaming_ack_min_quiet_s = 2.0   # B105: hark holds play until operator quiet �
 Event fields: `streaming` (bool), `ack_min_quiet_s` when streaming, + `warning` / `instructions`. Monitor compact lines use the same split.
 
 **Quiet gate (B105, enforced by `hark tts`):** when streaming is on and listen/radio is still capturing, play + mic mute wait until the operator has been quiet ≥ `streaming_ack_min_quiet_s` (default **2 s**) **or** the stream ends. Continuous talk without that pause must **not** get interim TTS barging in — prefer HOLD; one short ack after a real pause is enough. Half-duplex mute-during-TTS still applies in the quiet window. After the gate is dogfooded safe, operators may leave `streaming = true` always on.
+
+**Latency (B112):** with streaming on, radio idle auto-finish uses ~`end_silence_s` (not the classic ~6.3 s hold) so `ambient.prompt` arrives after a natural pause; partials still wake you earlier. Prefer one short ack; do not talk over TTS (speech during mute can be dropped). Still **MUST** `listen-end` on clear done signals.
 
 ## Agent-controlled end of recording (radio partials) — hard rule
 

@@ -746,6 +746,8 @@ config_watch_debounce_ms = 400
 # When true, partial HEP instructions allow brief interruptible acks; hark holds
 # play until operator quiet ≥ streaming_ack_min_quiet_s (B105, default 2s) or
 # listen ends — continuous speech without that pause is not stepped on.
+# Also clamps radio idle auto-finish so ambient.prompt lands after a natural
+# pause (~end_silence_s) instead of the classic ~6.3s hold (B112).
 # streaming = false
 # streaming_ack_min_quiet_s = 2.0
 # Once the quiet gate is dogfooded safe, operators may leave streaming = true.

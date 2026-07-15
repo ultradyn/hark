@@ -966,6 +966,37 @@ def monotonic_partial_text(prev: str, candidate: str) -> str:
     return prefer_complete_transcript(p, c)
 
 
+def effective_radio_idle_end_s(
+    cfg: HarkConfig,
+    *,
+    streaming: bool | None = None,
+) -> float:
+    """Post-speech quiet before radio auto-finish (B074 + B112 streaming).
+
+    Classic radio uses ``radio_idle_end_silence_s`` (default 3× ``end_silence_s``
+    ≈ 6.3 s) so short thinking pauses stay open. With ``[ambient].streaming``,
+    partials already deliver progress, so a long idle before ``ambient.prompt``
+    feels like a hang (GH #6 / B112). Streaming clamps idle to
+    ``max(end_silence_s, streaming_ack_min_quiet_s)`` unless that would *raise*
+    the configured idle (explicit faster finish still wins).
+    """
+    end_s = float(getattr(cfg.listen, "end_silence_s", 2.1) or 2.1)
+    idle = float(getattr(cfg.listen, "radio_idle_end_silence_s", 0.0) or 0.0)
+    if idle <= 0:
+        idle = 3.0 * end_s
+    if streaming is None:
+        streaming = bool(getattr(getattr(cfg, "ambient", None), "streaming", False))
+    if not streaming:
+        return idle
+    ack = float(
+        getattr(getattr(cfg, "ambient", None), "streaming_ack_min_quiet_s", 2.0)
+        or 2.0
+    )
+    stream_idle = max(end_s, ack)
+    # Prefer the tighter window so streaming finals land after a natural pause.
+    return min(idle, stream_idle)
+
+
 def run_listen(
     cfg: HarkConfig,
     *,
@@ -1072,13 +1103,19 @@ def run_listen(
         if mode is EndMode.SILENCE
         else float(getattr(cfg.listen, "radio_partial_silence_s", 0.6))
     )
+    # B098/B105/B112: ambient.streaming flips partial HEP policy and (radio)
+    # post-speech idle finalize timing so ambient.prompt is not stuck at ~6.3s.
+    ambient_streaming = bool(
+        getattr(getattr(cfg, "ambient", None), "streaming", False)
+    )
+    streaming_ack_min_quiet_s = float(
+        getattr(getattr(cfg, "ambient", None), "streaming_ack_min_quiet_s", 2.0)
+        or 2.0
+    )
     # Radio answer windows: long continuous quiet after speech has opened → finish
     # (not cancel). Before first open, use normal initial_timeout / nudges only.
-    radio_idle_end = float(
-        getattr(cfg.listen, "radio_idle_end_silence_s", 0.0) or 0.0
-    )
-    if radio_idle_end <= 0:
-        radio_idle_end = 3.0 * float(cfg.listen.end_silence_s)
+    # Streaming clamps idle to max(end_silence_s, streaming_ack_min_quiet_s).
+    radio_idle_end = effective_radio_idle_end_s(cfg, streaming=ambient_streaming)
     # Radio-only: silence pad around each segment before STT (B075). Silence
     # end_mode never pads. Clamped under radio_partial_silence_s so pad is hush.
     radio_pad_ms = (
@@ -1124,15 +1161,6 @@ def run_listen(
     # Partials only meaningful when waiting for an end phrase
     stream_partials = mode is EndMode.RADIO and getattr(
         cfg.listen, "stream_partials", True
-    )
-    # B098/B105: ambient.streaming flips partial HEP policy (HOLD vs short live
-    # TTS); streaming_ack_min_quiet_s is the play gate for those acks.
-    ambient_streaming = bool(
-        getattr(getattr(cfg, "ambient", None), "streaming", False)
-    )
-    streaming_ack_min_quiet_s = float(
-        getattr(getattr(cfg, "ambient", None), "streaming_ack_min_quiet_s", 2.0)
-        or 2.0
     )
     recording_cued = False
 
@@ -1468,6 +1496,26 @@ def run_listen(
             last_provider = getattr(stt, "name", "unknown")
             last_sample_rate = 16000
             speech_opened_once = False
+            if ambient_streaming:
+                classic_idle = float(
+                    getattr(cfg.listen, "radio_idle_end_silence_s", 0.0) or 0.0
+                )
+                if classic_idle <= 0:
+                    classic_idle = 3.0 * float(cfg.listen.end_silence_s)
+                if radio_idle_end + 1e-9 < classic_idle:
+                    syslog(
+                        "listen.streaming_idle_clamp",
+                        component="stt",
+                        level="info",
+                        stream_id=stream,
+                        idle_s=radio_idle_end,
+                        classic_idle_s=classic_idle,
+                        streaming_ack_min_quiet_s=streaming_ack_min_quiet_s,
+                        message=(
+                            "streaming mode: radio idle auto-finish uses quieter "
+                            "window so ambient.prompt is not delayed (B112)"
+                        ),
+                    )
             if guard > 0:
                 time.sleep(guard)
             # Answer-window arm cue: beep as soon as listen is ready (radio too)

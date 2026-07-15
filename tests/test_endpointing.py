@@ -114,10 +114,11 @@ def test_capture_energy_path_keeps_legacy_condition_and_avoids_per_block_concat(
     # Only finalization concatenates. A default turn never builds an endpoint frame.
     assert concatenate_calls == 1
     source = inspect.getsource(cap_mod.capture_utterance)
-    assert (
-        "silent_blocks >= end_silence_blocks\n"
-        "                            and speech_blocks >= min_speech_blocks"
-    ) in source
+    # Energy path still uses the legacy fixed-silence compound condition
+    # (whitespace may vary with surrounding mute-hold logic).
+    assert "silent_blocks >= end_silence_blocks" in source
+    assert "speech_blocks >= min_speech_blocks" in source
+    assert "endpointer is None" in source
 
 
 # ---------------------------------------------------------------------------

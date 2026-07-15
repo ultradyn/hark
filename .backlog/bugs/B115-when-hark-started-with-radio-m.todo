@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-07-15T06:12:23Z"
+depends_on: []
+estimate_hours: 1
+id: B115
+priority: high
+status: pending
+tags: []
+title: When hark started with radio mode, it didn't mention saying 'hey iris' (or whatever) to activate it
+updated_at: "2026-07-15T06:12:23Z"
+---
+
+When hark started with radio mode, it didn't mention saying 'hey iris' (or whatever) to activate it

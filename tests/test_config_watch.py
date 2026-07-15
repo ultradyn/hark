@@ -322,3 +322,143 @@ def test_reload_source_sighup_label():
     assert reload_source() == "sighup"
     clear_reload_request()
     assert reload_source() is None
+
+
+def test_ambient_loop_reload_mid_listen_emits_cancelled_and_reloaded(tmp_path, monkeypatch):
+    """B124: mid-listen reload → ambient.cancelled + ambient.reloaded(listen_aborted)."""
+    cfg_path = tmp_path / "config.toml"
+    _write_ambient_config(
+        cfg_path,
+        extra=["hey hark"],
+        config_watch=False,
+        end_mode="radio",
+    )
+    monkeypatch.delenv("HARK_AMBIENT", raising=False)
+    monkeypatch.delenv("HARK_CONFIG_WATCH", raising=False)
+    cfg = load_config(cfg_path)
+
+    monkeypatch.setattr("hark.audio.capture.state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr("hark.paths.state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(ambient, "ambient_pause_requested", lambda: False)
+    monkeypatch.setattr(lc, "state_dir", lambda: tmp_path / "state")
+    lc._shutdown = False
+    clear_reload_request()
+
+    stop_calls: list[str] = []
+
+    class FakeStream:
+        def __init__(self, *a, **k):
+            self._last = b"TXT:hey hark"
+
+        def open(self):
+            return self
+
+        def close(self):
+            pass
+
+        def __enter__(self):
+            return self.open()
+
+        def __exit__(self, *a):
+            pass
+
+        @property
+        def available_s(self):
+            return 5.0
+
+        def read_for(self, duration_s, *, should_stop=None):
+            if should_stop is not None and should_stop():
+                return False
+            return True
+
+        def window_pcm16(self, duration_s, *, end_offset_s=0.0):
+            return self._last
+
+    def fake_listen(cfg, **kwargs):
+        # Active post-wake capture is aborted by config reload
+        request_reload(source="config_watch")
+        stop_calls.append("stop")  # stand-in: production plays play_record_stop
+        return ListenResult(
+            text="mid sentence about the site",
+            provider="mock-stt",
+            duration_ms=400,
+            end_mode="radio",
+            end_phrase="reload",
+            cancelled=True,
+            stream_id="s-mid",
+            partials_emitted=1,
+        )
+
+    cycle = {"n": 0}
+
+    def fake_run_ambient(cfg, **kwargs):
+        cycle["n"] += 1
+        if cycle["n"] == 1:
+            # Simulate complete_after_wake after a wake hit
+            listened = fake_listen(cfg)
+            from hark.ambient import AmbientResult
+
+            return AmbientResult(
+                activated=True,
+                phrase="hey hark",
+                text=listened.text,
+                wake_backend="text_probe",
+                listen={
+                    "provider": listened.provider,
+                    "duration_ms": listened.duration_ms,
+                    "end_phrase": "reload",
+                    "cancelled": True,
+                    "reason": "config_reload",
+                    "listen_aborted": True,
+                },
+                stream_id=listened.stream_id,
+                partials_emitted=1,
+                final=True,
+                partial=False,
+            )
+        request_shutdown(reason="stop")
+        return ambient.AmbientResult(activated=False, phrase=None, text=None)
+
+    monkeypatch.setattr(ambient, "ContinuousMicStream", FakeStream)
+    monkeypatch.setattr(ambient, "run_ambient", fake_run_ambient)
+    monkeypatch.setattr(ambient, "run_tts", lambda *a, **k: None)
+    monkeypatch.setattr(
+        ambient,
+        "start_config_watcher",
+        lambda *a, **k: None,
+    )
+    # Avoid real backend build
+    class FakeBackend:
+        name = "text_probe"
+        phrases = ["hey hark"]
+
+        def score(self, *a, **k):
+            return None
+
+    monkeypatch.setattr(ambient, "build_wake_backend", lambda *a, **k: FakeBackend())
+
+    out = io.StringIO()
+    cfg.ambient.timeout_s = 2.0
+    cfg.ambient.config_watch = False
+    rc = ambient.run_ambient_loop(cfg, out=out, announce=False, idle_log_s=999)
+    assert rc == 0
+
+    events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    kinds = [e.get("kind") for e in events]
+    assert "ambient.cancelled" in kinds, kinds
+    assert "ambient.reloaded" in kinds, kinds
+
+    cancelled = next(e for e in events if e["kind"] == "ambient.cancelled")
+    assert cancelled.get("listen_aborted") is True
+    assert cancelled.get("reason") == "config_reload"
+
+    reloaded = next(e for e in events if e["kind"] == "ambient.reloaded")
+    assert reloaded.get("listen_aborted") is True
+    assert reloaded.get("source") == "config_watch"
+
+    # cancelled should appear before reloaded (stop cue path before re-arm)
+    assert kinds.index("ambient.cancelled") < kinds.index("ambient.reloaded")
+    assert stop_calls == ["stop"]
+
+    lc._shutdown = False
+    clear_reload_request()

@@ -237,17 +237,42 @@ def open_answer_window(
                 mode=mode.value,
             )
 
-    def _cue_stop_once(*, reason: str = "finalize") -> None:
+    # Channel-drop paths must always beep even when streaming suppresses the
+    # normal end-of-turn stop cue (B110). Reload abort + explicit cancel are
+    # not "short pause" finals — the operator must hear the channel drop (B124).
+    _FORCE_STOP_CUE_REASONS = frozenset(
+        {
+            "reload",
+            "config_reload",
+            "agent:cancel",
+            "cancel",
+        }
+    )
+
+    def _reload_abort() -> bool:
+        """True when config reload (SIGHUP / file-watch) should end this listen."""
+        try:
+            from hark.lifecycle import reload_requested
+
+            return bool(reload_requested())
+        except Exception:
+            return False
+
+    def _cue_stop_once(*, reason: str = "finalize", force: bool | None = None) -> None:
         """Play record-stop once when capture finalizes (not between radio partials).
 
         Skipped when ``[ambient].streaming`` is on (B110): short pauses are not
         end-of-capture. Ambient start/arm still plays independently (B113).
+
+        ``force=True`` (or reason in reload/cancel set) overrides suppress so the
+        operator always hears channel drop on reload-abort / cancel (B124).
         """
         nonlocal stop_cued
         if not recording_cued or stop_cued:
             return
         stop_cued = True
-        if suppress_stop_cue:
+        do_force = bool(force) if force is not None else reason in _FORCE_STOP_CUE_REASONS
+        if suppress_stop_cue and not do_force:
             syslog(
                 "listen.stop_cue_suppressed",
                 component="stt",
@@ -266,9 +291,50 @@ def open_answer_window(
             stream_id=stream,
             mode=mode.value,
             reason=reason,
+            forced=do_force and suppress_stop_cue,
+        )
+
+    def _reload_cancel_result(
+        *,
+        duration_ms: int = 0,
+        text: str = "",
+        provider: str | None = None,
+        partials_emitted: int = 0,
+    ) -> ListenResult:
+        """Clean cancel when config reload aborts an active listen (B124)."""
+        _cue_stop_once(reason="reload")
+        prov = provider or getattr(stt, "name", "unknown")
+        body = (text or "").strip()
+        store.record_stt(
+            text=body,
+            provider=prov,
+            audio_ms=duration_ms,
+            ok=False,
+            error="config_reload",
+        )
+        syslog(
+            "listen.reload_abort",
+            component="stt",
+            level="info",
+            stream_id=stream,
+            mode=mode.value,
+            duration_ms=duration_ms,
+            text_len=len(body),
+        )
+        return ListenResult(
+            text=body,
+            provider=prov,
+            duration_ms=duration_ms,
+            end_mode=mode.value,
+            end_phrase="reload",
+            cancelled=True,
+            stream_id=stream,
+            partials_emitted=partials_emitted,
         )
 
     def _agent_wants_stop(_pcm: bytes, _elapsed: float) -> bool:
+        if _reload_abort():
+            return True
         return poll_listen_action(stream) is not None
 
     # Duck/pause non-Hark media for the full answer-window capture (B046 / I002).
@@ -359,6 +425,9 @@ def open_answer_window(
                             mute_edge_pad_ms=gate_mute_pad_ms,
                         )
                     except TimeoutError as exc:
+                        # Reload mid-wait (before speech / empty capture) → clean cancel
+                        if _reload_abort():
+                            return _reload_cancel_result()
                         _cue_stop_once(reason="timeout")
                         err_s = str(exc)
                         store.record_stt(
@@ -400,6 +469,9 @@ def open_answer_window(
                                 )
                                 continue
                         raise
+                    # Config reload mid-capture (should_stop) — not a normal silence end
+                    if _reload_abort():
+                        return _reload_cancel_result(duration_ms=cap.duration_ms)
                     agent_act = consume_listen_action(stream)
                     _cue_stop_once(
                         reason=(
@@ -580,6 +652,13 @@ def open_answer_window(
             if arm_cue:
                 _arm_cue_if_requested()
             while time.monotonic() - started < max_listen:
+                if _reload_abort():
+                    return _reload_cancel_result(
+                        duration_ms=int(1000 * (time.monotonic() - started)),
+                        text=radio_sess.last_partial_text,
+                        provider=last_provider,
+                        partials_emitted=radio_sess.partial_seq,
+                    )
                 agent_act = radio_sess.poll_agent_action()
                 if agent_act is not None and pieces:
                     # Finalize with audio already captured
@@ -618,7 +697,9 @@ def open_answer_window(
                         post_tts_guard_s=0,
                         on_opened=_on_speech_opened,
                         on_voice=lambda: touch_voice_activity(stream_id=stream),
-                        should_stop=lambda *_a: radio_sess.agent_wants_stop(),
+                        should_stop=lambda *_a: (
+                            _reload_abort() or radio_sess.agent_wants_stop()
+                        ),
                         discard_leading_ms=seg_discard,
                         audio_ok_after=seg_ok_after,
                         abs_open_db=gate_abs_open,
@@ -627,6 +708,13 @@ def open_answer_window(
                         mute_edge_pad_ms=gate_mute_pad_ms,
                     )
                 except TimeoutError:
+                    if _reload_abort():
+                        return _reload_cancel_result(
+                            duration_ms=int(1000 * (time.monotonic() - started)),
+                            text=radio_sess.last_partial_text,
+                            provider=last_provider,
+                            partials_emitted=radio_sess.partial_seq,
+                        )
                     agent_act = radio_sess.poll_agent_action()
                     if agent_act is not None and pieces:
                         break
@@ -710,6 +798,14 @@ def open_answer_window(
                         error="timeout",
                     )
                     raise
+                # Config reload mid-segment (should_stop) — clean cancel with stop cue
+                if _reload_abort():
+                    return _reload_cancel_result(
+                        duration_ms=int(1000 * (time.monotonic() - started)),
+                        text=radio_sess.last_partial_text,
+                        provider=last_provider,
+                        partials_emitted=radio_sess.partial_seq,
+                    )
                 # Successful capture always means the energy gate opened
                 speech_opened_once = True
                 last_sample_rate = cap.sample_rate

@@ -566,17 +566,23 @@ def complete_after_wake(
         )
 
     if listened.cancelled:
+        end_phrase = listened.end_phrase
+        listen_meta: dict[str, Any] = {
+            "provider": listened.provider,
+            "duration_ms": listened.duration_ms,
+            "end_phrase": end_phrase,
+            "cancelled": True,
+        }
+        # B124: config reload mid post-wake/radio listen — channel drop, not operator cancel
+        if end_phrase in ("reload", "config_reload"):
+            listen_meta["reason"] = "config_reload"
+            listen_meta["listen_aborted"] = True
         return AmbientResult(
             activated=True,
             phrase=hit.phrase,
             text=listened.text,
             wake_backend=hit.backend,
-            listen={
-                "provider": listened.provider,
-                "duration_ms": listened.duration_ms,
-                "end_phrase": listened.end_phrase,
-                "cancelled": True,
-            },
+            listen=listen_meta,
             event_id=event_id,
             stream_id=listened.stream_id or stream_id,
             partials_emitted=listened.partials_emitted,
@@ -822,6 +828,15 @@ def ambient_event_line(result: AmbientResult) -> dict[str, Any]:
         base["instructions"] = (
             "Cancelled — ignore prior partials for this stream_id."
         )
+        # B124: reload-aborted active listen (operator heard stop cue)
+        if result.listen and result.listen.get("listen_aborted"):
+            base["listen_aborted"] = True
+            base["reason"] = result.listen.get("reason") or "config_reload"
+            base["instructions"] = (
+                "Listen aborted by config reload — channel dropped; "
+                "ignore prior partials for this stream_id. "
+                "ambient.reloaded will follow with listen_aborted=true."
+            )
     return base
 
 
@@ -831,6 +846,7 @@ def _emit_reload_event(
     *,
     error: str | None = None,
     source: str | None = None,
+    listen_aborted: bool = False,
 ) -> None:
     src = source or info.get("source") or "unknown"
     if error:
@@ -841,6 +857,7 @@ def _emit_reload_event(
             "observed_at": utc_now_iso(),
             "error": f"config reload: {error}",
             "source": src,
+            "listen_aborted": bool(listen_aborted),
         }
     else:
         line = {
@@ -859,6 +876,8 @@ def _emit_reload_event(
             "wake_label_prev": info.get("wake_label_prev"),
             "wake_label_changed": info.get("wake_label_changed"),
             "source": src,
+            # B124: true when reload cut an active post-wake/radio listen
+            "listen_aborted": bool(listen_aborted),
             "instructions": (
                 "Config reloaded. Activation phrases, listen settings "
                 "(e.g. end_mode), and ambient knobs now match disk. "
@@ -868,6 +887,12 @@ def _emit_reload_event(
                 + (
                     " Primary wake label changed — ambient spoke the new phrase."
                     if info.get("wake_label_changed")
+                    else ""
+                )
+                + (
+                    " An active listen was aborted (stop cue played); "
+                    "operator channel dropped mid-capture."
+                    if listen_aborted
                     else ""
                 )
             ),
@@ -882,6 +907,7 @@ def _emit_reload_event(
         rebuilt_backend=info.get("rebuilt_backend") if not error else None,
         source=src,
         end_mode=info.get("end_mode") if not error else None,
+        listen_aborted=bool(listen_aborted) if not error else None,
     )
 
 
@@ -1060,6 +1086,8 @@ def run_ambient_loop(
                 pass
 
     last_idle = time.monotonic()
+    # B124: when reload aborts an active post-wake listen, tag ambient.reloaded
+    pending_listen_aborted = False
     watch_path = cfg.path or default_config_path()
     config_watcher = start_config_watcher(
         watch_path,
@@ -1072,10 +1100,14 @@ def run_ambient_loop(
             if reload_requested():
                 src = reload_source()
                 clear_reload_request()
+                aborted = pending_listen_aborted
+                pending_listen_aborted = False
                 try:
                     cfg, backend, info = apply_config_reload(cfg, backend)
                     info["source"] = src
-                    _emit_reload_event(out, info, source=src)
+                    _emit_reload_event(
+                        out, info, source=src, listen_aborted=aborted
+                    )
                     # Live-reload name/phrase change → one-shot TTS (no cache).
                     if announce and info.get("wake_label_changed"):
                         try:
@@ -1109,7 +1141,13 @@ def run_ambient_loop(
                                 source=src,
                             )
                 except Exception as exc:
-                    _emit_reload_event(out, {}, error=str(exc)[:200], source=src)
+                    _emit_reload_event(
+                        out,
+                        {},
+                        error=str(exc)[:200],
+                        source=src,
+                        listen_aborted=aborted,
+                    )
                 continue
 
             result = run_ambient(
@@ -1121,6 +1159,15 @@ def run_ambient_loop(
                 out=out,
                 near_miss_acc=near_miss_acc,
             )
+
+            # Active post-wake listen aborted by reload (stop cue already played)
+            if (
+                reload_requested()
+                and result.activated
+                and result.listen
+                and result.listen.get("listen_aborted")
+            ):
+                pending_listen_aborted = True
 
             # Wake wait aborted for config reload — apply next loop, skip timeout
             if reload_requested() and not result.activated:

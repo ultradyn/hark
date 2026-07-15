@@ -242,3 +242,164 @@ def test_play_cue_defaults_non_exclusive(monkeypatch):
     cues.play_record_stop()
     assert calls
     assert calls[0].get("exclusive") is False
+
+
+def test_reload_mid_radio_plays_stop_when_streaming(monkeypatch, tmp_path):
+    """B124: reload-abort of active radio listen always plays stop (override B110)."""
+    from hark.lifecycle import clear_reload_request, request_reload
+
+    clear_reload_request()
+    stt = _FakeStt(texts=["still talking about the design"])
+    _patch_listen(monkeypatch, stt, [_cap()], invoke_on_opened=True)
+    monkeypatch.setattr(
+        "hark.speech.UsageStore",
+        lambda: UsageStore(tmp_path / "usage.jsonl"),
+    )
+
+    def fake_capture(**kwargs):
+        on_opened = kwargs.get("on_opened")
+        if callable(on_opened):
+            on_opened()
+        # Simulate file-watch/SIGHUP while the segment is open
+        request_reload(source="config_watch")
+        should_stop = kwargs.get("should_stop")
+        if callable(should_stop):
+            assert should_stop(b"", 0.1) is True
+        return _cap()
+
+    monkeypatch.setattr("hark.speech.capture_utterance", fake_capture)
+
+    cues: list[str] = []
+    monkeypatch.setattr(
+        "hark.speech.play_record_start",
+        lambda: cues.append("start"),
+    )
+    monkeypatch.setattr(
+        "hark.speech.play_record_stop",
+        lambda: cues.append("stop"),
+    )
+    logs: list[str] = []
+    monkeypatch.setattr(
+        "hark.speech.syslog",
+        lambda event, **data: logs.append(event),
+    )
+
+    result = run_listen(
+        HarkConfig(
+            listen=ListenConfig(end_mode="radio", stream_partials=True),
+            ambient=AmbientConfig(
+                streaming=True,
+                post_wake_arm_cue=True,
+                post_wake_lead_in_ms=0,
+            ),
+        ),
+        profile="post_wake",
+        end_mode="radio",
+        post_tts_guard_s=0,
+        streaming=True,
+    )
+
+    assert result.cancelled is True
+    assert result.end_phrase == "reload"
+    assert cues == ["start", "stop"], cues
+    assert "listen.stop_cue" in logs
+    assert "listen.reload_abort" in logs
+    assert "listen.stop_cue_suppressed" not in logs
+    clear_reload_request()
+
+
+def test_reload_mid_silence_plays_stop_when_streaming(monkeypatch, tmp_path):
+    """B124: silence-mode reload abort also forces stop cue under streaming."""
+    from hark.lifecycle import clear_reload_request, request_reload
+
+    clear_reload_request()
+    stt = _FakeStt(texts=["hello"])
+    _patch_listen(monkeypatch, stt, [_cap()], invoke_on_opened=True)
+    monkeypatch.setattr(
+        "hark.speech.UsageStore",
+        lambda: UsageStore(tmp_path / "usage.jsonl"),
+    )
+
+    def fake_capture(**kwargs):
+        on_opened = kwargs.get("on_opened")
+        if callable(on_opened):
+            on_opened()
+        request_reload(source="sighup")
+        return _cap()
+
+    monkeypatch.setattr("hark.speech.capture_utterance", fake_capture)
+
+    cues: list[str] = []
+    monkeypatch.setattr(
+        "hark.speech.play_record_start",
+        lambda: cues.append("start"),
+    )
+    monkeypatch.setattr(
+        "hark.speech.play_record_stop",
+        lambda: cues.append("stop"),
+    )
+
+    result = run_listen(
+        HarkConfig(
+            listen=ListenConfig(end_mode="silence"),
+            ambient=AmbientConfig(streaming=True, post_wake_arm_cue=True),
+        ),
+        profile="post_wake",
+        end_mode="silence",
+        post_tts_guard_s=0,
+        streaming=True,
+    )
+
+    assert result.cancelled is True
+    assert result.end_phrase == "reload"
+    assert cues == ["start", "stop"]
+    clear_reload_request()
+
+
+def test_reload_before_speech_with_arm_cue_plays_stop(monkeypatch, tmp_path):
+    """B124: arm cue already played, reload before open → still stop beep."""
+    from hark.lifecycle import clear_reload_request, request_reload
+
+    clear_reload_request()
+    stt = _FakeStt(texts=[])
+    _patch_listen(monkeypatch, stt, [], invoke_on_opened=False)
+    monkeypatch.setattr(
+        "hark.speech.UsageStore",
+        lambda: UsageStore(tmp_path / "usage.jsonl"),
+    )
+
+    def fake_capture(**kwargs):
+        request_reload(source="config_watch")
+        raise TimeoutError("no speech detected (peak_db=-60.0)")
+
+    monkeypatch.setattr("hark.speech.capture_utterance", fake_capture)
+
+    cues: list[str] = []
+    monkeypatch.setattr(
+        "hark.speech.play_record_start",
+        lambda: cues.append("start"),
+    )
+    monkeypatch.setattr(
+        "hark.speech.play_record_stop",
+        lambda: cues.append("stop"),
+    )
+
+    result = run_listen(
+        HarkConfig(
+            listen=ListenConfig(end_mode="radio"),
+            ambient=AmbientConfig(
+                streaming=True,
+                post_wake_arm_cue=True,
+                post_wake_lead_in_ms=0,
+            ),
+        ),
+        profile="post_wake",
+        end_mode="radio",
+        post_tts_guard_s=0,
+        streaming=True,
+    )
+
+    assert result.cancelled is True
+    assert result.end_phrase == "reload"
+    assert cues == ["start", "stop"]
+    clear_reload_request()

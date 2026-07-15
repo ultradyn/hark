@@ -353,6 +353,38 @@ def test_complete_after_wake_passes_post_wake_knobs(monkeypatch):
     assert pw_logs[0]["arm_cue"] is True
 
 
+def test_complete_after_wake_reload_abort_marks_listen_aborted(monkeypatch):
+    """B124: cancelled listen with end_phrase=reload surfaces listen_aborted."""
+    listened = SimpleNamespace(
+        text="partial so far",
+        provider="fake",
+        duration_ms=500,
+        end_phrase="reload",
+        cancelled=True,
+        stream_id="s-reload",
+        partials_emitted=2,
+    )
+    monkeypatch.setattr("hark.ambient.run_listen", lambda *a, **k: listened)
+
+    result = complete_after_wake(
+        HarkConfig(),
+        WakeHit(phrase="hey hark", remainder="", raw="hey hark", backend="vosk"),
+        announce=False,
+    )
+
+    assert result.activated is True
+    assert result.listen["cancelled"] is True
+    assert result.listen["end_phrase"] == "reload"
+    assert result.listen["listen_aborted"] is True
+    assert result.listen["reason"] == "config_reload"
+
+    line = ambient_event_line(result)
+    assert line["kind"] == "ambient.cancelled"
+    assert line["listen_aborted"] is True
+    assert line["reason"] == "config_reload"
+    assert "reload" in (line.get("instructions") or "").lower()
+
+
 def test_complete_after_wake_no_open_error_metrics(monkeypatch):
     def boom(cfg, **kwargs):
         raise TimeoutError(

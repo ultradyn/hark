@@ -111,3 +111,4 @@ bugs:
     - file: B110-end-of-recording-beep-plays-in.todo
     - file: B111-false-done-numbered-menu-false.todo
     - file: B112-perceived-regression-long-late.todo
+    - file: B113-no-start-stop-recording-cue-in.todo

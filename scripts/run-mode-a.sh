@@ -60,7 +60,6 @@ acquire_pidfile_lock() {
   PIDFILE_LOCK_DEPTH=1
   export HARK_WORKER_PIDFILE_LOCK_PATH="$PIDFILE"
   export HARK_WORKER_PIDFILE_LOCK_FD="$PIDFILE_LOCK_FD"
-  export HARK_WORKER_PIDFILE_LOCK_OWNER_PID="$$"
 }
 
 release_pidfile_lock() {
@@ -68,7 +67,6 @@ release_pidfile_lock() {
   PIDFILE_LOCK_DEPTH=$((PIDFILE_LOCK_DEPTH - 1))
   ((PIDFILE_LOCK_DEPTH == 0)) || return 0
   unset HARK_WORKER_PIDFILE_LOCK_PATH HARK_WORKER_PIDFILE_LOCK_FD
-  unset HARK_WORKER_PIDFILE_LOCK_OWNER_PID
   local status=0
   flock -u "$PIDFILE_LOCK_FD" || status=$?
   exec {PIDFILE_LOCK_FD}>&-
@@ -108,6 +106,17 @@ stage_shutdown_reason() {
 # Keeping the shell as an adapter prevents its stop path from drifting from
 # `hark stop` while preserving orphan discovery.
 worker_identity() {
+  if ((PIDFILE_LOCK_DEPTH > 0)); then
+    # uv closes non-standard descriptors. Mirror the exact locked open file
+    # description onto stdin, which uv and Python preserve, so the helper can
+    # verify reentrancy directly rather than infer it from external contention.
+    (
+      cd "$ROOT"
+      HARK_WORKER_PIDFILE_LOCK_FD=0 \
+        uv run python -m hark.worker_process "$@" 0<&"$PIDFILE_LOCK_FD"
+    )
+    return $?
+  fi
   (cd "$ROOT" && uv run python -m hark.worker_process "$@")
 }
 
@@ -142,6 +151,80 @@ write_legacy_pidfile() {
   rm -f "$temporary"
   release_pidfile_lock || status=$?
   return "$status"
+}
+
+# Last-resort publication for rollback survivors when atomic rename itself is
+# unavailable. The caller holds the ownership lock, so a synced direct rewrite
+# is preferable to returning with a live, unowned child.
+write_emergency_legacy_pidfile() {
+  (($# > 0)) || return 1
+  printf '%s\n' "$@" >"$PIDFILE" || return $?
+  sync -d "$PIDFILE" 2>/dev/null
+}
+
+workers_match_request() {
+  local -a request=(compatible "$PIDFILE" --discover --session "$SESSION")
+  [[ "$DO_WATCH" -eq 0 ]] || request+=(--watch)
+  [[ "$DO_AMBIENT" -eq 0 ]] || request+=(--ambient)
+  worker_identity "${request[@]}" >/dev/null
+}
+
+attempt_pid_running() {
+  local pid="$1"
+  local stat
+  local after_comm
+  local state
+  kill -0 "$pid" 2>/dev/null || return 1
+  stat="$(<"/proc/$pid/stat")" 2>/dev/null || return 1
+  after_comm="${stat##*) }"
+  state="${after_comm%% *}"
+  [[ "$state" != "Z" ]]
+}
+
+# A failed ownership publication cannot leave this attempt's children running
+# anonymously. Terminate and reap them; if a child somehow survives SIGKILL,
+# retry durable legacy ownership and make the exceptional state explicit.
+rollback_started_workers() {
+  (($# > 0)) || return 0
+  local -a attempted=("$@")
+  local -a remaining=()
+  local -a survivors=()
+  local pid
+  local tick
+
+  echo "rolling back unpublished Hark workers: ${attempted[*]}" >&2
+  for pid in "${attempted[@]}"; do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  for tick in {1..20}; do
+    remaining=()
+    for pid in "${attempted[@]}"; do
+      attempt_pid_running "$pid" && remaining+=("$pid")
+    done
+    ((${#remaining[@]} > 0)) || break
+    sleep 0.1
+  done
+  for pid in "${remaining[@]}"; do
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+  sleep 0.1
+  for pid in "${attempted[@]}"; do
+    if attempt_pid_running "$pid"; then
+      survivors+=("$pid")
+    else
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+  if ((${#survivors[@]} > 0)); then
+    if write_legacy_pidfile "${survivors[@]}" || \
+      write_emergency_legacy_pidfile "${survivors[@]}"; then
+      echo "warning: retained surviving rollback workers in $PIDFILE: ${survivors[*]}" >&2
+    else
+      echo "critical: rollback survivors could not be published in $PIDFILE: ${survivors[*]}" >&2
+      return 1
+    fi
+  fi
+  return 0
 }
 
 signal_pids() {
@@ -301,7 +384,7 @@ skip_start=0
 live=()
 
 if [[ $prev_count -gt 0 ]]; then
-  if [[ "$START_LOCK_CONTENDED" -eq 1 ]]; then
+  if [[ "$START_LOCK_CONTENDED" -eq 1 ]] && workers_match_request; then
     echo "workers already started by concurrent invocation: ${_prev[*]}"
     live=("${_prev[@]}")
     skip_start=1
@@ -342,7 +425,6 @@ if [[ "$skip_start" -eq 0 ]]; then
     echo "starting watch → $WATCH_LOG (session=$SESSION)"
     (
       unset HARK_WORKER_PIDFILE_LOCK_PATH HARK_WORKER_PIDFILE_LOCK_FD
-      unset HARK_WORKER_PIDFILE_LOCK_OWNER_PID
       exec {PIDFILE_LOCK_FD}>&-
       exec {START_LOCK_FD}>&-
       exec nohup "${HARK[@]}" watch --session "$SESSION" --for-monitor \
@@ -364,7 +446,6 @@ print("  say: " + " / ".join(ps[:10]) + (" …" if len(ps) > 10 else ""))
     echo "$PHRASE_LINE"
     (
       unset HARK_WORKER_PIDFILE_LOCK_PATH HARK_WORKER_PIDFILE_LOCK_FD
-      unset HARK_WORKER_PIDFILE_LOCK_OWNER_PID
       exec {PIDFILE_LOCK_FD}>&-
       exec {START_LOCK_FD}>&-
       exec nohup "${HARK[@]}" ambient
@@ -377,9 +458,14 @@ print("  say: " + " / ".join(ps[:10]) + (" …" if len(ps) > 10 else ""))
   # Prefer full discovery (uv + python children) so the pidfile is complete;
   # fall back to $! list if scan is empty (race before exec).
   if ! collect_mode_a_pids_into live; then
-    echo "error: failed to discover started Hark workers; retaining legacy ownership" >&2
+    echo "error: failed to discover started Hark workers" >&2
     if ((${#started[@]} > 0)); then
-      write_legacy_pidfile "${started[@]}" || true
+      if write_legacy_pidfile "${started[@]}"; then
+        echo "retaining legacy ownership in $PIDFILE" >&2
+      else
+        echo "error: failed to publish legacy ownership; rolling back" >&2
+        rollback_started_workers "${started[@]}" || true
+      fi
     fi
     release_pidfile_lock || true
     release_start_lock || true
@@ -388,8 +474,15 @@ print("  say: " + " / ".join(ps[:10]) + (" …" if len(ps) > 10 else ""))
   if ((${#live[@]} > 0)); then
     : # collect_mode_a_pids already wrote canonical structured identities
   elif ((${#started[@]} > 0)); then
-    write_legacy_pidfile "${started[@]}"
-    live=("${started[@]}")
+    if write_legacy_pidfile "${started[@]}"; then
+      live=("${started[@]}")
+    else
+      echo "error: failed to publish fallback worker ownership; rolling back" >&2
+      rollback_started_workers "${started[@]}" || true
+      release_pidfile_lock || true
+      release_start_lock || true
+      exit 1
+    fi
   else
     : # the successful collector already canonicalized empty ownership
   fi

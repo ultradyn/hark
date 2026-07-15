@@ -64,7 +64,6 @@ class PidfdUnavailableError(RuntimeError):
 _WORKER_LOCKS = threading.local()
 _INHERITED_LOCK_PATH_ENV = "HARK_WORKER_PIDFILE_LOCK_PATH"
 _INHERITED_LOCK_FD_ENV = "HARK_WORKER_PIDFILE_LOCK_FD"
-_INHERITED_LOCK_OWNER_ENV = "HARK_WORKER_PIDFILE_LOCK_OWNER_PID"
 
 
 def _load_libc_pidfd_functions():
@@ -95,31 +94,8 @@ def _lock_key(path: Path) -> Path:
     return path.resolve(strict=False)
 
 
-def _is_ancestor_process(candidate: int) -> bool:
-    pid = os.getpid()
-    for _ in range(64):
-        if pid == candidate:
-            return True
-        try:
-            status = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
-        except OSError:
-            return False
-        parent_line = next(
-            (line for line in status.splitlines() if line.startswith("PPid:")), None
-        )
-        if parent_line is None:
-            return False
-        try:
-            pid = int(parent_line.split(":", 1)[1].strip())
-        except ValueError:
-            return False
-        if pid <= 0:
-            return False
-    return False
-
-
 def _has_inherited_exclusive_lock(key: Path) -> bool:
-    """Validate and reuse an outer shell lock across helper processes."""
+    """Validate an inherited descriptor by acquiring its own open description."""
     raw_path = os.environ.get(_INHERITED_LOCK_PATH_ENV)
     raw_fd = os.environ.get(_INHERITED_LOCK_FD_ENV)
     if not raw_path or not raw_fd:
@@ -132,42 +108,18 @@ def _has_inherited_exclusive_lock(key: Path) -> bool:
             return False
         lock_path = key.with_name(f"{key.name}.lock")
         lock_stat = lock_path.stat()
-        try:
-            descriptor = os.fstat(fd)
-            if (descriptor.st_dev, descriptor.st_ino) == (
-                lock_stat.st_dev,
-                lock_stat.st_ino,
-            ):
-                # The inherited descriptor shares the shell's open file
-                # description, so this is a no-op and retains exclusivity.
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return True
-        except (BlockingIOError, OSError):
-            pass
-
-        # uv may close non-standard descriptors before it launches Python.
-        # In that case, prove that the descriptor remains open and locked in
-        # an ancestor shell which is synchronously waiting for this helper.
-        owner = int(os.environ[_INHERITED_LOCK_OWNER_ENV])
-        if owner <= 0 or not _is_ancestor_process(owner):
-            return False
-        owner_descriptor = Path(f"/proc/{owner}/fd/{fd}").stat()
-        if (owner_descriptor.st_dev, owner_descriptor.st_ino) != (
+        descriptor = os.fstat(fd)
+        if (descriptor.st_dev, descriptor.st_ino) != (
             lock_stat.st_dev,
             lock_stat.st_ino,
         ):
             return False
-        probe = lock_path.open("a+b")
-        try:
-            try:
-                fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return True
-            fcntl.flock(probe.fileno(), fcntl.LOCK_UN)
-            return False
-        finally:
-            probe.close()
-    except (KeyError, OSError, TypeError, ValueError):
+        # This succeeds only when the descriptor itself owns (or can safely
+        # acquire) exclusivity. Contention on an unrelated open description is
+        # never evidence of inherited ownership.
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except (BlockingIOError, OSError, TypeError, ValueError):
         return False
 
 
@@ -255,6 +207,35 @@ def _proc_argv(pid: int) -> list[str] | None:
     ]
 
 
+def _proc_environ(pid: int) -> dict[str, str] | None:
+    try:
+        raw = Path(f"/proc/{pid}/environ").read_bytes()
+    except OSError:
+        return None
+    result: dict[str, str] = {}
+    for item in raw.split(b"\0"):
+        if not item or b"=" not in item:
+            continue
+        key, value = item.split(b"=", 1)
+        result[key.decode(errors="surrogateescape")] = value.decode(
+            errors="surrogateescape"
+        )
+    return result
+
+
+def _config_path_from_environ(environ: dict[str, str]) -> Path | None:
+    override = environ.get("HARK_CONFIG")
+    if override:
+        return Path(override).resolve(strict=False)
+    config_home = environ.get("XDG_CONFIG_HOME")
+    if config_home:
+        return (Path(config_home) / "hark" / "config.toml").resolve(strict=False)
+    home = environ.get("HOME")
+    if not home:
+        return None
+    return (Path(home) / ".config" / "hark" / "config.toml").resolve(strict=False)
+
+
 def worker_role_from_argv(argv: Sequence[str]) -> str | None:
     """Classify only the launch shapes Hark itself uses for workers."""
     if not argv:
@@ -320,6 +301,47 @@ def capture_worker_identity(pid: int, *, role: str) -> WorkerRecord | None:
 def record_matches_process(record: WorkerRecord) -> bool:
     """Return whether *record* still names the same worker process lifetime."""
     return inspect_worker(record.pid, expected_role=record.role) == record
+
+
+def worker_records_match_request(
+    records: Collection[WorkerRecord],
+    *,
+    watch: bool,
+    ambient: bool,
+    session: str,
+) -> bool:
+    """Whether live records exactly implement one shell start request."""
+    requested_roles = {
+        role for role, enabled in (("watch", watch), ("ambient", ambient)) if enabled
+    }
+    if len(records) != len(requested_roles):
+        return False
+    if {record.role for record in records} != requested_roles:
+        return False
+    requested_config = _config_path_from_environ(dict(os.environ))
+    if requested_config is None:
+        return False
+    for record in records:
+        if not record_matches_process(record):
+            return False
+        live_environ = _proc_environ(record.pid)
+        if live_environ is None:
+            return False
+        if _config_path_from_environ(live_environ) != requested_config:
+            return False
+        if record.role != "watch":
+            continue
+        argv = _proc_argv(record.pid)
+        if argv is None:
+            return False
+        try:
+            session_index = argv.index("--session")
+            live_session = argv[session_index + 1]
+        except (ValueError, IndexError):
+            return False
+        if live_session != session:
+            return False
+    return True
 
 
 def _parse_stored_record(line: str) -> WorkerRecord | None:
@@ -633,9 +655,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     send.add_argument("pidfile", type=Path)
     send.add_argument("signal", type=_parse_signal)
     send.add_argument("--discover", action="store_true")
+    compatible = sub.add_parser("compatible")
+    compatible.add_argument("pidfile", type=Path)
+    compatible.add_argument("--discover", action="store_true")
+    compatible.add_argument("--watch", action="store_true")
+    compatible.add_argument("--ambient", action="store_true")
+    compatible.add_argument("--session", required=True)
     args = parser.parse_args(argv)
 
     records = collect_worker_records(args.pidfile, discover=args.discover)
+    if args.command == "compatible":
+        return (
+            0
+            if worker_records_match_request(
+                records,
+                watch=args.watch,
+                ambient=args.ambient,
+                session=args.session,
+            )
+            else 1
+        )
     if args.command == "signal":
         outcomes = [_signal_worker(record, args.signal) for record in records]
         records = [outcome.record for outcome in outcomes if outcome.sent]

@@ -35,6 +35,78 @@ def test_worker_role_accepts_real_launch_shapes(argv: list[str], role: str):
     assert worker_process.worker_role_from_argv(argv) == role
 
 
+def test_forged_inherited_lock_rejects_unrelated_contention(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    pidfile = tmp_path / "mode-a.pids"
+    lock_path = tmp_path / "mode-a.pids.lock"
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import fcntl, pathlib, sys, time; "
+                "f = pathlib.Path(sys.argv[1]).open('a+b'); "
+                "fcntl.flock(f.fileno(), fcntl.LOCK_EX); "
+                "print('ready', flush=True); time.sleep(30)"
+            ),
+            str(lock_path),
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "ready"
+        monkeypatch.setenv("HARK_WORKER_PIDFILE_LOCK_PATH", str(pidfile))
+        monkeypatch.setenv("HARK_WORKER_PIDFILE_LOCK_FD", str(descriptor))
+
+        assert worker_process._has_inherited_exclusive_lock(pidfile) is False
+    finally:
+        os.close(descriptor)
+        holder.kill()
+        holder.wait(timeout=2)
+
+
+def test_worker_request_compatibility_requires_exact_roles_and_watch_session(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    watch = worker_process.WorkerRecord(pid=101, start_time="w", role="watch")
+    ambient = worker_process.WorkerRecord(pid=202, start_time="a", role="ambient")
+    monkeypatch.setattr(worker_process, "record_matches_process", lambda _record: True)
+    monkeypatch.setattr(
+        worker_process,
+        "_proc_argv",
+        lambda pid: (
+            ["hark", "watch", "--session", "requested"]
+            if pid == watch.pid
+            else ["hark", "ambient"]
+        ),
+    )
+    monkeypatch.setattr(
+        worker_process, "_proc_environ", lambda _pid: dict(os.environ)
+    )
+
+    assert worker_process.worker_records_match_request(
+        [watch, ambient], watch=True, ambient=True, session="requested"
+    )
+    assert not worker_process.worker_records_match_request(
+        [watch, ambient], watch=True, ambient=True, session="different"
+    )
+    assert not worker_process.worker_records_match_request(
+        [watch], watch=False, ambient=True, session="requested"
+    )
+    monkeypatch.setattr(
+        worker_process,
+        "_proc_environ",
+        lambda _pid: {**os.environ, "HARK_CONFIG": "/different/config.toml"},
+    )
+    assert not worker_process.worker_records_match_request(
+        [watch, ambient], watch=True, ambient=True, session="requested"
+    )
+
+
 @pytest.mark.parametrize(
     "argv",
     [
@@ -575,6 +647,37 @@ printf 'done\n'
             process.wait(timeout=2)
 
 
+def test_shell_rollback_durably_records_a_survivor_after_atomic_write_failure(
+    tmp_path: Path,
+):
+    repo = Path(__file__).resolve().parents[1]
+    script = repo / "scripts" / "run-mode-a.sh"
+    state = tmp_path / "state"
+    command = f"""
+set -euo pipefail
+export HARK_RUN_MODE_A_SOURCE_ONLY=1
+export XDG_STATE_HOME={state!s}
+source {script!s}
+kill() {{ return 0; }}
+sleep() {{ return 0; }}
+attempt_pid_running() {{ return 0; }}
+write_legacy_pidfile() {{ return 42; }}
+rollback_started_workers 4321
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", command],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    pidfile = state / "hark" / "mode-a.pids"
+    assert pidfile.read_text(encoding="utf-8") == "4321\n"
+    assert "retained surviving rollback workers" in result.stderr
+
+
 def test_shell_stop_retains_pidfile_when_identity_collection_fails(tmp_path: Path):
     repo = Path(__file__).resolve().parents[1]
     script = repo / "scripts" / "run-mode-a.sh"
@@ -723,7 +826,108 @@ def test_shell_post_spawn_collection_failure_retains_legacy_pid(tmp_path: Path):
             pass
 
 
-def test_two_concurrent_shell_starts_spawn_one_complete_worker_set(tmp_path: Path):
+@pytest.mark.parametrize("collector_fails", [True, False])
+def test_shell_publication_failure_rolls_back_started_workers(
+    tmp_path: Path, collector_fails: bool
+):
+    """Both collector-error and successful-empty fallbacks are transactional."""
+    repo = Path(__file__).resolve().parents[1]
+    script = repo / "scripts" / "run-mode-a.sh"
+    real_mv = shutil.which("mv")
+    assert real_mv is not None
+    state = tmp_path / "state"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    count = tmp_path / "collect-count"
+    spawn_log = tmp_path / "spawn"
+    uv = fake_bin / "uv"
+    fail_condition = '[ "$n" -gt 2 ] && exit 42\n' if collector_fails else ""
+    uv.write_text(
+        "#!/bin/sh\n"
+        "if printf '%s\\n' \"$*\" | grep -q hark.worker_process; then\n"
+        f"  n=$(cat {count!s} 2>/dev/null || echo 0)\n"
+        "  n=$((n + 1))\n"
+        f"  printf '%s\\n' \"$n\" > {count!s}\n"
+        f"  {fail_condition}"
+        "  exit 0\n"
+        "fi\n"
+        "case \"$*\" in\n"
+        "  *'python -c'*) exit 0 ;;\n"
+        "  *'run hark'*)\n"
+        f"    printf '%s\\n' \"$$\" > {spawn_log!s}\n"
+        "    exec sleep 60 ;;\n"
+        "esac\n"
+        "exit 42\n",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+    mv = fake_bin / "mv"
+    mv.write_text(
+        "#!/bin/sh\n"
+        "for destination do :; done\n"
+        "case \"$destination\" in\n"
+        "  */mode-a.pids) exit 42 ;;\n"
+        "esac\n"
+        'exec "$REAL_MV" "$@"\n',
+        encoding="utf-8",
+    )
+    mv.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "XDG_STATE_HOME": str(state),
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "REAL_MV": real_mv,
+        }
+    )
+
+    result = subprocess.run(
+        [str(script), "--no-ambient"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    assert result.returncode != 0
+    assert "rolling back unpublished Hark workers" in result.stderr
+    spawned = int(spawn_log.read_text(encoding="utf-8").strip())
+    with pytest.raises(ProcessLookupError):
+        os.kill(spawned, 0)
+    assert not (state / "hark" / "mode-a.pids").exists()
+
+
+@pytest.mark.parametrize(
+    ("first_args", "second_args", "spawn_roles", "second_message"),
+    [
+        (
+            ["--no-ambient", "--session", "shared"],
+            ["--no-ambient", "--session", "shared"],
+            ["watch"],
+            "workers already started by concurrent invocation",
+        ),
+        (
+            ["--no-ambient", "--session", "first"],
+            ["--no-ambient", "--session", "second"],
+            ["watch", "watch"],
+            "restarting previous workers",
+        ),
+        (
+            ["--no-ambient", "--session", "first"],
+            ["--no-watch"],
+            ["watch", "ambient"],
+            "restarting previous workers",
+        ),
+    ],
+)
+def test_concurrent_shell_start_only_accepts_compatible_predecessor(
+    tmp_path: Path,
+    first_args: list[str],
+    second_args: list[str],
+    spawn_roles: list[str],
+    second_message: str,
+):
     repo = Path(__file__).resolve().parents[1]
     script = repo / "scripts" / "run-mode-a.sh"
     real_uv = shutil.which("uv")
@@ -770,7 +974,7 @@ def test_two_concurrent_shell_starts_spawn_one_complete_worker_set(tmp_path: Pat
     worker_pid: int | None = None
     try:
         first = subprocess.Popen(
-            [str(script), "--no-ambient", "--session", "first"],
+            [str(script), *first_args],
             cwd=repo,
             env=env,
             stdout=subprocess.PIPE,
@@ -785,7 +989,7 @@ def test_two_concurrent_shell_starts_spawn_one_complete_worker_set(tmp_path: Pat
         assert spawn_log.exists()
 
         second = subprocess.Popen(
-            [str(script), "--no-ambient", "--session", "second"],
+            [str(script), *second_args],
             cwd=repo,
             env=env,
             stdout=subprocess.PIPE,
@@ -800,16 +1004,15 @@ def test_two_concurrent_shell_starts_spawn_one_complete_worker_set(tmp_path: Pat
         assert second.returncode == 0, second_stderr
 
         spawn_lines = spawn_log.read_text(encoding="utf-8").splitlines()
-        assert len(spawn_lines) == 1
-        spawned_pid, role = spawn_lines[0].split()
-        assert role == "watch"
+        assert [line.split()[1] for line in spawn_lines] == spawn_roles
+        spawned_pid, role = spawn_lines[-1].split()
         worker_pid = int(spawned_pid)
         records = worker_process.collect_worker_records(state / "hark" / "mode-a.pids")
         assert [(record.pid, record.role) for record in records] == [
-            (worker_pid, "watch")
+            (worker_pid, role)
         ]
-        assert "starting watch" in first_stdout
-        assert "workers already started by concurrent invocation" in second_stdout
+        assert f"starting {spawn_roles[0]}" in first_stdout
+        assert second_message in second_stdout
     finally:
         for process in processes:
             if process.poll() is None:

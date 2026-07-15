@@ -19,7 +19,7 @@ tasks:
       file: T001-speech-run-listen-accepts-poli.todo
       id: T001
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: speech.run_listen accepts policy; drop ambient getattr
     - complexity: high

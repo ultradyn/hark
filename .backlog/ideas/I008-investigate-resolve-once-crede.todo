@@ -1,0 +1,35 @@
+---
+complexity: medium
+created_at: "2026-07-15T04:30:17Z"
+depends_on: []
+estimate_hours: 12
+id: I008
+priority: low
+status: pending
+tags:
+    - architecture
+    - speculative
+    - providers
+title: 'Investigate: resolve-once credentials + provider registry (architecture review #8)'
+updated_at: "2026-07-15T04:30:17Z"
+---
+## Source
+Architecture review 2026-07-15 candidate 8 (Speculative). Report: ~/served-html/architecture-review-hark-latest.html
+
+## Problem
+- `providers/auth.py` is deep (multi-store discovery)
+- `providers/resolve.py` is a shallow if/elif factory
+- Adapters re-resolve tokens per TTS chunk; Google bypasses shared auth
+- Doctor + `hark providers` re-build status rows in parallel
+
+## Investigate
+1. `get_token(provider)` inject into STT/TTS adapters (resolve once)
+2. Provider registry (pattern already cleaner in `agents/resolve`)
+3. Fold Google into same auth seam
+4. `all_provider_status()` as pure projection of that seam
+
+## Outcome if promoted
+Milestone under architecture revamp when voice deepens land. Real multi-adapter seam already exists for STT/TTS (ADR-004 cloud-first).
+
+## Related
+src/hark/providers/{resolve,auth,base,xai,openai_p,google_p,local_stt}.py

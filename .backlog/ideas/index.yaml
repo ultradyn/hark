@@ -55,3 +55,5 @@ ideas:
       title: 'Wake enrollment: record 5–10 activation samples for near-miss + optional light adapt'
     - file: I007-investigate-deepen-config-load.todo
       id: I007
+    - file: I008-investigate-resolve-once-crede.todo
+      id: I008

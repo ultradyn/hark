@@ -27,7 +27,7 @@ epics:
       locked: false
       name: 'E3: Migrate speech/ambient/TTS quiet-gate to policy'
       path: 03-e3-migrate-speech-ambient-tts
-      status: pending
+      status: done
     - complexity: medium
       depends_on: []
       description: Prove bound hark listen --end-mode radio does not inherit ambient.streaming side effects unless policy says so.

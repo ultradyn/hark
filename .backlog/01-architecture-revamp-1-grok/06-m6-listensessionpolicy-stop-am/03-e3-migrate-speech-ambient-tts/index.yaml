@@ -10,7 +10,7 @@ stats:
     in_progress: 0
     pending: 2
     total: 2
-status: pending
+status: done
 tasks:
     - complexity: high
       depends_on:
@@ -29,6 +29,6 @@ tasks:
       file: T002-ambient-cli-tts-quiet-gate-bui.todo
       id: T002
       priority: high
-      status: in_progress
+      status: done
       tags: []
       title: ambient + CLI + TTS quiet-gate build policy at seam

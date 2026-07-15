@@ -1,0 +1,379 @@
+"""B121/B122: streaming ambient is conversation mode (no re-wake between turns)."""
+
+from __future__ import annotations
+
+import io
+from types import SimpleNamespace
+
+import hark.ambient as ambient
+from hark.ambient import AmbientResult, complete_after_wake
+from hark.answer_window.result import ListenResult
+from hark.config import AmbientConfig, HarkConfig, ListenConfig
+from hark.wake import WakeHit
+
+
+def _hit() -> WakeHit:
+    return WakeHit(
+        phrase="hey iris",
+        remainder="",
+        raw="hey iris",
+        backend="text_probe",
+    )
+
+
+def test_streaming_conversation_idle_config_default():
+    assert AmbientConfig().streaming_conversation_idle_s == 45.0
+    assert HarkConfig().ambient.streaming_conversation_idle_s == 45.0
+
+
+def test_streaming_conversation_no_rewake_between_turns(monkeypatch):
+    """B122: one wake → multiple silence listens without re-arming wake."""
+    cfg = HarkConfig(
+        ambient=AmbientConfig(
+            streaming=True,
+            streaming_ack_min_quiet_s=2.0,
+            streaming_conversation_idle_s=30.0,
+            post_wake_arm_cue=True,
+        ),
+        listen=ListenConfig(end_mode="radio"),  # conversation forces silence turns
+    )
+    texts = ["status of deploy", "and the logs", ""]
+    listen_calls: list[dict] = []
+    idx = {"n": 0}
+
+    def fake_listen(cfg_arg, **kwargs):
+        pol = kwargs.get("policy")
+        listen_calls.append(
+            {
+                "policy": pol,
+                "end_mode": getattr(pol, "end_mode", None) if pol else kwargs.get("end_mode"),
+                "streaming": getattr(pol, "streaming", None) if pol else kwargs.get("streaming"),
+                "profile": getattr(pol, "profile", None) if pol else kwargs.get("profile"),
+                "initial_timeout_s": (
+                    getattr(pol, "initial_timeout_s", None) if pol else None
+                ),
+            }
+        )
+        n = idx["n"]
+        idx["n"] += 1
+        if n < 2:
+            return ListenResult(
+                text=texts[n],
+                provider="fake",
+                duration_ms=50 + n,
+                end_mode="silence",
+                end_phrase="turn_quiet",
+                stream_id=f"sturn{n}",
+                partials_emitted=0,
+            )
+        # Third open: no speech → conversation idle end
+        raise TimeoutError("no speech detected within timeout")
+
+    out = io.StringIO()
+    monkeypatch.setattr(ambient, "run_listen", fake_listen)
+    monkeypatch.setattr(ambient, "syslog", lambda *a, **k: None)
+    monkeypatch.setattr(ambient, "shutdown_requested", lambda: False)
+    monkeypatch.setattr(ambient, "reload_requested", lambda: False)
+
+    result = complete_after_wake(cfg, _hit(), announce=False, out=out)
+
+    assert len(listen_calls) == 3
+    for c in listen_calls:
+        assert c["policy"] is not None
+        assert str(c["end_mode"].value if hasattr(c["end_mode"], "value") else c["end_mode"]) == "silence"
+        assert c["streaming"] is True
+        assert c["profile"] == "post_wake"
+    # Later turns use conversation idle as gate timeout
+    assert listen_calls[1]["initial_timeout_s"] == 30.0
+    assert listen_calls[2]["initial_timeout_s"] == 30.0
+
+    assert result.skip_emit is True
+    assert result.kind == "ambient.conversation_end"
+    assert result.conversation_id
+    assert result.turn == 2
+    assert result.listen and result.listen.get("reason") == "conversation_idle"
+
+    # Parse dual-written HEP lines from out
+    import json
+
+    events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    kinds = [e["kind"] for e in events]
+    assert kinds.count("ambient.turn") == 2
+    assert "ambient.conversation_end" in kinds
+    assert "ambient.prompt" not in kinds  # idle end does not re-emit as prompt
+    turns = [e for e in events if e["kind"] == "ambient.turn"]
+    assert turns[0]["text"] == "status of deploy"
+    assert turns[1]["text"] == "and the logs"
+    assert turns[0]["turn"] == 1
+    assert turns[1]["turn"] == 2
+    assert turns[0]["conversation_id"] == turns[1]["conversation_id"]
+    assert turns[0]["streaming"] is True
+    assert turns[0]["final"] is False
+    assert "full" in (turns[0].get("instructions") or "").lower() or "TTS" in (
+        turns[0].get("instructions") or ""
+    )
+
+
+def test_streaming_false_single_listen_uses_config_end_mode(monkeypatch):
+    """Classic path: one listen then return (outer loop re-arms wake)."""
+    cfg = HarkConfig(
+        ambient=AmbientConfig(streaming=False),
+        listen=ListenConfig(end_mode="silence"),
+    )
+    calls: list[dict] = []
+
+    def fake_listen(cfg_arg, **kwargs):
+        calls.append(kwargs)
+        return ListenResult(
+            text="one shot",
+            provider="fake",
+            duration_ms=10,
+            end_mode="silence",
+            stream_id="s1",
+        )
+
+    monkeypatch.setattr(ambient, "run_listen", fake_listen)
+    monkeypatch.setattr(ambient, "syslog", lambda *a, **k: None)
+
+    result = complete_after_wake(cfg, _hit(), announce=False)
+    assert len(calls) == 1
+    assert calls[0].get("profile") == "post_wake"
+    assert calls[0].get("end_mode") == "silence"
+    assert result.text == "one shot"
+    assert result.skip_emit is False
+    assert result.kind is None
+
+
+def test_streaming_end_phrase_finalizes_conversation(monkeypatch):
+    cfg = HarkConfig(
+        ambient=AmbientConfig(streaming=True, streaming_conversation_idle_s=40.0),
+        listen=ListenConfig(end_mode="silence"),
+    )
+    calls = {"n": 0}
+
+    def fake_listen(cfg_arg, **kwargs):
+        calls["n"] += 1
+        return ListenResult(
+            text="ship it okay hark send",
+            provider="fake",
+            duration_ms=20,
+            end_mode="silence",
+            stream_id="sfin",
+        )
+
+    out = io.StringIO()
+    monkeypatch.setattr(ambient, "run_listen", fake_listen)
+    monkeypatch.setattr(ambient, "syslog", lambda *a, **k: None)
+    monkeypatch.setattr(ambient, "shutdown_requested", lambda: False)
+    monkeypatch.setattr(ambient, "reload_requested", lambda: False)
+
+    result = complete_after_wake(cfg, _hit(), announce=False, out=out)
+    assert calls["n"] == 1  # session ends after product end phrase
+    assert result.kind == "ambient.prompt"
+    assert result.skip_emit is True
+    assert "ship it" in (result.text or "")
+    import json
+
+    events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    assert any(e["kind"] == "ambient.prompt" and e.get("final") is True for e in events)
+    assert not any(e["kind"] == "ambient.turn" for e in events)
+
+
+def test_streaming_cancel_phrase_ends_conversation(monkeypatch):
+    cfg = HarkConfig(ambient=AmbientConfig(streaming=True))
+    monkeypatch.setattr(
+        ambient,
+        "run_listen",
+        lambda *a, **k: ListenResult(
+            text="never mind hark cancel",
+            provider="fake",
+            duration_ms=5,
+            end_mode="silence",
+            stream_id="sc",
+        ),
+    )
+    out = io.StringIO()
+    monkeypatch.setattr(ambient, "syslog", lambda *a, **k: None)
+    monkeypatch.setattr(ambient, "shutdown_requested", lambda: False)
+    monkeypatch.setattr(ambient, "reload_requested", lambda: False)
+
+    result = complete_after_wake(cfg, _hit(), announce=False, out=out)
+    assert result.kind == "ambient.cancelled"
+    assert result.skip_emit is True
+    import json
+
+    events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    assert any(e["kind"] == "ambient.cancelled" for e in events)
+
+
+def test_bound_answer_still_ignores_ambient_streaming():
+    """P1.M6 invariant: bound windows must not inherit conversation streaming."""
+    from hark.answer_window import ListenSessionPolicy
+
+    cfg = HarkConfig(
+        ambient=AmbientConfig(streaming=True, streaming_conversation_idle_s=12.0),
+        listen=ListenConfig(end_mode="radio"),
+    )
+    bound = ListenSessionPolicy.from_config(cfg, "bound_answer")
+    assert bound.streaming is False
+    post = ListenSessionPolicy.from_config(cfg, "post_wake")
+    assert post.streaming is True
+
+
+def test_run_ambient_streaming_does_not_call_wake_between_turns(monkeypatch):
+    """run_ambient: one wake wait, multi-turn conversation, then return (loop re-arms)."""
+    cfg = HarkConfig(ambient=AmbientConfig(streaming=True, enabled=True, engine="text_probe"))
+    wake_calls = {"n": 0}
+    listen_n = {"n": 0}
+
+    def fake_wait(*a, **k):
+        wake_calls["n"] += 1
+        return _hit()
+
+    def fake_listen(cfg_arg, **kwargs):
+        listen_n["n"] += 1
+        if listen_n["n"] == 1:
+            return ListenResult(
+                text="first turn",
+                provider="fake",
+                duration_ms=10,
+                end_mode="silence",
+                stream_id="a1",
+            )
+        raise TimeoutError("no speech detected within timeout")
+
+    class Backend:
+        name = "text_probe"
+
+        def score_snippet(self, *a, **k):
+            return None
+
+    out = io.StringIO()
+    monkeypatch.setattr(ambient, "_wait_for_wake", fake_wait)
+    monkeypatch.setattr(ambient, "run_listen", fake_listen)
+    monkeypatch.setattr(ambient, "syslog", lambda *a, **k: None)
+    monkeypatch.setattr(ambient, "shutdown_requested", lambda: False)
+    monkeypatch.setattr(ambient, "reload_requested", lambda: False)
+    monkeypatch.setattr(ambient, "build_wake_backend", lambda *a, **k: Backend())
+
+    result = ambient.run_ambient(cfg, once=True, timeout_s=5, announce=False, out=out)
+    assert wake_calls["n"] == 1
+    assert listen_n["n"] == 2
+    assert result.activated is True
+    assert result.skip_emit is True
+    import json
+
+    events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    assert any(e["kind"] == "ambient.turn" for e in events)
+
+
+def test_loop_skips_emit_when_conversation_already_wrote(monkeypatch):
+    """Outer ambient loop must not re-emit ambient.prompt after conversation path."""
+    import json
+
+    import hark.lifecycle as lc
+    from hark.lifecycle import clear_reload_request, request_shutdown
+
+    cfg = HarkConfig()
+    cfg.ambient.enabled = True
+    cfg.ambient.engine = "text_probe"
+    cfg.ambient.timeout_s = 0.05
+    cfg.ambient.surface_timeouts = False
+    cfg.ambient.streaming = True
+
+    lc._shutdown = False
+    clear_reload_request()
+    calls = {"n": 0}
+
+    def fake_run_ambient(cfg, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Simulate conversation path that dual-wrote turns already
+            out = kwargs.get("out")
+            if out is not None:
+                ambient.emit_hep(
+                    {
+                        "schema": "hark.event.v1",
+                        "kind": "ambient.turn",
+                        "event_id": "t1",
+                        "text": "hello",
+                        "conversation_id": "c1",
+                        "turn": 1,
+                        "streaming": True,
+                        "final": False,
+                        "partial": False,
+                    },
+                    out,
+                )
+            return AmbientResult(
+                activated=True,
+                phrase="hey iris",
+                text="hello",
+                skip_emit=True,
+                kind="ambient.conversation_end",
+                conversation_id="c1",
+                turn=1,
+                event_id="e1",
+                stream_id="s1",
+            )
+        request_shutdown(reason="stop")
+        return AmbientResult(activated=False, phrase=None, text=None)
+
+    class Backend:
+        def score_snippet(self, *a, **k):
+            return None
+
+    monkeypatch.setattr(ambient, "run_ambient", fake_run_ambient)
+    monkeypatch.setattr(ambient, "syslog", lambda *a, **k: None)
+    monkeypatch.setattr(ambient, "run_tts", lambda *a, **k: None)
+    monkeypatch.setattr(ambient, "build_wake_backend", lambda *a, **k: Backend())
+    monkeypatch.setattr(ambient, "install_signal_handlers", lambda: None)
+
+    out = io.StringIO()
+    rc = ambient.run_ambient_loop(cfg, out=out, announce=False, idle_log_s=999)
+    assert rc == 0
+    kinds = [
+        json.loads(line).get("kind")
+        for line in out.getvalue().splitlines()
+        if line.strip()
+    ]
+    # conversation dual-wrote turn; loop skip_emit must not add ambient.prompt
+    assert "ambient.turn" in kinds
+    assert "ambient.prompt" not in kinds
+
+    lc._shutdown = False
+    clear_reload_request()
+
+
+def test_present_ambient_turn_compact():
+    from hark.state_feed.present import present_for_monitor
+
+    compact = present_for_monitor(
+        {
+            "schema": "hark.event.v1",
+            "kind": "ambient.turn",
+            "event_id": "e1",
+            "observed_at": "2026-01-01T00:00:00Z",
+            "text": "hello there",
+            "stream_id": "s1",
+            "conversation_id": "c1",
+            "turn": 2,
+            "streaming": True,
+            "final": False,
+            "partial": False,
+            "ack_min_quiet_s": 2.0,
+        }
+    )
+    assert compact["kind"] == "ambient.turn"
+    assert compact["turn"] == 2
+    assert compact["conversation_id"] == "c1"
+    assert compact["streaming"] is True
+    assert compact["final"] is False
+    assert "TTS" in compact["instructions"] or "reply" in compact["instructions"].lower()
+
+
+def test_mode_a_wake_kinds_include_turn():
+    from hark.monitor_feed import MODE_A_WAKE_KINDS
+
+    assert "ambient.turn" in MODE_A_WAKE_KINDS
+    assert "ambient.conversation_end" in MODE_A_WAKE_KINDS

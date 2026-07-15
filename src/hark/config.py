@@ -180,10 +180,12 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "config_watch",
         "config_watch_poll_ms",
         "config_watch_debounce_ms",
-        # Ambient streaming mode (B098): short live TTS on partials allowed
+        # Ambient streaming / conversation mode (B098 + B121/B122)
         "streaming",
         # B105: min operator quiet before streaming TTS play (seconds)
         "streaming_ack_min_quiet_s",
+        # B122: max wait for next turn speech before re-arming wake
+        "streaming_conversation_idle_s",
     }),
     "stt": frozenset({
         "provider",
@@ -451,15 +453,20 @@ class AmbientConfig:
     config_watch: bool = True
     config_watch_poll_ms: int = 1000
     config_watch_debounce_ms: int = 400
-    # Streaming mode (B098): when true, ambient.partial HEP instructions allow
-    # short live TTS acks/interim replies (not hard HOLD-only). Default false
-    # keeps classic radio HOLD until ambient.prompt / final.
+    # Streaming / conversation mode (B098 + B121/B122): when true, after the
+    # first wake hark stays in an open post-wake conversation — quiet ends a
+    # *turn* (ambient.turn; full TTS reply OK), not the session. Classic radio
+    # HOLD + re-wake after each ambient.prompt remains the default (false).
     # Full duplex barge-in is separate; B105 gates play on operator quiet.
     streaming: bool = False
     # B105: when streaming, live TTS play waits until operator has been quiet
     # this many seconds (or listen ends). Continuous speech without the pause
     # keeps acks deferred so half-duplex mute does not barge mid-thought.
+    # Also the quiet that ends a conversation *turn* (silence end).
     streaming_ack_min_quiet_s: float = 2.0
+    # B122: after a conversation turn, wait this long for more speech before
+    # re-arming wake (operator need not re-say iris/hark between short pauses).
+    streaming_conversation_idle_s: float = 45.0
     # Full wake policy (names/phrases + learned aliases); set by load_config
     wake_policy: Any = None
 
@@ -747,17 +754,16 @@ post_wake_no_open_nudge = true
 config_watch = true
 config_watch_poll_ms = 1000
 config_watch_debounce_ms = 400
-# Streaming mode (B098): short live TTS on ambient.partial (default OFF = HOLD).
-# When true, partial HEP instructions allow brief interruptible acks; hark holds
-# play until operator quiet ≥ streaming_ack_min_quiet_s (B105, default 2s) or
-# listen ends — continuous speech without that pause is not stepped on.
-# Quiet-gate mid-capture TTS is radio-only (B108): silence end_mode still
-# auto-finalizes on end_silence_s and forces HOLD TTS until capture ends.
-# Also clamps radio idle auto-finish so ambient.prompt lands after a natural
-# pause (~end_silence_s) instead of the classic ~6.3s hold (B112).
+# Streaming / conversation mode (B098 + B121/B122; default OFF = classic radio).
+# When true: after first wake, stay in open post-wake conversation — operator
+# quiet ≥ streaming_ack_min_quiet_s ends a *turn* (ambient.turn; full TTS OK),
+# not the session. No re-saying iris/hark between turns. Long idle
+# (streaming_conversation_idle_s) re-arms wake. Soft/end phrases optional for
+# explicit session finalize; not required each turn.
 # streaming = false
 # streaming_ack_min_quiet_s = 2.0
-# Once the quiet gate is dogfooded safe, operators may leave streaming = true.
+# streaming_conversation_idle_s = 45.0
+# Once dogfooded safe, operators may leave streaming = true.
 
 # Coding CLI resolution for voice spawn (I005 / B055–B059)
 # Prefer short aliases (cc/cx/gk/cr) when they are *safe* PATH binaries — not
@@ -963,6 +969,9 @@ def _build_ambient_config(
         streaming=_as_bool(ambient_raw.get("streaming"), default=False),
         streaming_ack_min_quiet_s=float(
             ambient_raw.get("streaming_ack_min_quiet_s", 2.0)
+        ),
+        streaming_conversation_idle_s=float(
+            ambient_raw.get("streaming_conversation_idle_s", 45.0)
         ),
         wake_policy=policy,
     )
@@ -1697,6 +1706,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "config_watch_debounce_ms": cfg.ambient.config_watch_debounce_ms,
             "streaming": cfg.ambient.streaming,
             "streaming_ack_min_quiet_s": cfg.ambient.streaming_ack_min_quiet_s,
+            "streaming_conversation_idle_s": cfg.ambient.streaming_conversation_idle_s,
         },
         "stt": {
             "provider": cfg.stt.provider,

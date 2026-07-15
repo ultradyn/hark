@@ -29,7 +29,12 @@ from hark.lifecycle import (
 from hark.monitor_feed import emit_hep
 from hark.paths import default_config_path
 from hark.mic_coord import ambient_pause_requested
-from hark.partial import make_final_event, new_stream_id
+from hark.listen_end import (
+    DEFAULT_CANCEL_PHRASES,
+    DEFAULT_END_PHRASES,
+    evaluate_radio_transcript,
+)
+from hark.partial import make_turn_event, new_stream_id
 from hark.speech import run_listen, run_tts
 from hark.syslog import log as syslog
 from hark.wake import (
@@ -127,6 +132,13 @@ class AmbientResult:
     partials_emitted: int = 0
     final: bool = True
     partial: bool = False
+    # B121/B122: conversation session fields
+    conversation_id: str | None = None
+    turn: int | None = None
+    # When True, complete_after_wake already dual-wrote HEP; outer loop skips.
+    skip_emit: bool = False
+    # Optional kind override for ambient_event_line (e.g. ambient.conversation_end)
+    kind: str | None = None
 
 
 def _apply_policy_to_backend(backend: WakeBackend, policy: WakePolicy) -> None:
@@ -479,49 +491,49 @@ def _wait_for_wake(
         _close_stream()
 
 
-def complete_after_wake(
+def _emit_ambient_hep(
+    ev: dict[str, Any],
+    *,
+    out: TextIO | None,
+    on_partial: Any | None = None,
+    syslog_kind: str | None = None,
+) -> None:
+    """Dual-write ambient HEP (stdout/out + ambient.jsonl) and optional syslog."""
+    if out is not None:
+        emit_hep(ev, out)
+    if on_partial is not None:
+        on_partial(ev)
+    kind = syslog_kind or str(ev.get("kind") or "ambient.event")
+    syslog(
+        kind,
+        component="ambient",
+        level="info",
+        stream_id=ev.get("stream_id"),
+        conversation_id=ev.get("conversation_id"),
+        turn=ev.get("turn"),
+        seq=ev.get("seq"),
+        text=(ev.get("text") or "")[:300],
+        partial=ev.get("partial"),
+        final=ev.get("final"),
+        phrase=ev.get("phrase"),
+    )
+
+
+def _single_post_wake_listen(
     cfg: HarkConfig,
     hit: WakeHit,
     *,
-    announce: bool = True,
     on_partial: Any | None = None,
     out: TextIO | None = None,
 ) -> AmbientResult:
-    """After wake: optional lead-in + arm cue → energy-gated cloud listen.
-
-    No spoken 'okay' / 'listening' by default. Post-wake settle, softer/configurable
-    open threshold, and no-open retry/nudge are driven by ``[ambient]`` /
-    ``[listen]`` (B031). In radio end_mode, interim STT is streamed as
-    ambient.partial via on_partial / out until the end phrase yields
-    ambient.prompt (final). Default HOLD; when ``[ambient].streaming`` is true
-    (B098), partial instructions allow short live TTS acks (not pane delivery).
-    """
-    del announce
+    """Classic one-shot post-wake listen (radio/silence) → ambient.prompt."""
     event_id = new_event_id()
     stream_id = new_stream_id()
 
     def _emit_partial(ev: dict[str, Any]) -> None:
         ev = {**ev, "phrase": hit.phrase}
-        # Dual-write partials to ambient.jsonl so radio stream reaches
-        # hark monitor even when ambient stdout is redirected (B104).
-        if out is not None:
-            emit_hep(ev, out)
-        if on_partial is not None:
-            on_partial(ev)
-        syslog(
-            "ambient.partial",
-            component="ambient",
-            level="info",
-            stream_id=ev.get("stream_id"),
-            seq=ev.get("seq"),
-            text=(ev.get("text") or "")[:300],
-            partial=True,
-            final=False,
-            warning=ev.get("warning"),
-        )
+        _emit_ambient_hep(ev, out=out, on_partial=on_partial, syslog_kind="ambient.partial")
 
-    # Post-wake gate / arm / no-open knobs live on the post_wake Answer Window
-    # profile (policy_from_config) — do not re-read ambient gate fields here.
     from hark.answer_window.policy import policy_from_config
 
     pw_policy = policy_from_config(
@@ -542,10 +554,10 @@ def complete_after_wake(
         initial_timeout_s=float(pw_policy.initial_timeout_s),
         lead_in_ms=int(pw_policy.lead_in_ms),
         arm_cue=bool(pw_policy.arm_cue),
+        streaming=False,
     )
 
     try:
-        # profile=post_wake encodes softer gate, lead_in, arm cue, no-open nudge.
         listened = run_listen(
             cfg,
             profile="post_wake",
@@ -560,8 +572,6 @@ def complete_after_wake(
             "no speech detected" in err_s.lower()
             or "no speech captured" in err_s.lower()
         )
-        # run_listen already spoke post_wake_no_open_tts as the mid-path nudge
-        # when enabled — do not double-speak on final fail (metrics are enough).
         syslog(
             "ambient.error",
             component="ambient",
@@ -634,6 +644,497 @@ def complete_after_wake(
         partials_emitted=listened.partials_emitted,
         final=True,
         partial=False,
+    )
+
+
+def _conversation_after_wake(
+    cfg: HarkConfig,
+    hit: WakeHit,
+    *,
+    on_partial: Any | None = None,
+    out: TextIO | None = None,
+) -> AmbientResult:
+    """B121/B122: open post-wake conversation — turns on quiet; no re-wake.
+
+    After the first wake, re-open silence-mode listens without waiting for
+    iris/hark again until cancel, product end-phrase finalize, conversation
+    idle, shutdown, or config reload.
+    """
+    from hark.answer_window.policy import policy_from_config
+
+    amb = cfg.ambient
+    conversation_id = new_stream_id()
+    ack_quiet = float(getattr(amb, "streaming_ack_min_quiet_s", 2.0) or 2.0)
+    conv_idle = float(getattr(amb, "streaming_conversation_idle_s", 45.0) or 45.0)
+    end_silence = float(getattr(cfg.listen, "end_silence_s", 2.1) or 2.1)
+    # Turn quiet ≈ max(ack quiet, end_silence) so turn-taking matches B105 gate.
+    turn_silence = max(end_silence, ack_quiet)
+    end_phrases = tuple(
+        getattr(cfg.listen, "end_phrases", None) or DEFAULT_END_PHRASES
+    )
+    cancel_phrases = tuple(
+        getattr(cfg.listen, "cancel_phrases", None) or DEFAULT_CANCEL_PHRASES
+    )
+
+    syslog(
+        "ambient.conversation_start",
+        component="ambient",
+        level="info",
+        phrase=hit.phrase,
+        wake_backend=hit.backend,
+        conversation_id=conversation_id,
+        streaming_ack_min_quiet_s=ack_quiet,
+        streaming_conversation_idle_s=conv_idle,
+        turn_silence_s=turn_silence,
+    )
+
+    turn = 0
+    last_text: str | None = None
+    last_stream_id: str | None = None
+    last_event_id: str | None = None
+    last_listen: dict[str, Any] | None = None
+    last_partials = 0
+
+    while not shutdown_requested() and not reload_requested():
+        stream_id = new_stream_id()
+        is_first = turn == 0
+        # First turn: post_wake gate timeout; later turns: conversation idle.
+        gate_timeout = (
+            float(
+                getattr(amb, "post_wake_timeout_s", None)
+                or getattr(cfg.listen, "initial_timeout_s", 45.0)
+                or 45.0
+            )
+            if is_first
+            else conv_idle
+        )
+        pol = policy_from_config(
+            cfg,
+            "post_wake",
+            stream_id=stream_id,
+            end_mode="silence",
+            streaming=True,
+            streaming_ack_min_quiet_s=ack_quiet,
+            end_silence_s=turn_silence,
+            initial_timeout_s=gate_timeout,
+            # First turn may nudge; later turns just end the conversation.
+            no_open_retry=bool(is_first and getattr(cfg.listen, "no_open_retry", True)),
+            no_open_nudge=bool(
+                is_first and getattr(amb, "post_wake_no_open_nudge", True)
+            ),
+            # Re-arm cue each turn so operator hears the channel is still open.
+            arm_cue=bool(getattr(amb, "post_wake_arm_cue", True)),
+            lead_in_ms=(
+                int(getattr(amb, "post_wake_lead_in_ms", 150) or 0)
+                if is_first
+                else 50
+            ),
+        )
+
+        syslog(
+            "ambient.post_wake_listen",
+            component="ambient",
+            level="info",
+            phrase=hit.phrase,
+            wake_backend=hit.backend,
+            stream_id=stream_id,
+            conversation_id=conversation_id,
+            turn=turn + 1,
+            abs_open_db=float(pol.abs_open_db),
+            initial_timeout_s=float(pol.initial_timeout_s),
+            lead_in_ms=int(pol.lead_in_ms),
+            arm_cue=bool(pol.arm_cue),
+            streaming=True,
+            end_mode="silence",
+        )
+
+        try:
+            listened = run_listen(cfg, policy=pol)
+        except Exception as exc:
+            err_s = str(exc)
+            is_no_open = (
+                "no speech detected" in err_s.lower()
+                or "no speech captured" in err_s.lower()
+            )
+            if is_first:
+                event_id = new_event_id()
+                syslog(
+                    "ambient.error",
+                    component="ambient",
+                    level="error",
+                    message=err_s[:300],
+                    phrase=hit.phrase,
+                    wake_backend=hit.backend,
+                    stream_id=stream_id,
+                    conversation_id=conversation_id,
+                    event_id=event_id,
+                    reason="no_open" if is_no_open else "listen_failed",
+                    listen_error=err_s[:240],
+                )
+                return AmbientResult(
+                    activated=True,
+                    phrase=hit.phrase,
+                    text=None,
+                    wake_backend=hit.backend,
+                    listen={
+                        "error": err_s,
+                        "reason": "no_open" if is_no_open else "listen_failed",
+                        "abs_open_db": float(pol.abs_open_db),
+                        "initial_timeout_s": float(pol.initial_timeout_s),
+                        "conversation_id": conversation_id,
+                    },
+                    event_id=event_id,
+                    stream_id=stream_id,
+                    conversation_id=conversation_id,
+                    final=True,
+                    partial=False,
+                )
+            # Later turn no-open → conversation idle; re-arm wake (no re-prompt).
+            syslog(
+                "ambient.conversation_end",
+                component="ambient",
+                level="info",
+                conversation_id=conversation_id,
+                reason="conversation_idle",
+                turns=turn,
+                idle_s=conv_idle,
+            )
+            end_ev = {
+                "schema": "hark.event.v1",
+                "kind": "ambient.conversation_end",
+                "event_id": new_event_id(),
+                "observed_at": utc_now_iso(),
+                "conversation_id": conversation_id,
+                "turns": turn,
+                "phrase": hit.phrase,
+                "reason": "conversation_idle",
+                "partial": False,
+                "final": True,
+                "streaming": True,
+                "instructions": (
+                    "Conversation session ended (idle). Wake is re-armed; "
+                    "operator must say the wake name for a new session. "
+                    "No new operator prompt on this event."
+                ),
+            }
+            _emit_ambient_hep(end_ev, out=out, syslog_kind="ambient.conversation_end")
+            return AmbientResult(
+                activated=True,
+                phrase=hit.phrase,
+                text=last_text,
+                wake_backend=hit.backend,
+                listen={
+                    **(last_listen or {}),
+                    "reason": "conversation_idle",
+                    "turns": turn,
+                    "conversation_id": conversation_id,
+                },
+                event_id=last_event_id or end_ev["event_id"],
+                stream_id=last_stream_id or stream_id,
+                conversation_id=conversation_id,
+                turn=turn or None,
+                partials_emitted=last_partials,
+                final=True,
+                partial=False,
+                skip_emit=True,
+                kind="ambient.conversation_end",
+            )
+
+        sid = listened.stream_id or stream_id
+        body = (listened.text or "").strip()
+
+        if listened.cancelled:
+            event_id = new_event_id()
+            cancel_ev = {
+                "schema": "hark.event.v1",
+                "kind": "ambient.cancelled",
+                "event_id": event_id,
+                "observed_at": utc_now_iso(),
+                "stream_id": sid,
+                "conversation_id": conversation_id,
+                "turn": turn + 1,
+                "text": body or None,
+                "phrase": hit.phrase,
+                "partial": False,
+                "final": True,
+                "streaming": True,
+                "instructions": (
+                    "Conversation cancelled — ignore prior turns for this "
+                    "conversation_id. Wake re-arms."
+                ),
+            }
+            _emit_ambient_hep(cancel_ev, out=out, syslog_kind="ambient.cancelled")
+            return AmbientResult(
+                activated=True,
+                phrase=hit.phrase,
+                text=body or None,
+                wake_backend=hit.backend,
+                listen={
+                    "provider": listened.provider,
+                    "duration_ms": listened.duration_ms,
+                    "end_phrase": listened.end_phrase,
+                    "cancelled": True,
+                    "conversation_id": conversation_id,
+                    "turns": turn,
+                },
+                event_id=event_id,
+                stream_id=sid,
+                conversation_id=conversation_id,
+                turn=turn + 1,
+                partials_emitted=listened.partials_emitted,
+                final=True,
+                partial=False,
+                skip_emit=True,
+                kind="ambient.cancelled",
+            )
+
+        if not body:
+            if is_first:
+                event_id = new_event_id()
+                return AmbientResult(
+                    activated=True,
+                    phrase=hit.phrase,
+                    text=None,
+                    wake_backend=hit.backend,
+                    listen={
+                        "error": "empty transcript",
+                        "reason": "empty_stt",
+                        "conversation_id": conversation_id,
+                    },
+                    event_id=event_id,
+                    stream_id=sid,
+                    conversation_id=conversation_id,
+                    final=True,
+                    partial=False,
+                )
+            break
+
+        # Cancel / product end on the turn transcript (silence path has no radio eval).
+        # Soft ends do NOT force session finalize — quiet already ended the turn.
+        hit_phrase = evaluate_radio_transcript(
+            body,
+            end_phrases=end_phrases,
+            cancel_phrases=cancel_phrases,
+            soft_end_phrases=(),
+            soft_end_phrases_enabled=False,
+        )
+        if hit_phrase is not None and hit_phrase.kind == "cancel":
+            event_id = new_event_id()
+            cancel_ev = {
+                "schema": "hark.event.v1",
+                "kind": "ambient.cancelled",
+                "event_id": event_id,
+                "observed_at": utc_now_iso(),
+                "stream_id": sid,
+                "conversation_id": conversation_id,
+                "turn": turn + 1,
+                "text": hit_phrase.body or body,
+                "phrase": hit.phrase,
+                "end_phrase": hit_phrase.phrase,
+                "partial": False,
+                "final": True,
+                "streaming": True,
+                "instructions": (
+                    "Conversation cancelled by operator phrase. Wake re-arms."
+                ),
+            }
+            _emit_ambient_hep(cancel_ev, out=out, syslog_kind="ambient.cancelled")
+            return AmbientResult(
+                activated=True,
+                phrase=hit.phrase,
+                text=hit_phrase.body or body,
+                wake_backend=hit.backend,
+                listen={
+                    "provider": listened.provider,
+                    "duration_ms": listened.duration_ms,
+                    "end_phrase": hit_phrase.phrase,
+                    "cancelled": True,
+                    "conversation_id": conversation_id,
+                    "turns": turn,
+                },
+                event_id=event_id,
+                stream_id=sid,
+                conversation_id=conversation_id,
+                turn=turn + 1,
+                partials_emitted=listened.partials_emitted,
+                final=True,
+                partial=False,
+                skip_emit=True,
+                kind="ambient.cancelled",
+            )
+
+        turn_text = body
+        if hit_phrase is not None and hit_phrase.kind == "end" and hit_phrase.body:
+            turn_text = hit_phrase.body.strip() or body
+
+        turn += 1
+        event_id = new_event_id()
+        listen_meta = {
+            "provider": listened.provider,
+            "duration_ms": listened.duration_ms,
+            "end_phrase": (
+                hit_phrase.phrase
+                if hit_phrase is not None and hit_phrase.kind == "end"
+                else listened.end_phrase or "turn_quiet"
+            ),
+            "cancelled": False,
+            "conversation_id": conversation_id,
+            "turn": turn,
+        }
+        last_text = turn_text
+        last_stream_id = sid
+        last_event_id = event_id
+        last_listen = listen_meta
+        last_partials = listened.partials_emitted
+
+        # Explicit product end → ambient.prompt final + end conversation.
+        if hit_phrase is not None and hit_phrase.kind == "end":
+            final_ev = {
+                "schema": "hark.event.v1",
+                "kind": "ambient.prompt",
+                "event_id": event_id,
+                "observed_at": utc_now_iso(),
+                "stream_id": sid,
+                "conversation_id": conversation_id,
+                "turn": turn,
+                "text": turn_text,
+                "phrase": hit.phrase,
+                "provider": listened.provider,
+                "end_phrase": hit_phrase.phrase,
+                "partial": False,
+                "final": True,
+                "streaming": True,
+                "conversation": True,
+                "listen": listen_meta,
+                "partials_emitted": listened.partials_emitted,
+                "instructions": (
+                    "FINAL conversation turn (explicit end phrase). "
+                    "Reply with hark tts. Session ends; wake re-arms. "
+                    "Not bound to a pane unless they ask."
+                ),
+            }
+            _emit_ambient_hep(final_ev, out=out, syslog_kind="ambient.prompt")
+            syslog(
+                "ambient.conversation_end",
+                component="ambient",
+                level="info",
+                conversation_id=conversation_id,
+                reason="end_phrase",
+                turns=turn,
+                end_phrase=hit_phrase.phrase,
+            )
+            return AmbientResult(
+                activated=True,
+                phrase=hit.phrase,
+                text=turn_text,
+                wake_backend=hit.backend,
+                listen=listen_meta,
+                event_id=event_id,
+                stream_id=sid,
+                conversation_id=conversation_id,
+                turn=turn,
+                partials_emitted=listened.partials_emitted,
+                final=True,
+                partial=False,
+                skip_emit=True,
+                kind="ambient.prompt",
+            )
+
+        # Normal quiet-ended turn — full reply OK; stay in conversation.
+        turn_ev = make_turn_event(
+            stream_id=sid,
+            text=turn_text,
+            conversation_id=conversation_id,
+            turn=turn,
+            provider=listened.provider,
+            phrase=hit.phrase,
+            event_id=event_id,
+            ack_min_quiet_s=ack_quiet,
+            listen=listen_meta,
+        )
+        _emit_ambient_hep(
+            turn_ev, out=out, on_partial=on_partial, syslog_kind="ambient.turn"
+        )
+
+        if shutdown_requested() or reload_requested():
+            break
+
+    # Loop exit: idle after empty body, shutdown, or reload.
+    reason = (
+        "shutdown"
+        if shutdown_requested()
+        else ("reload" if reload_requested() else "conversation_idle")
+    )
+    end_ev = {
+        "schema": "hark.event.v1",
+        "kind": "ambient.conversation_end",
+        "event_id": new_event_id(),
+        "observed_at": utc_now_iso(),
+        "conversation_id": conversation_id,
+        "turns": turn,
+        "phrase": hit.phrase,
+        "reason": reason,
+        "partial": False,
+        "final": True,
+        "streaming": True,
+        "instructions": (
+            f"Conversation session ended ({reason}). Wake is re-armed; "
+            "operator must say the wake name for a new session."
+        ),
+    }
+    _emit_ambient_hep(end_ev, out=out, syslog_kind="ambient.conversation_end")
+    return AmbientResult(
+        activated=True,
+        phrase=hit.phrase,
+        text=last_text,
+        wake_backend=hit.backend,
+        listen={
+            **(last_listen or {}),
+            "reason": reason,
+            "turns": turn,
+            "conversation_id": conversation_id,
+        },
+        event_id=last_event_id or end_ev["event_id"],
+        stream_id=last_stream_id,
+        conversation_id=conversation_id,
+        turn=turn or None,
+        partials_emitted=last_partials,
+        final=True,
+        partial=False,
+        skip_emit=True,
+        kind="ambient.conversation_end",
+    )
+
+
+def complete_after_wake(
+    cfg: HarkConfig,
+    hit: WakeHit,
+    *,
+    announce: bool = True,
+    on_partial: Any | None = None,
+    out: TextIO | None = None,
+) -> AmbientResult:
+    """After wake: optional lead-in + arm cue → energy-gated cloud listen.
+
+    No spoken 'okay' / 'listening' by default. Post-wake settle, softer/configurable
+    open threshold, and no-open retry/nudge are driven by ``[ambient]`` /
+    ``[listen]`` (B031).
+
+    Classic (``[ambient].streaming = false``): one radio/silence capture →
+    ambient.prompt, then re-arm wake.
+
+    Conversation (``streaming = true``, B121/B122): after first wake, stay in an
+    open post-wake session — quiet ends a *turn* (ambient.turn; full TTS OK);
+    no re-saying iris/hark until cancel, product end phrase, long idle, or
+    shutdown/reload.
+    """
+    del announce
+    if bool(getattr(cfg.ambient, "streaming", False)):
+        return _conversation_after_wake(
+            cfg, hit, on_partial=on_partial, out=out
+        )
+    return _single_post_wake_listen(
+        cfg, hit, on_partial=on_partial, out=out
     )
 
 
@@ -818,7 +1319,9 @@ def apply_config_reload(
 
 
 def ambient_event_line(result: AmbientResult) -> dict[str, Any]:
-    if result.activated and result.text and not (
+    if result.kind:
+        kind = result.kind
+    elif result.activated and result.text and not (
         result.listen and result.listen.get("cancelled")
     ):
         kind = "ambient.prompt"
@@ -845,6 +1348,10 @@ def ambient_event_line(result: AmbientResult) -> dict[str, Any]:
         "stream_id": result.stream_id,
         "partials_emitted": result.partials_emitted,
     }
+    if result.conversation_id:
+        base["conversation_id"] = result.conversation_id
+    if result.turn is not None:
+        base["turn"] = result.turn
     if kind == "ambient.prompt":
         base["instructions"] = (
             "FINAL operator prompt for this stream_id (supersedes all ambient.partial "
@@ -865,6 +1372,11 @@ def ambient_event_line(result: AmbientResult) -> dict[str, Any]:
                 "ignore prior partials for this stream_id. "
                 "ambient.reloaded will follow with listen_aborted=true."
             )
+    elif kind == "ambient.conversation_end":
+        base["instructions"] = (
+            "Conversation session ended. Wake re-armed; no new prompt on this event."
+        )
+        base["warning"] = None
     return base
 
 
@@ -1203,7 +1715,10 @@ def run_ambient_loop(
 
             # Always emit if we got something useful; skip pure timeouts when shutting down.
             # ambient.timeout on continuous idle cycles is optional (surface_timeouts).
-            if result.activated or not shutdown_requested():
+            # Conversation path dual-writes turns/finals itself (skip_emit).
+            if result.skip_emit:
+                pass
+            elif result.activated or not shutdown_requested():
                 line = ambient_event_line(result)
                 kind = str(line.get("kind") or "ambient.event")
                 if kind == "ambient.timeout" and not getattr(

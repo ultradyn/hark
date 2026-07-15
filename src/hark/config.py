@@ -746,6 +746,8 @@ config_watch_debounce_ms = 400
 # When true, partial HEP instructions allow brief interruptible acks; hark holds
 # play until operator quiet ≥ streaming_ack_min_quiet_s (B105, default 2s) or
 # listen ends — continuous speech without that pause is not stepped on.
+# Quiet-gate mid-capture TTS is radio-only (B108): silence end_mode still
+# auto-finalizes on end_silence_s and forces HOLD TTS until capture ends.
 # streaming = false
 # streaming_ack_min_quiet_s = 2.0
 # Once the quiet gate is dogfooded safe, operators may leave streaming = true.

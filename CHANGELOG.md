@@ -6,6 +6,14 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- fix(listen/silence, B108): silence `end_mode` auto-finalizes again when
+  `[ambient].streaming` is on. Two root causes: (1) energy-gate hang now uses a
+  **relative-to-peak** floor when the utterance peak is well above `open_thresh`,
+  so high mic gain / elevated room noise cannot keep the stream open forever
+  above a frozen low `abs_open_db` hang; (2) streaming quiet-gate TTS is
+  **radio-only** — silence captures force HOLD (wait for capture end) so
+  mid-capture mute cannot race `end_silence_s` (B084 freeze). Radio + streaming
+  acks unchanged.
 - fix(stdio, B109): line-buffer stdout/stderr when piped so progressive HEP /
   status streams to consumers instead of full-buffering until exit. Warn once
   on interactive commands (`tts --listen`, `listen`, `ask`, `monitor`, …) when

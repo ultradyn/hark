@@ -19,6 +19,10 @@ B105: when ``[ambient].streaming`` is on, live acks may play during a still-open
 radio capture **only** after ~``streaming_ack_min_quiet_s`` (default 2s) of
 operator quiet — continuous speech without that pause keeps TTS on HOLD until
 a pause or the stream ends.
+
+B108: silence ``end_mode`` always uses HOLD defer (wait for capture end), even
+when streaming is on. Mid-capture TTS mute freezes silence clocks (B084) and
+races ``end_silence_s``; silence-mode streams must auto-finalize on pause.
 """
 
 from __future__ import annotations
@@ -460,8 +464,36 @@ def wait_until_tts_play_allowed(
       ``min_quiet_s`` **or** the capture ends. Continuous speech without that
       pause keeps play deferred so short acks do not barge in / mute mid-thought.
       On max-wait timeout, speak anyway (same fail-open as B097).
+    * **Silence end_mode (B108):** always HOLD even when ``streaming=True``.
+      Quiet-gate mid-capture TTS races silence endpointing (mute freezes silence
+      clocks). Live streaming acks apply to **radio** captures only.
     """
-    if not streaming:
+    probe = probe_fn or (
+        lambda: user_capture_active(ignore_own_pid=ignore_own_pid)
+    )
+
+    # B108: silence-mode streams must finalize on end_silence_s. Streaming quiet
+    # gate is radio-only; force HOLD when the active capture is silence mode.
+    use_streaming = bool(streaming)
+    if use_streaming:
+        first_probe = probe()
+        mode = (first_probe.mode or "").strip().lower() if first_probe.active else ""
+        if mode == "silence":
+            use_streaming = False
+            syslog(
+                "tts.defer_silence_hold",
+                component="tts",
+                level="debug",
+                reason=first_probe.reason,
+                stream_id=first_probe.stream_id,
+                mode=first_probe.mode,
+                message=(
+                    "silence end_mode: HOLD TTS until capture ends "
+                    "(streaming quiet-gate is radio-only; B108)"
+                ),
+            )
+
+    if not use_streaming:
         result = wait_until_user_capture_idle(
             max_wait_s=max_wait_s,
             poll_ms=poll_ms,
@@ -469,7 +501,7 @@ def wait_until_tts_play_allowed(
             ignore_own_pid=ignore_own_pid,
             sleep_fn=sleep_fn,
             monotonic_fn=monotonic_fn,
-            probe_fn=probe_fn,
+            probe_fn=probe,
         )
         if result.deferred and result.gate is None:
             result.gate = "idle"
@@ -478,9 +510,6 @@ def wait_until_tts_play_allowed(
     sleep = sleep_fn or time.sleep
     mono = monotonic_fn or time.monotonic
     wall = time_fn or time.time
-    probe = probe_fn or (
-        lambda: user_capture_active(ignore_own_pid=ignore_own_pid)
-    )
 
     def _quiet() -> float | None:
         if quiet_fn is not None:

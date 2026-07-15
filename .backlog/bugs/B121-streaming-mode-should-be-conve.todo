@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-15T09:06:45Z"
 claimed_by: grok-grit-latch-h52d
-completed_at: null
+completed_at: "2026-07-15T09:14:26Z"
 complexity: medium
 created_at: "2026-07-15T08:32:07Z"
 depends_on: []
+duration_minutes: 7.699656230666667
 estimate_hours: 1
 id: B121
 priority: high
 started_at: "2026-07-15T09:06:45Z"
-status: in_progress
+status: done
 tags: []
 title: 'Streaming mode should be conversation mode, not radio-with-acks. Operator intent (dogfood 2026-07-15): when ambient.streaming=true, everything is partial — continuous conversation after wake; no radio end-phrase structure; no special ''finished''/final as the only full-answer moment. Current product still: end_mode=radio + finals + ''short acks until ambient.prompt'' + over/okay-hark-send. Gap: need conversation profile (persistent post-wake session, turn-taking on quiet gate, full interim replies OK, stop cue suppressed already B110, no forced radio finalize semantics). Skill/PROTOCOL still teach radio finals.'
-updated_at: "2026-07-15T09:06:45Z"
+updated_at: "2026-07-15T09:14:26Z"
 ---
 
 Streaming mode should be conversation mode, not radio-with-acks. Operator intent (dogfood 2026-07-15): when ambient.streaming=true, everything is partial — continuous conversation after wake; no radio end-phrase structure; no special 'finished'/final as the only full-answer moment. Current product still: end_mode=radio + finals + 'short acks until ambient.prompt' + over/okay-hark-send. Gap: need conversation profile (persistent post-wake session, turn-taking on quiet gate, full interim replies OK, stop cue suppressed already B110, no forced radio finalize semantics). Skill/PROTOCOL still teach radio finals.

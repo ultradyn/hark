@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-15T09:06:45Z"
 claimed_by: grok-grit-latch-h52d
-completed_at: null
+completed_at: "2026-07-15T09:14:26Z"
 complexity: medium
 created_at: "2026-07-15T08:32:51Z"
 depends_on: []
+duration_minutes: 7.69966970985
 estimate_hours: 1
 id: B122
 priority: high
 started_at: "2026-07-15T09:06:45Z"
-status: in_progress
+status: done
 tags: []
 title: 'Conversation/streaming mode session: once streaming=true and operator has woken once, stay in open post-wake conversation — do NOT require re-saying iris/hark each turn. Product today re-arms wake after each ambient.prompt finalize. Operator: ''streaming is one giant unfinished radio message'' meaning continuous partials = conversation, finish structure is not the point.'
-updated_at: "2026-07-15T09:06:45Z"
+updated_at: "2026-07-15T09:14:26Z"
 ---
 
 Conversation/streaming mode session: once streaming=true and operator has woken once, stay in open post-wake conversation — do NOT require re-saying iris/hark each turn. Product today re-arms wake after each ambient.prompt finalize. Operator: 'streaming is one giant unfinished radio message' meaning continuous partials = conversation, finish structure is not the point.

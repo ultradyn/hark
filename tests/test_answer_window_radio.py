@@ -584,3 +584,326 @@ def test_effective_radio_idle_end_s_accepts_explicit_ack():
     assert effective_radio_idle_end_s(
         cfg, streaming=True, streaming_ack_min_quiet_s=2.0
     ) == pytest.approx(2.1)
+
+
+# --- E5.T001: open_answer_window deep seam (no private _loop hooks) ---
+
+
+class _NullCtx:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _cap(*, duration_ms: int = 40, wait_speech_ms: int = 20):
+    from hark.audio.capture import CaptureResult
+
+    return CaptureResult(
+        pcm16=b"\0\0" * max(1, int(16 * duration_ms)),
+        sample_rate=16000,
+        duration_ms=duration_ms,
+        speech_ms=duration_ms,
+        wait_speech_ms=wait_speech_ms,
+        peak_rms=0.02,
+        peak_db=-34.0,
+    )
+
+
+def _fake_stt(texts: list[str] | str):
+    from types import SimpleNamespace
+
+    seq = [texts] if isinstance(texts, str) else list(texts)
+    idx = {"n": 0}
+
+    def transcribe(_wav, *, language=None):
+        del language
+        i = min(idx["n"], len(seq) - 1)
+        idx["n"] += 1
+        return SimpleNamespace(text=seq[i], provider="fake")
+
+    return SimpleNamespace(name="fake", transcribe=transcribe, calls=idx)
+
+
+def _stub_speech_shell(monkeypatch):
+    """Lease / duck / cues / time still late-bound via hark.speech (not private loops)."""
+    import hark.speech as speech
+
+    class FakeStore:
+        def record_stt(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(speech, "pause_ambient_for_mic", lambda **k: _NullCtx())
+    monkeypatch.setattr(speech, "MicLease", lambda *a, **k: _NullCtx())
+    monkeypatch.setattr(speech, "BusySection", lambda *a, **k: _NullCtx())
+    monkeypatch.setattr(speech, "duck_media", lambda *a, **k: _NullCtx())
+    monkeypatch.setattr(speech, "configure_cues_from_config", lambda cfg: None)
+    monkeypatch.setattr(speech, "UsageStore", FakeStore)
+    monkeypatch.setattr(speech.time, "sleep", lambda s: None)
+
+
+def _open_radio(
+    policy: AnswerWindowPolicy,
+    *,
+    cfg,
+    stt,
+    capture,
+    on_partial=None,
+    syslog=None,
+    **deps_extra,
+):
+    from hark.answer_window import open_answer_window
+
+    deps_kw = dict(
+        cfg=cfg,
+        stt=stt,
+        capture=capture,
+        on_partial=on_partial,
+        syslog=syslog or (lambda *a, **k: None),
+        play_record_start=lambda: None,
+        play_record_stop=lambda: None,
+        register_active_listen=lambda *a, **k: None,
+        clear_active_listen=lambda *a, **k: None,
+        poll_listen_action=lambda *a: None,
+        consume_listen_action=lambda *a: None,
+        touch_voice_activity=lambda **k: None,
+    )
+    deps_kw.update(deps_extra)
+    return open_answer_window(policy, deps=AnswerWindowDeps(**deps_kw))
+
+
+def test_open_answer_window_radio_soft_end_over(monkeypatch):
+    """Deep seam: multi-segment content + sole 'over' finalizes (not cancel)."""
+    from hark.config import HarkConfig, ListenConfig
+
+    _stub_speech_shell(monkeypatch)
+    cfg = HarkConfig(
+        listen=ListenConfig(
+            end_mode="radio",
+            soft_end_phrases_enabled=True,
+            stream_partials=False,
+            strip_phrase=True,
+        )
+    )
+    policy = _policy(
+        soft_end_phrases_enabled=True,
+        stream_partials=False,
+        strip_phrase=True,
+        post_tts_guard_s=0,
+        max_listen_s=30.0,
+    )
+    stt = _fake_stt(["please implement the fix", "over"])
+    result = _open_radio(
+        policy,
+        cfg=cfg,
+        stt=stt,
+        capture=lambda **k: _cap(),
+    )
+    assert result.cancelled is False
+    assert result.end_phrase == "over"
+    assert result.end_mode == "radio"
+    assert "implement" in (result.text or "").lower()
+    assert "over" not in (result.text or "").lower()
+
+
+def test_open_answer_window_radio_idle_auto_finish(monkeypatch):
+    """Deep seam: post-open quiet → radio_idle end (policy idle, not ambient)."""
+    from hark.config import HarkConfig, ListenConfig
+
+    _stub_speech_shell(monkeypatch)
+    idle_s = 0.15
+    cfg = HarkConfig(listen=ListenConfig(end_mode="radio"))
+    policy = _policy(
+        radio_partial_silence_s=0.05,
+        radio_idle_end_silence_s=idle_s,
+        soft_end_phrases_enabled=False,
+        stream_partials=True,
+        post_tts_guard_s=0,
+        streaming=False,
+    )
+    calls: list[dict] = []
+    outcomes = ["speech", "idle"]
+    logs: list[tuple[str, dict]] = []
+
+    def fake_capture(**kwargs):
+        calls.append(dict(kwargs))
+        step = outcomes.pop(0) if outcomes else "idle"
+        if step == "speech":
+            on_opened = kwargs.get("on_opened")
+            if on_opened is not None:
+                on_opened()
+            return _cap(duration_ms=80)
+        raise TimeoutError("no speech detected (peak_db=-60.0)")
+
+    result = _open_radio(
+        policy,
+        cfg=cfg,
+        stt=_fake_stt("ship the auth fix"),
+        capture=fake_capture,
+        syslog=lambda event, **data: logs.append((event, data)),
+    )
+    assert result.cancelled is False
+    assert result.end_phrase == "radio_idle"
+    assert "auth" in (result.text or "").lower()
+    assert len(calls) >= 2
+    assert calls[0]["initial_timeout_s"] == pytest.approx(policy.initial_timeout_s)
+    assert calls[0]["end_silence_s"] == pytest.approx(0.05)
+    assert calls[1]["initial_timeout_s"] == pytest.approx(idle_s)
+    idle_logs = [d for e, d in logs if e == "listen.radio_idle_end"]
+    assert idle_logs
+    assert idle_logs[0]["idle_s"] == pytest.approx(idle_s)
+
+
+def test_open_answer_window_radio_partials_via_deps(monkeypatch):
+    """Deep seam: on_partial on AnswerWindowDeps receives HOLD partials."""
+    from hark.config import HarkConfig, ListenConfig
+
+    _stub_speech_shell(monkeypatch)
+    cfg = HarkConfig(listen=ListenConfig(end_mode="radio"))
+    policy = _policy(
+        radio_partial_silence_s=0.5,
+        stream_partials=True,
+        streaming=False,
+        soft_end_phrases_enabled=False,
+        strip_phrase=True,
+        post_tts_guard_s=0,
+        stream_id="s-deep",
+        end_phrases=("okay hark send", "hark send"),
+    )
+    transcripts = [
+        "please open the pull request",
+        "please open the pull request for auth",
+        "please open the pull request for auth okay hark send",
+    ]
+    partials: list[dict] = []
+    capture_kwargs: list[dict] = []
+
+    def fake_capture(**kwargs):
+        capture_kwargs.append(kwargs)
+        assert kwargs["end_silence_s"] == pytest.approx(0.5)
+        return _cap()
+
+    result = _open_radio(
+        policy,
+        cfg=cfg,
+        stt=_fake_stt(transcripts),
+        capture=fake_capture,
+        on_partial=partials.append,
+    )
+    assert len(partials) >= 2
+    assert all(p.get("partial") is True for p in partials)
+    assert all(p.get("final") is False for p in partials)
+    assert all(p.get("stream_id") == "s-deep" for p in partials)
+    assert result.end_phrase == "okay hark send"
+    assert result.cancelled is False
+    assert "pull request" in (result.text or "").lower()
+    assert result.partials_emitted >= 2
+    assert capture_kwargs
+
+
+def test_open_answer_window_radio_pre_open_timeout_not_idle(monkeypatch):
+    """Deep seam: quiet before first open uses initial_timeout, not radio_idle."""
+    from hark.config import HarkConfig, ListenConfig
+
+    _stub_speech_shell(monkeypatch)
+    cfg = HarkConfig(listen=ListenConfig(end_mode="radio"))
+    policy = _policy(
+        initial_timeout_s=0.2,
+        radio_idle_end_silence_s=0.05,
+        soft_end_phrases_enabled=False,
+        post_tts_guard_s=0,
+    )
+    calls: list[dict] = []
+
+    def fake_capture(**kwargs):
+        calls.append(dict(kwargs))
+        raise TimeoutError("no speech detected (peak_db=-60.0)")
+
+    with pytest.raises(TimeoutError, match="no speech detected"):
+        _open_radio(
+            policy,
+            cfg=cfg,
+            stt=_fake_stt(""),
+            capture=fake_capture,
+        )
+    assert calls
+    assert calls[0]["initial_timeout_s"] == pytest.approx(0.2)
+
+
+def test_open_answer_window_radio_streaming_idle_from_policy(monkeypatch):
+    """Deep seam: streaming clamp is policy-only; capture gets tightened idle."""
+    from hark.config import HarkConfig, ListenConfig
+
+    _stub_speech_shell(monkeypatch)
+    cfg = HarkConfig(listen=ListenConfig(end_mode="radio"))
+    # Classic idle 6.3s; streaming clamp → max(end_silence, ack) = 2.1
+    policy = _policy(
+        radio_idle_end_silence_s=6.3,
+        end_silence_s=2.1,
+        streaming=True,
+        streaming_ack_min_quiet_s=2.0,
+        radio_partial_silence_s=0.05,
+        soft_end_phrases_enabled=False,
+        stream_partials=True,
+        post_tts_guard_s=0,
+    )
+    assert effective_radio_idle_s(policy) == pytest.approx(2.1)
+    calls: list[dict] = []
+    outcomes = ["speech", "idle"]
+
+    def fake_capture(**kwargs):
+        calls.append(dict(kwargs))
+        step = outcomes.pop(0) if outcomes else "idle"
+        if step == "speech":
+            on_opened = kwargs.get("on_opened")
+            if on_opened is not None:
+                on_opened()
+            return _cap()
+        raise TimeoutError("no speech detected (peak_db=-60.0)")
+
+    result = _open_radio(
+        policy,
+        cfg=cfg,
+        stt=_fake_stt("streamed thought"),
+        capture=fake_capture,
+    )
+    assert result.end_phrase == "radio_idle"
+    assert len(calls) >= 2
+    # Post-open segment timeout uses streaming-clamped idle from policy
+    assert calls[1]["initial_timeout_s"] == pytest.approx(2.1)
+
+
+def test_open_answer_window_radio_agent_cancel_via_deps(monkeypatch):
+    """Deep seam: agent cancel is deps poll/consume — no filesystem hooks."""
+    from hark.config import HarkConfig, ListenConfig
+
+    _stub_speech_shell(monkeypatch)
+    cfg = HarkConfig(listen=ListenConfig(end_mode="radio"))
+    policy = _policy(
+        stream_id="s-cancel",
+        soft_end_phrases_enabled=False,
+        stream_partials=False,
+        post_tts_guard_s=0,
+    )
+    opened = {"n": 0}
+
+    def fake_capture(**kwargs):
+        opened["n"] += 1
+        on_opened = kwargs.get("on_opened")
+        if on_opened is not None:
+            on_opened()
+        return _cap()
+
+    result = _open_radio(
+        policy,
+        cfg=cfg,
+        stt=_fake_stt("half a thought"),
+        capture=fake_capture,
+        poll_listen_action=lambda _s: "cancel",
+        consume_listen_action=lambda _s: "cancel",
+    )
+    assert result.cancelled is True
+    assert result.end_phrase == "agent:cancel"
+    assert result.stream_id == "s-cancel"
+    assert opened["n"] >= 1

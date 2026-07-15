@@ -352,3 +352,306 @@ def test_policy_from_config_endpoint_fields():
     assert pol.endpoint_strategy_name == "smart_turn"
     assert pol.smart_turn_model_path == "/tmp/m.onnx"
     assert pol.smart_turn_threshold == pytest.approx(0.55)
+
+
+# --- E5.T001: open_answer_window deep seam (no private _loop hooks) ---
+
+
+class _NullCtx:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _cap(*, duration_ms: int = 2540, peak_rms: float = 0.02):
+    from hark.audio.capture import CaptureResult
+
+    return CaptureResult(
+        pcm16=b"\x00\x00" * 1600,
+        sample_rate=16000,
+        duration_ms=duration_ms,
+        speech_ms=duration_ms,
+        wait_speech_ms=80,
+        peak_rms=peak_rms,
+        peak_db=-34.0,
+    )
+
+
+def _fake_stt(texts: list[str]):
+    from types import SimpleNamespace
+
+    seq = list(texts)
+    state = {"n": 0, "calls": 0}
+
+    def transcribe(_wav, *, language=None):
+        del language
+        state["calls"] += 1
+        i = min(state["n"], len(seq) - 1)
+        state["n"] += 1
+        text = seq[i] if seq else ""
+        return SimpleNamespace(text=text, provider="fake")
+
+    return SimpleNamespace(name="fake", transcribe=transcribe, state=state)
+
+
+def _stub_speech_shell(monkeypatch):
+    import hark.speech as speech
+
+    class FakeStore:
+        def record_stt(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(speech, "pause_ambient_for_mic", lambda **k: _NullCtx())
+    monkeypatch.setattr(speech, "MicLease", lambda *a, **k: _NullCtx())
+    monkeypatch.setattr(speech, "BusySection", lambda *a, **k: _NullCtx())
+    monkeypatch.setattr(speech, "duck_media", lambda *a, **k: _NullCtx())
+    monkeypatch.setattr(speech, "configure_cues_from_config", lambda cfg: None)
+    monkeypatch.setattr(speech, "UsageStore", FakeStore)
+    monkeypatch.setattr(speech.time, "sleep", lambda s: None)
+
+
+def _open_silence(
+    policy: AnswerWindowPolicy,
+    *,
+    cfg,
+    stt,
+    capture,
+    syslog=None,
+    **deps_extra,
+):
+    from hark.answer_window import open_answer_window
+
+    deps_kw = dict(
+        cfg=cfg,
+        stt=stt,
+        capture=capture,
+        syslog=syslog or (lambda *a, **k: None),
+        play_record_start=lambda: None,
+        play_record_stop=lambda: None,
+        register_active_listen=lambda *a, **k: None,
+        clear_active_listen=lambda *a, **k: None,
+        poll_listen_action=lambda *a: None,
+        consume_listen_action=lambda *a: None,
+        touch_voice_activity=lambda **k: None,
+    )
+    deps_kw.update(deps_extra)
+    return open_answer_window(policy, deps=AnswerWindowDeps(**deps_kw))
+
+
+def test_open_answer_window_empty_stt_retry_then_success(monkeypatch):
+    """Deep seam: empty STT recovery via SilenceSession inside open_answer_window."""
+    from hark.config import HarkConfig, ListenConfig
+
+    _stub_speech_shell(monkeypatch)
+    cfg = HarkConfig(listen=ListenConfig(end_mode="silence"))
+    policy = _policy(
+        empty_stt_retry=True,
+        empty_stt_nudge=False,
+        last_tts="Pick one or two",
+        post_tts_guard_s=0.1,
+        end_mode=EndMode.SILENCE,
+    )
+    logs: list[tuple[str, dict]] = []
+    caps = [_cap(duration_ms=2540), _cap(duration_ms=1200)]
+    cap_iter = iter(caps)
+
+    def fake_capture(**kwargs):
+        del kwargs
+        return next(cap_iter)
+
+    stt = _fake_stt(["", "option two"])
+    result = _open_silence(
+        policy,
+        cfg=cfg,
+        stt=stt,
+        capture=fake_capture,
+        syslog=lambda event, **data: logs.append((event, data)),
+    )
+    assert result.text == "option two"
+    assert result.end_mode == "silence"
+    assert stt.state["calls"] == 2
+    empty_events = [e for e, _ in logs if e == "speech.empty_stt"]
+    assert len(empty_events) == 1
+    payload = next(d for e, d in logs if e == "speech.empty_stt")
+    assert payload["after_tts"] is True
+    assert payload["duration_ms"] == 2540
+    assert any(e == "speech.empty_stt_retry" for e, _ in logs)
+
+
+def test_open_answer_window_empty_stt_nudge_then_success(monkeypatch):
+    """Deep seam: empty STT nudge uses speech.run_tts (late-bound); recovery on session."""
+    import hark.speech as speech
+    from hark.config import HarkConfig, ListenConfig
+
+    _stub_speech_shell(monkeypatch)
+    tts_calls: list[str] = []
+    monkeypatch.setattr(
+        speech,
+        "run_tts",
+        lambda cfg, text, **k: tts_calls.append(text) or {"ok": True},
+    )
+    cfg = HarkConfig(listen=ListenConfig(end_mode="silence"))
+    policy = _policy(
+        empty_stt_retry=False,
+        empty_stt_nudge=True,
+        last_tts="menu text here",
+        post_tts_guard_s=0,
+    )
+    logs: list[str] = []
+    caps = [_cap(), _cap()]
+    cap_iter = iter(caps)
+
+    result = _open_silence(
+        policy,
+        cfg=cfg,
+        stt=_fake_stt(["", "yes please"]),
+        capture=lambda **k: next(cap_iter),
+        syslog=lambda event, **data: logs.append(event),
+    )
+    assert result.text == "yes please"
+    assert tts_calls == [EMPTY_STT_NUDGE_TEXT]
+    assert "speech.empty_stt" in logs
+    assert "speech.empty_stt_nudge" in logs
+
+
+def test_open_answer_window_empty_stt_exhausted(monkeypatch):
+    import hark.speech as speech
+    from hark.config import HarkConfig, ListenConfig
+
+    _stub_speech_shell(monkeypatch)
+    tts_calls: list[str] = []
+    monkeypatch.setattr(
+        speech,
+        "run_tts",
+        lambda cfg, text, **k: tts_calls.append(text) or {"ok": True},
+    )
+    cfg = HarkConfig(listen=ListenConfig(end_mode="silence"))
+    policy = _policy(
+        empty_stt_retry=True,
+        empty_stt_nudge=True,
+        last_tts="long menu",
+        post_tts_guard_s=0.05,
+    )
+    logs: list[tuple[str, dict]] = []
+    caps = [_cap(), _cap(), _cap()]
+    cap_iter = iter(caps)
+
+    with pytest.raises(TimeoutError, match="empty text"):
+        _open_silence(
+            policy,
+            cfg=cfg,
+            stt=_fake_stt(["", "", ""]),
+            capture=lambda **k: next(cap_iter),
+            syslog=lambda event, **data: logs.append((event, data)),
+        )
+    assert tts_calls == [EMPTY_STT_NUDGE_TEXT]
+    empty = [d for e, d in logs if e == "speech.empty_stt"]
+    assert len(empty) == 3
+    assert empty[0]["phase"] == "initial"
+    assert empty[1]["phase"] == "retry"
+    assert empty[2]["phase"] == "nudge"
+
+
+def test_open_answer_window_silence_uses_end_silence_s(monkeypatch):
+    """Deep seam: silence path ignores radio_partial_silence for capture hang."""
+    from hark.config import HarkConfig, ListenConfig
+
+    _stub_speech_shell(monkeypatch)
+    cfg = HarkConfig(listen=ListenConfig(end_mode="silence"))
+    policy = _policy(
+        end_silence_s=2.1,
+        radio_partial_silence_s=0.5,
+        radio_idle_end_silence_s=0.1,
+        post_tts_guard_s=0,
+    )
+    calls: list[dict] = []
+
+    def fake_capture(**kwargs):
+        calls.append(dict(kwargs))
+        return _cap(duration_ms=40)
+
+    result = _open_silence(
+        policy,
+        cfg=cfg,
+        stt=_fake_stt(["one two three"]),
+        capture=fake_capture,
+    )
+    assert result.end_mode == "silence"
+    assert result.text == "one two three"
+    assert calls[0]["end_silence_s"] == pytest.approx(2.1)
+    assert calls[0]["end_silence_s"] != pytest.approx(0.5)
+
+
+def test_open_answer_window_echo_reject(monkeypatch):
+    """Deep seam: policy.last_tts drives echo reject without private hooks."""
+    from hark.config import HarkConfig, ListenConfig
+    from hark.providers.base import ProviderError
+
+    _stub_speech_shell(monkeypatch)
+    cfg = HarkConfig(listen=ListenConfig(end_mode="silence"))
+    tts = (
+        "Please answer what you know about the laptop state including Windows version "
+        "BitLocker encryption local admin disk size free space and dual boot status "
+        "when you are ready to continue with the backup plan to the NAS device."
+    )
+    policy = _policy(last_tts=tts, post_tts_guard_s=0, empty_stt_retry=False)
+    with pytest.raises(ProviderError, match="TTS echo"):
+        _open_silence(
+            policy,
+            cfg=cfg,
+            stt=_fake_stt([tts]),
+            capture=lambda **k: _cap(duration_ms=500),
+        )
+    # Short quote from the prompt is not echo (B093) — already unit-tested on
+    # SilenceSession; deep seam accepts a real short answer.
+    result = _open_silence(
+        policy,
+        cfg=cfg,
+        stt=_fake_stt(["BitLocker."]),
+        capture=lambda **k: _cap(duration_ms=500),
+    )
+    assert result.text == "BitLocker."
+
+
+def test_open_answer_window_no_open_recovery(monkeypatch):
+    """Deep seam: no-open retry/nudge/give-up without run_listen facade."""
+    import hark.speech as speech
+    from hark.config import HarkConfig, ListenConfig
+
+    _stub_speech_shell(monkeypatch)
+    tts_calls: list[str] = []
+    monkeypatch.setattr(
+        speech,
+        "run_tts",
+        lambda cfg, text, **k: tts_calls.append(text) or {"ok": True},
+    )
+    cfg = HarkConfig(listen=ListenConfig(end_mode="silence"))
+    policy = _policy(
+        no_open_retry=True,
+        no_open_nudge=True,
+        post_tts_guard_s=0,
+        no_open_nudge_text=NO_OPEN_NUDGE_TEXT,
+    )
+    logs: list[tuple[str, dict]] = []
+    err = TimeoutError(
+        "no speech detected (peak_db=-45.4 peak_rms=0.00537 open_thresh≈-38.0dB)"
+    )
+
+    def always_timeout(**kwargs):
+        del kwargs
+        raise err
+
+    with pytest.raises(TimeoutError, match="no speech detected"):
+        _open_silence(
+            policy,
+            cfg=cfg,
+            stt=_fake_stt(["unused"]),
+            capture=always_timeout,
+            syslog=lambda event, **data: logs.append((event, data)),
+        )
+    assert tts_calls == [NO_OPEN_NUDGE_TEXT]
+    no_open = [d for e, d in logs if e == "speech.no_open"]
+    assert len(no_open) == 3
+    assert [d["phase"] for d in no_open] == ["initial", "retry", "nudge"]

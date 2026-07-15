@@ -1,0 +1,31 @@
+---
+complexity: low
+created_at: "2026-07-15T20:59:51Z"
+depends_on: []
+estimate_hours: 1
+id: B129
+priority: high
+status: pending
+tags:
+    - security
+    - dashboard
+    - path-traversal
+title: Dashboard static path traversal reads sibling directories with matching prefixes
+updated_at: "2026-07-15T20:59:51Z"
+---
+## Evidence
+DashboardHandler.do_GET serves every non-api path without authentication. _serve_static URL-decodes the path, resolves root plus the relative path, then accepts it when str(target).startswith(str(root.resolve())). String prefixes do not prove path containment. With static root /tmp/X/web and sibling /tmp/X/web-secret/secret.txt, an unauthenticated GET /%2e%2e/web-secret/secret.txt returned HTTP 200 with TOP-SECRET. This was reproduced against a live DashboardServer on the current head. B066 is complete and does not record this concrete traversal.
+
+## Expected
+Static requests can read only regular files contained by the resolved static root. Escapes return a safe 404 or the intentional SPA index fallback without reading the escaped target.
+
+## Actual
+A resolved sibling path whose name begins with the static-root path passes the prefix check and is returned without authentication.
+
+## Acceptance criteria
+- Replace string-prefix containment with a path-aware containment check against fully resolved paths.
+- Reject traversal through percent-encoded dot segments and symlinks that resolve outside the static root.
+- Preserve SPA fallback only after proving the requested target is contained; never inspect or read an escaped target.
+- Add HTTP-level tests for plain and percent-encoded traversal, matching-prefix siblings, symlink escapes, valid assets, and SPA routes.
+- Verify the packaged webui_dist path and development static path use the same safe logic.
+- Run the dashboard security and full Python suites.

@@ -155,9 +155,12 @@ def test_answer_delivers_only_to_bound_pane(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "DeliveryStore", lambda: store)
     monkeypatch.setattr(cli, "_client_for", lambda cfg, session_id: clients[session_id])
     # Fingerprint of live pane must equal the bound fingerprint to deliver.
-    # (the check lives in the shared answer core since hark serve reuses it)
-    import hark.answering as answering
-    monkeypatch.setattr(answering, "question_fingerprint", lambda excerpt: "blake2b:evtA")
+    # (the check lives in answerability.live via shared answer core)
+    import hark.answerability.live as answer_live
+
+    monkeypatch.setattr(
+        answer_live, "question_fingerprint", lambda excerpt: "blake2b:evtA"
+    )
 
     args = argparse.Namespace(event_id="evtA", text="use option two", keys=None)
     rc = cli.cmd_answer(args, cfg=object())

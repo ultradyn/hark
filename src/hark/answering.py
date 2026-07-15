@@ -1,8 +1,11 @@
 """Bound-answer core shared by `hark answer` (CLI) and `hark serve` (/answer).
 
 Single implementation of the safe-delivery checks (fingerprint, pane revision,
-live status, idempotency) so no surface can drift from the safety invariants
-in docs/SAFETY.md / docs/ARCHITECTURE.md.
+live status / false-done compatibility, idempotency) so no surface can drift
+from the safety invariants in docs/SAFETY.md / docs/plans/P1-M2-answerability.md.
+
+Live-compatible gates live in ``hark.answerability``; this module owns store
+lookup, send, and mark delivered/rejected/uncertain.
 """
 
 from __future__ import annotations
@@ -10,8 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from hark.answerability import assess_live, hep_kind_from_bound
 from hark.delivery import DeliveryStore
-from hark.fingerprint import question_fingerprint
 from hark.herdr.client import HerdrError
 
 
@@ -73,33 +76,19 @@ def answer_bound_event(
         store.mark(event_id, "rejected", reason="missing_question_fingerprint")
         return AnswerResult(False, event_id, "rejected", "missing_question_fingerprint")
 
-    has_revision = isinstance(bound.pane_revision, int) and bound.pane_revision > 0
     target = f"{bound.session_id}/{bound.pane_id}"
-
     client = client_for(bound.session_id)
-    live = client.get_agent(bound.pane_id)
-    if live is None:
-        store.mark(event_id, "rejected", reason="pane_gone")
-        return AnswerResult(False, event_id, "rejected", "pane_gone", target)
-    if live.status != "blocked":
-        store.mark(event_id, "rejected", reason="not_blocked")
-        return AnswerResult(False, event_id, "rejected", "not_blocked", target)
-    if has_revision and live.revision != bound.pane_revision:
-        store.mark(event_id, "rejected", reason="stale_revision")
-        return AnswerResult(False, event_id, "rejected", "stale_revision", target)
 
-    try:
-        pane_text = client.read_pane(bound.pane_id, lines=40)
-        from hark.events import extract_question_excerpt
-
-        excerpt = extract_question_excerpt(pane_text)
-        live_fp = question_fingerprint(excerpt)
-        if live_fp != fingerprint:
-            store.mark(event_id, "rejected", reason="fingerprint_mismatch")
-            return AnswerResult(False, event_id, "rejected", "fingerprint_mismatch", target)
-    except HerdrError:
-        store.mark(event_id, "rejected", reason="fingerprint_unavailable")
-        return AnswerResult(False, event_id, "rejected", "fingerprint_unavailable", target)
+    verdict = assess_live(
+        pane_id=bound.pane_id,
+        bound_revision=int(bound.pane_revision or 0),
+        bound_fingerprint=fingerprint,
+        hep_kind=hep_kind_from_bound(bound),
+        client=client,
+    )
+    if not verdict.ok:
+        store.mark(event_id, "rejected", reason=verdict.reason)
+        return AnswerResult(False, event_id, "rejected", verdict.reason, target)
 
     try:
         if keys:

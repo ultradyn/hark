@@ -1478,6 +1478,7 @@ _ANSWER_REJECT_HINTS = {
     "missing_question_fingerprint": "bound event has no question fingerprint",
     "pane_gone": "pane no longer present",
     "not_blocked": "agent is no longer blocked",
+    "not_compatible": "pane is not in a compatible answer state (not blocked / false-done menu gone)",
     "stale_revision": "stale pane revision",
     "fingerprint_mismatch": "question fingerprint mismatch (stale)",
     "fingerprint_unavailable": "unable to verify question fingerprint",

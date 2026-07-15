@@ -55,13 +55,27 @@ Herdr wire event
 blocked → extract question + risk + fingerprint
        → TTS identity + question
        → post-TTS guard → readiness
-       → listen (adaptive gate / Smart Turn)
-       → echo reject / filler reject
+       → Answer Window open(policy) → ListenResult
+       → echo reject / filler reject (silence session)
        → confirm if R2/R3 or auto-unsure
        → revalidate target
        → send text or keys
        → idempotent delivery record
 ```
+
+## Answer Window (deep listen module)
+
+Capture after TTS or ambient wake is a single deep module
+(`hark.answer_window`): **`open(policy) → ListenResult`**.
+
+| Layer | Owns |
+|-------|------|
+| **External interface** | `open_answer_window(policy, deps=…)`, `AnswerWindowPolicy` profiles (`bound_answer` / `post_wake` / `confirm`), `ListenResult` |
+| **Implementation** | `RadioSession` (segments, partial HEP, soft/hard end, agent control, idle clamp) · `SilenceSession` (endpoint strategy, empty/no-open recovery, echo) |
+| **Thin facades** | `speech.run_listen` builds policy + deps then opens the window; ambient post-wake and CLI listen pass **profiles**, not gate-kwargs soup |
+| **Stays pure / separate** | `listen_end` phrase evaluation (no I/O); `listen_control` IPC for `hark listen-end`; answering/delivery (bound fingerprint) |
+
+**Locality:** radio soft-end, streaming idle clamp, and partial HEP shapes live behind one seam. **Leverage:** Mode A CLI, ambient, speak-then-listen, and dashboard dictation share the same open path. Streaming / idle knobs are **policy fields** (not re-read from `[ambient]` inside the session loop). Design note: [plans/P1-M1-answer-window.md](plans/P1-M1-answer-window.md). Domain terms: root [CONTEXT.md](../CONTEXT.md).
 
 ## Monitor / harness compatibility
 

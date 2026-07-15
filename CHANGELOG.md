@@ -6,6 +6,14 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- refactor(answer-window, P1.M1): deepen listen into `hark.answer_window` —
+  `open(policy) → ListenResult` with radio/silence sessions behind a small
+  external interface. `run_listen` is a thin facade; ambient post-wake and CLI
+  listen/ask use profiles (`bound_answer` / `post_wake` / `confirm`) instead of
+  gate-kwargs soup. Streaming idle clamp and partial HEP knobs are policy
+  fields (no `[ambient]` re-read inside the session loop). `listen_end` stays
+  pure; agent `hark listen-end` IPC unchanged. See `docs/plans/P1-M1-answer-window.md`,
+  `docs/ARCHITECTURE.md`, and root `CONTEXT.md`.
 - fix(listen/silence, B108): silence `end_mode` auto-finalizes again when
   `[ambient].streaming` is on. Two root causes: (1) energy-gate hang now uses a
   **relative-to-peak** floor when the utterance peak is well above `open_thresh`,

@@ -61,6 +61,10 @@ from hark.wake_learn import (
 
 # Default spoken wake example in ambient boot TTS (names mode / stock config).
 DEFAULT_BOOT_WAKE_LABEL = "hey hark"
+_EXCEPTION_DETAIL_MAX_CHARS = 240
+_EXCEPTION_TYPE_MAX_CHARS = 80
+_LAST_SUCCESS_TEXT_MAX_CHARS = 240
+_LAST_SUCCESS_PROVIDER_MAX_CHARS = 120
 
 
 def primary_wake_label(cfg: HarkConfig) -> str:
@@ -140,6 +144,46 @@ class AmbientResult:
     skip_emit: bool = False
     # Optional kind override for ambient_event_line (e.g. ambient.conversation_end)
     kind: str | None = None
+
+
+def _safe_bounded_text(value: Any, *, max_chars: int) -> str | None:
+    """Render an operational field without letting hostile objects escape logging."""
+    if value is None:
+        return None
+    try:
+        rendered = str(value)
+        if not isinstance(rendered, str):
+            return None
+        text = str.strip(rendered)
+    except BaseException:
+        return None
+    return text[:max_chars] or None
+
+
+def _safe_exception_type_name(exc: BaseException) -> str:
+    """Return a bounded exception type name that itself cannot raise."""
+    try:
+        name = type(exc).__name__
+        if isinstance(name, str):
+            name = str.strip(name)
+            if name:
+                return name[:_EXCEPTION_TYPE_MAX_CHARS]
+    except BaseException:
+        pass
+    return "Exception"
+
+
+def _safe_exception_detail(exc: BaseException) -> str:
+    """Return bounded exception detail, falling back when ``__str__`` is broken."""
+    fallback = _safe_exception_type_name(exc)
+    try:
+        rendered = str(exc)
+        if not isinstance(rendered, str):
+            return fallback
+        detail = str.strip(rendered)
+    except BaseException:
+        return fallback
+    return (detail or fallback)[:_EXCEPTION_DETAIL_MAX_CHARS]
 
 
 def _apply_policy_to_backend(backend: WakeBackend, policy: WakePolicy) -> None:
@@ -568,7 +612,7 @@ def _single_post_wake_listen(
             partial_kind="ambient.partial",
         )
     except Exception as exc:
-        err_s = str(exc)
+        err_s = _safe_exception_detail(exc)
         is_no_open = (
             "no speech detected" in err_s.lower()
             or "no speech captured" in err_s.lower()
@@ -752,7 +796,8 @@ def _conversation_after_wake(
         try:
             listened = run_listen(cfg, policy=pol)
         except Exception as exc:
-            err_s = str(exc)
+            error_type = _safe_exception_type_name(exc)
+            err_s = _safe_exception_detail(exc)
             is_no_open = (
                 "no speech detected" in err_s.lower()
                 or "no speech captured" in err_s.lower()
@@ -803,7 +848,14 @@ def _conversation_after_wake(
                 end_reason = "conversation_idle"
             else:
                 end_reason = "listen_failed"
-            error_detail = (err_s.strip() or type(exc).__name__)[:240]
+            error_detail = err_s
+            last_text_detail = _safe_bounded_text(
+                last_text, max_chars=_LAST_SUCCESS_TEXT_MAX_CHARS
+            )
+            last_provider_detail = _safe_bounded_text(
+                (last_listen or {}).get("provider"),
+                max_chars=_LAST_SUCCESS_PROVIDER_MAX_CHARS,
+            )
 
             if is_conversation_idle:
                 syslog(
@@ -826,6 +878,11 @@ def _conversation_after_wake(
                     reason=end_reason,
                     listen_error=error_detail,
                     turns=turn,
+                    last_event_id=last_event_id,
+                    last_stream_id=last_stream_id,
+                    last_turn=turn,
+                    last_text=last_text_detail,
+                    last_provider=last_provider_detail,
                 )
             end_ev = {
                 "schema": "hark.event.v1",
@@ -857,11 +914,13 @@ def _conversation_after_wake(
                 end_ev.update(
                     {
                         "listen_error": error_detail,
-                        "error_type": type(exc).__name__,
+                        "error_type": error_type,
                         "failure_stream_id": stream_id,
                         "last_event_id": last_event_id,
                         "last_stream_id": last_stream_id,
                         "last_turn": turn,
+                        "last_text": last_text_detail,
+                        "last_provider": last_provider_detail,
                     }
                 )
             _emit_ambient_hep(end_ev, out=out, syslog_kind="ambient.conversation_end")
@@ -875,7 +934,7 @@ def _conversation_after_wake(
                 listen_result.update(
                     {
                         "error": error_detail,
-                        "error_type": type(exc).__name__,
+                        "error_type": error_type,
                         "failure_stream_id": stream_id,
                     }
                 )

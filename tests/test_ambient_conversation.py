@@ -15,6 +15,16 @@ from hark.providers.base import ProviderError
 from hark.wake import WakeHit
 
 
+class _RaisingStrRuntimeError(RuntimeError):
+    def __str__(self) -> str:
+        raise RuntimeError("exception rendering failed")
+
+
+class _NonStringStrRuntimeError(RuntimeError):
+    def __str__(self):
+        return 123
+
+
 def _hit() -> WakeHit:
     return WakeHit(
         phrase="hey iris",
@@ -181,12 +191,83 @@ def test_streaming_later_listen_failure_is_not_idle(monkeypatch, failure, reason
     assert end["last_stream_id"] == "last-success-stream"
     assert end["last_turn"] == 1
     assert end["last_event_id"] == result.event_id
+    assert end["last_text"] == "successful turn"
+    assert end["last_provider"] == "fake-provider"
     assert "failure" in end["instructions"]
 
     error_logs = [fields for kind, fields in logs if kind == "ambient.error"]
     assert len(error_logs) == 1
     assert error_logs[0]["reason"] == reason
     assert error_logs[0]["listen_error"] == detail
+    assert error_logs[0]["last_event_id"] == result.event_id
+    assert error_logs[0]["last_stream_id"] == "last-success-stream"
+    assert error_logs[0]["last_turn"] == 1
+    assert error_logs[0]["last_text"] == "successful turn"
+    assert error_logs[0]["last_provider"] == "fake-provider"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [_RaisingStrRuntimeError(), _NonStringStrRuntimeError()],
+)
+def test_streaming_later_hostile_exception_rendering_is_contained(monkeypatch, failure):
+    """Failure reporting cannot itself escape or duplicate an unbounded transcript."""
+    cfg = HarkConfig(
+        ambient=AmbientConfig(streaming=True, streaming_conversation_idle_s=30.0),
+        listen=ListenConfig(end_mode="silence"),
+    )
+    calls = {"n": 0}
+    logs: list[tuple[str, dict]] = []
+    long_text = "last successful transcript " + "x" * 400
+    long_provider = "provider-" + "y" * 200
+
+    def fake_listen(cfg_arg, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ListenResult(
+                text=long_text,
+                provider=long_provider,
+                duration_ms=73,
+                end_mode="silence",
+                stream_id="last-success-stream",
+            )
+        raise failure
+
+    out = io.StringIO()
+    monkeypatch.setattr(ambient, "run_listen", fake_listen)
+    monkeypatch.setattr(
+        ambient, "syslog", lambda kind, **fields: logs.append((kind, fields))
+    )
+    monkeypatch.setattr(ambient, "shutdown_requested", lambda: False)
+    monkeypatch.setattr(ambient, "reload_requested", lambda: False)
+
+    result = complete_after_wake(cfg, _hit(), announce=False, out=out)
+    error_type = type(failure).__name__
+
+    assert result.kind == "ambient.conversation_end"
+    assert result.text == long_text
+    assert result.listen
+    assert result.listen["reason"] == "listen_failed"
+    assert result.listen["error"] == error_type
+    assert result.listen["error_type"] == error_type
+
+    events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    end = next(event for event in events if event["kind"] == "ambient.conversation_end")
+    assert end["listen_error"] == error_type
+    assert end["error_type"] == error_type
+    assert end["last_event_id"] == result.event_id
+    assert end["last_stream_id"] == "last-success-stream"
+    assert end["last_turn"] == 1
+    assert end["last_text"] == long_text[:240]
+    assert end["last_provider"] == long_provider[:120]
+
+    error_log = next(fields for kind, fields in logs if kind == "ambient.error")
+    assert error_log["listen_error"] == error_type
+    assert error_log["last_event_id"] == result.event_id
+    assert error_log["last_stream_id"] == "last-success-stream"
+    assert error_log["last_turn"] == 1
+    assert error_log["last_text"] == long_text[:240]
+    assert error_log["last_provider"] == long_provider[:120]
 
 
 def test_streaming_later_runtime_with_no_speech_text_is_not_idle(monkeypatch):

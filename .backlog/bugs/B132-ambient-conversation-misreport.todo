@@ -1,0 +1,31 @@
+---
+complexity: medium
+created_at: "2026-07-15T21:02:06Z"
+depends_on: []
+estimate_hours: 1
+id: B132
+priority: medium
+status: pending
+tags:
+    - ambient
+    - conversation
+    - error-reporting
+title: Ambient conversation misreports later-turn listen failures as conversation_idle
+updated_at: "2026-07-15T21:02:06Z"
+---
+## Evidence
+In ambient._conversation_after_wake, the listen exception path computes whether the error is a no-speech timeout. The first turn distinguishes no_open from listen_failed, but every exception after a successful turn unconditionally emits ambient.conversation_end with reason conversation_idle. A reproduction with one successful turn followed by RuntimeError("provider unavailable") emitted conversation_idle. Existing tests cover a later no-speech TimeoutError, not provider, mic, or internal failures.
+
+## Expected
+Only a genuine later-turn no-speech timeout ends the post-wake conversation as conversation_idle. Other failures retain their error class and are surfaced as failures to logs and HEP consumers.
+
+## Actual
+Provider, microphone, and internal listen failures after turn one are indistinguishable from normal operator inactivity.
+
+## Acceptance criteria
+- Classify later-turn listen exceptions before choosing the conversation outcome.
+- Preserve conversation_idle for genuine no-speech expiration.
+- Emit a stable failure reason and useful bounded error detail for provider, mic, and unexpected failures.
+- Preserve the last successful turn metadata without presenting the failure as normal idle.
+- Add tests for later no-speech timeout, ProviderError, mic-busy failure, and unexpected RuntimeError.
+- Keep first-turn no_open and listen_failed behavior compatible.

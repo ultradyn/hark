@@ -130,3 +130,4 @@ bugs:
     - file: B129-dashboard-static-path-traversa.todo
     - file: B130-dashboard-sse-reconnect-can-sk.todo
     - file: B131-state-feed-resume-skips-record.todo
+    - file: B132-ambient-conversation-misreport.todo

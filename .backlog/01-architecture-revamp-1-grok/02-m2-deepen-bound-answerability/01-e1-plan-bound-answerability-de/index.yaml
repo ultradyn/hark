@@ -28,6 +28,6 @@ tasks:
       file: T002-design-note-acceptance-for-ans.todo
       id: T002
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: Design note + acceptance for Answerability seam

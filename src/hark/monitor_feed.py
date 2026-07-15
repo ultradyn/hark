@@ -92,11 +92,24 @@ def io_targets_path(out: TextIO | None, path: Path) -> bool:
         return False
 
 
+def _stored_event_line(event: dict[str, Any]) -> str:
+    """Return the authoritative NDJSON representation for persisted events.
+
+    Execution provenance is reserved metadata: when the process declares it,
+    it overrides caller-supplied data in a copy.  Callers may still emit their
+    original object to a non-canonical machine stream unchanged.
+    """
+    stored_event = dict(event)
+    provenance = os.environ.get(EVENT_PROVENANCE_ENV, "").strip()
+    if provenance:
+        stored_event["hark_provenance"] = provenance
+    return json.dumps(stored_event, separators=(",", ":"), ensure_ascii=False) + "\n"
+
+
 def append_ambient_jsonl(
     event: dict[str, Any],
     *,
     root: Path | None = None,
-    line: str | None = None,
 ) -> bool:
     """Best-effort append of one HEP object to state ``ambient.jsonl``.
 
@@ -107,21 +120,8 @@ def append_ambient_jsonl(
     try:
         path = ambient_feed_path(root)
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = line
-        provenance = os.environ.get(EVENT_PROVENANCE_ENV, "").strip()
-        if provenance:
-            stored_event = dict(event)
-            stored_event.setdefault("hark_provenance", provenance)
-            payload = (
-                json.dumps(stored_event, separators=(",", ":"), ensure_ascii=False)
-                + "\n"
-            )
-        elif payload is None:
-            payload = json.dumps(event, separators=(",", ":"), ensure_ascii=False) + "\n"
-        elif not payload.endswith("\n"):
-            payload = payload + "\n"
         with path.open("a", encoding="utf-8") as fh:
-            fh.write(payload)
+            fh.write(_stored_event_line(event))
         return True
     except Exception:
         return False
@@ -140,9 +140,15 @@ def emit_hep(
     so redirect-to-restart-log still feeds ``hark monitor`` without duplicating
     the normal path.
     """
-    line = json.dumps(event, separators=(",", ":"), ensure_ascii=False) + "\n"
+    feed = ambient_feed_path(root)
+    out_is_feed = io_targets_path(out, feed)
     if out is not None:
         try:
+            line = (
+                _stored_event_line(event)
+                if out_is_feed
+                else json.dumps(event, separators=(",", ":"), ensure_ascii=False) + "\n"
+            )
             out.write(line)
             out.flush()
         except Exception:
@@ -151,10 +157,9 @@ def emit_hep(
         # No stream → nothing to dual-write (callers that only want the feed
         # should use append_ambient_jsonl directly, e.g. TTS lifecycle).
         return
-    feed = ambient_feed_path(root)
-    if io_targets_path(out, feed):
+    if out_is_feed:
         return
-    append_ambient_jsonl(event, root=root, line=line)
+    append_ambient_jsonl(event, root=root)
 
 
 class MonitorBusyError(RuntimeError):
@@ -435,6 +440,7 @@ def replay_matching(
                 obj, kinds, include_test_events=include_test_events
             ):
                 matched.append((obj, path.name))
+
     # keep last N across all files by observed_at if present else order
     def sort_key(item: tuple[dict[str, Any], str]) -> str:
         return str(item[0].get("observed_at") or "")
@@ -550,9 +556,7 @@ def run_monitor(
             replay_matching(
                 paths, kinds=kinds, limit=replay, for_monitor=for_monitor, out=out
             )
-        return follow_state_files(
-            paths, kinds=kinds, for_monitor=for_monitor, out=out
-        )
+        return follow_state_files(paths, kinds=kinds, for_monitor=for_monitor, out=out)
     finally:
         if lock is not None:
             lock.release()

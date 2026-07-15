@@ -236,11 +236,12 @@ def test_loop_dual_writes_prompt_when_stdout_is_restart_log(monkeypatch, tmp_pat
     feed_text = feed.read_text(encoding="utf-8")
     assert "b104-loop-prompt" in restart_text
     assert "b104-loop-prompt" in feed_text
-    assert '"kind":"ambient.prompt"' in feed_text or '"kind": "ambient.prompt"' in feed_text
+    assert (
+        '"kind":"ambient.prompt"' in feed_text
+        or '"kind": "ambient.prompt"' in feed_text
+    )
 
-    feed_events = [
-        json.loads(line) for line in feed_text.splitlines() if line.strip()
-    ]
+    feed_events = [json.loads(line) for line in feed_text.splitlines() if line.strip()]
     prompts = [e for e in feed_events if e.get("kind") == "ambient.prompt"]
     assert len(prompts) == 1
     assert prompts[0]["text"] == "ship the dual-write fix over"

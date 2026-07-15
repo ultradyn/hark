@@ -38,9 +38,7 @@ def test_wake_near_miss_is_mode_a_wake_kind():
 
 
 def test_should_surface_filters():
-    assert should_surface(
-        {"kind": "ambient.wake_near_miss"}, MODE_A_WAKE_KINDS
-    )
+    assert should_surface({"kind": "ambient.wake_near_miss"}, MODE_A_WAKE_KINDS)
     assert not should_surface({"kind": "ambient.debug"}, MODE_A_WAKE_KINDS)
     assert not should_surface(
         {"kind": "ambient.prompt", "hark_provenance": "test"},
@@ -242,9 +240,7 @@ def test_replay_filters_marked_test_events(tmp_path: Path):
                         "hark_provenance": "test",
                     }
                 ),
-                json.dumps(
-                    {"kind": "ambient.prompt", "event_id": "operator-live"}
-                ),
+                json.dumps({"kind": "ambient.prompt", "event_id": "operator-live"}),
             ]
         )
         + "\n",
@@ -422,9 +418,7 @@ def test_run_monitor_allow_multiple_skips_lock(
     held = MonitorFeedLock(tmp_path)
     held.acquire()
     try:
-        code = run_monitor(
-            replay=0, allow_multiple=True, state_root=tmp_path, paths=[]
-        )
+        code = run_monitor(replay=0, allow_multiple=True, state_root=tmp_path, paths=[])
         assert code == 0
     finally:
         held.release()
@@ -453,6 +447,7 @@ def test_run_monitor_acquires_and_releases(
 
 # --- B104: dual-write ambient HEP ---
 
+
 def test_emit_hep_dual_writes_when_stdout_redirected(tmp_path: Path, monkeypatch):
     """B104: HEP wake events must hit ambient.jsonl even if out is a restart log."""
     monkeypatch.setattr("hark.paths.state_dir", lambda: tmp_path)
@@ -479,6 +474,7 @@ def test_emit_hep_dual_writes_when_stdout_redirected(tmp_path: Path, monkeypatch
     assert json.loads(feed_lines[0])["event_id"] == "b104-prompt-1"
     assert json.loads(feed_lines[0])["kind"] == "ambient.prompt"
 
+
 def test_emit_hep_skips_dual_write_when_out_is_ambient_jsonl(
     tmp_path: Path, monkeypatch
 ):
@@ -499,6 +495,40 @@ def test_emit_hep_skips_dual_write_when_out_is_ambient_jsonl(
     assert len(lines) == 1
     assert json.loads(lines[0])["event_id"] == "b104-once"
 
+
+def test_emit_hep_direct_canonical_feed_stamps_once_and_is_filtered(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr("hark.paths.state_dir", lambda: tmp_path)
+    feed = ambient_feed_path(tmp_path)
+    event = {
+        "kind": "ambient.prompt",
+        "event_id": "direct-synthetic",
+        "hark_provenance": "operator",
+    }
+
+    with feed.open("a", encoding="utf-8") as out:
+        emit_hep(event, out)
+
+    lines = feed.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["hark_provenance"] == "test"
+    assert event["hark_provenance"] == "operator"
+
+    replayed = StringIO()
+    assert (
+        replay_matching(
+            [feed],
+            kinds=MODE_A_WAKE_KINDS,
+            limit=10,
+            for_monitor=False,
+            out=replayed,
+        )
+        == 0
+    )
+    assert replayed.getvalue() == ""
+
+
 def test_emit_hep_dual_writes_stringio_out(tmp_path: Path, monkeypatch):
     """StringIO (tests / in-memory) still dual-writes to the feed path."""
     monkeypatch.setattr("hark.paths.state_dir", lambda: tmp_path)
@@ -518,6 +548,40 @@ def test_emit_hep_dual_writes_stringio_out(tmp_path: Path, monkeypatch):
     feed_text = (tmp_path / "ambient.jsonl").read_text(encoding="utf-8")
     assert "b104-partial" in feed_text
     assert "ambient.partial" in feed_text
+
+
+def test_execution_provenance_overrides_caller_only_in_persisted_copy(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr("hark.paths.state_dir", lambda: tmp_path)
+    event = {
+        "kind": "ambient.prompt",
+        "event_id": "reserved-provenance",
+        "hark_provenance": "operator",
+    }
+    out = StringIO()
+
+    emit_hep(event, out)
+
+    assert json.loads(out.getvalue())["hark_provenance"] == "operator"
+    assert event["hark_provenance"] == "operator"
+    feed = tmp_path / "ambient.jsonl"
+    stored = json.loads(feed.read_text(encoding="utf-8"))
+    assert stored["hark_provenance"] == "test"
+
+    replayed = StringIO()
+    assert (
+        replay_matching(
+            [feed],
+            kinds=MODE_A_WAKE_KINDS,
+            limit=10,
+            for_monitor=False,
+            out=replayed,
+        )
+        == 0
+    )
+    assert replayed.getvalue() == ""
+
 
 def test_append_ambient_jsonl_helper(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("hark.paths.state_dir", lambda: tmp_path)

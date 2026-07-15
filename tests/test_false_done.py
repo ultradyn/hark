@@ -1,4 +1,7 @@
-"""B016: false-done detection — done/idle with menu-like pane → needs_input."""
+"""B016: false-done detection — done/idle with menu-like pane → needs_input.
+
+Coverage retained under Pane Understanding (P1.M3): heuristics + PaneClassifier.
+"""
 
 from __future__ import annotations
 
@@ -7,13 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from hark.events import (
-    looks_like_pending_question,
-    make_agent_needs_input,
-    monitor_profile,
-)
+from hark.events import make_agent_needs_input, monitor_profile
 from hark.herdr.client import AgentInfo
-from hark.watch import EdgeTracker
+from hark.pane_understanding import looks_like_pending_question
+from hark.pane_understanding.classify import PaneClassifier as EdgeTracker
 
 ROOT = Path(__file__).resolve().parents[1]
 FIX = ROOT / "fixtures" / "text" / "false_done.jsonl"

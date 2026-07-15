@@ -1,4 +1,7 @@
-"""B096: false agent.completed while Herdr/Grok subagent Tasks still running."""
+"""B096: false agent.completed while Herdr/Grok subagent Tasks still running.
+
+Coverage retained under Pane Understanding (P1.M3).
+"""
 
 from __future__ import annotations
 
@@ -7,13 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from hark.events import (
-    detect_active_subagents,
-    make_agent_busy_subagent,
-    monitor_profile,
-)
+from hark.events import make_agent_busy_subagent, monitor_profile
 from hark.herdr.client import AgentInfo
-from hark.watch import EdgeTracker
+from hark.pane_understanding import detect_active_subagents
+from hark.pane_understanding.classify import PaneClassifier as EdgeTracker
 
 ROOT = Path(__file__).resolve().parents[1]
 FIX = ROOT / "fixtures" / "text" / "subagent_tasks.jsonl"

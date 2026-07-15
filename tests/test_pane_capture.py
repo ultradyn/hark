@@ -1,10 +1,12 @@
-"""B094: full pane text capture on agent wake HEP events."""
+"""B094: full pane text capture on agent wake HEP events.
+
+PaneClassifier (P1.M3) owns capture split; coverage retained.
+"""
 
 from __future__ import annotations
 
 from hark.config import load_config
 from hark.events import (
-    looks_like_pending_question,
     make_agent_needs_input,
     make_agent_status_event,
     monitor_profile,
@@ -12,7 +14,8 @@ from hark.events import (
 )
 from hark.herdr.client import AgentInfo
 from hark.monitor_feed import compact_mode_a_event
-from hark.watch import EdgeTracker
+from hark.pane_understanding import looks_like_pending_question
+from hark.pane_understanding.classify import PaneClassifier as EdgeTracker
 
 # Multi-option menu as would appear on a blocked / false-done pane.
 BLOCKED_MENU_PANE = """\

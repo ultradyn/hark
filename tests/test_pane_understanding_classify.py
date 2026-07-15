@@ -58,3 +58,32 @@ def test_process_observations_no_herdr_types_required() -> None:
         interest={"blocked"},
     )
     assert any(e["kind"] == "agent.blocked" for e in events)
+
+
+GROK_TASKS = """\
+▾ Tasks 1
+⁙ Task Install something important…   (1+) 2m00s
+▾ Watchers 1
+"""
+
+
+def test_process_observations_busy_subagent_suppresses_completed() -> None:
+    clf = PaneClassifier(
+        ClassifyPolicy(interest=frozenset({"blocked", "done"}), detect_false_done=True)
+    )
+    clf.process_observations(
+        [PaneObservation(session_id="s", pane_id="p", status="working")],
+        interest={"blocked", "done"},
+    )
+    events = clf.process_observations(
+        [
+            PaneObservation(
+                session_id="s", pane_id="p", status="done", pane_text=GROK_TASKS
+            )
+        ],
+        interest={"blocked", "done"},
+    )
+    kinds = [e["kind"] for e in events]
+    assert "agent.completed" not in kinds
+    assert any(e.get("busy_subagent") for e in events)
+    assert ("s", "p") in clf.state.subagents_busy

@@ -19,11 +19,11 @@ phases:
       description: 'Deepen shallow/wide modules surfaced by /improve-codebase-architecture (2026-07-15). Aim: testability + AI-navigability via deep modules (small interface, large implementation) at clean seams. Report: ~/served-html/architecture-review-hark-latest.html. Domain: Mode A voice bridge, HEP, bound delivery, Answer Window, false-done. Vocab: module, interface, depth, seam, adapter, leverage, locality. ADRs 002/007/008/009/014 stay load-bearing.'
       estimate_hours: 120
       id: P1
-      locked: false
+      locked: true
       name: Architecture revamp 1 (Grok)
       path: 01-architecture-revamp-1-grok
       priority: high
-      status: pending
+      status: done
       weeks: 8
 project: hark
 stats:

@@ -2,7 +2,7 @@ complexity: medium
 depends_on: []
 estimate_hours: 120
 id: P1
-locked: false
+locked: true
 milestones:
     - complexity: high
       depends_on: []
@@ -57,7 +57,7 @@ milestones:
       locked: false
       name: 'M6: ListenSessionPolicy (stop ambient leaking into listen)'
       path: 06-m6-listensessionpolicy-stop-am
-      status: pending
+      status: done
 name: Architecture revamp 1 (Grok)
 stats:
     blocked: 0
@@ -65,5 +65,5 @@ stats:
     in_progress: 0
     pending: 58
     total_tasks: 58
-status: pending
+status: done
 weeks: 8

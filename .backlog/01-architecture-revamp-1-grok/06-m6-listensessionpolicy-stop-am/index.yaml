@@ -36,7 +36,7 @@ epics:
       locked: false
       name: 'E4: Tests that bound listen ignores ambient TOML streaming'
       path: 04-e4-tests-that-bound-listen-ign
-      status: pending
+      status: done
 estimate_hours: 12
 id: P1.M6
 locked: false
@@ -47,4 +47,4 @@ stats:
     in_progress: 0
     pending: 7
     total_tasks: 7
-status: pending
+status: done

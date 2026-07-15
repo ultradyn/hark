@@ -29,6 +29,6 @@ tasks:
       file: T002-architecture-md-edgetracker-pa.todo
       id: T002
       priority: low
-      status: pending
+      status: in_progress
       tags: []
       title: ARCHITECTURE.md EdgeTracker → Pane Understanding

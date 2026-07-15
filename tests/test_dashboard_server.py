@@ -607,6 +607,60 @@ def test_overflow_drain_discards_only_cursor_covered_envelopes():
     assert not _durable_envelope_covered(envelope("serve", "serve:1"), highwater)
 
 
+def test_overflow_retry_carries_serve_retained_before_late_overflow():
+    from hark.dashboard.server import DashboardHandler, SubscriberQueue
+
+    serve = {
+        "schema": "hark.dashboard.v1",
+        "type": "event",
+        "source": "serve",
+        "cursor": "watch:1,serve:1",
+        "payload": {"kind": "serve.dictation"},
+    }
+    covered = {
+        "schema": "hark.dashboard.v1",
+        "type": "event",
+        "source": "watch",
+        "cursor": "watch:1",
+        "payload": {"kind": "agent.blocked"},
+    }
+
+    class LateOverflowQueue(SubscriberQueue):
+        def __init__(self):
+            super().__init__()
+            self.removals = 0
+            self.triggered = False
+
+        def get_nowait(self):
+            envelope = super().get_nowait()
+            self.removals += 1
+            if self.removals == 2 and not self.triggered:
+                self.triggered = True
+                self.mark_overflow()
+            return envelope
+
+    class FakeHandler:
+        replay_calls = 0
+
+        def _sse_replay(self, since, wanted):
+            self.replay_calls += 1
+            return "watch:1"
+
+    subscriber = LateOverflowQueue()
+    subscriber.put_nowait(serve)
+    subscriber.put_nowait(covered)
+    subscriber.mark_overflow()
+    handler = FakeHandler()
+
+    cursor, retained = DashboardHandler._recover_subscriber_overflow(
+        handler, subscriber, "watch:0", None
+    )
+
+    assert cursor == "watch:1"
+    assert handler.replay_calls == 2
+    assert retained == [serve]
+
+
 def test_overflow_drain_retains_append_after_replay_snapshot(
     state, tmp_path, monkeypatch
 ):

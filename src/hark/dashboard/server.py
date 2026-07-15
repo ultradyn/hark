@@ -46,14 +46,18 @@ _DURABLE_CURSOR_KEYS = {
 }
 
 
-def _durable_envelope_covered(envelope: dict[str, Any], highwater: str) -> bool:
-    """Whether a queued durable envelope is proven included in *highwater*."""
+def _durable_cursor_key(envelope: dict[str, Any]) -> str | None:
+    """Cursor key for a replayable durable envelope, if it has one."""
     source = envelope.get("source")
     if source == "delivery":
         payload = envelope.get("payload") or {}
-        cursor_key = "bound" if payload.get("type") == "bound" else "delivery"
-    else:
-        cursor_key = _DURABLE_CURSOR_KEYS.get(source)
+        return "bound" if payload.get("type") == "bound" else "delivery"
+    return _DURABLE_CURSOR_KEYS.get(source)
+
+
+def _durable_envelope_covered(envelope: dict[str, Any], highwater: str) -> bool:
+    """Whether a queued durable envelope is proven included in *highwater*."""
+    cursor_key = _durable_cursor_key(envelope)
     if cursor_key is None:
         return False
     envelope_seq = parse_cursor(envelope.get("cursor")).get(cursor_key)
@@ -591,13 +595,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         publish after the snapshot but before the drain) and non-durable serve
         events are retained for delivery.
         """
+        carried: list[dict[str, Any]] = []
         while True:
             subscriber.clear_overflow()
             stream_cursor = self._sse_replay(stream_cursor, wanted)
             if subscriber.overflowed:
                 continue
 
-            retained: list[dict[str, Any]] = []
+            retained_durable: list[dict[str, Any]] = []
             queued = subscriber.qsize()
             for _ in range(queued):
                 try:
@@ -607,13 +612,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 source = envelope["source"]
                 if wanted is not None and source not in wanted:
                     continue
-                if source == "serve" or not _durable_envelope_covered(
-                    envelope, stream_cursor
-                ):
-                    retained.append(envelope)
+                if source == "serve" or _durable_cursor_key(envelope) is None:
+                    # No disk replay can recover this envelope.  Carry it
+                    # across retry passes instead of abandoning it when a
+                    # later queue removal observes another overflow.
+                    carried.append(envelope)
+                elif not _durable_envelope_covered(envelope, stream_cursor):
+                    # Safe to retain only for this pass: if it retries, the
+                    # next durable replay will include this newer record.
+                    retained_durable.append(envelope)
             if subscriber.overflowed:
                 continue
-            return stream_cursor, retained
+            return stream_cursor, [*carried, *retained_durable]
 
     def _handle_stream(self, qs: dict[str, list[str]]) -> None:
         sources_raw = (qs.get("sources") or [None])[0]

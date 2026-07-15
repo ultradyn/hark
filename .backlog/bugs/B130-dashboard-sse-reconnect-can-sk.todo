@@ -1,18 +1,18 @@
 ---
+claimed_at: "2026-07-15T21:49:44Z"
+claimed_by: codex-urban-morn-b847
+completed_at: null
 complexity: medium
 created_at: "2026-07-15T21:01:16Z"
 depends_on: []
 estimate_hours: 1
 id: B130
 priority: high
-status: pending
-tags:
-    - dashboard
-    - sse
-    - event-loss
-    - state-feed
+started_at: "2026-07-15T21:49:44Z"
+status: in_progress
+tags: []
 title: Dashboard SSE reconnect can skip unseen backfill after the hello frame
-updated_at: "2026-07-15T21:01:16Z"
+updated_at: "2026-07-15T21:49:44Z"
 ---
 ## Evidence
 DashboardHandler._handle_stream sends a hello envelope before replay. The hello cursor is TailPump.composite_cursor at current EOF, and _sse_write emits every envelope cursor as the SSE id. When a client requests since=watch:0 with two unseen events, the first frame is hello with id watch:2. If the connection drops then, EventSource reconnects with watch:2 and GET events since that id returns no backfill. The web ingest path also adopts hello.cursor immediately. Replay events are likewise stamped with the final page cursor rather than a per-record cursor, so a disconnect midway can skip the remainder. A live-server harness reproduced an empty replay after reconnect. The full suite still passes.

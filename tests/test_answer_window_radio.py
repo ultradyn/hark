@@ -1,4 +1,4 @@
-"""E2.T001/T002: RadioSession state machine + segment join / partial emit."""
+"""E2.T001–T003: RadioSession state machine, segment join, end/control internals."""
 
 from __future__ import annotations
 
@@ -346,3 +346,165 @@ def test_text_join_helpers_reexported_from_speech():
     assert m2 is monotonic_partial_text
     assert p2 is prefer_complete_transcript
     assert j2(["alpha beta", "beta gamma"]) == "alpha beta gamma"
+
+
+# --- E2.T003: listen_end + listen_control as RadioSession internals ---
+
+
+def test_evaluate_transcript_soft_end_uses_policy():
+    """Soft end evaluation is pure and driven by policy phrase lists."""
+    s = RadioSession(
+        policy=_policy(
+            soft_end_phrases=("over", "send it"),
+            soft_end_phrases_enabled=True,
+            end_phrases=("hark send",),
+            cancel_phrases=("hark cancel",),
+        )
+    )
+    hit = s.evaluate_transcript("please implement the fix over")
+    assert hit is not None
+    assert hit.kind == "end"
+    assert hit.phrase == "over"
+    assert "implement" in hit.body
+
+
+def test_evaluate_transcript_cancel_priority():
+    s = RadioSession(
+        policy=_policy(
+            soft_end_phrases_enabled=True,
+            end_phrases=("hark send",),
+            cancel_phrases=("hark cancel",),
+        )
+    )
+    hit = s.evaluate_transcript("scratch that hark cancel")
+    assert hit is not None
+    assert hit.kind == "cancel"
+    assert hit.phrase == "hark cancel"
+
+
+def test_evaluate_transcript_soft_disabled():
+    s = RadioSession(
+        policy=_policy(
+            soft_end_phrases=("send it",),
+            soft_end_phrases_enabled=False,
+            end_phrases=("hark send",),
+        )
+    )
+    assert s.evaluate_transcript("ship it send it") is None
+    hit = s.evaluate_transcript("ship it hark send")
+    assert hit is not None
+    assert hit.phrase == "hark send"
+
+
+def test_poll_and_consume_agent_action_via_deps():
+    """Agent control IPC is injectable; no filesystem required."""
+    pending: list[str | None] = ["finish"]
+
+    def poll(_sid: str) -> str | None:
+        return pending[0]
+
+    def consume(_sid: str) -> str | None:
+        act = pending[0]
+        pending[0] = None
+        return act
+
+    s = RadioSession(
+        policy=_policy(stream_id="s-ctrl"),
+        deps=AnswerWindowDeps(
+            poll_listen_action=poll,
+            consume_listen_action=consume,
+        ),
+        stream_id="s-ctrl",
+    )
+    assert s.poll_agent_action() == "finish"
+    assert s.agent_wants_stop() is True
+    # poll is non-destructive
+    assert s.poll_agent_action() == "finish"
+    assert s.consume_agent_action() == "finish"
+    assert s.poll_agent_action() is None
+    assert s.agent_wants_stop() is False
+
+
+def test_handle_agent_or_phrase_agent_cancel_priority():
+    """Agent cancel wins even when the transcript has a soft end."""
+    s = RadioSession(
+        policy=_policy(stream_id="s-ag", soft_end_phrases_enabled=True),
+        deps=AnswerWindowDeps(
+            poll_listen_action=lambda _s: "cancel",
+            consume_listen_action=lambda _s: "cancel",
+        ),
+        stream_id="s-ag",
+    )
+    s.ingest_segment_transcript("long prompt over")
+    r = s.handle_agent_or_phrase(
+        "long prompt over",
+        provider="fake",
+        duration_ms=100,
+        consume_agent=True,
+    )
+    assert r is not None
+    assert r.cancelled is True
+    assert r.end_phrase == "agent:cancel"
+    assert r.stream_id == "s-ag"
+
+
+def test_handle_agent_or_phrase_soft_end_result():
+    s = RadioSession(
+        policy=_policy(
+            stream_id="s-soft",
+            soft_end_phrases_enabled=True,
+            strip_phrase=True,
+        ),
+        deps=AnswerWindowDeps(
+            poll_listen_action=lambda _s: None,
+            consume_listen_action=lambda _s: None,
+        ),
+        stream_id="s-soft",
+    )
+    r = s.handle_agent_or_phrase(
+        "please implement the fix over",
+        provider="fake",
+        duration_ms=50,
+    )
+    assert r is not None
+    assert r.cancelled is False
+    assert r.end_phrase == "over"
+    assert "implement" in (r.text or "").lower()
+    assert "over" not in (r.text or "").lower()
+    assert r.partials_emitted == 0
+
+
+def test_handle_agent_or_phrase_none_when_continue():
+    s = RadioSession(
+        policy=_policy(stream_id="s-cont"),
+        deps=AnswerWindowDeps(
+            poll_listen_action=lambda _s: None,
+            consume_listen_action=lambda _s: None,
+        ),
+        stream_id="s-cont",
+    )
+    assert (
+        s.handle_agent_or_phrase(
+            "still thinking about the design",
+            provider="fake",
+            duration_ms=10,
+        )
+        is None
+    )
+
+
+def test_result_for_agent_finish_and_cancel():
+    s = RadioSession(policy=_policy(stream_id="s-res"), stream_id="s-res")
+    s.note_partial_emitted("partial body")
+    fin = s.result_for_agent_action(
+        "finish", text="partial body", provider="xai", duration_ms=12
+    )
+    assert fin.end_phrase == "agent:finish"
+    assert fin.cancelled is False
+    assert fin.text == "partial body"
+    can = s.result_for_agent_action(
+        "cancel", text="", provider="xai", duration_ms=12
+    )
+    assert can.end_phrase == "agent:cancel"
+    assert can.cancelled is True
+    assert can.text == "partial body"  # falls back to last_partial_text

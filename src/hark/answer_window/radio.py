@@ -1,8 +1,9 @@
 """Radio Answer Window session: state machine + segment text / partial HEP.
 
 Unit-testable without audio hardware. Capture loop wiring lands in later tasks;
-this module owns states, events, pure transitions, segment STT join, and
-partial emit (HEP shapes via :mod:`hark.partial`).
+this module owns states, events, pure transitions, segment STT join, partial
+emit (HEP shapes via :mod:`hark.partial`), and listen_end / listen_control
+as session internals (E2.T003).
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from hark.answer_window.text_join import (
     monotonic_partial_text,
     prefer_complete_transcript,
 )
-from hark.listen_end import EndMode
+from hark.listen_end import EndMode, PhraseHit, evaluate_radio_transcript
 from hark.partial import make_partial_event, partial_fragment
 
 
@@ -101,11 +102,14 @@ def radio_transition(state: RadioState, event: RadioEvent) -> RadioState:
 
 @dataclass
 class RadioSession:
-    """Radio-profile session: owns state, segment join, and partial HEP emit.
+    """Radio-profile session: owns state, segment join, partial HEP, end/control.
 
     No STT provider *types* on the public interface — only optional string
-    provider names and callables for partials. Capture loop still lives in
-    ``speech.run_listen`` until later E2 tasks move it behind ``open()``.
+    provider names and callables for partials. Phrase evaluation stays pure
+    via :func:`hark.listen_end.evaluate_radio_transcript`; agent finish/cancel
+    uses injectable deps (or :mod:`hark.listen_control` defaults). Capture
+    loop still lives in ``speech.run_listen`` until later E2 tasks move it
+    behind ``open()``.
     """
 
     policy: AnswerWindowPolicy
@@ -286,6 +290,160 @@ class RadioSession:
 
     def history(self) -> list[tuple[RadioState, RadioEvent, RadioState]]:
         return list(self._history)
+
+    # --- listen_end (pure) + listen_control (IPC via deps) — E2.T003 ---
+
+    def evaluate_transcript(self, text: str) -> PhraseHit | None:
+        """Soft/hard end + cancel from policy phrase lists (pure; no I/O).
+
+        Wraps :func:`hark.listen_end.evaluate_radio_transcript` with this
+        session's policy. Priority remains cancel → product end → soft end.
+        """
+        return evaluate_radio_transcript(
+            text,
+            end_phrases=self.policy.end_phrases,
+            cancel_phrases=self.policy.cancel_phrases,
+            soft_end_phrases=self.policy.soft_end_phrases,
+            soft_end_phrases_enabled=bool(self.policy.soft_end_phrases_enabled),
+        )
+
+    def poll_agent_action(self) -> str | None:
+        """Non-destructive peek at agent finish/cancel (listen_control IPC)."""
+        sid = self.stream_id
+        if not sid:
+            return None
+        poll = self.deps.poll_listen_action
+        if poll is not None:
+            return poll(sid)
+        from hark.listen_control import poll_listen_action
+
+        return poll_listen_action(sid)
+
+    def consume_agent_action(self) -> str | None:
+        """Read and clear pending agent finish/cancel."""
+        sid = self.stream_id
+        if not sid:
+            return None
+        consume = self.deps.consume_listen_action
+        if consume is not None:
+            return consume(sid)
+        from hark.listen_control import consume_listen_action
+
+        return consume_listen_action(sid)
+
+    def agent_wants_stop(self) -> bool:
+        """True when the agent has requested finish or cancel (capture gate)."""
+        return self.poll_agent_action() is not None
+
+    def result_for_phrase_hit(
+        self,
+        hit: PhraseHit,
+        *,
+        text: str,
+        provider: str,
+        duration_ms: int,
+    ) -> ListenResult:
+        """Map a pure phrase hit to a terminal :class:`ListenResult`."""
+        self.end_phrase = hit.phrase
+        if hit.kind == "cancel":
+            self.cancelled = True
+            return ListenResult(
+                text=hit.body,
+                provider=provider,
+                duration_ms=duration_ms,
+                end_mode=EndMode.RADIO.value,
+                end_phrase=hit.phrase,
+                cancelled=True,
+                stream_id=self.stream_id,
+                partials_emitted=self.partial_seq,
+            )
+        body = hit.body if self.policy.strip_phrase else text
+        return ListenResult(
+            text=body,
+            provider=provider,
+            duration_ms=duration_ms,
+            end_mode=EndMode.RADIO.value,
+            end_phrase=hit.phrase,
+            stream_id=self.stream_id,
+            partials_emitted=self.partial_seq,
+        )
+
+    def result_for_agent_action(
+        self,
+        action: str,
+        *,
+        text: str = "",
+        provider: str = "unknown",
+        duration_ms: int = 0,
+    ) -> ListenResult:
+        """Map agent finish/cancel to a terminal :class:`ListenResult`."""
+        body = (text or "").strip() or self.last_partial_text
+        if action == "cancel":
+            self.end_phrase = "agent:cancel"
+            self.cancelled = True
+            return ListenResult(
+                text=body,
+                provider=provider,
+                duration_ms=duration_ms,
+                end_mode=EndMode.RADIO.value,
+                end_phrase="agent:cancel",
+                cancelled=True,
+                stream_id=self.stream_id,
+                partials_emitted=self.partial_seq,
+            )
+        # finish (and any other non-cancel action treated as finish)
+        self.end_phrase = "agent:finish"
+        return ListenResult(
+            text=body,
+            provider=provider,
+            duration_ms=duration_ms,
+            end_mode=EndMode.RADIO.value,
+            end_phrase="agent:finish",
+            stream_id=self.stream_id,
+            partials_emitted=self.partial_seq,
+        )
+
+    def handle_agent_or_phrase(
+        self,
+        text: str,
+        *,
+        provider: str,
+        duration_ms: int,
+        consume_agent: bool = True,
+    ) -> ListenResult | None:
+        """If agent action or end/cancel phrase ends the window, return result.
+
+        Agent finish/cancel takes priority over phrase evaluation (same order
+        as the radio capture loop). Returns ``None`` when listening continues.
+        """
+        act = (
+            self.consume_agent_action()
+            if consume_agent
+            else self.poll_agent_action()
+        )
+        if act == "cancel":
+            return self.result_for_agent_action(
+                "cancel",
+                text=text,
+                provider=provider,
+                duration_ms=duration_ms,
+            )
+        if act == "finish":
+            return self.result_for_agent_action(
+                "finish",
+                text=text,
+                provider=provider,
+                duration_ms=duration_ms,
+            )
+        hit = self.evaluate_transcript(text)
+        if hit is None:
+            return None
+        return self.result_for_phrase_hit(
+            hit,
+            text=text,
+            provider=provider,
+            duration_ms=duration_ms,
+        )
 
     def result_stub(
         self,

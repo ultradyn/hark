@@ -48,7 +48,7 @@ from hark.listen_control import (
     touch_voice_activity,
 )
 from hark.endpointing import EndpointStrategy, build_endpoint_strategy
-from hark.listen_end import EndMode, evaluate_radio_transcript, parse_end_mode
+from hark.listen_end import EndMode, parse_end_mode
 from hark.mic_coord import pause_ambient_for_mic, wait_until_tts_play_allowed
 from hark.partial import new_stream_id
 from hark.providers.base import ProviderError
@@ -1415,8 +1415,10 @@ def run_listen(
             # Radio mode — segment until end phrase / agent finish / post-speech
             # idle (B074); stream partials. Short pauses stay open; long quiet
             # after speech has opened auto-finishes (same path as soft-end).
-            # Segment join + partial HEP owned by RadioSession (E2.T002).
+            # Segment join + partial HEP (E2.T002); listen_end + listen_control
+            # poll/consume are RadioSession internals (E2.T003).
             pieces: list[bytes] = []
+            _soft = getattr(cfg.listen, "soft_end_phrases", ()) or ()
             radio_sess = RadioSession(
                 policy=AnswerWindowPolicy(
                     profile="bound_answer",
@@ -1431,6 +1433,20 @@ def run_listen(
                     radio_idle_end_silence_s=float(
                         getattr(cfg.listen, "radio_idle_end_silence_s", 0.0) or 0.0
                     ),
+                    end_phrases=tuple(cfg.listen.end_phrases or ()),
+                    cancel_phrases=tuple(cfg.listen.cancel_phrases or ()),
+                    soft_end_phrases=tuple(_soft),
+                    soft_end_phrases_enabled=bool(
+                        getattr(cfg.listen, "soft_end_phrases_enabled", True)
+                    ),
+                    strip_phrase=bool(getattr(cfg.listen, "strip_phrase", True)),
+                ),
+                deps=AnswerWindowDeps(
+                    # Bind speech-module symbols so tests monkeypatching
+                    # hark.speech.poll/consume_listen_action still work.
+                    poll_listen_action=lambda sid: poll_listen_action(sid),
+                    consume_listen_action=lambda sid: consume_listen_action(sid),
+                    on_partial=on_partial,
                 ),
                 stream_id=stream,
             )
@@ -1470,7 +1486,7 @@ def run_listen(
             if arm_cue:
                 _arm_cue_if_requested()
             while time.monotonic() - started < max_listen:
-                agent_act = poll_listen_action(stream)
+                agent_act = radio_sess.poll_agent_action()
                 if agent_act is not None and pieces:
                     # Finalize with audio already captured
                     break
@@ -1508,7 +1524,7 @@ def run_listen(
                         post_tts_guard_s=0,
                         on_opened=_on_speech_opened,
                         on_voice=lambda: touch_voice_activity(stream_id=stream),
-                        should_stop=_agent_wants_stop,
+                        should_stop=lambda *_a: radio_sess.agent_wants_stop(),
                         discard_leading_ms=seg_discard,
                         audio_ok_after=seg_ok_after,
                         abs_open_db=gate_abs_open,
@@ -1517,7 +1533,7 @@ def run_listen(
                         mute_edge_pad_ms=gate_mute_pad_ms,
                     )
                 except TimeoutError:
-                    agent_act = poll_listen_action(stream)
+                    agent_act = radio_sess.poll_agent_action()
                     if agent_act is not None and pieces:
                         break
                     # B074: post-speech continuous quiet → auto-finish (not cancel)
@@ -1537,22 +1553,12 @@ def run_listen(
                             sample_rate=last_sample_rate or 16000,
                         )
                         last_provider = tr.provider
-                        hit = evaluate_radio_transcript(
-                            tr.text,
-                            end_phrases=cfg.listen.end_phrases,
-                            cancel_phrases=cfg.listen.cancel_phrases,
-                            soft_end_phrases=getattr(
-                                cfg.listen, "soft_end_phrases", ()
-                            ),
-                            soft_end_phrases_enabled=bool(
-                                getattr(
-                                    cfg.listen, "soft_end_phrases_enabled", True
-                                )
-                            ),
-                        )
+                        hit = radio_sess.evaluate_transcript(tr.text)
                         if hit is not None:
                             body = (
-                                hit.body if cfg.listen.strip_phrase else tr.text
+                                hit.body
+                                if radio_sess.policy.strip_phrase
+                                else tr.text
                             )
                             store.record_stt(
                                 text=body,
@@ -1564,29 +1570,13 @@ def run_listen(
                                 ok=hit.kind != "cancel",
                                 error="cancel" if hit.kind == "cancel" else None,
                             )
-                            if hit.kind == "cancel":
-                                return ListenResult(
-                                    text=hit.body,
-                                    provider=tr.provider,
-                                    duration_ms=int(
-                                        1000 * (time.monotonic() - started)
-                                    ),
-                                    end_mode=mode.value,
-                                    end_phrase=hit.phrase,
-                                    cancelled=True,
-                                    stream_id=stream,
-                                    partials_emitted=radio_sess.partial_seq,
-                                )
-                            return ListenResult(
-                                text=body,
+                            return radio_sess.result_for_phrase_hit(
+                                hit,
+                                text=tr.text,
                                 provider=tr.provider,
                                 duration_ms=int(
                                     1000 * (time.monotonic() - started)
                                 ),
-                                end_mode=mode.value,
-                                end_phrase=hit.phrase,
-                                stream_id=stream,
-                                partials_emitted=radio_sess.partial_seq,
                             )
                         body = (tr.text or "").strip()
                         store.record_stt(
@@ -1686,129 +1676,80 @@ def run_listen(
                     text=body_so_far or (tr.text or ""),
                     provider=getattr(tr, "provider", last_provider),
                 )
-                # Agent may have requested end while we were capturing/STT
-                agent_act = consume_listen_action(stream)
-                if agent_act == "cancel":
-                    _cue_stop_once(reason="agent:cancel")
-                    body = (tr.text or "").strip()
-                    store.record_stt(
-                        text=body,
-                        provider=tr.provider,
-                        audio_ms=int(1000 * (time.monotonic() - started)),
-                        latency_ms=latency_ms,
-                        ok=False,
-                        error="agent_cancel",
-                    )
-                    return ListenResult(
-                        text=body,
-                        provider=tr.provider,
-                        duration_ms=int(1000 * (time.monotonic() - started)),
-                        end_mode=mode.value,
-                        end_phrase="agent:cancel",
-                        cancelled=True,
-                        stream_id=stream,
-                        partials_emitted=radio_sess.partial_seq,
-                    )
-                if agent_act == "finish":
-                    _cue_stop_once(reason="agent:finish")
-                    body = (tr.text or "").strip()
-                    store.record_stt(
-                        text=body,
-                        provider=tr.provider,
-                        audio_ms=int(1000 * (time.monotonic() - started)),
-                        latency_ms=latency_ms,
-                        ok=True,
-                    )
-                    return ListenResult(
-                        text=body,
-                        provider=tr.provider,
-                        duration_ms=int(1000 * (time.monotonic() - started)),
-                        end_mode=mode.value,
-                        end_phrase="agent:finish",
-                        stream_id=stream,
-                        partials_emitted=radio_sess.partial_seq,
-                    )
-                hit = evaluate_radio_transcript(
+                # Agent finish/cancel or soft/hard end phrase (session internals)
+                ended = radio_sess.handle_agent_or_phrase(
                     tr.text,
-                    end_phrases=cfg.listen.end_phrases,
-                    cancel_phrases=cfg.listen.cancel_phrases,
-                    soft_end_phrases=getattr(
-                        cfg.listen, "soft_end_phrases", ()
-                    ),
-                    soft_end_phrases_enabled=bool(
-                        getattr(cfg.listen, "soft_end_phrases_enabled", True)
-                    ),
-                )
-                if hit is None:
-                    # Joined segment STT is append-only; RadioSession refuses shrink
-                    # so a flaky mid-slice rewrite cannot drop words already seen.
-                    if radio_sess.emit_partial_if_needed(
-                        body_so_far,
-                        provider=tr.provider,
-                        stt_seq=stt_seq,
-                        on_partial=on_partial,
-                        streaming=ambient_streaming,
-                        streaming_ack_min_quiet_s=streaming_ack_min_quiet_s,
-                        partial_kind=partial_kind,
-                    ):
-                        ev = radio_sess.last_partial_event or {}
-                        frag = ev.get("fragment") or ""
-                        # Prefer fragment in logs so each radio slice is visible
-                        # (full cumulative body is still on the event as text).
-                        syslog(
-                            "listen.partial",
-                            component="stt",
-                            level="info",
-                            stream_id=stream,
-                            seq=radio_sess.partial_seq,
-                            stt_seq=stt_seq,
-                            fragment=(frag or "")[:300],
-                            text_len=len(radio_sess.last_partial_text),
-                            text=(
-                                (radio_sess.last_partial_text[:120] + "…")
-                                if len(radio_sess.last_partial_text) > 120
-                                else radio_sess.last_partial_text
-                            ),
-                            provider=tr.provider,
-                            partial=True,
-                            final=False,
-                        )
-                    continue
-                _cue_stop_once(
-                    reason="cancel" if hit.kind == "cancel" else f"end:{hit.phrase}"
-                )
-                body = hit.body if cfg.listen.strip_phrase else tr.text
-                store.record_stt(
-                    text=body,
-                    provider=tr.provider,
-                    audio_ms=int(1000 * (time.monotonic() - started)),
-                    latency_ms=latency_ms,
-                    ok=hit.kind != "cancel",
-                    error="cancel" if hit.kind == "cancel" else None,
-                )
-                if hit.kind == "cancel":
-                    return ListenResult(
-                        text=hit.body,
-                        provider=tr.provider,
-                        duration_ms=int(1000 * (time.monotonic() - started)),
-                        end_mode=mode.value,
-                        end_phrase=hit.phrase,
-                        cancelled=True,
-                        stream_id=stream,
-                        partials_emitted=radio_sess.partial_seq,
-                    )
-                return ListenResult(
-                    text=body,
                     provider=tr.provider,
                     duration_ms=int(1000 * (time.monotonic() - started)),
-                    end_mode=mode.value,
-                    end_phrase=hit.phrase,
-                    stream_id=stream,
-                    partials_emitted=radio_sess.partial_seq,
+                    consume_agent=True,
                 )
+                if ended is not None:
+                    if ended.cancelled:
+                        _cue_stop_once(reason="agent:cancel" if ended.end_phrase == "agent:cancel" else "cancel")
+                        store.record_stt(
+                            text=ended.text,
+                            provider=tr.provider,
+                            audio_ms=ended.duration_ms,
+                            latency_ms=latency_ms,
+                            ok=False,
+                            error=(
+                                "agent_cancel"
+                                if ended.end_phrase == "agent:cancel"
+                                else "cancel"
+                            ),
+                        )
+                    else:
+                        reason = (
+                            "agent:finish"
+                            if ended.end_phrase == "agent:finish"
+                            else f"end:{ended.end_phrase}"
+                        )
+                        _cue_stop_once(reason=reason)
+                        store.record_stt(
+                            text=ended.text,
+                            provider=tr.provider,
+                            audio_ms=ended.duration_ms,
+                            latency_ms=latency_ms,
+                            ok=True,
+                        )
+                    return ended
+                # Joined segment STT is append-only; RadioSession refuses shrink
+                # so a flaky mid-slice rewrite cannot drop words already seen.
+                if radio_sess.emit_partial_if_needed(
+                    body_so_far,
+                    provider=tr.provider,
+                    stt_seq=stt_seq,
+                    on_partial=on_partial,
+                    streaming=ambient_streaming,
+                    streaming_ack_min_quiet_s=streaming_ack_min_quiet_s,
+                    partial_kind=partial_kind,
+                ):
+                    ev = radio_sess.last_partial_event or {}
+                    frag = ev.get("fragment") or ""
+                    # Prefer fragment in logs so each radio slice is visible
+                    # (full cumulative body is still on the event as text).
+                    syslog(
+                        "listen.partial",
+                        component="stt",
+                        level="info",
+                        stream_id=stream,
+                        seq=radio_sess.partial_seq,
+                        stt_seq=stt_seq,
+                        fragment=(frag or "")[:300],
+                        text_len=len(radio_sess.last_partial_text),
+                        text=(
+                            (radio_sess.last_partial_text[:120] + "…")
+                            if len(radio_sess.last_partial_text) > 120
+                            else radio_sess.last_partial_text
+                        ),
+                        provider=tr.provider,
+                        partial=True,
+                        final=False,
+                    )
+                continue
 
             # Exit loop: agent finish with pieces, or max timeout
-            agent_act = consume_listen_action(stream)
+            agent_act = radio_sess.consume_agent_action()
             _cue_stop_once(
                 reason=(
                     "agent:finish"
@@ -1852,14 +1793,11 @@ def run_listen(
                             latency_ms=latency_ms,
                             ok=True,
                         )
-                        return ListenResult(
+                        return radio_sess.result_for_agent_action(
+                            "finish",
                             text=body,
                             provider=tr.provider,
                             duration_ms=int(1000 * (time.monotonic() - started)),
-                            end_mode=mode.value,
-                            end_phrase="agent:finish",
-                            stream_id=stream,
-                            partials_emitted=radio_sess.partial_seq,
                         )
                     # max_listen / fall-through: return assembled body if any
                     if body:
@@ -1880,15 +1818,11 @@ def run_listen(
                             partials_emitted=radio_sess.partial_seq,
                         )
             if agent_act == "cancel":
-                return ListenResult(
+                return radio_sess.result_for_agent_action(
+                    "cancel",
                     text=radio_sess.last_partial_text,
                     provider=last_provider,
                     duration_ms=int(1000 * (time.monotonic() - started)),
-                    end_mode=mode.value,
-                    end_phrase="agent:cancel",
-                    cancelled=True,
-                    stream_id=stream,
-                    partials_emitted=radio_sess.partial_seq,
                 )
             raise TimeoutError(f"radio listen exceeded max_listen_s={max_listen}")
         finally:

@@ -108,3 +108,4 @@ bugs:
     - file: B107-do-complete-audit-of-recent-co.todo
     - file: B108-silence-end-mode-does-not-auto.todo
     - file: B109-hark-commands-piped-to-tail-ap.todo
+    - file: B110-end-of-recording-beep-plays-in.todo

@@ -9,7 +9,7 @@ epics:
       locked: false
       name: 'E1: Plan Bound Answerability deepen'
       path: 01-e1-plan-bound-answerability-de
-      status: pending
+      status: done
     - complexity: high
       depends_on: []
       description: 'Single deep module: is_answerable(bound, live_agent, live_fp) → allow|refuse+reason. Covers fingerprint, revision, pane liveness, status compatibility including false-done/needs_input.'

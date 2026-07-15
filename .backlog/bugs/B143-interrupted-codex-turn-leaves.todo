@@ -1,0 +1,13 @@
+---
+complexity: medium
+created_at: "2026-07-15T23:43:03Z"
+depends_on: []
+estimate_hours: 1
+id: B143
+priority: high
+status: pending
+tags: []
+title: Interrupted Codex turn leaves hark ask blocked in audio capture
+updated_at: "2026-07-15T23:43:03Z"
+---
+A bound 'hark ask --confirm never' outlived an interrupted Codex turn and remained blocked indefinitely in PortAudio Pa_ReadStream with no further transcript or timeout progress. Recovery required sending Ctrl-C to the original PTY session. Hark then emitted a full KeyboardInterrupt traceback from capture_utterance instead of a clean cancelled result. The unified monitor survived but 'hark start --status' showed workers not running. Hark should handle orchestrator/process interruption gracefully, release capture, return a structured cancellation, and avoid a raw traceback.

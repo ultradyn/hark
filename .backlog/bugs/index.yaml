@@ -141,3 +141,4 @@ bugs:
     - file: B140-live-monitor-ingests-synthetic.todo
     - file: B141-hark-ask-question-text-is-not.todo
     - file: B142-hark-ask-reports-cancelled-aft.todo
+    - file: B143-interrupted-codex-turn-leaves.todo

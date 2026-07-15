@@ -32,7 +32,7 @@ Once `/hark` or `/handsfree` is invoked, you enter **TTS mode**:
    - Start listening (`hark listen` / `hark ask` already listens)
    - Act on the transcript; speak a short ack when useful
 4. Chat/text is for **tool output, event_ids, and debugging** — not the main operator UI.
-5. **Ambient voice → TTS reply (hard rule).** On every final `ambient.prompt` (and after you act on a finished radio stream), **speak your response with `hark tts`**. Do **not** answer ambient operator speech with chat-only prose. Short acks count; long plans can be summarized by voice with detail in chat if needed. Radio **partials:** default HOLD (think privately) unless `[ambient].streaming = true` (short live TTS acks allowed — see **Streaming mode**); when the stream is **final**, always reply by TTS.
+5. **Ambient voice → TTS reply (hard rule).** On every final `ambient.prompt`, every conversation `ambient.turn`, and after you act on a finished radio stream, **speak your response with `hark tts`**. Do **not** answer ambient operator speech with chat-only prose. Short acks count; long plans can be summarized by voice with detail in chat if needed. Radio **partials** (HOLD, `streaming=false`): think privately until final. **Conversation mode** (`streaming=true`): full TTS on each `ambient.turn` / streaming partial — see **Streaming / conversation mode**.
 
 Mic mutes automatically during TTS (`mute_mic_during_tts`). After TTS/ask, the **record beep plays when listen is ready** (`answer_arm_cue`, default on) — not when speech opens. Leading silence/noise is still trimmed before content is kept.
 
@@ -132,8 +132,8 @@ before arming Monitor or TTS mode.
 - **Never pipe interactive hark to `| tail` (B109 hard rule).** Do **not** wrap `hark tts --listen`, `hark listen`, `hark ask`, `hark monitor`, `hark watch`, or `hark ambient` with `| tail`, `| tail -N`, or similar EOF-waiting filters. `tail` without `-f` waits for the process to exit before printing — long listens/monitors look hung and hide recording state. Prefer the harness **Monitor** tool, bare `hark monitor --for-monitor`, or (debug only) `tail -f`. Short one-shot commands (`doctor`, `status`, `queue`) may be piped if needed. Hark line-buffers stdout when piped so progressive NDJSON can stream to real line consumers.  
 - **R2/R3** (permissions, destructive): always confirm. **R0/R1**: confirm only when unsure.  
 - **Listen end:** default silence/Smart Turn. If `[listen] end_mode = "radio"`, keep listening through long pauses until an end phrase. **Product:** `okay hark send`, `end prompt`, `hark over`. **Soft (default on):** utterance-final prosign `over` (not phrasal `turn it over` / `take over`), `okay over` / `okay, over`, `send it`, `that's all`, `over and out`, `message done`. Soft `over` is always **finish**, never cancel. Trailing politeness (`thank you`, `thanks`, `please`) after an end phrase still auto-finishes. Cancel: `hark cancel` (not casual “cancel that”).  
-- **Partials (radio only):** you may receive `ambient.partial` / `partial=true` with interim text, policy `warning`/`instructions`, `streaming` bool, and **`agent_control`**. You **MUST NOT** deliver to a pane until `final=true` / `ambient.prompt` for that `stream_id`. **Default HOLD** (`streaming=false` / `[ambient].streaming` off): do **not** TTS a full answer on partials — think privately. **Streaming mode** (`streaming=true`): short, interruptible live acks / brief interim TTS are allowed; still no pane delivery and no final-style full answer until final. You **MUST** end capture early via `hark listen-end` when a done signal is clear (below). You **MUST cancel** (`listen-end --cancel`) when the stream is clearly **unrelated conversation / bleed** (not for you) — see below.  
-- **Event-driven idle (hard rule) — no polling.** After you finish handling a monitor event (blocked answer delivered, ambient.prompt answered by TTS, done judged, partial HOLD/streaming decision done), **stop**. Do **not** poll logs, spin `sleep`/busy-wait, re-tail files, or re-query “is there more?” in a loop. The **persistent Monitor(s)** will wake you on the next line. Between events your job is to be idle with monitors still armed — not to keep the turn alive.
+- **Partials / turns:** you may receive `ambient.partial` (radio HOLD), `ambient.turn` (conversation), with policy `warning`/`instructions`, `streaming` bool, and often **`agent_control`**. You **MUST NOT** deliver to a pane until the operator clearly asks (or `final=true` / `ambient.prompt` when bound to a finish). **Default HOLD** (`streaming=false`): do **not** TTS a full answer on partials — think privately; wait for `ambient.prompt`. **Conversation mode** (`streaming=true`): **full TTS on each `ambient.turn`** (and streaming partials) — do **not** wait for a special radio final; session stays open without re-wake. You **MUST cancel** (`listen-end --cancel`) when capture is clearly **unrelated conversation / bleed**.  
+- **Event-driven idle (hard rule) — no polling.** After you finish handling a monitor event (blocked answer delivered, ambient.prompt / ambient.turn answered by TTS, done judged, partial HOLD decision done), **stop**. Do **not** poll logs, spin `sleep`/busy-wait, re-tail files, or re-query “is there more?” in a loop. The **persistent Monitor(s)** will wake you on the next line. Between events your job is to be idle with monitors still armed — not to keep the turn alive.
 - **Ambient:** optional `[ambient]` wake via local short snippets; cloud STT after activation. Defaults: names **iris** / **mercury** / **hark** / **herald** (say hey/hello/yo/sup + name, or bare name). Engines: **`vosk`** (stock default) or **`sherpa_kws`** (**prefer for product names** — keyword spotting vs open ASR; see [WAKE_STT.md](WAKE_STT.md) § *Why Sherpa is better*). **Two customization styles** (pick one) — see [docs/CUSTOM_WAKE.md](https://github.com/ultradyn/hark/blob/master/docs/CUSTOM_WAKE.md):
   1. **Name-based** (default): `[ambient] wake_mode = "names"`, `names = ["iris", "mercury", "hark", "herald"]`, optional `extra_names`. Greating+name and bare name; seed mishears for hark/herald (Vosk).
   2. **Full-phrase:** `wake_mode = "phrases"`, `trigger_phrases = ["start prompt", …]` (no name fuzzy).
@@ -171,73 +171,64 @@ uv run hark …
 Do **not** dogfood Hark against an old global tool when validating listen/TTS handoff
 or Mode A workers. If PATH rejects `hark start`, reinstall editable before pkill.  
 
-## Streaming mode (`[ambient].streaming`) — B098 + B105 + B112
+## Streaming / conversation mode (`[ambient].streaming`) — B098 + B105 + B112 + B121/B122
 
-Config (default **off** = classic radio HOLD):
+Config (default **off** = classic radio HOLD + re-wake each prompt):
 
 ```toml
 [ambient]
-streaming = false                 # true → short live TTS on ambient.partial allowed
-streaming_ack_min_quiet_s = 2.0   # B105: hark holds play until operator quiet ≥ this
+streaming = false                      # true → conversation mode after first wake
+streaming_ack_min_quiet_s = 2.0        # quiet that ends a turn / TTS quiet gate
+streaming_conversation_idle_s = 45.0   # long idle → re-arm wake (B122)
 ```
 
-| Flag | On each `ambient.partial` |
-|------|---------------------------|
-| `streaming=false` (default) | **HOLD** — think privately; **no** TTS full answer; no pane delivery |
-| `streaming=true` | **Short live TTS ok (pause-gated)** — brief acks / interim replies; still **no** pane delivery; full answer waits for `final=true` |
+| Flag | Product behavior |
+|------|------------------|
+| `streaming=false` (default) | **Radio HOLD** — partials: think privately; full TTS only on `ambient.prompt` / final; after final, **re-arm wake** (say iris/hark again) |
+| `streaming=true` | **Conversation** — after first wake, stay open; quiet ends a **turn** (`ambient.turn`); **full TTS OK** each turn; **no re-wake** until cancel / product end phrase / long idle |
 
-Event fields: `streaming` (bool), `ack_min_quiet_s` when streaming, + `warning` / `instructions`. Monitor compact lines use the same split.
+Event fields: `streaming` (bool), `conversation` / `conversation_id` / `turn` on conversation events, `ack_min_quiet_s` when streaming, + `warning` / `instructions`.
 
-**Quiet gate (B105, enforced by `hark tts`):** when streaming is on and a **radio** listen is still capturing, play + mic mute wait until the operator has been quiet ≥ `streaming_ack_min_quiet_s` (default **2 s**) **or** the stream ends. Continuous talk without that pause must **not** get interim TTS barging in — prefer HOLD; one short ack after a real pause is enough. Half-duplex mute-during-TTS still applies in the quiet window. **Silence `end_mode` (B108):** streaming does not disable silence auto-end — capture still finalizes ~`end_silence_s` after speech stops; mid-capture TTS is HOLD until that finalize (quiet-gate acks are radio-only). After the gate is dogfooded safe, operators may leave `streaming = true` always on.
+**Conversation loop (B121/B122):** once woken with streaming on, operator continues without re-saying the wake name. Short pauses end turns, not the session. Optional product end phrases (`okay hark send`, `hark over`, `end prompt`) finalize with `ambient.prompt` and re-arm wake. Cancel: `hark cancel`. Long idle (`streaming_conversation_idle_s`) → `ambient.conversation_end` + wake re-arms.
 
-**Latency (B112):** with streaming on, radio idle auto-finish uses ~`end_silence_s` (not the classic ~6.3 s hold) so `ambient.prompt` arrives after a natural pause; partials still wake you earlier. Prefer one short ack; do not talk over TTS (speech during mute can be dropped). Still **MUST** `listen-end` on clear done signals.
+**Quiet gate (B105):** TTS play waits until operator quiet ≥ `streaming_ack_min_quiet_s` (default **2 s**) or the turn listen ends. Continuous talk is not stepped on. Half-duplex mute-during-TTS still applies.
 
-## Agent-controlled end of recording (radio partials) — hard rule
+**Bound answer windows** (`hark listen` / `ask` / `tts --listen`) do **not** inherit conversation re-arm — they stay single-window (P1.M6 `bound_answer`).
 
-Soft/product end phrases often auto-finalize. You are the **required backup** when they do not.
+## Agent-controlled end of recording (classic radio HOLD only)
 
-**How operators end radio** (remind them on bootstrap / when stuck): say **`over`** or **`okay hark send`** (also: `okay, over` / `okay over`, `that's all`, `send it`, `hark over`, `end prompt`). Cancel: `hark cancel`.
+When `streaming=false` and radio end_mode is on, soft/product end phrases often auto-finalize. You are the **required backup** when they do not.
 
-On **each** `ambient.partial` / radio partial:
+**How operators end radio** (HOLD mode / bootstrap): say **`over`** or **`okay hark send`**. Cancel: `hark cancel`. In **conversation mode**, end phrases are optional — quiet already ends a turn.
 
-1. Read `text` (and `fragment`) and `streaming` / `instructions`.  
+On **each** `ambient.partial` (HOLD radio):
+
+1. Read `text` / `fragment` and `streaming` / `instructions`.  
    - **HOLD** (`streaming` false): do **not** TTS a full answer — think privately.  
-   - **Streaming** (`streaming` true): you **may** TTS a short interruptible ack or brief interim reply; still no pane delivery.  
-2. **MUST first** check whether the audio is **not for you** (unrelated / bleed). If **apparent**, **cancel immediately** — do not HOLD open waiting for “over”:
+2. **MUST first** check whether the audio is **not for you** (unrelated / bleed). If **apparent**, **cancel immediately**:
    ```bash
    hark listen-end --stream-id <stream_id> --cancel --reason "unrelated conversation"
    ```
-   **Unrelated / bleed signals** (any clear match → cancel; no TTS reply to the bleed):
-   - Background chat, meeting/call audio, TV/podcast, other people talking — not addressed to Hark/Iris/the wake name
-   - **TTS / sample loopback** (mic hearing speakers): e.g. “this is Eve, you're listening to Eve, a Hark voice sample…”, catalog voice demos, your own prior TTS re-captured
-   - Accidental wake then clearly non-operator content (kitchen talk, “pass the salt”, long third-party dialogue)
-   - Operator (or you) said **stop recording** / **cancel** / **never mind** as a control intent — cancel, do not finalize as a prompt
-   When in doubt that it *is* directed at you: HOLD (or short ack only in streaming). When in doubt that it *might* be bleed but looks wrong for a prompt: prefer **cancel** over inventing a reply.
-3. Else **MUST** evaluate whether the operator has **clearly finished**. Done signals include utterance-final:
-   - `over` / `okay over` / `okay, over` / `over and out`
-   - `okay hark send` / `hark over` / `end prompt`
-   - `that's all` / `send it` / `message done`
-   - “stop recording”, “that's all, send it”, “how do I stop this?” (when they want out)
-4. If clearly done **and** the stream is still active → run finish (not cancel):
-   ```bash
-   hark listen-end --stream-id <stream_id>           # finalize as complete prompt
-   hark listen-end --stream-id <stream_id> --cancel  # abort / unrelated / stop recording
-   ```
-   Prefer **finish** when the thought is complete and **for you**; **cancel** if they abort, stop recording, or content is unrelated bleed.  
-5. **False positives — do NOT finish on soft end:** mid-clause / non-terminal speech such as “over the weekend”, “turn it over”, “send it to staging”, “that's all I know about X”. (Unrelated cancel still applies when the whole stream is bleed.)  
-6. After you decide (HOLD / short streaming ack, finish, or cancel), **stop this turn** — wait for the Monitor to fire the next partial or the final `ambient.prompt` / `ambient.cancelled`. No polling for more partials.  
-7. After a **final** arrives (or listen-end finish produces one): if the transcript is **still clearly bleed/unrelated**, do **not** treat it as a real operator prompt — **no** pane delivery, **no** substantive TTS reply (optional very short “ignored bleed” only if useful). Otherwise treat it like any other operator prompt (TTS reply).
+   Bleed: meeting/TV/background chat, TTS loopback samples, kitchen talk, accidental wake. Prefer **cancel** over inventing a reply when it looks wrong for a prompt.
+3. Else **MUST** evaluate clear done signals (utterance-final `over` / `okay hark send` / `that's all` / `send it` / …). If clearly done and stream still active → `hark listen-end --stream-id <id>` (finish).  
+4. **False positives — do NOT finish:** mid-clause “over the weekend”, “send it to staging”, “that's all I know about X”.  
+5. After HOLD/finish/cancel: **stop** — wait for next Monitor event. No polling.
 
-Exact product/soft end phrases still auto-finish without you when they match (including when followed by `thank you` / `thanks`). You **must** still listen-end when a done signal is clear and capture remains open. You **must cancel** when unrelated conversation is being forwarded through.
+## On `ambient.turn` (conversation mode — operator voice to you)
 
-## On final `ambient.prompt` (operator voice to you)
-
-1. **Bleed check first.** If `text` is clearly unrelated conversation, sample/TTS loopback, or not directed at you — **do not** answer as a prompt. Optional: if a stream is still open, `hark listen-end --stream-id … --cancel`. Idle; no substantive TTS.
-2. Otherwise treat the `text` as a direct operator instruction to **you** (the handsfree orchestrator), not as pane delivery unless they clearly ask to reply to an agent.
-3. **Immediately** `hark tts "…"` with your answer, status, or next step — same bar as TTS mode rule 5 above.
-4. If still mid-radio (`partial=true`): HOLD mode → no full TTS; streaming mode → short acks only. Unless they asked to stop early via `listen-end`, **stop and wait** for the next Monitor event (`final=true` / matching `stream_id` final). Do not poll ambient.jsonl for the final.
+1. **Bleed check first.** If clearly unrelated → do not answer substantively; cancel only if a stream is still open.  
+2. Otherwise treat `text` as a direct operator instruction to **you**.  
+3. **Immediately** `hark tts "…"` with a **full** answer/status/next step (not short-ack-only).  
+4. Session stays open — operator will speak again **without** re-wake. Idle for next `ambient.turn` / `ambient.prompt` / `ambient.cancelled` / `ambient.conversation_end`.  
 5. File dogfood bugs by voice-ack + `bl bug` when they report friction.
-6. When done: **idle** — leave monitors armed; do not keep the session busy waiting.
+
+## On final `ambient.prompt` (classic final or conversation finalize)
+
+1. **Bleed check first.** If `text` is clearly unrelated — **do not** answer as a prompt.  
+2. Otherwise treat the `text` as a direct operator instruction to **you**.  
+3. **Immediately** `hark tts "…"` with your answer.  
+4. If still mid-radio HOLD (`partial=true`, `streaming=false`): no full TTS; wait for final.  
+5. When done: **idle** — leave monitors armed.
 
 ## Arm the feed (**required**)
 
@@ -267,7 +258,9 @@ Monitor({
 | `agent.blocked` / `agent.needs_input` / `agent.question_changed` | Speak + answer a Herdr agent |
 | `agent.completed` | Judge done vs false-done |
 | `ambient.prompt` | Final operator voice → **TTS reply** |
-| `ambient.partial` | Radio partial: HOLD by default; short live TTS if `streaming=true` (B098) |
+| `ambient.turn` | Conversation turn (`streaming=true`) → **full TTS reply**; session stays open |
+| `ambient.partial` | Radio HOLD partial: think privately until final |
+| `ambient.conversation_end` | Conversation idle/end; wake re-armed (no new prompt) |
 | `ambient.wake_near_miss` | Failed wake; review / learning |
 | `ambient.wake_learned` | Alias auto-learned |
 | `ambient.error` / `ambient.cancelled` / `ambient.reloaded` / `ambient.armed` | Ops / status |
@@ -339,7 +332,7 @@ run the guided checklist before arming handsfree:
 
 1. Ensure CLI exists (`command -v hark`). If not → [POST_INSTALL.md](POST_INSTALL.md). Then `hark doctor` (text OK for tools). If setup incomplete → [SETUP.md](SETUP.md) / `hark setup`.
 2. `hark status` + `hark queue --announce` — **announce any already-blocked / pending by TTS**. `hark queue --announce` speaks the waiting count itself when more than one agent is waiting (JSON always carries `count` / `announcement` / distinct `targets`). Hark watch also emits on load; still speak a short rollup so the operator hears it.  
-3. TTS: “Hark is ready. I'll speak from here. When you're done talking in radio mode, say over or okay hark send.”  
+3. TTS: “Hark is ready. I'll speak from here.” If streaming/conversation is off, remind: radio mode ends with over or okay hark send. If streaming is on: after wake, keep talking — no re-wake between turns.  
 4. Voice-ask session targets if not already configured (local / SSH / mix — write `[[herdr.sessions]]` accordingly).  
 5. **Required:** arm **one** **`hark monitor --for-monitor`** (persistent) if not already armed. One feed for Herdr + ambient (includes `wake_near_miss`). Do **not** arm a second monitor on restart/dual skill boots — check first (`hark start --status` / existing Monitor). Do **not** arm only `hark watch` or only ambient tails.  
 6. Prefer `hark tts --listen "…"` or `hark ask` so recording arms after you speak (**beep when listen ready**, not when speech opens). **Ambient auto-pauses** for listen/ask (mic lease yield); no manual kill needed.  

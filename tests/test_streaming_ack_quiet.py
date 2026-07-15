@@ -280,7 +280,12 @@ def test_partial_event_includes_ack_min_quiet_when_streaming():
     assert live["ack_min_quiet_s"] == 2.0
     assert custom["ack_min_quiet_s"] == 1.5
     assert "quiet" in live["instructions"].lower() or "2s" in live["instructions"]
-    assert "HOLD" in live["instructions"] or "continuous" in live["instructions"].lower()
+    # B121: conversation mode allows full TTS; still mentions mid-sentence restraint
+    assert (
+        "mid-sentence" in live["instructions"].lower()
+        or "continuous" in live["instructions"].lower()
+        or "CONVERSATION" in live["instructions"]
+    )
 
 
 def test_monitor_compact_includes_ack_min_quiet():

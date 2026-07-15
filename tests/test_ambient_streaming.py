@@ -64,16 +64,13 @@ def test_partial_instructions_differ_hold_vs_streaming():
     assert live["instructions"] == STREAMING_INSTRUCTIONS
     assert hold["instructions"] != live["instructions"]
     assert "HOLD" in hold["instructions"]
-    assert "STREAMING" in live["instructions"]
-    assert "short live" in live["instructions"].lower() or "brief" in live[
-        "instructions"
-    ].lower()
-    # Both still require listen-end backup
-    for ev in (hold, live):
-        assert "MUST" in ev["instructions"]
-        assert "end_recording" in ev["instructions"]
-        assert ev["partial"] is True
-        assert ev["final"] is False
+    assert "CONVERSATION" in live["instructions"] or "STREAMING" in live["instructions"]
+    assert "full" in live["instructions"].lower()
+    assert hold["partial"] is True and live["partial"] is True
+    assert hold["final"] is False and live["final"] is False
+    # HOLD still requires listen-end backup
+    assert "MUST" in hold["instructions"]
+    assert "end_recording" in hold["instructions"]
 
 
 def test_monitor_compact_partial_hold_vs_streaming():
@@ -97,9 +94,7 @@ def test_monitor_compact_partial_hold_vs_streaming():
     assert live["instructions"] == STREAMING_COMPACT_INSTRUCTIONS
     assert hold["instructions"] != live["instructions"]
     assert "HOLD" in hold["instructions"]
-    assert "STREAMING" in live["instructions"]
-    assert "short live TTS" in live["instructions"] or "brief" in live["instructions"].lower()
+    assert "CONVERSATION" in live["instructions"] or "STREAMING" in live["instructions"]
+    assert "full" in live["instructions"].lower() or "TTS" in live["instructions"]
     assert "listen-end" in hold["instructions"]
-    assert "listen-end" in live["instructions"]
     assert "MUST" in hold["instructions"]
-    assert "MUST" in live["instructions"]

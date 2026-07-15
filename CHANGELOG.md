@@ -6,6 +6,13 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- feat(ambient/streaming, B121 + B122): `[ambient].streaming = true` is
+  **conversation mode**, not radio-with-acks. After first wake, stay in an open
+  post-wake session — operator quiet ends an `ambient.turn` (full TTS reply OK);
+  no re-saying iris/hark between turns. Long idle
+  (`streaming_conversation_idle_s`, default 45s) or product end phrase / cancel
+  re-arms wake. Skill + PROTOCOL updated; bound_answer windows still do not
+  inherit conversation re-arm (P1.M6).
 - refactor(listen-session-policy, P1.M6): stop ambient streaming leaking into
   bound listen. `ListenSessionPolicy` aliases `AnswerWindowPolicy`; profiles
   `bound_answer` / `post_wake` / `confirm` own streaming defaults. `run_listen`

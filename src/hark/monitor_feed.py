@@ -43,6 +43,8 @@ MODE_A_WAKE_KINDS: frozenset[str] = frozenset(
         # Ambient / voice (via ambient.jsonl from `hark ambient`)
         "ambient.prompt",
         "ambient.partial",
+        "ambient.turn",
+        "ambient.conversation_end",
         "ambient.wake_near_miss",
         "ambient.wake_learned",
         "ambient.error",

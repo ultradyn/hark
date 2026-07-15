@@ -33,11 +33,54 @@ def present_for_monitor(event: dict[str, Any]) -> dict[str, Any]:
                 "phrase": event.get("phrase"),
                 "text": text,
                 "stream_id": event.get("stream_id"),
+                "conversation_id": event.get("conversation_id"),
+                "turn": event.get("turn"),
                 "final": True,
                 "partial": False,
                 "instructions": (
                     "FINAL operator voice prompt. Reply with hark tts. "
                     "Not bound to a pane unless they ask. Then idle for next Monitor event."
+                ),
+            }
+        )
+    elif kind == "ambient.turn":
+        from hark.partial import TURN_COMPACT_INSTRUCTIONS
+
+        text = event.get("text")
+        if isinstance(text, str) and len(text) > 400:
+            text = text[:397] + "…"
+        compact.update(
+            {
+                "phrase": event.get("phrase"),
+                "text": text,
+                "stream_id": event.get("stream_id"),
+                "conversation_id": event.get("conversation_id"),
+                "turn": event.get("turn"),
+                "partial": False,
+                "final": False,
+                "streaming": True,
+                "conversation": True,
+                "instructions": event.get("instructions") or TURN_COMPACT_INSTRUCTIONS,
+            }
+        )
+        if event.get("ack_min_quiet_s") is not None:
+            try:
+                compact["ack_min_quiet_s"] = float(event["ack_min_quiet_s"])
+            except (TypeError, ValueError):
+                compact["ack_min_quiet_s"] = 2.0
+    elif kind == "ambient.conversation_end":
+        compact.update(
+            {
+                "phrase": event.get("phrase"),
+                "conversation_id": event.get("conversation_id"),
+                "turns": event.get("turns"),
+                "reason": event.get("reason"),
+                "final": True,
+                "partial": False,
+                "streaming": True,
+                "instructions": event.get("instructions")
+                or (
+                    "Conversation session ended. Wake re-armed; no new prompt."
                 ),
             }
         )

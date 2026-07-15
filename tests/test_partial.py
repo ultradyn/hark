@@ -38,8 +38,8 @@ def test_partial_instructions_require_listen_end_on_done():
     assert "MUST" in ev["agent_control"]["hint"]
 
 
-def test_streaming_partial_allows_short_live_tts():
-    """B098: ambient.streaming → different instructions than HOLD."""
+def test_streaming_partial_allows_full_conversation_reply():
+    """B098 + B121: ambient.streaming → conversation instructions (full TTS OK)."""
     hold = make_partial_event(stream_id="s1", seq=1, text="hello", streaming=False)
     live = make_partial_event(stream_id="s1", seq=1, text="hello", streaming=True)
 
@@ -50,11 +50,9 @@ def test_streaming_partial_allows_short_live_tts():
 
     assert "HOLD" in hold["instructions"]
     assert "Do NOT TTS a full answer" in hold["instructions"]
-    assert "STREAMING" in live["instructions"]
-    assert "short live" in live["instructions"].lower() or "brief" in live["instructions"].lower()
+    assert "CONVERSATION" in live["instructions"] or "STREAMING" in live["instructions"]
+    assert "full" in live["instructions"].lower()
     assert "pane" in live["instructions"].lower()
-    assert "MUST" in live["instructions"]
-    assert "end_recording" in live["instructions"]
 
     assert STREAMING_WARNING != HOLD_WARNING
     assert STREAMING_INSTRUCTIONS != HOLD_INSTRUCTIONS
@@ -64,7 +62,7 @@ def test_streaming_partial_allows_short_live_tts():
     assert partial_compact_instructions(streaming=False) == HOLD_COMPACT_INSTRUCTIONS
     assert partial_compact_instructions(streaming=True) == STREAMING_COMPACT_INSTRUCTIONS
     assert "HOLD" in HOLD_COMPACT_INSTRUCTIONS
-    assert "STREAMING" in STREAMING_COMPACT_INSTRUCTIONS
+    assert "CONVERSATION" in STREAMING_COMPACT_INSTRUCTIONS or "STREAMING" in STREAMING_COMPACT_INSTRUCTIONS
     assert HOLD_COMPACT_INSTRUCTIONS != STREAMING_COMPACT_INSTRUCTIONS
 
 

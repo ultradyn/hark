@@ -36,7 +36,7 @@ epics:
       locked: false
       name: 'E4: Tests for Pane Understanding'
       path: 04-e4-tests-for-pane-understandin
-      status: pending
+      status: done
 estimate_hours: 20
 id: P1.M3
 locked: false
@@ -47,4 +47,4 @@ stats:
     in_progress: 0
     pending: 9
     total_tasks: 9
-status: pending
+status: done

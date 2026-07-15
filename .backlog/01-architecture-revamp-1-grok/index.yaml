@@ -30,7 +30,7 @@ milestones:
       locked: false
       name: 'M3: Deepen Pane Understanding'
       path: 03-m3-deepen-pane-understanding
-      status: pending
+      status: done
     - complexity: medium
       depends_on: []
       description: 'Candidate 4 (Worth exploring). Half-duplex handoff (ADR-009) lives as nested thread state in speech.py; mute/duck/conference are separate call sites. One SpeakThenListen module owns TTS→listen transitions, arm cues, echo last_tts, confirm turns. Files: speech.py speak_and_listen/run_tts/run_ask, mic_coord.py, audio/mic_mute.py, audio/media.py, conference.py. Prefer after M1.'

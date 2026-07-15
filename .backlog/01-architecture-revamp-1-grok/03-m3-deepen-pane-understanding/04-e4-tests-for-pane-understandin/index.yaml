@@ -10,7 +10,7 @@ stats:
     in_progress: 0
     pending: 2
     total: 2
-status: pending
+status: done
 tasks:
     - complexity: medium
       depends_on:
@@ -29,6 +29,6 @@ tasks:
       file: T002-architecture-md-edgetracker-pa.todo
       id: T002
       priority: low
-      status: in_progress
+      status: done
       tags: []
       title: ARCHITECTURE.md EdgeTracker → Pane Understanding

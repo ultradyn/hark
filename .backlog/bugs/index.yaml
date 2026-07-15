@@ -124,3 +124,4 @@ bugs:
     - file: B123-tts-mute-mic-during-tts-interr.todo
     - file: B124-config-reload-drops-active-amb.todo
     - file: B125-hark-skill-structured-startup.todo
+    - file: B126-remote-herdr-sessions-are-not.todo

@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-07-15T06:16:37Z"
+depends_on: []
+estimate_hours: 1
+id: B116
+priority: high
+status: pending
+tags: []
+title: When /hark is run, the user should be asked some setup questions like which herdr session to connect to (local or over ssh or multiple), and any other questions that are needed.
+updated_at: "2026-07-15T06:16:37Z"
+---
+
+When /hark is run, the user should be asked some setup questions like which herdr session to connect to (local or over ssh or multiple), and any other questions that are needed.

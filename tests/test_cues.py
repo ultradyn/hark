@@ -42,7 +42,9 @@ def test_play_record_start_sleeps_lead_then_plays(monkeypatch):
     played: list[str] = []
 
     monkeypatch.setattr(cues.time, "sleep", lambda s: sleeps.append(s))
-    monkeypatch.setattr(cues, "play_cue", lambda name: played.append(name))
+    monkeypatch.setattr(
+        cues, "play_cue", lambda name, **kw: played.append(name)
+    )
 
     play_record_start()
     assert sleeps == [0.117]

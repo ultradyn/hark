@@ -23,20 +23,30 @@ device
   → utterance → cloud STT
 ```
 
-### Arm cue (record-start beep)
+### Arm / start and stop cues (record beeps)
 
-After TTS for `hark ask` / `tts --listen` / confirm, the **record-start beep plays when
+**Start (arm):** After TTS for `hark ask` / `tts --listen` / confirm, **and** after
+an ambient wake word opens post-wake listen, the **record-start beep plays when
 listen is armed** — not when the energy gate first opens. That way the operator
 knows they can speak without waiting through silence. Leading silence is still
 trimmed from STT content.
 
+**Stop:** A distinct record-stop beep plays once when the capture **finalizes**
+(silence end, radio end-phrase / soft end / agent `listen-end` / radio idle /
+cancel / max timeout) — not between radio partial segments.
+
 | Knob | Default | Role |
 |------|---------|------|
 | `[audio] answer_arm_cue` | `true` | Beep when answer-window listen is ready (silence **and** radio) |
-| `[ambient] post_wake_arm_cue` | `true` | Same after ambient wake → post-wake listen |
+| `[ambient] post_wake_arm_cue` | `true` | Same after ambient wake → post-wake listen (B113) |
+| `[audio] cue_start_path` / `cue_stop_path` | baked WAVs | Optional custom start/stop samples |
+| `[ambient] streaming` | `false` | When true, **suppress stop** cue (pauses are not end-of-capture; B110) — **start still plays** |
 
 With arm cue on, speech-open only logs (`listen.speech_opened`); it does **not**
 double-beep. With arm cue off, record-start still plays once when speech opens.
+
+Short cue playback **does not wait on the TTS exclusive play queue** so a stuck
+or long TTS job cannot swallow arm/stop beeps.
 
 **Dogfood:** use the checkout (`uv run hark`) or `uv tool install -e . --force` so the
 CLI matches repo arm-cue behaviour; a stale non-editable `uv tool` site-packages

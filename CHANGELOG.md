@@ -35,6 +35,13 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   stdout is non-TTY — `| tail` without `-f` still waits for EOF and looks hung.
   Skill hard rule: agents must never pipe interactive hark to `tail`.
   `HARK_NO_PIPE_WARN=1` silences the warning.
+- fix(audio, B113): ambient wake / radio capture plays record-start when listen
+  arms (`post_wake_arm_cue`) and a distinct record-stop when capture finalizes
+  (end-phrase, silence, agent finish/cancel, radio idle). Short cues no longer
+  wait on the TTS exclusive play queue (stuck TTS cannot swallow beeps). Radio
+  applies post-wake `lead_in_ms` before the arm cue. With `[ambient].streaming`,
+  stop is suppressed (misleading mid-pause end beep; B110) while start still
+  plays. Assets: `assets/cues/record-start.wav` / `record-stop.wav`.
 - fix(radio, B106/B107): soft/product end phrases still finalize when the
   operator appends trailing politeness (`over thank you`, `that's all, thanks`,
   `okay hark send thank you`, `over and thank you`, STT `thankyou`). Courtesy

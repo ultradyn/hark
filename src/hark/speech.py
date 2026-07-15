@@ -1163,6 +1163,10 @@ def run_listen(
         cfg.listen, "stream_partials", True
     )
     recording_cued = False
+    stop_cued = False
+    # B110 / B113: end-of-recording beep is misleading while ambient.streaming
+    # keeps the radio session open across short pauses. Start (arm) still plays.
+    suppress_stop_cue = ambient_streaming
 
     def _cue_start_once() -> None:
         """Play record-start only when speech opens (not during leading silence)."""
@@ -1182,6 +1186,8 @@ def run_listen(
         """Early arm cue (answer window / post-wake): beep when listen is ready.
 
         Sets ``recording_cued`` so speech-open paths do not double-beep.
+        Used for ambient wake capture (``post_wake_arm_cue``) and ask/tts
+        --listen (``answer_arm_cue``) so both paths share the same start cue.
         """
         nonlocal recording_cued
         if arm_cue and not recording_cued:
@@ -1195,26 +1201,36 @@ def run_listen(
                 mode=mode.value,
             )
 
-    def _cue_stop_if_cued() -> None:
-        """Play end-of-recording cue once speech was cued, unless streaming (B110).
+    def _cue_stop_once(*, reason: str = "finalize") -> None:
+        """Play record-stop once when capture finalizes (not between radio partials).
 
-        With ``[ambient].streaming``, capture finalizes differently (agent finish /
-        end phrase / idle) and the standard stop beep is misleading — suppress it.
-        Start/arm cues are unchanged (B113 owns ambient start/stop design).
+        Skipped when ``[ambient].streaming`` is on (B110): short pauses are not
+        end-of-capture. Ambient start/arm still plays independently (B113).
         """
-        if not recording_cued:
+        nonlocal stop_cued
+        if not recording_cued or stop_cued:
             return
-        if ambient_streaming:
+        stop_cued = True
+        if suppress_stop_cue:
             syslog(
                 "listen.stop_cue_suppressed",
                 component="stt",
                 level="info",
                 stream_id=stream,
                 mode=mode.value,
-                reason="streaming",
+                reason="ambient.streaming",
+                finalize_reason=reason,
             )
             return
         play_record_stop()
+        syslog(
+            "listen.stop_cue",
+            component="stt",
+            level="info",
+            stream_id=stream,
+            mode=mode.value,
+            reason=reason,
+        )
 
     def _agent_wants_stop(_pcm: bytes, _elapsed: float) -> bool:
         return poll_listen_action(stream) is not None
@@ -1258,6 +1274,7 @@ def run_listen(
                     settle = max(0.05, min(0.2, guard if guard > 0 else 0.1))
                     # Fresh cue state each attempt; optional early arm for post-wake
                     recording_cued = False
+                    stop_cued = False
                     if arm_cue:
                         _arm_cue_if_requested()
                     try:
@@ -1296,7 +1313,7 @@ def run_listen(
                             mute_edge_pad_ms=gate_mute_pad_ms,
                         )
                     except TimeoutError as exc:
-                        _cue_stop_if_cued()
+                        _cue_stop_once(reason="timeout")
                         err_s = str(exc)
                         store.record_stt(
                             text="",
@@ -1362,7 +1379,13 @@ def run_listen(
                                 continue
                         raise
                     agent_act = consume_listen_action(stream)
-                    _cue_stop_if_cued()
+                    _cue_stop_once(
+                        reason=(
+                            "agent:cancel"
+                            if agent_act == "cancel"
+                            else ("agent:finish" if agent_act == "finish" else "silence")
+                        )
+                    )
                     if agent_act == "cancel":
                         store.record_stt(
                             text="",
@@ -1535,9 +1558,13 @@ def run_listen(
                             "window so ambient.prompt is not delayed (B112)"
                         ),
                     )
+            # Post-wake settle before arm cue (same as silence path; B031/B113)
+            if lead_in_ms > 0:
+                time.sleep(max(0.0, lead_in_ms / 1000.0))
             if guard > 0:
                 time.sleep(guard)
-            # Answer-window arm cue: beep as soon as listen is ready (radio too)
+            # Answer-window / ambient post-wake arm cue: beep as soon as listen
+            # is ready (radio too). Independent of streaming stop-cue policy.
             if arm_cue:
                 _arm_cue_if_requested()
             while time.monotonic() - started < max_listen:
@@ -1593,7 +1620,7 @@ def run_listen(
                         break
                     # B074: post-speech continuous quiet → auto-finish (not cancel)
                     if pieces and speech_opened_once:
-                        _cue_stop_if_cued()
+                        _cue_stop_once(reason="radio_idle")
                         wav = write_wav_bytes(
                             b"".join(pieces), last_sample_rate or 16000
                         )
@@ -1689,7 +1716,7 @@ def run_listen(
                         )
                     if pieces:
                         continue
-                    _cue_stop_if_cued()
+                    _cue_stop_once(reason="timeout")
                     store.record_stt(
                         text="",
                         provider=getattr(stt, "name", None),
@@ -1760,7 +1787,7 @@ def run_listen(
                 # Agent may have requested end while we were capturing/STT
                 agent_act = consume_listen_action(stream)
                 if agent_act == "cancel":
-                    _cue_stop_if_cued()
+                    _cue_stop_once(reason="agent:cancel")
                     body = (tr.text or "").strip()
                     store.record_stt(
                         text=body,
@@ -1781,7 +1808,7 @@ def run_listen(
                         partials_emitted=partial_seq,
                     )
                 if agent_act == "finish":
-                    _cue_stop_if_cued()
+                    _cue_stop_once(reason="agent:finish")
                     body = (tr.text or "").strip()
                     store.record_stt(
                         text=body,
@@ -1867,7 +1894,9 @@ def run_listen(
                             final=False,
                         )
                     continue
-                _cue_stop_if_cued()
+                _cue_stop_once(
+                    reason="cancel" if hit.kind == "cancel" else f"end:{hit.phrase}"
+                )
                 body = hit.body if cfg.listen.strip_phrase else tr.text
                 store.record_stt(
                     text=body,
@@ -1900,7 +1929,13 @@ def run_listen(
 
             # Exit loop: agent finish with pieces, or max timeout
             agent_act = consume_listen_action(stream)
-            _cue_stop_if_cued()
+            _cue_stop_once(
+                reason=(
+                    "agent:finish"
+                    if agent_act == "finish"
+                    else ("agent:cancel" if agent_act == "cancel" else "max_listen")
+                )
+            )
             if pieces and agent_act in ("finish", None):
                 # Primary: per-segment join (B083). Optional full-audio re-STT is a
                 # *candidate only* — never replace a longer joined body (word loss).

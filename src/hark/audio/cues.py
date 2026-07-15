@@ -137,29 +137,37 @@ def resolve_cue_path(name: str) -> Path | None:
     return defaults.get(name)
 
 
-def play_cue(name: str) -> None:
-    """Play a named cue (record_start | record_stop). Never raises."""
+def play_cue(name: str, *, exclusive: bool = False) -> None:
+    """Play a named cue (record_start | record_stop). Never raises.
+
+    Default ``exclusive=False`` so short beeps never wait on the TTS play FIFO
+    (B092). A stuck or long TTS job must not swallow arm/stop cues for ambient
+    wake or radio capture (B113). Pass ``exclusive=True`` only when the caller
+    already serializes against other speakers and wants queue ordering.
+    """
     try:
         path = resolve_cue_path(name)
         if path is None or not path.is_file():
             # Fall back to in-memory generated beep at current volume
             freq = RECORD_START_HZ if name == "record_start" else RECORD_STOP_HZ
-            play_audio(build_beep(freq, vol=_cue_volume))
+            play_audio(build_beep(freq, vol=_cue_volume), exclusive=exclusive)
             syslog(
                 "cue.play",
                 component="audio",
                 cue=name,
                 source="generated",
                 volume=_cue_volume,
+                exclusive=exclusive,
             )
             return
-        play_audio(path.read_bytes())
+        play_audio(path.read_bytes(), exclusive=exclusive)
         syslog(
             "cue.play",
             component="audio",
             cue=name,
             path=str(path),
             volume=_cue_volume,
+            exclusive=exclusive,
         )
     except Exception as exc:
         syslog(
@@ -176,6 +184,9 @@ def play_record_start() -> None:
 
     ``RECORD_START_LEAD_SILENCE_MS`` (117) is intentional lead-in — search that
     constant when tuning clip/kick-in behavior.
+
+    Does not take the TTS exclusive play lock — arm cues must fire even when
+    another process is synthesizing or a prior TTS ticket is still draining.
     """
     lead = max(0, int(RECORD_START_LEAD_SILENCE_MS))
     if lead:
@@ -186,11 +197,12 @@ def play_record_start() -> None:
             cue="record_start",
             lead_ms=lead,
         )
-    play_cue("record_start")
+    play_cue("record_start", exclusive=False)
 
 
 def play_record_stop() -> None:
-    play_cue("record_stop")
+    """Play record-stop cue without waiting on the TTS play FIFO (B113)."""
+    play_cue("record_stop", exclusive=False)
 
 
 def phrase_slug(text: str) -> str:

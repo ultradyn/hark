@@ -9,7 +9,7 @@ epics:
       locked: false
       name: 'E1: Plan Pane Understanding deepen'
       path: 01-e1-plan-pane-understanding-dee
-      status: pending
+      status: done
     - complexity: high
       depends_on: []
       description: Move looks_like_pending_question, detect_active_subagents orchestration + EdgeTracker state machine into one deep module. HEP builders stay thin.

@@ -10,7 +10,7 @@ stats:
     in_progress: 0
     pending: 2
     total: 2
-status: pending
+status: done
 tasks:
     - complexity: medium
       depends_on: []
@@ -28,6 +28,6 @@ tasks:
       file: T002-map-edgetracker-fields-to-modu.todo
       id: T002
       priority: high
-      status: in_progress
+      status: done
       tags: []
       title: Map EdgeTracker fields to module-owned state

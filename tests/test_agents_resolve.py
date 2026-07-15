@@ -173,8 +173,49 @@ def test_override_safe_path_preserves_prefix_and_extra_args(
         extra_args=["--requested"],
     )
 
-    assert resolved.argv == [override, "--configured", "--requested"]
+    assert resolved.argv == [
+        str(target.resolve()),
+        "--configured",
+        "--requested",
+    ]
     assert resolved.source == "override"
+
+
+def test_override_relative_path_entry_is_pinned_absolute(
+    tmp_path: Path, monkeypatch
+):
+    bindir = tmp_path / "relative-bin"
+    bindir.mkdir()
+    target = bindir / "custom-codex"
+    target.write_text("#!/bin/sh\n")
+    target.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+
+    resolved = resolve_agent_argv(
+        "codex",
+        overrides={"codex": "custom-codex --configured"},
+        path="relative-bin",
+    )
+
+    assert resolved.argv == [str(target.resolve()), "--configured"]
+
+
+def test_override_symlink_is_pinned_to_validated_target(
+    tmp_path: Path, monkeypatch
+):
+    target = tmp_path / "real-codex"
+    target.write_text("#!/bin/sh\n")
+    target.chmod(0o755)
+    shim = tmp_path / "custom-codex"
+    shim.symlink_to(target)
+    monkeypatch.chdir(tmp_path)
+
+    resolved = resolve_agent_argv(
+        "codex",
+        overrides={"codex": ["./custom-codex", "--configured"]},
+    )
+
+    assert resolved.argv == [str(target.resolve()), "--configured"]
 
 
 def test_adhoc_argv(tmp_path: Path):

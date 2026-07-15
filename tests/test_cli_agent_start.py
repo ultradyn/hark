@@ -535,6 +535,32 @@ def test_agent_start_valid_override_prefix_regression(
     assert '"source": "override"' in captured.out
 
 
+def test_agent_start_relative_override_is_pinned_before_launch_cwd(
+    monkeypatch, capsys, tmp_path: Path
+):
+    validation_cwd = tmp_path / "validation"
+    launch_cwd = tmp_path / "launch"
+    validation_cwd.mkdir()
+    launch_cwd.mkdir()
+    validated = _executable(validation_cwd / "custom-codex")
+    sentinel = _executable(launch_cwd / "custom-codex")
+    monkeypatch.chdir(validation_cwd)
+
+    code, client, captured, _ = _run_agent_start(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["codex", "--cwd", str(launch_cwd), "--json"],
+        overrides={"codex": "./custom-codex --configured"},
+    )
+
+    assert code == OK
+    assert client.started[0][1] == [str(validated.resolve()), "--configured"]
+    assert client.started[0][1][0] != str(sentinel.resolve())
+    assert client.started[0][2]["cwd"] == str(launch_cwd)
+    assert '"source": "override"' in captured.out
+
+
 def test_agent_start_normal_catalog_resolution_regression(
     monkeypatch, capsys, tmp_path: Path
 ):

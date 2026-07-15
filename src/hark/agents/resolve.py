@@ -195,24 +195,35 @@ def _resolve_override_executable(
         or os.sep in command
         or (os.altsep is not None and os.altsep in command)
     )
-    resolved = command if is_path else _which(command, path=path)
+    try:
+        resolved = command if is_path else _which(command, path=path)
+    except (OSError, ValueError):
+        resolved = None
     if resolved is None:
         raise ResolveError(
             f"override command not found on PATH for agent {agent_key!r}: {command!r}",
             reason=ResolveFailureReason.INVALID_OVERRIDE,
         )
-    if not _is_regular_executable(resolved):
+    try:
+        pinned = str(Path(resolved).resolve(strict=True))
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ResolveError(
+            f"override for agent {agent_key!r} is not a regular executable: "
+            f"{command!r}",
+            reason=ResolveFailureReason.INVALID_OVERRIDE,
+        ) from exc
+    if not _is_regular_executable(pinned):
         raise ResolveError(
             f"override for agent {agent_key!r} is not a regular executable: "
             f"{command!r}",
             reason=ResolveFailureReason.INVALID_OVERRIDE,
         )
-    if _is_rejected(command, resolved):
+    if _is_rejected(command, pinned):
         raise ResolveError(
             f"unsafe override for agent {agent_key!r} rejected: {command!r}",
             reason=ResolveFailureReason.INVALID_OVERRIDE,
         )
-    return resolved
+    return pinned
 
 
 def _spec_for_key(key: str) -> AgentSpec | None:

@@ -614,19 +614,46 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        rel = unquote(path.lstrip("/")) or "index.html"
-        target = (root / rel).resolve()
-        if not str(target).startswith(str(root.resolve())) or not target.is_file():
-            # SPA fallback: unknown paths get index.html (client routing)
-            target = root / "index.html"
-        ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        try:
+            root = root.resolve()
+            rel = unquote(path.lstrip("/")) or "index.html"
+            logical_target = root / rel
+            target = logical_target.resolve()
+        except (OSError, RuntimeError, ValueError):
+            self._err(HTTPStatus.NOT_FOUND, "not_found", path)
+            return
+
+        # Resolve before checking containment so symlinks cannot escape the
+        # static root.  Do not inspect an escaped target: even is_file() would
+        # follow it and disclose filesystem state outside the web bundle.
+        if not target.is_relative_to(root):
+            self._err(HTTPStatus.NOT_FOUND, "not_found", path)
+            return
+
+        if not target.is_file():
+            # SPA fallback is allowed only to a regular file that also remains
+            # inside the resolved root (index.html itself may be a symlink).
+            logical_target = root / "index.html"
+            try:
+                fallback = logical_target.resolve()
+            except (OSError, RuntimeError, ValueError):
+                self._err(HTTPStatus.NOT_FOUND, "not_found", path)
+                return
+            if not fallback.is_relative_to(root) or not fallback.is_file():
+                self._err(HTTPStatus.NOT_FOUND, "not_found", path)
+                return
+            target = fallback
+        ctype = mimetypes.guess_type(str(logical_target))[0] or "application/octet-stream"
         data = target.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
-        if target.name == "index.html" or target.suffix == ".webmanifest":
+        if (
+            logical_target.name == "index.html"
+            or logical_target.suffix == ".webmanifest"
+        ):
             self.send_header("Cache-Control", "no-cache")
-        elif target.name == "sw.js":
+        elif logical_target.name == "sw.js":
             # Service worker must revalidate so a post-build update is not stuck
             self.send_header("Cache-Control", "no-cache")
         else:

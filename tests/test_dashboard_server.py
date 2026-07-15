@@ -6,6 +6,7 @@ import http.client
 import json
 import threading
 import time
+from http import HTTPStatus
 from pathlib import Path
 
 import pytest
@@ -387,6 +388,137 @@ def test_placeholder_index_when_no_bundle(state, tmp_path):
         assert r.status == 200
         assert b"hark webui is running" in r.read()
         c.close()
+    finally:
+        server.shutdown()
+
+
+@pytest.fixture(params=("webui_dist", "dist"))
+def static_root(request, tmp_path, monkeypatch) -> Path:
+    """Exercise the packaged and development bundle layouts identically."""
+    if request.param == "webui_dist":
+        root = tmp_path / "package" / "webui_dist"
+    else:
+        root = tmp_path / "repo" / "webui" / "dist"
+    root.mkdir(parents=True)
+    (root / "index.html").write_text("<h1>dashboard</h1>", encoding="utf-8")
+    monkeypatch.setattr("hark.dashboard.server.resolve_static_root", lambda: root)
+    return root
+
+
+def _get_static(server, path: str) -> tuple[int, bytes]:
+    status, body, _ = _get_static_with_headers(server, path)
+    return status, body
+
+
+def _get_static_with_headers(
+    server, path: str
+) -> tuple[int, bytes, dict[str, str]]:
+    c = _conn(server)
+    try:
+        c.request("GET", path)
+        response = c.getresponse()
+        body = response.read()
+        headers = {name.lower(): value for name, value in response.getheaders()}
+        return response.status, body, headers
+    finally:
+        c.close()
+
+
+def test_static_serves_valid_asset(state, tmp_path, static_root):
+    asset = static_root / "assets" / "app.js"
+    asset.parent.mkdir()
+    asset.write_bytes(b"console.log('safe')")
+    server = _server(tmp_path)
+    try:
+        assert _get_static(server, "/assets/app.js") == (
+            HTTPStatus.OK,
+            b"console.log('safe')",
+        )
+    finally:
+        server.shutdown()
+
+
+def test_static_contained_missing_path_uses_spa_fallback(
+    state, tmp_path, static_root
+):
+    server = _server(tmp_path)
+    try:
+        assert _get_static(server, "/settings/profile") == (
+            HTTPStatus.OK,
+            b"<h1>dashboard</h1>",
+        )
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize("path", ("/", "/index.html", "/settings/profile"))
+def test_static_in_root_symlink_index_preserves_logical_metadata(
+    state, tmp_path, static_root, path
+):
+    current = static_root / "current-dashboard"
+    (static_root / "index.html").replace(current)
+    (static_root / "index.html").symlink_to(current.name)
+    server = _server(tmp_path)
+    try:
+        status, body, headers = _get_static_with_headers(server, path)
+        assert (status, body) == (HTTPStatus.OK, b"<h1>dashboard</h1>")
+        assert headers["content-type"] == "text/html"
+        assert headers["cache-control"] == "no-cache"
+    finally:
+        server.shutdown()
+
+
+def test_static_rejects_percent_encoded_null_byte(state, tmp_path, static_root):
+    server = _server(tmp_path)
+    try:
+        status, body = _get_static(server, "/%00")
+        assert status == HTTPStatus.NOT_FOUND
+        assert b"not_found" in body
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize("dot_segment", ("..", "%2e%2e"))
+def test_static_rejects_matching_prefix_sibling_traversal(
+    state, tmp_path, static_root, dot_segment
+):
+    sibling = static_root.parent / f"{static_root.name}-secret"
+    sibling.mkdir()
+    (sibling / "secret.txt").write_bytes(b"TOP-SECRET")
+    server = _server(tmp_path)
+    try:
+        status, body = _get_static(
+            server, f"/{dot_segment}/{sibling.name}/secret.txt"
+        )
+        assert status == HTTPStatus.NOT_FOUND
+        assert b"TOP-SECRET" not in body
+    finally:
+        server.shutdown()
+
+
+def test_static_rejects_symlink_escape(state, tmp_path, static_root):
+    secret = tmp_path / "outside-secret.txt"
+    secret.write_bytes(b"TOP-SECRET")
+    (static_root / "secret.txt").symlink_to(secret)
+    server = _server(tmp_path)
+    try:
+        status, body = _get_static(server, "/secret.txt")
+        assert status == HTTPStatus.NOT_FOUND
+        assert b"TOP-SECRET" not in body
+    finally:
+        server.shutdown()
+
+
+def test_static_rejects_spa_fallback_symlink_escape(state, tmp_path, static_root):
+    secret = tmp_path / "outside-index.html"
+    secret.write_bytes(b"TOP-SECRET")
+    (static_root / "index.html").unlink()
+    (static_root / "index.html").symlink_to(secret)
+    server = _server(tmp_path)
+    try:
+        status, body = _get_static(server, "/contained-but-missing")
+        assert status == HTTPStatus.NOT_FOUND
+        assert b"TOP-SECRET" not in body
     finally:
         server.shutdown()
 

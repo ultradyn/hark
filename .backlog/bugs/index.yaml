@@ -112,3 +112,4 @@ bugs:
     - file: B111-false-done-numbered-menu-false.todo
     - file: B112-perceived-regression-long-late.todo
     - file: B113-no-start-stop-recording-cue-in.todo
+    - file: B114-the-static-site-should-show-sh.todo

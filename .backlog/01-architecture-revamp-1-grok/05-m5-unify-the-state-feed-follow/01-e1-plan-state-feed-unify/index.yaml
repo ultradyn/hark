@@ -18,7 +18,7 @@ tasks:
       file: T001-specify-follower-interface-ada.todo
       id: T001
       priority: high
-      status: in_progress
+      status: done
       tags: []
       title: Specify follower interface + adapter responsibilities
     - complexity: medium

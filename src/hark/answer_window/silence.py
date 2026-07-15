@@ -1,8 +1,9 @@
-"""Silence Answer Window session: endpoint strategy + empty/no-open recovery.
+"""Silence Answer Window session: endpoint strategy + empty/no-open + echo.
 
 Owns states, events, pure transitions, strategy resolution (energy default;
-Smart Turn optional; fail-open to energy), and empty-STT / no-open recovery
-decision + attempt bookkeeping (E3.T001–T002). Echo reject lands in E3.T003.
+Smart Turn optional; fail-open to energy), empty-STT / no-open recovery
+decision + attempt bookkeeping (E3.T001–T002), and echo reject vs
+``policy.last_tts`` (E3.T003).
 """
 
 from __future__ import annotations
@@ -235,9 +236,40 @@ def resolve_endpoint_strategy(
     )
 
 
+def echo_overlap(transcript: str, last_tts: str | None) -> bool:
+    """True when *transcript* looks like residual TTS, not a real answer.
+
+    Short answers that *quote a word from the question* (e.g. ``BitLocker.`` after
+    the prompt asked about BitLocker) must **not** match — dogfood B093: that
+    used to wipe the whole radio assembly via ``pieces.clear()``.
+    """
+    if not last_tts or not transcript:
+        return False
+    a = re.sub(r"\W+", " ", transcript.lower()).strip()
+    b = re.sub(r"\W+", " ", last_tts.lower()).strip()
+    # Need substantial text on both sides; one-word replies are never "echo"
+    if len(a) < 24 or len(b) < 24:
+        return False
+    # Substring only when the transcript is long enough to be residual TTS bleed
+    if len(a) >= 40 and (a in b or b in a):
+        return True
+    aw, bw = set(a.split()), set(b.split())
+    if not aw or not bw:
+        return False
+    # Require enough shared mass that a short answer cannot clear the session
+    if len(aw) < 6:
+        return False
+    j = len(aw & bw) / max(1, len(aw | bw))
+    return j >= 0.7
+
+
+# Back-compat alias used by speech facade / tests historically as ``_echo_overlap``.
+_echo_overlap = echo_overlap
+
+
 @dataclass
 class SilenceSession:
-    """Silence-profile session: endpoint strategy + empty/no-open recovery.
+    """Silence-profile session: endpoint strategy, empty/no-open recovery, echo.
 
     Strategy is resolved at construction (or via :meth:`bind_endpoint_strategy`).
     ``None`` strategy = energy default — same contract as ``audio.capture``.
@@ -246,6 +278,9 @@ class SilenceSession:
     gate failure; the session logs, updates attempt flags, and returns the
     next action (retry / nudge / give_up). TTS nudge stays with the caller
     (or ``deps.run_tts_nudge`` if wired).
+
+    Echo: :meth:`should_reject_echo` compares the transcript to
+    ``policy.last_tts`` (owned by session inputs, not a free kwargs handoff).
     """
 
     policy: AnswerWindowPolicy
@@ -380,6 +415,15 @@ class SilenceSession:
         if nxt is SilenceState.CANCELLED:
             self.cancelled = True
         return nxt
+
+    def should_reject_echo(self, transcript: str) -> bool:
+        """True when *transcript* is residual TTS vs ``policy.last_tts``.
+
+        Ownership of *last_tts* is on the session policy (call-seam input), not
+        a free parameter on the capture loop. Pure decision — caller still
+        raises / recovers (silence facade raises ``ProviderError`` today).
+        """
+        return echo_overlap(transcript, self.policy.last_tts)
 
     def plan_empty_stt_recovery(self) -> SilenceEvent:
         """Which recovery event to fire after empty STT (policy-driven)."""

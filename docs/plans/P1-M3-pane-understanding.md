@@ -1,11 +1,12 @@
 # P1.M3 — Deepen Pane Understanding
 
-**Status:** design in progress (E1.T001 interface draft)  
+**Status:** design locked for E1 (implementation follows E2–E4)  
 **Date:** 2026-07-15  
 **Backlog:** `P1.M3` · architecture review candidate 3  
 **Depends on:** M2 Bound Answerability (delivery side; emission is independent)  
 **Related bugs:** B016 (false done), B096 (busy subagent), B111 (idle chrome vs menu)  
-**E1.T001:** classify interface + state types documented below
+**E1.T001:** classify interface + state types documented below  
+**E1.T002:** EdgeTracker → module state map + acceptance **LOCKED** (2026-07-15)
 
 ## Goal
 
@@ -191,19 +192,124 @@ Per observation key `(session_id, pane_id)`:
 
 ---
 
-## Preview: state field map (E1.T002)
+## E1.T002 — Map EdgeTracker fields to module-owned state (LOCKED)
 
-| EdgeTracker field | Module type field | Notes |
-|-------------------|-------------------|-------|
-| `_status` | `state.status` | last Herdr status per pane |
-| `_dedupe` | `state.dedupe` | emit once per (pane, tag, fp) |
-| `_last_fp` | `state.last_fp` | question_changed + blocked FP |
-| `_false_done_scanned` | `state.false_done_scanned` | seal one scan per status epoch |
-| `_subagents_busy` | `state.subagents_busy` | count while Tasks strip active |
-| `pane_capture*` | `ClassifyPolicy` | not per-pane mutable state |
+### Mutable per-pane maps (must leave `watch.py`)
 
-**Acceptance for E1.T002:** no EdgeTracker-private maps remain only in
-`watch.py` after E2 extract; watch may hold a `PaneClassifier` instance only.
+Key type throughout: `PaneKey = tuple[str, str]` → `(session_id, pane_id)`.
+
+| EdgeTracker today | Module field | Semantics | Mutated when |
+|-------------------|--------------|-----------|--------------|
+| `_status: dict[PaneKey, str]` | `PaneUnderstandingState.status` | Last observed Herdr status for edge detect | Every status change (incl. first-seen) |
+| `_dedupe: set[tuple[str,str,str,str]]` | `PaneUnderstandingState.dedupe` | Suppress re-emit of same (pane, tag, fp/count) | After successful blocked / needs_input / question_changed / busy_subagent emit |
+| `_last_fp: dict[PaneKey, str]` | `PaneUnderstandingState.last_fp` | Last question fingerprint while awaiting input | On blocked emit, needs_input emit, question_changed |
+| `_false_done_scanned: dict[PaneKey, str]` | `PaneUnderstandingState.false_done_scanned` | Status epoch already inspected for false-done | After idle-like false-done path runs; **cleared** while busy-subagent active |
+| `_subagents_busy: dict[PaneKey, int]` | `PaneUnderstandingState.subagents_busy` | Active Tasks count while strip present | Set on busy emit; popped when strip clears |
+
+### Policy / config (not per-pane maps)
+
+| EdgeTracker today | Module home | Notes |
+|-------------------|-------------|-------|
+| `pane_capture: bool` | `ClassifyPolicy.pane_capture` | Whether to attach `pane_capture` blob |
+| `pane_capture_lines: int` | `ClassifyPolicy.pane_capture_lines` | Bound for `prepare_pane_capture` |
+| `pane_capture_max_chars: int` | `ClassifyPolicy.pane_capture_max_chars` | Char cap for capture |
+| `interest` (process kwarg) | `ClassifyPolicy.interest` | Frozen set of statuses watch cares about |
+| `detect_false_done` (process kwarg) | `ClassifyPolicy.detect_false_done` | Gate false-done / busy paths |
+| `question_for` callback | **removed** | Replaced by `PaneObservation.pane_text` (watch reads first) |
+
+### Methods map (EdgeTracker → module)
+
+| EdgeTracker method | Module home | Pure? |
+|--------------------|-------------|-------|
+| `process` | `PaneClassifier.process` | Yes w.r.t. Herdr (obs already filled) |
+| `_same_status_events` | private on classifier | Yes |
+| `_maybe_false_done` | private on classifier | Yes |
+| `_emit_busy_subagent` | private on classifier | Yes |
+| `_emit_blocked` | private on classifier | Yes |
+| `_split_pane_text` | private helper (uses `extract_question_excerpt` + `prepare_pane_capture`) | Yes |
+| `_heuristic_text` | private helper | Yes |
+| `_watch_cares_about_input` | static / module private | Yes |
+
+### What **stays** in `watch.py` after E3 (I/O boundary)
+
+| Concern | Why it stays in watch |
+|---------|----------------------|
+| Tunnel / client setup | Herdr I/O |
+| `list_agents` / `read_pane` | Herdr I/O → builds `PaneObservation` |
+| Self-exclusion (`_filter_self`) | Identity + socket matching; pre-filter before classify |
+| Emit + `DeliveryStore.register_from_hep` | Side effects |
+| Heartbeat / `watch.armed` / `watch.error` | Transport lifecycle, not pane meaning |
+| Socket reconnect / poll loop | I/O |
+| `_handle_lifecycle_event` / `target.invalidated` | Pane closed/moved invalidation — **not** EdgeTracker state; documented in E3.T002 |
+
+After E2+E3, watch may hold **only**:
+
+```python
+classifier = PaneClassifier(ClassifyPolicy(...))
+# ...
+obs = [
+    PaneObservation(
+        session_id=a.session_id,
+        pane_id=a.pane_id,
+        status=a.status,
+        pane_text=question_for(a) if need_text else None,
+        raw_agent=a,
+    )
+    for a in agents
+]
+for event in classifier.process(obs):
+    emit(event)
+```
+
+No private `_status` / `_dedupe` / `_last_fp` / `_false_done_scanned` /
+`_subagents_busy` dicts on watch or on a residual `EdgeTracker` class in
+`watch.py`. A thin **compat alias** `EdgeTracker = PaneClassifier` (or a
+deprecated wrapper) is allowed only if tests need a one-release bridge; prefer
+updating call sites in the same epic.
+
+### Compatibility alias (optional, E2)
+
+```python
+# hark.watch during migration (prefer delete by E3.T001):
+from hark.pane_understanding import PaneClassifier as EdgeTracker
+```
+
+Public package export:
+
+```python
+from hark.pane_understanding import (
+    ClassifyPolicy,
+    PaneClassifier,
+    PaneObservation,
+    PaneUnderstandingState,
+    looks_like_pending_question,  # after E2.T001
+    detect_active_subagents,
+)
+```
+
+`events.looks_like_pending_question` / `detect_active_subagents` may re-export
+from the package for back-compat so Answerability + existing tests keep
+importing from `hark.events` until E4 ports them.
+
+### Locked acceptance (E1 design → E2/E3 implement)
+
+| ID | Criterion | Epic |
+|----|-----------|------|
+| AC-S1 | All five EdgeTracker maps live on `PaneUnderstandingState` (or classifier-owned equivalent with same keys) | E2.T002 |
+| AC-S2 | `watch.py` has **no** false-done / busy-subagent / question_changed policy code after E3.T001 | E3.T001 |
+| AC-S3 | No pane-meaning state left only in `watch.py` (only a `PaneClassifier` instance + I/O) | E3.T001 |
+| AC-S4 | Classifier unit-testable with `PaneObservation` fixtures only (no Herdr client) | E2.T002 |
+| AC-S5 | B016 / B096 / B111 behavioral parity retained | E4.T001 |
+| AC-S6 | Lifecycle invalidation remains in watch; boundary documented | E3.T002 |
+| AC-S7 | `make_agent_*` take already-decided fields; no new policy inside builders | E2.T003 |
+| AC-S8 | ARCHITECTURE.md names Pane Understanding; EdgeTracker demoted/retired | E4.T002 |
+
+### Non-goals (state map)
+
+- Do not persist classifier state across process restarts.
+- Do not put DeliveryStore / fingerprint registry into Pane Understanding.
+- Do not move self-detection into the module.
+- Do not change dedupe key shapes (keeps emit parity).
 
 ---
 

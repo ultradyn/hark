@@ -56,19 +56,7 @@ from hark.providers.resolve import resolve_stt, resolve_tts
 from hark.risk import classify_question, confirm_required
 from hark.syslog import log as syslog
 from hark.usage import UsageStore
-
-
-@dataclass
-class ListenResult:
-    text: str
-    provider: str
-    duration_ms: int
-    end_mode: str
-    end_phrase: str | None = None
-    cancelled: bool = False
-    stream_id: str | None = None
-    partials_emitted: int = 0
-    meta_command: str | None = None
+from hark.answer_window.result import ListenResult  # canonical; facade re-export
 
 
 def soft_truncate_text(text: str, max_chars: int) -> str:

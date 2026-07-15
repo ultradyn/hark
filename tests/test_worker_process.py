@@ -84,9 +84,7 @@ def test_worker_request_compatibility_requires_exact_roles_and_watch_session(
             else ["hark", "ambient"]
         ),
     )
-    monkeypatch.setattr(
-        worker_process, "_proc_environ", lambda _pid: dict(os.environ)
-    )
+    monkeypatch.setattr(worker_process, "_proc_environ", lambda _pid: dict(os.environ))
 
     assert worker_process.worker_records_match_request(
         [watch, ambient], watch=True, ambient=True, session="requested"
@@ -113,11 +111,41 @@ def test_direct_publication_keeps_structured_worker_identity(tmp_path: Path):
         pid=4321, start_time="captured-start", role="ambient"
     )
 
-    assert worker_process.main(
-        ["publish", str(path), "--direct", record.to_json()]
-    ) == 0
+    assert (
+        worker_process.main(["publish", str(path), "--direct", record.to_json()]) == 0
+    )
 
     assert json.loads(path.read_text(encoding="utf-8")) == json.loads(record.to_json())
+
+
+def test_capture_role_poll_rejects_pid_lifetime_change(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    record = worker_process.WorkerRecord(pid=4321, start_time="original", role="watch")
+    lifetimes = iter([True, False])
+    monkeypatch.setattr(
+        worker_process,
+        "record_matches_lifetime",
+        lambda _record: next(lifetimes),
+    )
+    monkeypatch.setattr(worker_process, "record_matches_process", lambda _record: False)
+    monkeypatch.setattr(worker_process.time, "sleep", lambda _seconds: None)
+
+    assert not worker_process.wait_for_worker_role(record, timeout_s=1.0)
+
+
+def test_capture_rejects_pid_that_is_not_the_launchers_child(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(worker_process, "_proc_stat", lambda _pid: ("S", "start"))
+    monkeypatch.setattr(worker_process, "_proc_ppid", lambda _pid: 999)
+
+    assert (
+        worker_process.capture_worker_identity(
+            4321, role="watch", expected_parent_pid=111
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -430,16 +458,21 @@ def test_signal_records_cli_does_not_signal_reused_spawn_identity(
     read_fd, write_fd = os.pipe()
     sent: list[tuple[int, int]] = []
     monkeypatch.setattr(worker_process.os, "pidfd_open", lambda _pid: read_fd)
-    monkeypatch.setattr(worker_process, "record_matches_process", lambda _record: False)
+    monkeypatch.setattr(
+        worker_process, "record_matches_lifetime", lambda _record: False
+    )
     monkeypatch.setattr(
         worker_process.signal,
         "pidfd_send_signal",
         lambda fd, sig: sent.append((fd, sig)),
     )
     try:
-        assert worker_process.main(
-            ["signal-records", "TERM", record.to_json()]
-        ) == 0
+        assert (
+            worker_process.main(
+                ["signal-records", "TERM", "--lifetime-only", record.to_json()]
+            )
+            == 0
+        )
     finally:
         os.close(write_fd)
 
@@ -649,9 +682,7 @@ def test_shell_structured_attempt_writer_uses_same_pidfile_lock(tmp_path: Path):
     state = tmp_path / "state"
     pidfile = state / "hark" / "mode-a.pids"
     entered = tmp_path / "entered"
-    record = worker_process.WorkerRecord(
-        pid=1234, start_time="captured", role="watch"
-    )
+    record = worker_process.WorkerRecord(pid=1234, start_time="captured", role="watch")
     command = f"""
 set -euo pipefail
 export HARK_RUN_MODE_A_SOURCE_ONLY=1
@@ -689,6 +720,223 @@ printf 'done\n'
         if process is not None and process.poll() is None:
             process.kill()
             process.wait(timeout=2)
+
+
+def test_shell_capture_waits_for_same_lifetime_to_finish_delayed_exec(tmp_path: Path):
+    repo = Path(__file__).resolve().parents[1]
+    script = repo / "scripts" / "run-mode-a.sh"
+    real_uv = shutil.which("uv")
+    assert real_uv is not None
+    state = tmp_path / "state"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    spawn_log = tmp_path / "spawn"
+    discovery_guard = tmp_path / "discovery-blocked"
+    fake_hark = tmp_path / "hark"
+    fake_hark.write_text(
+        "#!/usr/bin/env python3\n"
+        "import signal\n"
+        "import time\n"
+        "signal.signal(signal.SIGTERM, lambda *_args: exit(0))\n"
+        "while True:\n"
+        "    time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    fake_hark.chmod(0o755)
+    uv = fake_bin / "uv"
+    uv.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ " $* " == *" hark.worker_process collect "* ]]; then\n'
+        "  filtered=()\n"
+        '  for arg in "$@"; do\n'
+        '    if [[ "$arg" == --discover ]]; then\n'
+        "      printf 'blocked\\n' >> \"$DISCOVERY_GUARD\"\n"
+        "      continue\n"
+        "    fi\n"
+        '    filtered+=("$arg")\n'
+        "  done\n"
+        '  for arg in "${filtered[@]}"; do\n'
+        '    [[ "$arg" != --discover ]] || exit 97\n'
+        "  done\n"
+        '  exec "$REAL_UV" "${filtered[@]}"\n'
+        "fi\n"
+        'if [ "${1:-}" = run ] && [ "${2:-}" = hark ]; then\n'
+        "  shift 2\n"
+        f"  printf '%s %s\\n' \"$$\" \"$(awk '{{print $22}}' /proc/$$/stat)\" > {spawn_log!s}\n"
+        "  sleep 0.35\n"
+        '  exec "$FAKE_HARK" "$@"\n'
+        "fi\n"
+        'exec "$REAL_UV" "$@"\n',
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "XDG_STATE_HOME": str(state),
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "REAL_UV": real_uv,
+            "FAKE_HARK": str(fake_hark),
+            "DISCOVERY_GUARD": str(discovery_guard),
+        }
+    )
+    worker_record: worker_process.WorkerRecord | None = None
+    try:
+        result = subprocess.run(
+            [str(script), "--no-ambient"],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert discovery_guard.exists()
+        worker_pid_raw, start_time = spawn_log.read_text(encoding="utf-8").split()
+        worker_record = worker_process.WorkerRecord(
+            pid=int(worker_pid_raw), start_time=start_time, role="watch"
+        )
+        records = worker_process.collect_worker_records(state / "hark" / "mode-a.pids")
+        assert [(record.pid, record.role) for record in records] == [
+            (worker_record.pid, "watch")
+        ]
+    finally:
+        if worker_record is None and spawn_log.exists():
+            worker_pid_raw, start_time = spawn_log.read_text(encoding="utf-8").split()
+            worker_record = worker_process.WorkerRecord(
+                pid=int(worker_pid_raw), start_time=start_time, role="watch"
+            )
+        if worker_record is not None:
+            worker_process._signal_worker(
+                worker_record, signal.SIGKILL, lifetime_only=True
+            )
+
+
+def test_shell_capture_timeout_rolls_back_without_unbounded_wait(tmp_path: Path):
+    repo = Path(__file__).resolve().parents[1]
+    script = repo / "scripts" / "run-mode-a.sh"
+    real_uv = shutil.which("uv")
+    assert real_uv is not None
+    state = tmp_path / "state"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    spawn_log = tmp_path / "spawn"
+    discovery_guard = tmp_path / "discovery-blocked"
+    uv = fake_bin / "uv"
+    uv.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ " $* " == *" hark.worker_process collect "* ]]; then\n'
+        "  filtered=()\n"
+        '  for arg in "$@"; do\n'
+        '    if [[ "$arg" == --discover ]]; then\n'
+        "      printf 'blocked\\n' >> \"$DISCOVERY_GUARD\"\n"
+        "      continue\n"
+        "    fi\n"
+        '    filtered+=("$arg")\n'
+        "  done\n"
+        '  for arg in "${filtered[@]}"; do\n'
+        '    [[ "$arg" != --discover ]] || exit 97\n'
+        "  done\n"
+        '  exec "$REAL_UV" "${filtered[@]}"\n'
+        "fi\n"
+        'if [ "${1:-}" = run ] && [ "${2:-}" = hark ]; then\n'
+        f"  printf '%s %s\\n' \"$$\" \"$(awk '{{print $22}}' /proc/$$/stat)\" > {spawn_log!s}\n"
+        "  exec sleep 60\n"
+        "fi\n"
+        'exec "$REAL_UV" "$@"\n',
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "XDG_STATE_HOME": str(state),
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "REAL_UV": real_uv,
+            "HARK_SPAWN_CAPTURE_TIMEOUT_S": "0.1",
+            "DISCOVERY_GUARD": str(discovery_guard),
+        }
+    )
+
+    worker_record: worker_process.WorkerRecord | None = None
+    try:
+        started_at = time.monotonic()
+        result = subprocess.run(
+            [str(script), "--no-ambient"],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        elapsed = time.monotonic() - started_at
+
+        assert result.returncode != 0
+        assert discovery_guard.exists()
+        assert elapsed < 3
+        assert "bounded capture window" in result.stderr
+        worker_pid_raw, start_time = spawn_log.read_text(encoding="utf-8").split()
+        worker_record = worker_process.WorkerRecord(
+            pid=int(worker_pid_raw), start_time=start_time, role="watch"
+        )
+        assert not worker_process.record_matches_lifetime(worker_record)
+    finally:
+        if worker_record is None and spawn_log.exists():
+            worker_pid_raw, start_time = spawn_log.read_text(encoding="utf-8").split()
+            worker_record = worker_process.WorkerRecord(
+                pid=int(worker_pid_raw), start_time=start_time, role="watch"
+            )
+        if worker_record is not None:
+            worker_process._signal_worker(
+                worker_record, signal.SIGKILL, lifetime_only=True
+            )
+
+
+@pytest.mark.parametrize("invalid_timeout", ["nan", "inf", "bad", "11"])
+def test_shell_rejects_invalid_capture_timeout_before_spawn(
+    tmp_path: Path, invalid_timeout: str
+):
+    repo = Path(__file__).resolve().parents[1]
+    script = repo / "scripts" / "run-mode-a.sh"
+    real_uv = shutil.which("uv")
+    assert real_uv is not None
+    state = tmp_path / "state"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    spawn_log = tmp_path / "spawn"
+    uv = fake_bin / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        'if [ "${1:-}" = run ] && [ "${2:-}" = hark ]; then\n'
+        f"  printf 'spawned\\n' > {spawn_log!s}\n"
+        "  exec sleep 60\n"
+        "fi\n"
+        'exec "$REAL_UV" "$@"\n',
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "XDG_STATE_HOME": str(state),
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "REAL_UV": real_uv,
+            "HARK_SPAWN_CAPTURE_TIMEOUT_S": invalid_timeout,
+        }
+    )
+
+    result = subprocess.run(
+        [str(script), "--no-ambient"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+    assert result.returncode != 0
+    assert "must be finite" in result.stderr
+    assert not spawn_log.exists()
 
 
 def test_shell_rollback_durably_records_structured_survivor_after_atomic_failure(
@@ -1056,6 +1304,7 @@ def test_concurrent_shell_start_only_accepts_compatible_predecessor(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     spawn_log = tmp_path / "spawns"
+    discovery_guard = tmp_path / "discovery-blocked"
     fake_hark = tmp_path / "hark"
     fake_hark.write_text(
         "#!/usr/bin/env python3\n"
@@ -1069,7 +1318,21 @@ def test_concurrent_shell_start_only_accepts_compatible_predecessor(
     fake_hark.chmod(0o755)
     uv = fake_bin / "uv"
     uv.write_text(
-        "#!/bin/sh\n"
+        "#!/usr/bin/env bash\n"
+        'if [[ " $* " == *" hark.worker_process "* ]]; then\n'
+        "  filtered=()\n"
+        '  for arg in "$@"; do\n'
+        '    if [[ "$arg" == --discover ]]; then\n'
+        "      printf 'blocked\\n' >> \"$DISCOVERY_GUARD\"\n"
+        "      continue\n"
+        "    fi\n"
+        '    filtered+=("$arg")\n'
+        "  done\n"
+        '  for arg in "${filtered[@]}"; do\n'
+        '    [[ "$arg" != --discover ]] || exit 97\n'
+        "  done\n"
+        '  exec "$REAL_UV" "${filtered[@]}"\n'
+        "fi\n"
         'if [ "${1:-}" = run ] && [ "${2:-}" = hark ]; then\n'
         "  shift 2\n"
         '  printf \'%s %s\\n\' "$$" "${1:-}" >> "$SPAWN_LOG"\n'
@@ -1088,6 +1351,7 @@ def test_concurrent_shell_start_only_accepts_compatible_predecessor(
             "REAL_UV": real_uv,
             "FAKE_HARK": str(fake_hark),
             "SPAWN_LOG": str(spawn_log),
+            "DISCOVERY_GUARD": str(discovery_guard),
         }
     )
     processes: list[subprocess.Popen[str]] = []
@@ -1122,15 +1386,14 @@ def test_concurrent_shell_start_only_accepts_compatible_predecessor(
         second_stdout, second_stderr = second.communicate(timeout=15)
         assert first.returncode == 0, first_stderr
         assert second.returncode == 0, second_stderr
+        assert discovery_guard.exists()
 
         spawn_lines = spawn_log.read_text(encoding="utf-8").splitlines()
         assert [line.split()[1] for line in spawn_lines] == spawn_roles
         spawned_pid, role = spawn_lines[-1].split()
         worker_pid = int(spawned_pid)
         records = worker_process.collect_worker_records(state / "hark" / "mode-a.pids")
-        assert [(record.pid, record.role) for record in records] == [
-            (worker_pid, role)
-        ]
+        assert [(record.pid, record.role) for record in records] == [(worker_pid, role)]
         assert f"starting {spawn_roles[0]}" in first_stdout
         assert second_message in second_stdout
     finally:

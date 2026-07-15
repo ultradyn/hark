@@ -38,6 +38,7 @@ FORCE=0
 SESSION="${HARK_SESSION:-default}"
 # Max wait for an in-flight recording (seconds)
 STOP_GRACE="${HARK_STOP_GRACE_S:-120}"
+SPAWN_CAPTURE_TIMEOUT="${HARK_SPAWN_CAPTURE_TIMEOUT_S:-2}"
 PIDFILE_LOCK_DEPTH=0
 PIDFILE_LOCK_FD=""
 START_LOCK_FD=""
@@ -163,9 +164,31 @@ capture_started_worker() {
   local pid="$1"
   local role="$2"
   local record
-  record="$(worker_identity capture "$pid" "$role")" || return $?
-  started+=("$pid")
-  started_records+=("$record")
+  local status=0
+  record="$(
+    worker_identity capture "$pid" "$role" --timeout "$SPAWN_CAPTURE_TIMEOUT" \
+      --parent-pid "$$"
+  )" || status=$?
+  if [[ -n "$record" ]]; then
+    started+=("$pid")
+    started_records+=("$record")
+  fi
+  return "$status"
+}
+
+validate_spawn_capture_timeout() {
+  python3 -c '
+import math
+import sys
+
+try:
+    value = float(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+if not math.isfinite(value) or value < 0 or value > 10:
+    raise SystemExit(1)
+print(f"{value:g}")
+' "$1"
 }
 
 match_started_records_into() {
@@ -173,7 +196,7 @@ match_started_records_into() {
   shift
   local output
   local -a parsed=()
-  output="$(worker_identity match-records "$@")" || return $?
+  output="$(worker_identity match-records --lifetime-only "$@")" || return $?
   if [[ -n "$output" ]]; then
     mapfile -t parsed <<<"$output"
   fi
@@ -200,7 +223,8 @@ rollback_started_workers() {
     echo "error: failed to verify rollback worker identities; refusing raw PID signals" >&2
     survivors=("${attempted_records[@]}")
   elif ((${#remaining[@]} > 0)); then
-    worker_identity signal-records TERM "${remaining[@]}" >/dev/null || true
+    worker_identity signal-records TERM --lifetime-only \
+      "${remaining[@]}" >/dev/null || true
   fi
   for tick in {1..20}; do
     match_started_records_into remaining "${attempted_records[@]}" || {
@@ -211,7 +235,8 @@ rollback_started_workers() {
     sleep 0.1
   done
   if ((${#remaining[@]} > 0)); then
-    worker_identity signal-records KILL "${remaining[@]}" >/dev/null || true
+    worker_identity signal-records KILL --lifetime-only \
+      "${remaining[@]}" >/dev/null || true
   fi
   sleep 0.1
   match_started_records_into survivors "${attempted_records[@]}" || \
@@ -380,6 +405,12 @@ HARK=(uv run hark)
 # Always replace previous workers (pidfile and/or orphan ambient/watch)
 # for an ordinary invocation. Concurrent shell starts serialize here; a waiter
 # accepts the completed predecessor instead of immediately restarting it.
+if ! SPAWN_CAPTURE_TIMEOUT="$(
+  validate_spawn_capture_timeout "$SPAWN_CAPTURE_TIMEOUT"
+)"; then
+  echo "error: HARK_SPAWN_CAPTURE_TIMEOUT_S must be finite and between 0 and 10 seconds" >&2
+  exit 1
+fi
 if ! acquire_start_lock; then
   echo "error: failed to acquire Hark worker start lock" >&2
   exit 1
@@ -445,8 +476,7 @@ if [[ "$skip_start" -eq 0 ]]; then
     ) >>"$WATCH_LOG" 2>&1 &
     started_pid="$!"
     if ! capture_started_worker "$started_pid" watch; then
-      echo "error: failed to capture spawned watch identity; waiting rather than signalling a raw PID" >&2
-      wait "$started_pid" 2>/dev/null || true
+      echo "error: spawned watch did not reach its expected role within the bounded capture window" >&2
       rollback_started_workers "${started_records[@]}" || true
       release_pidfile_lock || true
       release_start_lock || true
@@ -473,8 +503,7 @@ print("  say: " + " / ".join(ps[:10]) + (" …" if len(ps) > 10 else ""))
     ) >>"$AMBIENT_LOG" 2>&1 &
     started_pid="$!"
     if ! capture_started_worker "$started_pid" ambient; then
-      echo "error: failed to capture spawned ambient identity; waiting rather than signalling a raw PID" >&2
-      wait "$started_pid" 2>/dev/null || true
+      echo "error: spawned ambient did not reach its expected role within the bounded capture window" >&2
       rollback_started_workers "${started_records[@]}" || true
       release_pidfile_lock || true
       release_start_lock || true

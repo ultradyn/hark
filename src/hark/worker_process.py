@@ -13,12 +13,14 @@ import argparse
 import ctypes
 import fcntl
 import json
+import math
 import os
 import re
 import signal
 import sys
 import tempfile
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -207,6 +209,23 @@ def _proc_argv(pid: int) -> list[str] | None:
     ]
 
 
+def _proc_ppid(pid: int) -> int | None:
+    try:
+        status = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    parent_line = next(
+        (line for line in status.splitlines() if line.startswith("PPid:")), None
+    )
+    if parent_line is None:
+        return None
+    try:
+        parent = int(parent_line.split(":", 1)[1].strip())
+    except ValueError:
+        return None
+    return parent if parent > 0 else None
+
+
 def _proc_environ(pid: int) -> dict[str, str] | None:
     try:
         raw = Path(f"/proc/{pid}/environ").read_bytes()
@@ -288,19 +307,55 @@ def inspect_worker(
     return WorkerRecord(pid=pid, start_time=stat[1], role=role)
 
 
-def capture_worker_identity(pid: int, *, role: str) -> WorkerRecord | None:
+def capture_worker_identity(
+    pid: int, *, role: str, expected_parent_pid: int | None = None
+) -> WorkerRecord | None:
     """Capture a newly spawned, caller-owned worker before later validation."""
     if role not in WORKER_ROLES:
         raise ValueError(f"invalid worker role: {role}")
     stat = _proc_stat(pid)
     if stat is None:
         return None
-    return WorkerRecord(pid=pid, start_time=stat[1], role=role)
+    record = WorkerRecord(pid=pid, start_time=stat[1], role=role)
+    if expected_parent_pid is not None:
+        if expected_parent_pid <= 0 or _proc_ppid(pid) != expected_parent_pid:
+            return None
+        # Close the lifetime-swap window between start-time and parent reads.
+        if not record_matches_lifetime(record):
+            return None
+    return record
+
+
+def record_matches_lifetime(record: WorkerRecord) -> bool:
+    """Return whether *record* still names the captured process lifetime."""
+    stat = _proc_stat(record.pid)
+    return stat is not None and stat[1] == record.start_time
 
 
 def record_matches_process(record: WorkerRecord) -> bool:
     """Return whether *record* still names the same worker process lifetime."""
     return inspect_worker(record.pid, expected_role=record.role) == record
+
+
+def wait_for_worker_role(
+    record: WorkerRecord,
+    *,
+    timeout_s: float,
+    poll_interval_s: float = 0.02,
+) -> bool:
+    """Wait boundedly for one captured lifetime to exec its expected role."""
+    if not math.isfinite(timeout_s) or timeout_s < 0 or timeout_s > 10:
+        return False
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    while True:
+        if not record_matches_lifetime(record):
+            return False
+        if record_matches_process(record):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(poll_interval_s, remaining))
 
 
 def worker_records_match_request(
@@ -462,9 +517,7 @@ def _write_worker_records_direct_unlocked(
         os.close(directory_fd)
 
 
-def write_worker_records_direct(
-    path: Path, records: Iterable[WorkerRecord]
-) -> None:
+def write_worker_records_direct(path: Path, records: Iterable[WorkerRecord]) -> None:
     """Durably publish structured identities when atomic rename is unavailable."""
     with worker_pidfile_lock(path):
         _write_worker_records_direct_unlocked(path, records)
@@ -615,7 +668,9 @@ def _send_pidfd_signal(pidfd: int, sig: int) -> None:
         raise OSError(error, os.strerror(error))
 
 
-def _signal_worker(record: WorkerRecord, sig: int) -> WorkerSignalOutcome:
+def _signal_worker(
+    record: WorkerRecord, sig: int, *, lifetime_only: bool = False
+) -> WorkerSignalOutcome:
     """Verify identity immediately before safely signalling one worker.
 
     A pidfd pins the process lifetime across verification and signal, closing
@@ -624,20 +679,21 @@ def _signal_worker(record: WorkerRecord, sig: int) -> WorkerSignalOutcome:
     A process that has exited or changed identity is a benign miss; an error
     signalling a still verified process is reported separately.
     """
+    matches = record_matches_lifetime if lifetime_only else record_matches_process
     try:
         pidfd = _open_pidfd(record.pid)
     except ProcessLookupError:
         return WorkerSignalOutcome(record)
     except PidfdUnavailableError as exc:
-        if not record_matches_process(record):
+        if not matches(record):
             return WorkerSignalOutcome(record)
         return WorkerSignalOutcome(record, error=f"pidfd unavailable: {exc}")
     except (OSError, ValueError) as exc:
-        if not record_matches_process(record):
+        if not matches(record):
             return WorkerSignalOutcome(record)
         return WorkerSignalOutcome(record, error=f"pidfd_open failed: {exc}")
     try:
-        if not record_matches_process(record):
+        if not matches(record):
             return WorkerSignalOutcome(record)
         try:
             _send_pidfd_signal(pidfd, sig)
@@ -675,6 +731,18 @@ def _parse_signal(value: str) -> int:
         raise argparse.ArgumentTypeError(f"unknown signal: {value}") from exc
 
 
+def _parse_capture_timeout(value: str) -> float:
+    try:
+        timeout = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("capture timeout must be numeric") from exc
+    if not math.isfinite(timeout) or timeout < 0 or timeout > 10:
+        raise argparse.ArgumentTypeError(
+            "capture timeout must be finite and between 0 and 10 seconds"
+        )
+    return timeout
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -694,11 +762,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     capture = sub.add_parser("capture")
     capture.add_argument("pid", type=int)
     capture.add_argument("role", choices=sorted(WORKER_ROLES))
+    capture.add_argument("--timeout", type=_parse_capture_timeout, default=2.0)
+    capture.add_argument("--parent-pid", type=int, required=True)
     matches = sub.add_parser("match-records")
     matches.add_argument("records", nargs="+")
+    matches.add_argument("--lifetime-only", action="store_true")
     send_records = sub.add_parser("signal-records")
     send_records.add_argument("signal", type=_parse_signal)
     send_records.add_argument("records", nargs="+")
+    send_records.add_argument("--lifetime-only", action="store_true")
     publish = sub.add_parser("publish")
     publish.add_argument("pidfile", type=Path)
     publish.add_argument("records", nargs="+")
@@ -706,11 +778,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "capture":
-        record = capture_worker_identity(args.pid, role=args.role)
+        record = capture_worker_identity(
+            args.pid, role=args.role, expected_parent_pid=args.parent_pid
+        )
         if record is None:
             return 1
         print(record.to_json())
-        return 0
+        return 0 if wait_for_worker_role(record, timeout_s=args.timeout) else 2
 
     if args.command in {"match-records", "signal-records", "publish"}:
         supplied: list[WorkerRecord] = []
@@ -720,12 +794,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 parser.error("invalid structured worker record")
             supplied.append(record)
         if args.command == "match-records":
+            matcher = (
+                record_matches_lifetime
+                if args.lifetime_only
+                else record_matches_process
+            )
             for record in supplied:
-                if record_matches_process(record):
+                if matcher(record):
                     print(record.to_json())
             return 0
         if args.command == "signal-records":
-            outcomes = [_signal_worker(record, args.signal) for record in supplied]
+            outcomes = [
+                _signal_worker(record, args.signal, lifetime_only=args.lifetime_only)
+                for record in supplied
+            ]
             errors = [outcome for outcome in outcomes if outcome.error is not None]
             for outcome in errors:
                 print(

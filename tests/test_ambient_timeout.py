@@ -251,11 +251,18 @@ def test_loop_dual_writes_prompt_when_stdout_is_restart_log(monkeypatch, tmp_pat
 
     out_mon = io.StringIO()
     n = replay_matching(
-        [feed], kinds=MODE_A_WAKE_KINDS, limit=20, for_monitor=True, out=out_mon
+        [feed],
+        kinds=MODE_A_WAKE_KINDS,
+        limit=20,
+        for_monitor=True,
+        out=out_mon,
+        include_test_events=True,
     )
     assert n >= 1
     mon_kinds = [
-        json.loads(l).get("kind") for l in out_mon.getvalue().splitlines() if l.strip()
+        json.loads(line).get("kind")
+        for line in out_mon.getvalue().splitlines()
+        if line.strip()
     ]
     assert "ambient.prompt" in mon_kinds
 

@@ -6,6 +6,7 @@ import json
 import os
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,7 +18,9 @@ from hark.monitor_feed import (
     ambient_feed_path,
     append_ambient_jsonl,
     compact_mode_a_event,
+    emit_line,
     emit_hep,
+    follow_state_files,
     io_targets_path,
     probe_monitor_consumer,
     read_monitor_holder_pid,
@@ -39,6 +42,15 @@ def test_should_surface_filters():
         {"kind": "ambient.wake_near_miss"}, MODE_A_WAKE_KINDS
     )
     assert not should_surface({"kind": "ambient.debug"}, MODE_A_WAKE_KINDS)
+    assert not should_surface(
+        {"kind": "ambient.prompt", "hark_provenance": "test"},
+        MODE_A_WAKE_KINDS,
+    )
+    assert should_surface(
+        {"kind": "ambient.prompt", "hark_provenance": "test"},
+        MODE_A_WAKE_KINDS,
+        include_test_events=True,
+    )
 
 
 def test_compact_wake_near_miss():
@@ -126,16 +138,131 @@ def test_replay_matching_from_files(tmp_path: Path):
         out=out,
     )
     assert n == 3
-    lines = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
-    kinds = [l["kind"] for l in lines]
+    lines = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    kinds = [line["kind"] for line in lines]
     assert kinds == [
         "agent.blocked",
         "ambient.wake_near_miss",
         "ambient.prompt",
     ]
     # near-miss came through (the bug class)
-    near = next(l for l in lines if l["kind"] == "ambient.wake_near_miss")
+    near = next(line for line in lines if line["kind"] == "ambient.wake_near_miss")
     assert near["attempts"] == ["clunker"]
+    assert all(line["monitor_delivery"]["mode"] == "replay" for line in lines)
+    assert {line["monitor_delivery"]["source"] for line in lines} == {
+        "watch.jsonl",
+        "ambient.jsonl",
+    }
+
+
+def test_monitor_delivery_marks_live_source():
+    out = StringIO()
+    emit_line(
+        {"kind": "ambient.prompt", "event_id": "live-1", "text": "hello"},
+        for_monitor=False,
+        out=out,
+        monitor_mode="live",
+        source="ambient.jsonl",
+    )
+
+    payload = json.loads(out.getvalue())
+    assert payload["monitor_delivery"] == {
+        "mode": "live",
+        "source": "ambient.jsonl",
+    }
+
+
+def test_live_follow_filters_marked_test_event_without_dropping_operator_event(
+    monkeypatch, tmp_path: Path
+):
+    class FakeFollower:
+        def __init__(self, _sources):
+            self.polls = 0
+
+        def start_live(self):
+            pass
+
+        def poll(self):
+            self.polls += 1
+            if self.polls > 1:
+                raise KeyboardInterrupt
+            return iter(
+                [
+                    SimpleNamespace(
+                        source="ambient.jsonl",
+                        payload={
+                            "kind": "ambient.prompt",
+                            "event_id": "synthetic",
+                            "hark_provenance": "test",
+                        },
+                    ),
+                    SimpleNamespace(
+                        source="ambient.jsonl",
+                        payload={
+                            "kind": "ambient.prompt",
+                            "event_id": "operator-live",
+                        },
+                    ),
+                ]
+            )
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("hark.monitor_feed.StateFeedFollower", FakeFollower)
+    out = StringIO()
+
+    assert (
+        follow_state_files(
+            [tmp_path / "ambient.jsonl"],
+            kinds=MODE_A_WAKE_KINDS,
+            for_monitor=False,
+            out=out,
+            poll_s=0,
+        )
+        == 0
+    )
+    lines = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert [line["event_id"] for line in lines] == ["operator-live"]
+    assert lines[0]["monitor_delivery"] == {
+        "mode": "live",
+        "source": "ambient.jsonl",
+    }
+
+
+def test_replay_filters_marked_test_events(tmp_path: Path):
+    feed = tmp_path / "ambient.jsonl"
+    feed.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "kind": "ambient.prompt",
+                        "event_id": "synthetic",
+                        "hark_provenance": "test",
+                    }
+                ),
+                json.dumps(
+                    {"kind": "ambient.prompt", "event_id": "operator-live"}
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    out = StringIO()
+
+    assert (
+        replay_matching(
+            [feed],
+            kinds=MODE_A_WAKE_KINDS,
+            limit=10,
+            for_monitor=False,
+            out=out,
+        )
+        == 1
+    )
+    assert json.loads(out.getvalue())["event_id"] == "operator-live"
 
 
 def test_partial_fragment_delta():
@@ -398,3 +525,20 @@ def test_append_ambient_jsonl_helper(tmp_path: Path, monkeypatch):
     assert ok is True
     text = (tmp_path / "ambient.jsonl").read_text(encoding="utf-8")
     assert "tts.truncated" in text
+    assert json.loads(text)["hark_provenance"] == "test"
+
+
+def test_default_feed_write_uses_autouse_isolated_state(
+    isolated_state_home: Path,
+):
+    from hark.paths import state_dir
+
+    event = {"kind": "ambient.prompt", "event_id": "isolation-regression"}
+    assert append_ambient_jsonl(event) is True
+
+    expected = isolated_state_home / "hark" / "ambient.jsonl"
+    assert state_dir() == isolated_state_home / "hark"
+    assert expected.is_file()
+    stored = json.loads(expected.read_text(encoding="utf-8"))
+    assert stored["event_id"] == "isolation-regression"
+    assert stored["hark_provenance"] == "test"

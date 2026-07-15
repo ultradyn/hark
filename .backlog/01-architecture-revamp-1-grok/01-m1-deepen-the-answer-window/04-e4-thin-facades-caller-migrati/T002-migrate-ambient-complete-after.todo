@@ -1,19 +1,20 @@
 ---
 claimed_at: "2026-07-15T05:16:57Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-15T05:21:24Z"
 complexity: medium
 created_at: "2026-07-15T04:29:39Z"
 depends_on:
     - P1.M1.E4.T001
+duration_minutes: 4.46382935115
 estimate_hours: 2
 id: P1.M1.E4.T002
 priority: high
 started_at: "2026-07-15T05:16:57Z"
-status: in_progress
+status: done
 tags: []
 title: Migrate ambient complete_after_wake + CLI cmd_listen
-updated_at: "2026-07-15T05:16:57Z"
+updated_at: "2026-07-15T05:21:24Z"
 ---
 # Migrate ambient complete_after_wake + CLI cmd_listen
 

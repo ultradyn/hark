@@ -1,17 +1,18 @@
 ---
+claimed_at: "2026-07-15T21:45:20Z"
+claimed_by: codex-urban-morn-b847
+completed_at: null
 complexity: medium
 created_at: "2026-07-15T20:56:26Z"
 depends_on: []
 estimate_hours: 1
 id: B126
 priority: high
-status: pending
-tags:
-    - herdr
-    - multi-session
-    - routing
+started_at: "2026-07-15T21:45:20Z"
+status: in_progress
+tags: []
 title: Remote Herdr sessions are not tunneled outside watch
-updated_at: "2026-07-15T20:56:26Z"
+updated_at: "2026-07-15T21:45:20Z"
 ---
 ## Evidence
 ADR-003 and docs/HERDR.md make local plus remote Herdr sessions first-class and require Hark-managed SSH tunnels. resolve_session_socket maps an ssh session to the local tunnel socket, but only watch.run_watch calls ensure_tunnel. CLI status, doctor, dashboard snapshots, context/reply/keys/answer paths, and agent-start construct HerdrClient directly. A deterministic probe with SessionConfig(id="arch-review-nonexistent", ssh="workbox.invalid") produced a nonexistent cache tunnel socket while HerdrClient.run_raw remained a local subprocess transport. cmd_agent_start also replaces the configured session with SessionConfig(id=herdr_session), dropping socket, ssh, herdr_bin, label, and remote_socket.

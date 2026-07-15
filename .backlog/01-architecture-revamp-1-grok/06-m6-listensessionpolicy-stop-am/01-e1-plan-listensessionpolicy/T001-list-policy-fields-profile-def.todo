@@ -1,4 +1,6 @@
 ---
+claimed_at: "2026-07-15T05:57:41Z"
+claimed_by: cli-user
 completed_at: null
 complexity: low
 created_at: "2026-07-15T04:30:09Z"
@@ -6,11 +8,11 @@ depends_on: []
 estimate_hours: 1
 id: P1.M6.E1.T001
 priority: high
-started_at: null
-status: pending
+started_at: "2026-07-15T05:57:41Z"
+status: in_progress
 tags: []
 title: List policy fields + profile defaults
-updated_at: "2026-07-15T04:30:09Z"
+updated_at: "2026-07-15T05:57:41Z"
 ---
 # List policy fields + profile defaults
 

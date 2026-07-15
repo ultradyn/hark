@@ -18,6 +18,6 @@ tasks:
       file: T001-list-policy-fields-profile-def.todo
       id: T001
       priority: high
-      status: pending
+      status: in_progress
       tags: []
       title: List policy fields + profile defaults

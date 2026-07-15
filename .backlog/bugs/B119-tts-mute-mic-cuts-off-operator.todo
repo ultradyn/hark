@@ -1,14 +1,18 @@
 ---
+claimed_at: "2026-07-15T09:06:45Z"
+claimed_by: grok-grit-latch-h52d
+completed_at: null
 complexity: medium
 created_at: "2026-07-15T08:28:48Z"
 depends_on: []
 estimate_hours: 1
 id: B119
 priority: high
-status: pending
+started_at: "2026-07-15T09:06:45Z"
+status: in_progress
 tags: []
 title: 'TTS mute_mic cuts off operator: when agent starts hark tts while operator is mid-thought (or right after incomplete final), mic mute drops the rest of speech. Half-duplex should not steal an open radio listen / follow-up utterance. Observed dogfooding pag.town design session 2026-07-15.'
-updated_at: "2026-07-15T08:28:48Z"
+updated_at: "2026-07-15T09:06:45Z"
 ---
 
 TTS mute_mic cuts off operator: when agent starts hark tts while operator is mid-thought (or right after incomplete final), mic mute drops the rest of speech. Half-duplex should not steal an open radio listen / follow-up utterance. Observed dogfooding pag.town design session 2026-07-15.

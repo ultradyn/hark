@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -106,6 +108,189 @@ def test_override_wins(tmp_path: Path):
     )
     assert r.source == "override"
     assert Path(r.command).name == "my-claude"
+
+
+@pytest.mark.parametrize(
+    ("agent", "override", "target_name"),
+    (("claude", "cc", "gcc"), ("cursor-agent", "cr", "coderabbit")),
+)
+def test_override_path_token_applies_collision_rejects(
+    tmp_path: Path, agent: str, override: str, target_name: str
+):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    target = bindir / target_name
+    target.write_text("#!/bin/sh\n")
+    target.chmod(0o755)
+    (bindir / override).symlink_to(target)
+
+    with pytest.raises(
+        ResolveError, match=rf"agent {agent!r}.*{override!r}"
+    ) as exc_info:
+        resolve_agent_argv(agent, overrides={agent: override}, path=str(bindir))
+
+    assert exc_info.value.reason is ResolveFailureReason.INVALID_OVERRIDE
+
+
+@pytest.mark.parametrize("relative", (False, True))
+@pytest.mark.parametrize(
+    "invalid_kind", ("missing", "broken", "directory", "non-executable")
+)
+def test_override_path_requires_regular_executable(
+    tmp_path: Path, monkeypatch, relative: bool, invalid_kind: str
+):
+    target = tmp_path / "override-agent"
+    if invalid_kind == "broken":
+        target.symlink_to(tmp_path / "missing-target")
+    elif invalid_kind == "directory":
+        target.mkdir()
+    elif invalid_kind == "non-executable":
+        target.write_text("not executable\n")
+        target.chmod(0o644)
+
+    monkeypatch.chdir(tmp_path)
+    override = f"./{target.name}" if relative else str(target)
+
+    with pytest.raises(
+        ResolveError, match=rf"agent 'codex'.*{target.name}"
+    ) as exc_info:
+        resolve_agent_argv("codex", overrides={"codex": override})
+
+    assert exc_info.value.reason is ResolveFailureReason.INVALID_OVERRIDE
+
+
+@pytest.mark.parametrize("relative", (False, True))
+@pytest.mark.parametrize("suffix", ("/", "/."))
+def test_override_rejects_file_path_with_directory_syntax(
+    tmp_path: Path, monkeypatch, relative: bool, suffix: str
+):
+    target = tmp_path / "custom-codex"
+    target.write_text("#!/bin/sh\n")
+    target.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    base = f"./{target.name}" if relative else str(target)
+    override = f"{base}{suffix}"
+
+    with pytest.raises(
+        ResolveError, match=rf"agent 'codex'.*{target.name}"
+    ) as exc_info:
+        resolve_agent_argv("codex", overrides={"codex": override})
+
+    assert exc_info.value.reason is ResolveFailureReason.INVALID_OVERRIDE
+
+
+@pytest.mark.parametrize("relative", (False, True))
+def test_override_safe_path_preserves_prefix_and_extra_args(
+    tmp_path: Path, monkeypatch, relative: bool
+):
+    target = tmp_path / "custom-codex"
+    target.write_text("#!/bin/sh\n")
+    target.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    override = f"./{target.name}" if relative else str(target)
+
+    resolved = resolve_agent_argv(
+        "codex",
+        overrides={"codex": [override, "--configured"]},
+        extra_args=["--requested"],
+    )
+
+    selected = (
+        os.path.join(str(tmp_path), override) if relative else override
+    )
+    assert resolved.argv == [selected, "--configured", "--requested"]
+    assert resolved.source == "override"
+
+
+def test_override_relative_path_entry_is_pinned_absolute(
+    tmp_path: Path, monkeypatch
+):
+    bindir = tmp_path / "relative-bin"
+    bindir.mkdir()
+    target = bindir / "custom-codex"
+    target.write_text("#!/bin/sh\n")
+    target.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+
+    resolved = resolve_agent_argv(
+        "codex",
+        overrides={"codex": "custom-codex --configured"},
+        path="relative-bin",
+    )
+
+    assert resolved.argv == [
+        os.path.join(str(tmp_path), "relative-bin/custom-codex"),
+        "--configured",
+    ]
+
+
+def test_override_symlink_preserves_selected_argv0_dispatch(
+    tmp_path: Path, monkeypatch
+):
+    target = tmp_path / "agent-dispatcher"
+    target.write_text(
+        "#!/bin/sh\n"
+        'if [ "$(basename "$0")" = "custom-codex" ]; then\n'
+        "  printf selected\n"
+        "else\n"
+        "  printf target\n"
+        "fi\n"
+    )
+    target.chmod(0o755)
+    shim = tmp_path / "custom-codex"
+    shim.symlink_to(target)
+    monkeypatch.chdir(tmp_path)
+
+    resolved = resolve_agent_argv(
+        "codex",
+        overrides={"codex": ["./custom-codex", "--configured"]},
+    )
+
+    assert resolved.argv == [
+        os.path.join(str(tmp_path), "./custom-codex"),
+        "--configured",
+    ]
+    executed = subprocess.run(
+        resolved.argv[:1],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert executed.stdout == "selected"
+
+
+def test_override_preserves_symlink_before_dotdot_execution(
+    tmp_path: Path, monkeypatch
+):
+    elsewhere = tmp_path / "elsewhere"
+    nested = elsewhere / "nested"
+    nested.mkdir(parents=True)
+    (tmp_path / "linkdir").symlink_to(nested, target_is_directory=True)
+
+    actual = elsewhere / "custom-codex"
+    actual.write_text("#!/bin/sh\nprintf actual\n")
+    actual.chmod(0o755)
+    sentinel = tmp_path / "custom-codex"
+    sentinel.write_text("#!/bin/sh\nprintf sentinel\n")
+    sentinel.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+
+    command = "./linkdir/../custom-codex"
+    resolved = resolve_agent_argv(
+        "codex",
+        overrides={"codex": [command, "--configured"]},
+    )
+
+    assert resolved.argv[0] == os.path.join(str(tmp_path), command)
+    executed = subprocess.run(
+        resolved.argv[:1],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert executed.stdout == "actual"
+    assert Path(resolved.argv[0]).resolve() == actual.resolve()
+    assert Path(resolved.argv[0]).resolve() != sentinel.resolve()
 
 
 def test_adhoc_argv(tmp_path: Path):

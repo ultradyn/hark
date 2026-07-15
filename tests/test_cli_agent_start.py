@@ -393,6 +393,68 @@ def test_agent_start_unsafe_override_symlink_does_not_fall_back(
     assert "codex" in captured.err
 
 
+@pytest.mark.parametrize("relative", (False, True))
+@pytest.mark.parametrize("suffix", ("/", "/."))
+def test_agent_start_override_file_with_directory_syntax_does_not_start_pane(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+    relative: bool,
+    suffix: str,
+):
+    validation_cwd = tmp_path / "validation"
+    validation_cwd.mkdir()
+    target = _executable(validation_cwd / "custom-codex")
+    monkeypatch.chdir(validation_cwd)
+    base = f"./{target.name}" if relative else str(target)
+    override = f"{base}{suffix}"
+
+    code, client, captured, _ = _run_agent_start(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["codex"],
+        overrides={"codex": override},
+    )
+
+    assert code == USAGE
+    assert client.started == []
+    assert "codex" in captured.err
+    assert "override" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("agent", "override", "target_name"),
+    (("claude", "cc", "gcc"), ("cursor-agent", "cr", "coderabbit")),
+)
+def test_agent_start_rejected_override_does_not_start_pane(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+    agent: str,
+    override: str,
+    target_name: str,
+):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    target = _executable(bindir / target_name)
+    (bindir / override).symlink_to(target)
+
+    code, client, captured, _ = _run_agent_start(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        [agent],
+        overrides={agent: override},
+    )
+
+    assert code == USAGE
+    assert client.started == []
+    assert agent in captured.err
+    assert override in captured.err
+    assert "override" in captured.err
+
+
 def test_agent_start_malformed_override_does_not_fall_back(
     monkeypatch, capsys, tmp_path: Path
 ):
@@ -480,6 +542,55 @@ def test_agent_start_valid_override_regression(monkeypatch, capsys, tmp_path: Pa
 
     assert code == OK
     assert client.started[0][1] == [str(custom)]
+    assert '"source": "override"' in captured.out
+
+
+def test_agent_start_valid_override_prefix_regression(
+    monkeypatch, capsys, tmp_path: Path
+):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    custom = _executable(bindir / "my-codex")
+
+    code, client, captured, _ = _run_agent_start(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["codex", "--json"],
+        overrides={"codex": "my-codex --configured"},
+    )
+
+    assert code == OK
+    assert client.started[0][1] == [str(custom), "--configured"]
+    assert '"source": "override"' in captured.out
+
+
+def test_agent_start_relative_override_is_pinned_before_launch_cwd(
+    monkeypatch, capsys, tmp_path: Path
+):
+    validation_cwd = tmp_path / "validation"
+    launch_cwd = tmp_path / "launch"
+    validation_cwd.mkdir()
+    launch_cwd.mkdir()
+    _executable(validation_cwd / "custom-codex")
+    sentinel = _executable(launch_cwd / "custom-codex")
+    monkeypatch.chdir(validation_cwd)
+
+    code, client, captured, _ = _run_agent_start(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["codex", "--cwd", str(launch_cwd), "--json"],
+        overrides={"codex": "./custom-codex --configured"},
+    )
+
+    assert code == OK
+    assert client.started[0][1] == [
+        f"{validation_cwd}/./custom-codex",
+        "--configured",
+    ]
+    assert client.started[0][1][0] != str(sentinel.resolve())
+    assert client.started[0][2]["cwd"] == str(launch_cwd)
     assert '"source": "override"' in captured.out
 
 

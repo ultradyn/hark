@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
+import stat
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -180,9 +181,62 @@ def is_safe_executable(cmd: str, *, path: str | None = None) -> str | None:
 def _is_regular_executable(path: str) -> bool:
     """Return whether ``path`` names a regular executable file."""
     try:
-        return Path(path).is_file() and os.access(path, os.X_OK)
-    except OSError:
+        return stat.S_ISREG(os.stat(path).st_mode) and os.access(path, os.X_OK)
+    except (OSError, ValueError):
         return False
+
+
+def _resolve_override_executable(
+    agent_key: str, command: str, *, path: str | None = None
+) -> str:
+    """Validate and resolve an override command without bypassing safety policy."""
+    is_path = (
+        Path(command).is_absolute()
+        or command.startswith(".")
+        or os.sep in command
+        or (os.altsep is not None and os.altsep in command)
+    )
+    try:
+        resolved = command if is_path else _which(command, path=path)
+    except (OSError, ValueError):
+        resolved = None
+    if resolved is None:
+        raise ResolveError(
+            f"override command not found on PATH for agent {agent_key!r}: {command!r}",
+            reason=ResolveFailureReason.INVALID_OVERRIDE,
+        )
+    try:
+        selected = (
+            resolved
+            if os.path.isabs(resolved)
+            else os.path.join(os.getcwd(), resolved)
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ResolveError(
+            f"override for agent {agent_key!r} is not a regular executable: "
+            f"{command!r}",
+            reason=ResolveFailureReason.INVALID_OVERRIDE,
+        ) from exc
+    if not _is_regular_executable(selected):
+        raise ResolveError(
+            f"override for agent {agent_key!r} is not a regular executable: "
+            f"{command!r}",
+            reason=ResolveFailureReason.INVALID_OVERRIDE,
+        )
+    try:
+        target = str(Path(selected).resolve(strict=True))
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ResolveError(
+            f"override for agent {agent_key!r} is not a regular executable: "
+            f"{command!r}",
+            reason=ResolveFailureReason.INVALID_OVERRIDE,
+        ) from exc
+    if _is_rejected(command, target):
+        raise ResolveError(
+            f"unsafe override for agent {agent_key!r} rejected: {command!r}",
+            reason=ResolveFailureReason.INVALID_OVERRIDE,
+        )
+    return selected
 
 
 def _spec_for_key(key: str) -> AgentSpec | None:
@@ -260,22 +314,9 @@ def resolve_agent_argv(
                     f"empty override for agent {spec.key!r}",
                     reason=ResolveFailureReason.INVALID_OVERRIDE,
                 )
-            # Allow absolute path without PATH
             first = prefix[0]
-            if not (first.startswith("/") or first.startswith(".")):
-                found = _which(first, path=path)
-                if not found:
-                    raise ResolveError(
-                        f"override command not found on PATH for agent "
-                        f"{spec.key!r}: {first!r}",
-                        reason=ResolveFailureReason.INVALID_OVERRIDE,
-                    )
-                prefix = [found, *prefix[1:]]
-            elif not Path(first).exists() and not _which(first, path=path):
-                raise ResolveError(
-                    f"override path not found for agent {spec.key!r}: {first!r}",
-                    reason=ResolveFailureReason.INVALID_OVERRIDE,
-                )
+            executable = _resolve_override_executable(spec.key, first, path=path)
+            prefix = [executable, *prefix[1:]]
             argv = [*prefix, *[str(a) for a in extra_args]]
             return ResolvedCli(
                 agent_key=spec.key,

@@ -9,7 +9,9 @@ conservative local heuristic for informal closers ("send it", "that's all",
 utterance-final "over", …) without requiring the orchestrator to call
 ``hark listen-end``. Soft matches are **utterance-final only** (phrase must end
 the transcript after normalize) and only evaluated after a radio segment
-boundary (trailing silence). Bare ``over`` is a radio prosign: it finalizes when
+boundary (trailing silence). Trailing politeness (``thank you``, ``thanks``, …)
+is stripped before matching so ``over thank you`` / ``that's all, thanks``
+still finalize (B106). Bare ``over`` is a radio prosign: it finalizes when
 utterance-final unless the preceding word is a phrasal-verb particle
 ("turn it over", "hand it over", "take over", "start over"). Sole "over",
 sentence-final ". over", and multi-word ``okay over`` / ``ok over`` always
@@ -101,6 +103,31 @@ SENTENCE_FINAL_SOFT_PHRASES: frozenset[str] = frozenset({"over"})
 # Soft end master switch default (B039 dogfood: bare "send it" / ". over." work).
 DEFAULT_SOFT_END_PHRASES_ENABLED: bool = True
 
+# Trailing politeness after a real end phrase (B106). Operators often say
+# "over, thank you" / "that's all thanks" — without stripping, soft ends never
+# match because the phrase is not utterance-final. Conservative list only;
+# mid-clause "for now" / "I know" stay non-courtesy so they do not false-finish.
+DEFAULT_TRAILING_COURTESY: tuple[str, ...] = (
+    "thank you very much",
+    "thanks very much",
+    "thank you so much",
+    "thanks so much",
+    "thanks a lot",
+    "and thank you",  # "… over and thank you"
+    "and thanks",
+    "thank you",
+    "thanks",
+    "thankyou",  # STT often collapses "thank you"
+    "thank u",
+    "thx",
+    "ty",
+    "cheers",
+    "much appreciated",
+    "appreciate it",
+    "please",
+    "ta",
+)
+
 # Preceding word → phrasal-verb "… over", not radio prosign (B103).
 # "turn it over", "hand them over", "take over", "start over", "go over", …
 _OVER_PHRASAL_PREV: frozenset[str] = frozenset(
@@ -184,6 +211,48 @@ def normalize_for_match(text: str) -> str:
 
 def _strip_trail_punct(text: str) -> str:
     return _PUNCT_TRAIL.sub("", text).strip()
+
+
+def strip_trailing_courtesy(
+    text: str,
+    courtesy: list[str] | tuple[str, ...] = DEFAULT_TRAILING_COURTESY,
+) -> str:
+    """Remove trailing politeness so soft/product ends can match (B106).
+
+    ``please implement the fix over thank you`` → ``please implement the fix over``.
+    Does not strip mid-clause material (``that's all I know`` stays intact).
+    """
+    norm = normalize_for_match(text)
+    norm = _strip_trail_punct(norm)
+    if not norm:
+        return ""
+    ordered = sorted(
+        (normalize_for_match(p) for p in courtesy if p and str(p).strip()),
+        key=len,
+        reverse=True,
+    )
+    # Multiple trailers are rare; loop so "thanks thank you" still clears.
+    changed = True
+    while changed and norm:
+        changed = False
+        for p in ordered:
+            if not p:
+                continue
+            if norm == p:
+                return ""
+            if not norm.endswith(p):
+                continue
+            before = len(norm) - len(p)
+            if before > 0:
+                prev = norm[before - 1]
+                # Space is the normal boundary; also allow glued punct from STT
+                # ("over,thanks" / "over.thanks") so trailers still strip (B107).
+                if not (prev.isspace() or prev in ".,!?;:"):
+                    continue
+            norm = _strip_trail_punct(norm[:before].rstrip())
+            changed = True
+            break
+    return norm
 
 
 @dataclass(frozen=True)
@@ -328,6 +397,7 @@ def evaluate_radio_transcript(
     sentence_final_soft_phrases: frozenset[str]
     | set[str]
     | None = SENTENCE_FINAL_SOFT_PHRASES,
+    trailing_courtesy: list[str] | tuple[str, ...] = DEFAULT_TRAILING_COURTESY,
 ) -> PhraseHit | None:
     """Evaluate radio-mode transcript for cancel / end / optional soft end.
 
@@ -335,27 +405,42 @@ def evaluate_radio_transcript(
     Soft end default ON (B039); when on, only **terminal** soft phrases match.
     Bare ``over`` is a radio prosign (kind=**end**, never cancel) unless a
     phrasal-verb previous word blocks it (B103).
+
+    B106: trailing politeness (``thank you``, ``thanks``, …) is stripped before
+    matching so ``… over thank you`` / ``… that's all, thanks`` finalize. Match
+    bodies are computed on the stripped form; ``raw`` stays the original text.
     """
-    cancel = find_terminal_phrase(text, cancel_phrases, kind="cancel")
-    if cancel is not None:
-        return cancel
-    end = find_terminal_phrase(text, end_phrases, kind="end")
-    if end is not None:
-        return end
-    if soft_end_phrases_enabled:
-        soft = find_terminal_phrase(
-            text,
-            soft_end_phrases,
-            kind="end",
-            sentence_final_phrases=sentence_final_soft_phrases,
-        )
-        if soft is not None:
-            # Soft over / okay over are always finish, never cancel (B103).
-            if soft.kind != "end":
-                soft = PhraseHit(
-                    kind="end", phrase=soft.phrase, body=soft.body, raw=soft.raw
+    raw = text or ""
+    # Try raw first so sole "thank you" does not become empty then miss cancel/end.
+    for candidate in (raw, strip_trailing_courtesy(raw, trailing_courtesy)):
+        if not (candidate or "").strip() and candidate != raw:
+            continue
+        cancel = find_terminal_phrase(candidate, cancel_phrases, kind="cancel")
+        if cancel is not None:
+            return PhraseHit(
+                kind=cancel.kind,
+                phrase=cancel.phrase,
+                body=cancel.body,
+                raw=raw,
+            )
+        end = find_terminal_phrase(candidate, end_phrases, kind="end")
+        if end is not None:
+            return PhraseHit(
+                kind=end.kind, phrase=end.phrase, body=end.body, raw=raw
+            )
+        if soft_end_phrases_enabled:
+            soft = find_terminal_phrase(
+                candidate,
+                soft_end_phrases,
+                kind="end",
+                sentence_final_phrases=sentence_final_soft_phrases,
+            )
+            if soft is not None:
+                # Soft over / okay over are always finish, never cancel (B103).
+                kind = "end" if soft.kind != "end" else soft.kind
+                return PhraseHit(
+                    kind=kind, phrase=soft.phrase, body=soft.body, raw=raw
                 )
-            return soft
     return None
 
 

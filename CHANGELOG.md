@@ -6,6 +6,15 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- fix(radio, B106/B107): soft/product end phrases still finalize when the
+  operator appends trailing politeness (`over thank you`, `that's all, thanks`,
+  `okay hark send thank you`, `over and thank you`, STT `thankyou`). Courtesy
+  tails are stripped before match so utterance-final soft ends work in dogfood
+  without requiring bare `over` alone. Prior B106 branch fix was never merged
+  to master (reopened); B107 audit of ~5–8am Jul 14 mic-termination commits
+  (B097 mute defer, B098 streaming, B103 over-as-end, B105 pause-gate) found
+  no second root cause — matching failed when STT left a non-terminal tail.
+
 ## 0.1.9
 
 - **Post-install skill doc:** `skill/hark/POST_INSTALL.md` — what `npx skills add`

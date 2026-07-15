@@ -337,6 +337,60 @@ def test_soft_end_product_phrases_still_win():
     assert hit3 is not None and hit3.phrase == "hark over"
 
 
+# ---------------------------------------------------------------------------
+# Trailing courtesy (B106) — "over thank you" / "that's all, thanks"
+# ---------------------------------------------------------------------------
+
+
+def test_soft_end_trailing_thank_you():
+    """B106: operators append thank you after soft/product end phrases."""
+    cases = [
+        ("please implement the fix over thank you", "over", "please implement the fix"),
+        ("please implement the fix over, thank you", "over", "please implement the fix"),
+        ("please implement the fix over. thanks.", "over", "please implement the fix"),
+        ("please implement the fix over, thanks!", "over", "please implement the fix"),
+        ("refactor the module that's all thank you", "that's all", "refactor the module"),
+        ("refactor the module that's all, thanks", "that's all", "refactor the module"),
+        ("refactor the module thats all thank you", "thats all", "refactor the module"),
+        ("long radio turn okay over thank you", "okay over", "long radio turn"),
+        ("ship it send it please", "send it", "ship it"),
+        ("covers the plan message done thanks", "message done", "covers the plan"),
+        ("please use black formatting okay hark send thank you", "okay hark send", "please use black formatting"),
+        ("ship the branch hark over thanks", "hark over", "ship the branch"),
+        # B107 audit: STT / conversational variants of trailing politeness
+        ("please implement the fix over and thank you", "over", "please implement the fix"),
+        ("please implement the fix over and thanks", "over", "please implement the fix"),
+        ("please implement the fix over thankyou", "over", "please implement the fix"),
+        ("refactor the module that's all thank u", "that's all", "refactor the module"),
+        ("please implement the fix over thank you very much", "over", "please implement the fix"),
+        ("please implement the fix over,thanks", "over", "please implement the fix"),
+    ]
+    for text, phrase, body_sub in cases:
+        hit = evaluate_radio_transcript(text, soft_end_phrases_enabled=True)
+        assert hit is not None, f"expected end for {text!r}"
+        assert hit.kind == "end", f"{text!r} → {hit}"
+        assert hit.phrase == phrase, f"{text!r}: got {hit.phrase!r} want {phrase!r}"
+        assert body_sub in hit.body
+        assert "thank" not in hit.body
+        assert hit.raw == text
+
+
+def test_soft_end_trailing_courtesy_not_mid_clause():
+    """Courtesy strip must not invent finishes from mid-thought speech."""
+    mid = [
+        "that's all I know about the auth bug thank you",  # that's all not terminal
+        "think it over and continue thank you",
+        "turn it over carefully thanks",
+        "please just send it to production later",  # send it not terminal
+        "thank you",  # politeness alone is not an end
+        "thanks a lot",
+    ]
+    for text in mid:
+        assert (
+            evaluate_radio_transcript(text, soft_end_phrases_enabled=True) is None
+        ), f"false finish on: {text!r}"
+
+
 def test_soft_end_safe_list_documented():
     soft_norm = {p.lower() for p in DEFAULT_SOFT_END_PHRASES}
     # B039/B068: bare send it / send that / over / okay over are in the soft list

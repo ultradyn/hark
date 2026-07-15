@@ -38,6 +38,24 @@ class DaemonConflict(RuntimeError):
     """Another owner already holds always-on workers or harkd."""
 
 
+class WorkerSpawnError(OSError):
+    """A worker-set startup failed, including any rollback diagnostics."""
+
+    def __init__(
+        self,
+        failed_role: str,
+        cause: BaseException,
+        rollback_failures: Sequence[str] = (),
+    ) -> None:
+        self.failed_role = failed_role
+        self.cause = cause
+        self.rollback_failures = tuple(rollback_failures)
+        message = f"{failed_role} startup failed: {cause}"
+        if self.rollback_failures:
+            message += "; rollback failures: " + "; ".join(self.rollback_failures)
+        super().__init__(message)
+
+
 @dataclass
 class ProcessProbe:
     running: bool
@@ -305,6 +323,74 @@ def _hark_argv() -> list[str]:
     return [sys.executable, "-m", "hark"]
 
 
+def _rollback_worker_start(
+    owned: Sequence[tuple[str, subprocess.Popen[Any]]],
+    *,
+    pid_path: Path,
+    original_pidfile: bytes | None,
+    restore_pidfile: bool,
+    timeout_s: float = 2.0,
+) -> list[str]:
+    """Stop/reap only workers owned by a failed startup attempt."""
+    failures: list[str] = []
+
+    for role, proc in reversed(owned):
+        if proc.poll() is not None:
+            continue
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except OSError as group_exc:
+            # The child may have exited between poll and signal.
+            if proc.poll() is not None:
+                continue
+            try:
+                proc.terminate()
+            except OSError as proc_exc:
+                failures.append(
+                    f"{role} SIGTERM failed ({group_exc}); terminate failed ({proc_exc})"
+                )
+
+    deadline = time.monotonic() + timeout_s
+    for role, proc in reversed(owned):
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            proc.wait(timeout=remaining if remaining > 0 else 0.1)
+            continue
+        except subprocess.TimeoutExpired:
+            pass
+        except OSError as exc:
+            failures.append(f"{role} reap failed ({exc})")
+            if proc.poll() is not None:
+                continue
+
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError as group_exc:
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                except OSError as proc_exc:
+                    failures.append(
+                        f"{role} SIGKILL failed ({group_exc}); kill failed ({proc_exc})"
+                    )
+
+        try:
+            proc.wait(timeout=1.0)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            failures.append(f"{role} reap after SIGKILL failed ({exc})")
+
+    if restore_pidfile:
+        try:
+            if original_pidfile is None:
+                pid_path.unlink(missing_ok=True)
+            else:
+                pid_path.write_bytes(original_pidfile)
+        except OSError as exc:
+            failures.append(f"pidfile restore failed ({exc})")
+
+    return failures
+
+
 def spawn_mode_a_workers(
     *,
     session: str = "default",
@@ -313,48 +399,89 @@ def spawn_mode_a_workers(
     root: Path | None = None,
     log_dir: Path | None = None,
 ) -> list[subprocess.Popen[Any]]:
-    """Start ambient/watch children and record mode-a.pids (shared with handsfree launcher)."""
+    """Transactionally start workers and record their shared mode-a pidfile."""
     root = root or state_dir()
     log_dir = log_dir or root
     log_dir.mkdir(parents=True, exist_ok=True)
     base = _hark_argv()
-    children: list[subprocess.Popen[Any]] = []
-    pids: list[int] = []
+    pid_path = mode_a_pids_path(root)
+    try:
+        original_pidfile = pid_path.read_bytes() if pid_path.exists() else None
+    except OSError as exc:
+        raise WorkerSpawnError("pidfile", exc) from exc
 
-    if do_watch:
-        watch_log = open(log_dir / "watch.jsonl", "a", encoding="utf-8")  # noqa: SIM115
-        proc = subprocess.Popen(
-            [
-                *base,
+    owned: list[tuple[str, subprocess.Popen[Any]]] = []
+    failed_role = "watch"
+    pidfile_touched = False
+
+    def _spawn(role: str, argv: list[str], log_name: str) -> None:
+        nonlocal failed_role
+        failed_role = role
+        # Popen duplicates the descriptor into the child, so the supervisor's
+        # copy can and must close immediately after the spawn attempt.
+        with open(log_dir / log_name, "a", encoding="utf-8") as log:
+            proc = subprocess.Popen(
+                argv,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            # Retain ownership before even closing the parent log stream, since
+            # context-manager cleanup is itself allowed to fail.
+            owned.append((role, proc))
+        if not proc.pid:
+            raise OSError("worker started without a process ID")
+        if proc.poll() is not None:
+            raise OSError(f"worker exited immediately with status {proc.returncode}")
+
+    try:
+        if do_watch:
+            _spawn(
                 "watch",
-                "--session",
-                session,
-                "--for-monitor",
-                "--statuses",
-                "blocked,done",
-            ],
-            stdout=watch_log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        children.append(proc)
-        if proc.pid:
-            pids.append(proc.pid)
+                [
+                    *base,
+                    "watch",
+                    "--session",
+                    session,
+                    "--for-monitor",
+                    "--statuses",
+                    "blocked,done",
+                ],
+                "watch.jsonl",
+            )
 
-    if do_ambient:
-        ambient_log = open(log_dir / "ambient.jsonl", "a", encoding="utf-8")  # noqa: SIM115
-        proc = subprocess.Popen(
-            [*base, "ambient"],
-            stdout=ambient_log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        children.append(proc)
-        if proc.pid:
-            pids.append(proc.pid)
+        if do_ambient:
+            _spawn("ambient", [*base, "ambient"], "ambient.jsonl")
 
-    write_pid_file(mode_a_pids_path(root), pids)
-    return children
+        # A previously started role can exit while a later Popen is in flight.
+        for role, proc in owned:
+            if proc.poll() is not None:
+                failed_role = role
+                raise OSError(f"worker exited immediately with status {proc.returncode}")
+
+        failed_role = "pidfile"
+        pidfile_touched = True
+        expected_pids = [proc.pid for _, proc in owned]
+        write_pid_file(pid_path, expected_pids)
+
+        recorded_pids = set(read_pids_file(pid_path))
+        for role, proc in owned:
+            if proc.pid not in recorded_pids:
+                failed_role = role
+                raise OSError(f"worker PID {proc.pid} was not recorded")
+            if proc.poll() is not None:
+                failed_role = role
+                raise OSError(f"worker exited immediately with status {proc.returncode}")
+    except Exception as exc:
+        rollback_failures = _rollback_worker_start(
+            owned,
+            pid_path=pid_path,
+            original_pidfile=original_pidfile,
+            restore_pidfile=pidfile_touched,
+        )
+        raise WorkerSpawnError(failed_role, exc, rollback_failures) from exc
+
+    return [proc for _, proc in owned]
 
 
 def terminate_children(

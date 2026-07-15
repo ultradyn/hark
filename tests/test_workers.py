@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 import hark.workers as workers
-from hark.exitcodes import ERROR, OK, USAGE
+from hark.exitcodes import OK, USAGE
 
 
 @pytest.fixture
@@ -100,6 +100,29 @@ def test_start_clears_stale_harkd_pid(state: Path, monkeypatch: pytest.MonkeyPat
     assert not result.get("already_running")
     assert spawned
     assert not (state / "harkd.pid").exists()
+
+
+def test_start_reports_transactional_spawn_failure(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import hark.daemon as daemon
+
+    error = daemon.WorkerSpawnError(
+        "ambient",
+        OSError("fork refused"),
+        ["watch SIGTERM failed (denied); terminate failed (denied)"],
+    )
+
+    def fail_spawn(**_kwargs):
+        raise error
+
+    monkeypatch.setattr(workers, "spawn_mode_a_workers", fail_spawn)
+
+    result = workers.start_workers(state, settle_s=0)
+    assert result["ok"] is False
+    assert result["pids"] == []
+    assert "ambient startup failed" in result["error"]
+    assert "rollback failures" in result["error"]
 
 
 def test_stop_signals_live_child(state: Path):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
 import time
 from pathlib import Path
 
@@ -13,10 +14,233 @@ import hark.daemon as daemon
 from hark.exitcodes import ERROR, OK
 
 
+class FakeWorker:
+    def __init__(self, pid: int, *, returncode: int | None = None) -> None:
+        self.pid = pid
+        self.returncode = returncode
+        self.wait_calls = 0
+        self.terminate_error: OSError | None = None
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.wait_calls += 1
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired(str(self.pid), timeout)
+        return self.returncode
+
+    def terminate(self) -> None:
+        if self.terminate_error is not None:
+            raise self.terminate_error
+        self.returncode = -signal.SIGTERM
+
+    def kill(self) -> None:
+        self.returncode = -signal.SIGKILL
+
+
 @pytest.fixture
 def state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(daemon, "state_dir", lambda: tmp_path)
     return tmp_path
+
+
+def test_spawn_workers_reports_first_role_failure_and_closes_log(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    streams = []
+
+    def fail_first(*_args, **kwargs):
+        streams.append(kwargs["stdout"])
+        raise OSError("fork refused")
+
+    monkeypatch.setattr(daemon.subprocess, "Popen", fail_first)
+
+    with pytest.raises(daemon.WorkerSpawnError, match="watch startup failed.*fork refused"):
+        daemon.spawn_mode_a_workers(root=state)
+
+    assert len(streams) == 1
+    assert streams[0].closed
+    assert not (state / "mode-a.pids").exists()
+
+
+def test_spawn_workers_rolls_back_first_child_when_second_role_fails(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    watch = FakeWorker(101)
+    streams = []
+    calls = 0
+
+    def fail_second(*_args, **kwargs):
+        nonlocal calls
+        streams.append(kwargs["stdout"])
+        calls += 1
+        if calls == 1:
+            return watch
+        raise OSError("ambient fork refused")
+
+    def killpg(pid: int, sig: int) -> None:
+        assert (pid, sig) == (watch.pid, signal.SIGTERM)
+        watch.returncode = -sig
+
+    monkeypatch.setattr(daemon.subprocess, "Popen", fail_second)
+    monkeypatch.setattr(daemon.os, "killpg", killpg)
+
+    with pytest.raises(
+        daemon.WorkerSpawnError, match="ambient startup failed.*ambient fork refused"
+    ):
+        daemon.spawn_mode_a_workers(root=state)
+
+    assert watch.returncode == -signal.SIGTERM
+    assert watch.wait_calls == 1
+    assert len(streams) == 2
+    assert all(stream.closed for stream in streams)
+    assert not (state / "mode-a.pids").exists()
+
+
+def test_spawn_workers_reports_rollback_signal_failure(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    watch = FakeWorker(101)
+    watch.terminate_error = OSError("terminate refused")
+    calls = 0
+
+    def fail_second(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return watch
+        raise OSError("ambient fork refused")
+
+    def killpg(_pid: int, sig: int) -> None:
+        if sig == signal.SIGTERM:
+            raise PermissionError("group signal refused")
+        watch.returncode = -sig
+
+    monkeypatch.setattr(daemon.subprocess, "Popen", fail_second)
+    monkeypatch.setattr(daemon.os, "killpg", killpg)
+
+    with pytest.raises(daemon.WorkerSpawnError) as caught:
+        daemon.spawn_mode_a_workers(root=state)
+
+    message = str(caught.value)
+    assert "ambient startup failed" in message
+    assert "rollback failures" in message
+    assert "watch SIGTERM failed" in message
+    assert "terminate refused" in message
+    assert watch.returncode == -signal.SIGKILL
+    assert watch.wait_calls == 2
+
+
+def test_spawn_workers_rolls_back_and_reports_early_child_exit(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    watch = FakeWorker(101, returncode=7)
+    calls = 0
+
+    def exited_first(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return watch
+
+    monkeypatch.setattr(daemon.subprocess, "Popen", exited_first)
+
+    with pytest.raises(
+        daemon.WorkerSpawnError, match="watch startup failed.*exited immediately.*7"
+    ):
+        daemon.spawn_mode_a_workers(root=state)
+
+    assert calls == 1
+    assert watch.wait_calls == 1
+    assert not (state / "mode-a.pids").exists()
+
+
+def test_spawn_workers_restores_pidfile_when_write_fails(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    pidfile = state / "mode-a.pids"
+    pidfile.write_bytes(b"777\n")
+    signalled: list[int] = []
+    all_workers = [FakeWorker(101), FakeWorker(102)]
+    workers = list(all_workers)
+
+    def spawn(*_args, **_kwargs):
+        return workers.pop(0)
+
+    def fail_write(path: Path, _pids) -> None:
+        path.write_bytes(b"partial")
+        raise OSError("disk full")
+
+    def killpg(pid: int, sig: int) -> None:
+        signalled.append(pid)
+        proc = next(proc for proc in all_workers if proc.pid == pid)
+        proc.returncode = -sig
+
+    monkeypatch.setattr(daemon.subprocess, "Popen", spawn)
+    monkeypatch.setattr(daemon, "write_pid_file", fail_write)
+    monkeypatch.setattr(daemon.os, "killpg", killpg)
+
+    with pytest.raises(daemon.WorkerSpawnError, match="pidfile startup failed.*disk full"):
+        daemon.spawn_mode_a_workers(root=state)
+
+    assert pidfile.read_bytes() == b"777\n"
+    assert set(signalled) == {101, 102}
+    assert 777 not in signalled
+    assert all(proc.wait_calls == 1 for proc in all_workers)
+
+
+def test_spawn_workers_successfully_starts_both_roles_and_closes_logs(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    fake_workers = [FakeWorker(101), FakeWorker(102)]
+    spawned: list[list[str]] = []
+    streams = []
+
+    def spawn(argv, **kwargs):
+        spawned.append(argv)
+        streams.append(kwargs["stdout"])
+        return fake_workers[len(spawned) - 1]
+
+    monkeypatch.setattr(daemon.subprocess, "Popen", spawn)
+    monkeypatch.setattr(daemon, "pid_alive", lambda pid: pid in {101, 102})
+
+    children = daemon.spawn_mode_a_workers(root=state, session="lab")
+
+    assert children == fake_workers
+    assert spawned[0][-6:] == [
+        "watch",
+        "--session",
+        "lab",
+        "--for-monitor",
+        "--statuses",
+        "blocked,done",
+    ]
+    assert spawned[1][-1] == "ambient"
+    assert (state / "mode-a.pids").read_text(encoding="utf-8") == "101\n102\n"
+    assert all(stream.closed for stream in streams)
+
+
+def test_run_foreground_reports_transactional_worker_failure(
+    state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    error = daemon.WorkerSpawnError(
+        "ambient",
+        OSError("fork refused"),
+        ["watch SIGTERM failed (denied); terminate failed (denied)"],
+    )
+
+    def fail_spawn(**_kwargs):
+        raise error
+
+    monkeypatch.setattr(daemon, "spawn_mode_a_workers", fail_spawn)
+
+    assert daemon.run_foreground(root=state, workers=True) == ERROR
+    stderr = capsys.readouterr().err
+    assert "ambient startup failed" in stderr
+    assert "rollback failures" in stderr
+    assert not (state / "harkd.pid").exists()
 
 
 def test_pid_alive_self():

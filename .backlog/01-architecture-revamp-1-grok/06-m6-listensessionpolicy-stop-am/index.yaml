@@ -18,7 +18,7 @@ epics:
       locked: false
       name: 'E2: Implement ListenSessionPolicy type + builders'
       path: 02-e2-implement-listensessionpoli
-      status: pending
+      status: done
     - complexity: high
       depends_on: []
       description: run_listen, run_tts streaming quiet, partial HOLD, stop-cue suppression take policy object. ambient builds post-wake policy; CLI builds bound-answer policy.

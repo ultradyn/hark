@@ -29,7 +29,7 @@ tasks:
       file: T002-move-edgetracker-process-false.todo
       id: T002
       priority: high
-      status: in_progress
+      status: done
       tags: []
       title: Move EdgeTracker process/false-done/busy into module
     - complexity: low

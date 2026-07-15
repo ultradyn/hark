@@ -1,0 +1,33 @@
+complexity: medium
+depends_on: []
+estimate_hours: 2
+id: P1.M2.E1
+locked: false
+name: 'E1: Plan Bound Answerability deepen'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 2
+    total: 2
+status: pending
+tasks:
+    - complexity: medium
+      depends_on: []
+      estimate_hours: 1
+      file: T001-specify-answerable-status-matr.todo
+      id: T001
+      priority: critical
+      status: pending
+      tags: []
+      title: Specify answerable status matrix (blocked, needs_input, …)
+    - complexity: low
+      depends_on:
+        - P1.M2.E1.T001
+      estimate_hours: 1
+      file: T002-design-note-acceptance-for-ans.todo
+      id: T002
+      priority: high
+      status: pending
+      tags: []
+      title: Design note + acceptance for Answerability seam

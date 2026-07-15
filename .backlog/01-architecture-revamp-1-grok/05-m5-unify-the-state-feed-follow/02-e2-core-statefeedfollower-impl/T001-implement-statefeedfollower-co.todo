@@ -1,0 +1,25 @@
+---
+completed_at: null
+complexity: high
+created_at: "2026-07-15T04:30:08Z"
+depends_on:
+    - P1.M5.E1.T002
+estimate_hours: 4
+id: P1.M5.E2.T001
+priority: high
+started_at: null
+status: pending
+tags: []
+title: Implement StateFeedFollower core (buffer, rotate, multi-path)
+updated_at: "2026-07-15T04:30:08Z"
+---
+# Implement StateFeedFollower core (buffer, rotate, multi-path)
+
+## Requirements
+
+- Implement core: partial buffer, inode/rotation, multi-path
+
+## Acceptance Criteria
+
+- Hardened beyond current monitor_feed alone
+

@@ -1,0 +1,44 @@
+complexity: high
+depends_on: []
+estimate_hours: 8
+id: P1.M1.E3
+locked: false
+name: 'E3: Extract silence Answer Window session'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 3
+    total: 3
+status: pending
+tasks:
+    - complexity: high
+      depends_on:
+        - P1.M1.E1.T003
+      estimate_hours: 2
+      file: T001-define-silencesession-endpoint.todo
+      id: T001
+      priority: high
+      status: pending
+      tags: []
+      title: Define SilenceSession + endpoint strategy injection
+    - complexity: high
+      depends_on:
+        - P1.M1.E3.T001
+      estimate_hours: 3
+      file: T002-move-empty-stt-and-no-open-rec.todo
+      id: T002
+      priority: high
+      status: pending
+      tags: []
+      title: Move empty-STT and no-open recovery into SilenceSession
+    - complexity: medium
+      depends_on:
+        - P1.M1.E3.T001
+      estimate_hours: 2
+      file: T003-echo-reject-last-tts-ownership.todo
+      id: T003
+      priority: medium
+      status: pending
+      tags: []
+      title: Echo reject + last_tts ownership in session

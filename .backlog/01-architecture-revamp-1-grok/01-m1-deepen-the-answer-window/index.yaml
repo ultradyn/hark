@@ -1,0 +1,59 @@
+complexity: high
+depends_on: []
+epics:
+    - complexity: medium
+      depends_on: []
+      description: 'Grill/design the deep Answer Window module: interface shape, what stays pure (listen_end), what becomes internal (partial strings, listen_control IPC), profiles (bound-answer / post-wake / confirm), acceptance criteria, CONTEXT.md terms, residual risks. Update remaining epics/tasks if design diverges. Output: short design note under docs/plans/ or append to milestone.'
+      estimate_hours: 4
+      id: E1
+      locked: false
+      name: 'E1: Plan Answer Window deepen'
+      path: 01-e1-plan-answer-window-deepen
+      status: pending
+    - complexity: high
+      depends_on: []
+      description: 'Pull radio half of run_listen into a deep session module: segment capture, pad/overlap, STT join, partial emit, end evaluation (delegate listen_end), agent control poll, idle/max_listen exits. Keep pure helpers; collapse shallow partial instruction builders as internals.'
+      estimate_hours: 10
+      id: E2
+      locked: false
+      name: 'E2: Extract radio Answer Window session'
+      path: 02-e2-extract-radio-answer-window
+      status: pending
+    - complexity: high
+      depends_on: []
+      description: 'Pull silence path: energy gate / endpoint strategy, empty-STT recovery, no-open recovery, echo reject, agent finish/cancel. Same external interface as radio profile.'
+      estimate_hours: 8
+      id: E3
+      locked: false
+      name: 'E3: Extract silence Answer Window session'
+      path: 03-e3-extract-silence-answer-wind
+      status: pending
+    - complexity: medium
+      depends_on: []
+      description: run_listen / ambient complete_after_wake / CLI become thin adapters over Answer Window. Delete kwargs soup from call sites. Preserve Mode A CLI exit codes and HEP partial shapes.
+      estimate_hours: 6
+      id: E4
+      locked: false
+      name: 'E4: Thin facades + caller migration'
+      path: 04-e4-thin-facades-caller-migrati
+      status: pending
+    - complexity: medium
+      depends_on: []
+      description: Re-home tests onto the deep interface; keep radio/soft-end/endpointing coverage green. Document module in ARCHITECTURE.md; note locality/leverage. No behavior regressions vs ADR-014/014b.
+      estimate_hours: 4
+      id: E5
+      locked: false
+      name: 'E5: Tests + docs for Answer Window'
+      path: 05-e5-tests-docs-for-answer-windo
+      status: pending
+estimate_hours: 32
+id: P1.M1
+locked: false
+name: 'M1: Deepen the Answer Window'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 16
+    total_tasks: 16
+status: pending

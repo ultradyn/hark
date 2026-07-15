@@ -1,0 +1,50 @@
+complexity: medium
+depends_on: []
+epics:
+    - complexity: low
+      depends_on: []
+      description: 'Profiles: bound-answer, post-wake ambient, confirm. Fields: end_mode, streaming, idle_end, arm_cue, gate thresholds, partial_kind. docs/plans/P1-M6-listen-session-policy.md. Natural first slice before/with M1.'
+      estimate_hours: 1
+      id: E1
+      locked: false
+      name: 'E1: Plan ListenSessionPolicy'
+      path: 01-e1-plan-listensessionpolicy
+      status: pending
+    - complexity: medium
+      depends_on: []
+      description: from_config(cfg, profile=...) and explicit construction for tests. No ambient section reads inside speech after migration.
+      estimate_hours: 4
+      id: E2
+      locked: false
+      name: 'E2: Implement ListenSessionPolicy type + builders'
+      path: 02-e2-implement-listensessionpoli
+      status: pending
+    - complexity: high
+      depends_on: []
+      description: run_listen, run_tts streaming quiet, partial HOLD, stop-cue suppression take policy object. ambient builds post-wake policy; CLI builds bound-answer policy.
+      estimate_hours: 4
+      id: E3
+      locked: false
+      name: 'E3: Migrate speech/ambient/TTS quiet-gate to policy'
+      path: 03-e3-migrate-speech-ambient-tts
+      status: pending
+    - complexity: medium
+      depends_on: []
+      description: Prove bound hark listen --end-mode radio does not inherit ambient.streaming side effects unless policy says so.
+      estimate_hours: 2
+      id: E4
+      locked: false
+      name: 'E4: Tests that bound listen ignores ambient TOML streaming'
+      path: 04-e4-tests-that-bound-listen-ign
+      status: pending
+estimate_hours: 12
+id: P1.M6
+locked: false
+name: 'M6: ListenSessionPolicy (stop ambient leaking into listen)'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 7
+    total_tasks: 7
+status: pending

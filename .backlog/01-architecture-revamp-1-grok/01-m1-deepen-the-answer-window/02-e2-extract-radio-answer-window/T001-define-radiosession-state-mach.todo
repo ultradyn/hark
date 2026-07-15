@@ -1,0 +1,28 @@
+---
+completed_at: null
+complexity: high
+created_at: "2026-07-15T04:29:39Z"
+depends_on:
+    - P1.M1.E1.T003
+estimate_hours: 3
+id: P1.M1.E2.T001
+priority: high
+started_at: null
+status: pending
+tags: []
+title: Define RadioSession state machine + types
+updated_at: "2026-07-15T04:29:39Z"
+---
+# Define RadioSession state machine + types
+
+## Requirements
+
+- Define RadioSession/AnswerWindow radio profile states and types
+- Cover segment boundary, agent finish/cancel, soft/product end, idle, max_listen
+- No STT provider details on the interface
+
+## Acceptance Criteria
+
+- State machine documented and typed
+- Unit-testable without audio hardware
+

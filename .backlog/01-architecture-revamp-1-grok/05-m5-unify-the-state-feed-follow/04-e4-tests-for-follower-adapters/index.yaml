@@ -1,0 +1,35 @@
+complexity: medium
+depends_on: []
+estimate_hours: 3
+id: P1.M5.E4
+locked: false
+name: 'E4: Tests for follower + adapters'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 2
+    total: 2
+status: pending
+tasks:
+    - complexity: medium
+      depends_on:
+        - P1.M5.E3.T003
+        - P1.M5.E3.T002
+      estimate_hours: 2
+      file: T001-port-monitor-tailer-tests-to-s.todo
+      id: T001
+      priority: high
+      status: pending
+      tags: []
+      title: Port monitor + tailer tests to shared core
+    - complexity: low
+      depends_on:
+        - P1.M5.E4.T001
+      estimate_hours: 1
+      file: T002-docs-feed-topology-in-architec.todo
+      id: T002
+      priority: low
+      status: pending
+      tags: []
+      title: 'Docs: feed topology in ARCHITECTURE.md'

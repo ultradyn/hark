@@ -1,0 +1,24 @@
+---
+complexity: medium
+created_at: "2026-07-15T04:29:54Z"
+depends_on: []
+estimate_hours: 1
+id: P1.M3.E1.T001
+priority: high
+status: pending
+tags:
+    - idea
+    - planning
+title: Define classify interface + state types
+updated_at: "2026-07-15T04:29:54Z"
+---
+# Define classify interface + state types
+
+## Requirements
+
+- Define classify(agent, pane_text, prev) → HEP facts + state
+
+## Acceptance Criteria
+
+- Interface documented
+

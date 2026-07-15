@@ -1,0 +1,34 @@
+complexity: medium
+depends_on: []
+estimate_hours: 4
+id: P1.M3.E3
+locked: false
+name: 'E3: Thin watch I/O over Pane Understanding'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 2
+    total: 2
+status: pending
+tasks:
+    - complexity: medium
+      depends_on:
+        - P1.M3.E2.T003
+      estimate_hours: 3
+      file: T001-refactor-watch-to-call-pane-un.todo
+      id: T001
+      priority: high
+      status: pending
+      tags: []
+      title: Refactor watch to call Pane Understanding only
+    - complexity: low
+      depends_on:
+        - P1.M3.E3.T001
+      estimate_hours: 1
+      file: T002-lifecycle-invalidation-stays-i.todo
+      id: T002
+      priority: medium
+      status: pending
+      tags: []
+      title: Lifecycle invalidation stays in watch (or document split)

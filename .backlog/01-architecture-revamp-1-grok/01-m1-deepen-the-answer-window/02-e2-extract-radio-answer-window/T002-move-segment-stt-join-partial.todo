@@ -1,0 +1,26 @@
+---
+completed_at: null
+complexity: high
+created_at: "2026-07-15T04:29:39Z"
+depends_on:
+    - P1.M1.E2.T001
+estimate_hours: 3
+id: P1.M1.E2.T002
+priority: high
+started_at: null
+status: pending
+tags: []
+title: Move segment STT join + partial emit into RadioSession
+updated_at: "2026-07-15T04:29:39Z"
+---
+# Move segment STT join + partial emit into RadioSession
+
+## Requirements
+
+- Move per-segment STT, join_radio_stt_segments, on_partial into radio session
+- Preserve partial HEP shapes
+
+## Acceptance Criteria
+
+- Existing radio partial tests can target the session
+

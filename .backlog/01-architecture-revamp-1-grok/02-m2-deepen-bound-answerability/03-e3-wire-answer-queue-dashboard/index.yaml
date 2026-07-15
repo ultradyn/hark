@@ -1,0 +1,34 @@
+complexity: high
+depends_on: []
+estimate_hours: 4
+id: P1.M2.E3
+locked: false
+name: 'E3: Wire answer, queue, dashboard through Answerability'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 2
+    total: 2
+status: pending
+tasks:
+    - complexity: high
+      depends_on:
+        - P1.M2.E2.T002
+      estimate_hours: 2
+      file: T001-migrate-answer-bound-event-to.todo
+      id: T001
+      priority: critical
+      status: pending
+      tags: []
+      title: Migrate answer_bound_event to Answerability
+    - complexity: medium
+      depends_on:
+        - P1.M2.E3.T001
+      estimate_hours: 2
+      file: T002-migrate-cmd-queue-live-filter.todo
+      id: T002
+      priority: high
+      status: pending
+      tags: []
+      title: Migrate cmd_queue live filter + dashboard /answer

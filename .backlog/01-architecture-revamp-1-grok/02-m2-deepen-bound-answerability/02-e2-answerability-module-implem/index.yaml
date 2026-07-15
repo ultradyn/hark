@@ -1,0 +1,34 @@
+complexity: high
+depends_on: []
+estimate_hours: 6
+id: P1.M2.E2
+locked: false
+name: 'E2: Answerability module implementation'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 2
+    total: 2
+status: pending
+tasks:
+    - complexity: high
+      depends_on:
+        - P1.M2.E1.T002
+      estimate_hours: 3
+      file: T001-implement-answerability-pure-c.todo
+      id: T001
+      priority: critical
+      status: pending
+      tags: []
+      title: Implement Answerability pure core + reasons
+    - complexity: medium
+      depends_on:
+        - P1.M2.E2.T001
+      estimate_hours: 2
+      file: T002-pane-re-read-helpers-for-live.todo
+      id: T002
+      priority: high
+      status: pending
+      tags: []
+      title: Pane re-read helpers for live FP + status

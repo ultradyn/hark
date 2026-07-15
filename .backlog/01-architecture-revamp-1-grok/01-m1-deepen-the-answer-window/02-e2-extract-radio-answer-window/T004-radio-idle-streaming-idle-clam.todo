@@ -1,0 +1,28 @@
+---
+completed_at: null
+complexity: medium
+created_at: "2026-07-15T04:29:39Z"
+depends_on:
+    - P1.M1.E2.T001
+    - P1.M6.E2.T002
+estimate_hours: 2
+id: P1.M1.E2.T004
+priority: high
+started_at: null
+status: pending
+tags: []
+title: Radio idle / streaming idle clamp as policy fields
+updated_at: "2026-07-15T04:29:39Z"
+---
+# Radio idle / streaming idle clamp as policy fields
+
+## Requirements
+
+- Radio idle / streaming idle clamp come from policy fields
+- No getattr(cfg.ambient, streaming) inside session loop
+- Depends on M6 policy types
+
+## Acceptance Criteria
+
+- Bound vs post-wake profiles differ on streaming without TOML ambient leak
+

@@ -1,0 +1,25 @@
+---
+completed_at: null
+complexity: medium
+created_at: "2026-07-15T04:29:39Z"
+depends_on:
+    - P1.M1.E4.T001
+estimate_hours: 2
+id: P1.M1.E4.T002
+priority: high
+started_at: null
+status: pending
+tags: []
+title: Migrate ambient complete_after_wake + CLI cmd_listen
+updated_at: "2026-07-15T04:29:39Z"
+---
+# Migrate ambient complete_after_wake + CLI cmd_listen
+
+## Requirements
+
+- Migrate ambient.complete_after_wake and CLI cmd_listen/ask to profiles
+
+## Acceptance Criteria
+
+- No gate kwargs at call sites
+

@@ -1,0 +1,34 @@
+complexity: high
+depends_on: []
+estimate_hours: 6
+id: P1.M5.E2
+locked: false
+name: 'E2: Core StateFeedFollower implementation'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 2
+    total: 2
+status: pending
+tasks:
+    - complexity: high
+      depends_on:
+        - P1.M5.E1.T002
+      estimate_hours: 4
+      file: T001-implement-statefeedfollower-co.todo
+      id: T001
+      priority: high
+      status: pending
+      tags: []
+      title: Implement StateFeedFollower core (buffer, rotate, multi-path)
+    - complexity: medium
+      depends_on:
+        - P1.M5.E2.T001
+      estimate_hours: 2
+      file: T002-cursor-token-format-for-multi.todo
+      id: T002
+      priority: medium
+      status: pending
+      tags: []
+      title: Cursor token format for multi-source resume

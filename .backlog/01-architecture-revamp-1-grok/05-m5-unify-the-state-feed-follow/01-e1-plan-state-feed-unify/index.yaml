@@ -1,0 +1,32 @@
+complexity: medium
+depends_on: []
+estimate_hours: 2
+id: P1.M5.E1
+locked: false
+name: 'E1: Plan State Feed unify'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 2
+    total: 2
+status: pending
+tasks:
+    - complexity: medium
+      depends_on: []
+      estimate_hours: 1
+      file: T001-specify-follower-interface-ada.todo
+      id: T001
+      priority: high
+      status: pending
+      title: Specify follower interface + adapter responsibilities
+    - complexity: medium
+      depends_on:
+        - P1.M5.E1.T001
+      estimate_hours: 1
+      file: T002-decide-single-compact-timing-w.todo
+      id: T002
+      priority: high
+      status: pending
+      tags: []
+      title: Decide single compact timing (write vs read)

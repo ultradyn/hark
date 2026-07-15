@@ -1,0 +1,43 @@
+complexity: medium
+depends_on: []
+estimate_hours: 4
+id: P1.M1.E1
+locked: false
+name: 'E1: Plan Answer Window deepen'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 3
+    total: 3
+status: pending
+tasks:
+    - complexity: medium
+      depends_on: []
+      estimate_hours: 2
+      file: T001-grill-interface-answer-window.todo
+      id: T001
+      priority: high
+      status: pending
+      tags: []
+      title: 'Grill interface: Answer Window open(policy)→result'
+    - complexity: low
+      depends_on:
+        - P1.M1.E1.T001
+      estimate_hours: 1
+      file: T002-update-context-md-domain-terms.todo
+      id: T002
+      priority: medium
+      status: pending
+      tags: []
+      title: Update CONTEXT.md / domain terms if missing
+    - complexity: low
+      depends_on:
+        - P1.M1.E1.T001
+      estimate_hours: 1
+      file: T003-lock-acceptance-criteria-non-g.todo
+      id: T003
+      priority: high
+      status: pending
+      tags: []
+      title: Lock acceptance criteria + non-goals

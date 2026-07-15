@@ -1,0 +1,25 @@
+---
+completed_at: null
+complexity: medium
+created_at: "2026-07-15T04:29:53Z"
+depends_on:
+    - P1.M2.E3.T001
+estimate_hours: 2
+id: P1.M2.E3.T002
+priority: high
+started_at: null
+status: pending
+tags: []
+title: Migrate cmd_queue live filter + dashboard /answer
+updated_at: "2026-07-15T04:29:53Z"
+---
+# Migrate cmd_queue live filter + dashboard /answer
+
+## Requirements
+
+- Migrate cmd_queue and dashboard /answer to same module
+
+## Acceptance Criteria
+
+- No duplicated status==blocked checks remain
+

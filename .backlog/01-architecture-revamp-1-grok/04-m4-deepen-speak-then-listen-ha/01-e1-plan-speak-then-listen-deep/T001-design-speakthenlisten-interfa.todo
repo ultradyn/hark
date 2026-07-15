@@ -1,0 +1,24 @@
+---
+complexity: medium
+created_at: "2026-07-15T04:30:08Z"
+depends_on: []
+estimate_hours: 1
+id: P1.M4.E1.T001
+priority: high
+status: pending
+tags:
+    - idea
+    - planning
+title: Design SpeakThenListen interface + half-duplex states
+updated_at: "2026-07-15T04:30:08Z"
+---
+# Design SpeakThenListen interface + half-duplex states
+
+## Requirements
+
+- Design SpeakThenListen states: speaking, armed, listening, confirming
+
+## Acceptance Criteria
+
+- Error modes and tts_info attachment specified
+

@@ -1,0 +1,69 @@
+complexity: medium
+depends_on: []
+estimate_hours: 120
+id: P1
+locked: false
+milestones:
+    - complexity: high
+      depends_on: []
+      description: 'Candidate 1 (Strong). Collapse run_listen + radio-end shards into one deep Answer Window module. Files: speech.py, listen_end.py, listen_control.py, partial.py, endpointing.py, audio/capture.py, ambient.py. Problem: run_listen interface nearly matches every internal knob; radio-end policy sharded across 5 modules. Solution: small external interface (profile + overrides); radio/silence state machines, control IPC, partial HEP as implementation. ADRs 008/009/014/014b.'
+      estimate_hours: 32
+      id: M1
+      locked: false
+      name: 'M1: Deepen the Answer Window'
+      path: 01-m1-deepen-the-answer-window
+      status: pending
+    - complexity: high
+      depends_on: []
+      description: 'Candidate 2 (Strong). Product hole: false-done menus surface as agent.needs_input and register for bound delivery, then hark answer rejects not_blocked. One deep Answerability module: fingerprint, revision, pane liveness, status compatibility (blocked OR still-needs-input) shared by answer, queue, dashboard. Files: answering.py, delivery.py, watch.py, events.py, cli.py, fingerprint.py. Aligns ADR-002/007; SAFETY.md says compatible state.'
+      estimate_hours: 16
+      id: M2
+      locked: false
+      name: 'M2: Deepen Bound Answerability'
+      path: 02-m2-deepen-bound-answerability
+      status: pending
+    - complexity: medium
+      depends_on: []
+      description: Candidate 3 (Worth exploring). Understanding is this agent really done? requires bouncing pure heuristics in events.py and stateful EdgeTracker in watch.py. Extract deep Pane Understanding module at seam between Herdr agent snapshots and HEP kinds; leave socket/poll I/O thin.
+      estimate_hours: 20
+      id: M3
+      locked: false
+      name: 'M3: Deepen Pane Understanding'
+      path: 03-m3-deepen-pane-understanding
+      status: pending
+    - complexity: medium
+      depends_on: []
+      description: 'Candidate 4 (Worth exploring). Half-duplex handoff (ADR-009) lives as nested thread state in speech.py; mute/duck/conference are separate call sites. One SpeakThenListen module owns TTS→listen transitions, arm cues, echo last_tts, confirm turns. Files: speech.py speak_and_listen/run_tts/run_ask, mic_coord.py, audio/mic_mute.py, audio/media.py, conference.py. Prefer after M1.'
+      estimate_hours: 20
+      id: M4
+      locked: false
+      name: 'M4: Deepen Speak-then-Listen Handoff'
+      path: 04-m4-deepen-speak-then-listen-ha
+      status: pending
+    - complexity: medium
+      depends_on: []
+      description: Candidate 5 (Worth exploring). Two JSONL followers (monitor_feed.follow_state_files vs dashboard MultiTailer) and dual compaction (monitor_profile at watch write, compact_mode_a_event at monitor read). One deep StateFeedFollower; monitor and dashboard are thin adapters. Single HEP presentation profile.
+      estimate_hours: 16
+      id: M5
+      locked: false
+      name: 'M5: Unify the State Feed Follower'
+      path: 05-m5-unify-the-state-feed-follow
+      status: pending
+    - complexity: medium
+      depends_on: []
+      description: Candidate 6 (Worth exploring). Bound listen and ambient post-wake share one path, but streaming policy hangs off [ambient] and leaks into core listen/TTS via getattr(cfg.ambient, streaming). Explicit ListenSessionPolicy.from_config(cfg, profile=...) built at the seam; speech never reads ambient section. Natural first slice of M1.
+      estimate_hours: 12
+      id: M6
+      locked: false
+      name: 'M6: ListenSessionPolicy (stop ambient leaking into listen)'
+      path: 06-m6-listensessionpolicy-stop-am
+      status: pending
+name: Architecture revamp 1 (Grok)
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 58
+    total_tasks: 58
+status: pending
+weeks: 8

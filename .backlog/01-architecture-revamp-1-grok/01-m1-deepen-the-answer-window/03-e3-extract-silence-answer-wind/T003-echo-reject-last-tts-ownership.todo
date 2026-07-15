@@ -1,0 +1,25 @@
+---
+completed_at: null
+complexity: medium
+created_at: "2026-07-15T04:29:39Z"
+depends_on:
+    - P1.M1.E3.T001
+estimate_hours: 2
+id: P1.M1.E3.T003
+priority: medium
+started_at: null
+status: pending
+tags: []
+title: Echo reject + last_tts ownership in session
+updated_at: "2026-07-15T04:29:39Z"
+---
+# Echo reject + last_tts ownership in session
+
+## Requirements
+
+- Echo reject uses last_tts owned by session inputs
+
+## Acceptance Criteria
+
+- Echo overlap tests preserved
+

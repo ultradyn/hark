@@ -1,0 +1,50 @@
+complexity: high
+depends_on: []
+epics:
+    - complexity: medium
+      depends_on: []
+      description: 'Define answerable states (blocked vs needs_input vs idle+menu), revalidation matrix, queue/dashboard parity, SAFETY.md wording. Design note: docs/plans/P1-M2-answerability.md. Confirm no ADR contradiction.'
+      estimate_hours: 2
+      id: E1
+      locked: false
+      name: 'E1: Plan Bound Answerability deepen'
+      path: 01-e1-plan-bound-answerability-de
+      status: pending
+    - complexity: high
+      depends_on: []
+      description: 'Single deep module: is_answerable(bound, live_agent, live_fp) → allow|refuse+reason. Covers fingerprint, revision, pane liveness, status compatibility including false-done/needs_input.'
+      estimate_hours: 6
+      id: E2
+      locked: false
+      name: 'E2: Answerability module implementation'
+      path: 02-e2-answerability-module-implem
+      status: pending
+    - complexity: high
+      depends_on: []
+      description: answering.answer_bound_event, cli._queue_live_answerable, dashboard answer path all call the same module. Delete duplicated status==blocked checks.
+      estimate_hours: 4
+      id: E3
+      locked: false
+      name: 'E3: Wire answer, queue, dashboard through Answerability'
+      path: 03-e3-wire-answer-queue-dashboard
+      status: pending
+    - complexity: medium
+      depends_on: []
+      description: 'Fixtures: needs_input registered → answer succeeds when pane still has menu; reject on true idle/completed; queue lists correctly. Update SAFETY.md compatible state.'
+      estimate_hours: 3
+      id: E4
+      locked: false
+      name: 'E4: Tests + SAFETY/docs for false-done delivery'
+      path: 04-e4-tests-safety-docs-for-false
+      status: pending
+estimate_hours: 16
+id: P1.M2
+locked: false
+name: 'M2: Deepen Bound Answerability'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 8
+    total_tasks: 8
+status: pending

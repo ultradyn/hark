@@ -1,0 +1,25 @@
+---
+completed_at: null
+complexity: low
+created_at: "2026-07-15T04:30:08Z"
+depends_on:
+    - P1.M4.E4.T001
+estimate_hours: 1
+id: P1.M4.E4.T002
+priority: low
+started_at: null
+status: pending
+tags: []
+title: 'Docs: half-duplex module locality'
+updated_at: "2026-07-15T04:30:08Z"
+---
+# Docs: half-duplex module locality
+
+## Requirements
+
+- Docs: half-duplex module locality
+
+## Acceptance Criteria
+
+- ARCHITECTURE updated
+

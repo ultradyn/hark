@@ -1,0 +1,25 @@
+---
+completed_at: null
+complexity: medium
+created_at: "2026-07-15T04:29:53Z"
+depends_on:
+    - P1.M2.E2.T001
+estimate_hours: 2
+id: P1.M2.E2.T002
+priority: high
+started_at: null
+status: pending
+tags: []
+title: Pane re-read helpers for live FP + status
+updated_at: "2026-07-15T04:29:53Z"
+---
+# Pane re-read helpers for live FP + status
+
+## Requirements
+
+- Live FP + status re-read helpers via injectable client_for
+
+## Acceptance Criteria
+
+- No hard Herdr coupling in pure core
+

@@ -1,0 +1,23 @@
+complexity: low
+depends_on: []
+estimate_hours: 1
+id: P1.M6.E1
+locked: false
+name: 'E1: Plan ListenSessionPolicy'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 1
+    total: 1
+status: pending
+tasks:
+    - complexity: low
+      depends_on: []
+      estimate_hours: 1
+      file: T001-list-policy-fields-profile-def.todo
+      id: T001
+      priority: high
+      status: pending
+      tags: []
+      title: List policy fields + profile defaults

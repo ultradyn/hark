@@ -1,0 +1,25 @@
+---
+completed_at: null
+complexity: high
+created_at: "2026-07-15T04:29:53Z"
+depends_on:
+    - P1.M2.E3.T002
+estimate_hours: 2
+id: P1.M2.E4.T001
+priority: critical
+started_at: null
+status: pending
+tags: []
+title: 'Tests: needs_input deliverable when menu still present'
+updated_at: "2026-07-15T04:29:53Z"
+---
+# Tests: needs_input deliverable when menu still present
+
+## Requirements
+
+- Fixture tests: needs_input + menu → deliver; idle empty → refuse
+
+## Acceptance Criteria
+
+- Green tests for both paths
+

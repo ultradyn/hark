@@ -1,0 +1,25 @@
+---
+completed_at: null
+complexity: low
+created_at: "2026-07-15T04:29:53Z"
+depends_on:
+    - P1.M2.E4.T001
+estimate_hours: 1
+id: P1.M2.E4.T002
+priority: medium
+started_at: null
+status: pending
+tags: []
+title: Update SAFETY.md + skill notes for false-done answer path
+updated_at: "2026-07-15T04:29:53Z"
+---
+# Update SAFETY.md + skill notes for false-done answer path
+
+## Requirements
+
+- Update SAFETY.md and skill notes for false-done answer path
+
+## Acceptance Criteria
+
+- Docs match implementation
+

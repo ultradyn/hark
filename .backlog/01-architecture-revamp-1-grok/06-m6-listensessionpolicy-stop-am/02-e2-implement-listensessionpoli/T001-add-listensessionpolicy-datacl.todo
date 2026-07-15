@@ -1,0 +1,26 @@
+---
+completed_at: null
+complexity: medium
+created_at: "2026-07-15T04:30:09Z"
+depends_on:
+    - P1.M6.E1.T001
+estimate_hours: 2
+id: P1.M6.E2.T001
+priority: high
+started_at: null
+status: pending
+tags: []
+title: Add ListenSessionPolicy dataclass + from_config
+updated_at: "2026-07-15T04:30:09Z"
+---
+# Add ListenSessionPolicy dataclass + from_config
+
+## Requirements
+
+- Add ListenSessionPolicy dataclass + from_config
+- No getattr holes for listed fields
+
+## Acceptance Criteria
+
+- Typed construction for tests
+

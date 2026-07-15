@@ -1,0 +1,26 @@
+---
+completed_at: null
+complexity: low
+created_at: "2026-07-15T04:29:39Z"
+depends_on:
+    - P1.M1.E1.T001
+estimate_hours: 1
+id: P1.M1.E1.T002
+priority: medium
+started_at: null
+status: pending
+tags: []
+title: Update CONTEXT.md / domain terms if missing
+updated_at: "2026-07-15T04:29:39Z"
+---
+# Update CONTEXT.md / domain terms if missing
+
+## Requirements
+
+- Bootstrap or update CONTEXT.md with domain terms
+- Terms: Answer Window, Bound delivery, HEP, false-done, Mode A
+
+## Acceptance Criteria
+
+- Terms discoverable for future architecture reviews
+

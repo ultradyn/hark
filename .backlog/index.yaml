@@ -1,13 +1,35 @@
 critical_path:
-    - I004
+    - P1.M1.E1.T001
+    - P1.M1.E1.T003
+    - P1.M1.E2.T001
+    - P1.M1.E2.T004
+    - P1.M1.E4.T001
+    - P1.M1.E4.T002
+    - P1.M1.E4.T003
+    - P1.M4.E2.T001
+    - P1.M4.E2.T003
+    - P1.M4.E3.T001
+    - P1.M4.E3.T002
+    - P1.M4.E4.T001
+    - P1.M4.E4.T002
 description: Voice bridge for Herdr agents (Mode A Python prototype; Rust client later)
-next_available: B001
-phases: []
+next_available: P1.M2.E1.T001
+phases:
+    - depends_on: []
+      description: 'Deepen shallow/wide modules surfaced by /improve-codebase-architecture (2026-07-15). Aim: testability + AI-navigability via deep modules (small interface, large implementation) at clean seams. Report: ~/served-html/architecture-review-hark-latest.html. Domain: Mode A voice bridge, HEP, bound delivery, Answer Window, false-done. Vocab: module, interface, depth, seam, adapter, leverage, locality. ADRs 002/007/008/009/014 stay load-bearing.'
+      estimate_hours: 120
+      id: P1
+      locked: false
+      name: Architecture revamp 1 (Grok)
+      path: 01-architecture-revamp-1-grok
+      priority: high
+      status: pending
+      weeks: 8
 project: hark
 stats:
     blocked: 0
-    done: 69
-    in_progress: 12
-    pending: 6
-    total_tasks: 87
+    done: 114
+    in_progress: 0
+    pending: 66
+    total_tasks: 180
 timeline_weeks: 12

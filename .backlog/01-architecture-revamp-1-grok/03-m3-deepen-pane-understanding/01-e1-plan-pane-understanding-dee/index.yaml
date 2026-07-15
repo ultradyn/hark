@@ -1,0 +1,32 @@
+complexity: medium
+depends_on: []
+estimate_hours: 2
+id: P1.M3.E1
+locked: false
+name: 'E1: Plan Pane Understanding deepen'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 2
+    total: 2
+status: pending
+tasks:
+    - complexity: medium
+      depends_on: []
+      estimate_hours: 1
+      file: T001-define-classify-interface-stat.todo
+      id: T001
+      priority: high
+      status: pending
+      title: Define classify interface + state types
+    - complexity: medium
+      depends_on:
+        - P1.M3.E1.T001
+      estimate_hours: 1
+      file: T002-map-edgetracker-fields-to-modu.todo
+      id: T002
+      priority: high
+      status: pending
+      tags: []
+      title: Map EdgeTracker fields to module-owned state

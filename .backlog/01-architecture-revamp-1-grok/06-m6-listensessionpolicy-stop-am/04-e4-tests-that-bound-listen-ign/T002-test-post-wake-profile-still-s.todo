@@ -1,0 +1,25 @@
+---
+completed_at: null
+complexity: medium
+created_at: "2026-07-15T04:30:09Z"
+depends_on:
+    - P1.M6.E4.T001
+estimate_hours: 1
+id: P1.M6.E4.T002
+priority: high
+started_at: null
+status: pending
+tags: []
+title: 'Test: post_wake profile still streams when configured'
+updated_at: "2026-07-15T04:30:09Z"
+---
+# Test: post_wake profile still streams when configured
+
+## Requirements
+
+- Test post_wake still streams when configured
+
+## Acceptance Criteria
+
+- Ambient path not regressed
+

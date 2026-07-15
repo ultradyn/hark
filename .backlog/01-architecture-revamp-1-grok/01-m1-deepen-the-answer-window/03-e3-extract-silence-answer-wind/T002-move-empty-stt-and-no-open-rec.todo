@@ -1,0 +1,25 @@
+---
+completed_at: null
+complexity: high
+created_at: "2026-07-15T04:29:39Z"
+depends_on:
+    - P1.M1.E3.T001
+estimate_hours: 3
+id: P1.M1.E3.T002
+priority: high
+started_at: null
+status: pending
+tags: []
+title: Move empty-STT and no-open recovery into SilenceSession
+updated_at: "2026-07-15T04:29:39Z"
+---
+# Move empty-STT and no-open recovery into SilenceSession
+
+## Requirements
+
+- Move empty-STT and no-open recovery out of speech.run_listen sprawl
+
+## Acceptance Criteria
+
+- test_empty_stt and no-open behaviors preserved
+

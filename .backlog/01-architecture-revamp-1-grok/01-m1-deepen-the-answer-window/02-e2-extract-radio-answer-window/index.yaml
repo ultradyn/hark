@@ -1,0 +1,55 @@
+complexity: high
+depends_on: []
+estimate_hours: 10
+id: P1.M1.E2
+locked: false
+name: 'E2: Extract radio Answer Window session'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 4
+    total: 4
+status: pending
+tasks:
+    - complexity: high
+      depends_on:
+        - P1.M1.E1.T003
+      estimate_hours: 3
+      file: T001-define-radiosession-state-mach.todo
+      id: T001
+      priority: high
+      status: pending
+      tags: []
+      title: Define RadioSession state machine + types
+    - complexity: high
+      depends_on:
+        - P1.M1.E2.T001
+      estimate_hours: 3
+      file: T002-move-segment-stt-join-partial.todo
+      id: T002
+      priority: high
+      status: pending
+      tags: []
+      title: Move segment STT join + partial emit into RadioSession
+    - complexity: medium
+      depends_on:
+        - P1.M1.E2.T001
+      estimate_hours: 2
+      file: T003-wire-listen-end-listen-control.todo
+      id: T003
+      priority: high
+      status: pending
+      tags: []
+      title: Wire listen_end + listen_control as internals
+    - complexity: medium
+      depends_on:
+        - P1.M1.E2.T001
+        - P1.M6.E2.T002
+      estimate_hours: 2
+      file: T004-radio-idle-streaming-idle-clam.todo
+      id: T004
+      priority: high
+      status: pending
+      tags: []
+      title: Radio idle / streaming idle clamp as policy fields

@@ -1,0 +1,34 @@
+complexity: medium
+depends_on: []
+estimate_hours: 3
+id: P1.M4.E3
+locked: false
+name: 'E3: Confirm turn as same module'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 2
+    total: 2
+status: pending
+tasks:
+    - complexity: medium
+      depends_on:
+        - P1.M4.E2.T003
+      estimate_hours: 2
+      file: T001-confirm-profile-readback-silen.todo
+      id: T001
+      priority: high
+      status: pending
+      tags: []
+      title: 'Confirm profile: readback + silence listen + lexicon'
+    - complexity: medium
+      depends_on:
+        - P1.M4.E3.T001
+      estimate_hours: 1
+      file: T002-wire-run-ask-cmd-ask-cmd-tts-l.todo
+      id: T002
+      priority: high
+      status: pending
+      tags: []
+      title: Wire run_ask / cmd_ask / cmd_tts --listen

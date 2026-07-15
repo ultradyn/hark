@@ -1,0 +1,34 @@
+complexity: medium
+depends_on: []
+estimate_hours: 4
+id: P1.M4.E4
+locked: false
+name: 'E4: Tests + thin speech facades'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 2
+    total: 2
+status: pending
+tasks:
+    - complexity: medium
+      depends_on:
+        - P1.M4.E3.T002
+      estimate_hours: 2
+      file: T001-port-handoff-overlap-arm-cue-t.todo
+      id: T001
+      priority: high
+      status: pending
+      tags: []
+      title: Port handoff/overlap/arm-cue tests
+    - complexity: low
+      depends_on:
+        - P1.M4.E4.T001
+      estimate_hours: 1
+      file: T002-docs-half-duplex-module-locali.todo
+      id: T002
+      priority: low
+      status: pending
+      tags: []
+      title: 'Docs: half-duplex module locality'

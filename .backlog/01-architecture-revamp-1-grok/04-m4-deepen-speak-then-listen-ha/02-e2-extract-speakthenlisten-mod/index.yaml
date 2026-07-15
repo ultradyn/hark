@@ -1,0 +1,45 @@
+complexity: high
+depends_on: []
+estimate_hours: 8
+id: P1.M4.E2
+locked: false
+name: 'E2: Extract SpeakThenListen module'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 3
+    total: 3
+status: pending
+tasks:
+    - complexity: high
+      depends_on:
+        - P1.M4.E1.T002
+        - P1.M1.E4.T003
+      estimate_hours: 3
+      file: T001-move-speak-and-listen-handoff.todo
+      id: T001
+      priority: high
+      status: pending
+      tags: []
+      title: Move speak_and_listen handoff into module
+    - complexity: high
+      depends_on:
+        - P1.M4.E2.T001
+      estimate_hours: 3
+      file: T002-internalize-mute-duck-conferen.todo
+      id: T002
+      priority: high
+      status: pending
+      tags: []
+      title: Internalize mute/duck/conference call order
+    - complexity: medium
+      depends_on:
+        - P1.M4.E2.T001
+      estimate_hours: 2
+      file: T003-overlap-prearm-discard-window.todo
+      id: T003
+      priority: high
+      status: pending
+      tags: []
+      title: Overlap prearm + discard window ownership

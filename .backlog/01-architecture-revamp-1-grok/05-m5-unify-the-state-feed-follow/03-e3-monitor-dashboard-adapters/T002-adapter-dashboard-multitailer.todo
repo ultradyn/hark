@@ -1,0 +1,25 @@
+---
+completed_at: null
+complexity: medium
+created_at: "2026-07-15T04:30:09Z"
+depends_on:
+    - P1.M5.E2.T002
+estimate_hours: 2
+id: P1.M5.E3.T002
+priority: high
+started_at: null
+status: pending
+tags: []
+title: 'Adapter: dashboard MultiTailer over same core'
+updated_at: "2026-07-15T04:30:09Z"
+---
+# Adapter: dashboard MultiTailer over same core
+
+## Requirements
+
+- dashboard MultiTailer adapter over same core
+
+## Acceptance Criteria
+
+- No second follow implementation
+

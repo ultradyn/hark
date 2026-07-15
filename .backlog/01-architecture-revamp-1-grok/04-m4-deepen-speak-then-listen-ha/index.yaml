@@ -1,0 +1,50 @@
+complexity: medium
+depends_on: []
+epics:
+    - complexity: medium
+      depends_on: []
+      description: Interface for SpeakThenListen / run_ask / confirm turn. Depends on M1 Answer Window for listen half ideally. docs/plans/P1-M4-speak-then-listen.md. ADR-009 half-duplex constraints.
+      estimate_hours: 2
+      id: E1
+      locked: false
+      name: 'E1: Plan Speak-then-Listen deepen'
+      path: 01-e1-plan-speak-then-listen-deep
+      status: pending
+    - complexity: high
+      depends_on: []
+      description: 'Own TTS→listen handoff: mute, duck, conference hold hooks, near_end arm, overlap prearm thread, post_tts_guard, arm cues, last_tts for echo.'
+      estimate_hours: 8
+      id: E2
+      locked: false
+      name: 'E2: Extract SpeakThenListen module'
+      path: 02-e2-extract-speakthenlisten-mod
+      status: pending
+    - complexity: medium
+      depends_on: []
+      description: run_ask confirm (readback TTS + silence listen + confirm_lexicon) is not an ad-hoc second full listen; same SpeakThenListen path with confirm profile.
+      estimate_hours: 3
+      id: E3
+      locked: false
+      name: 'E3: Confirm turn as same module'
+      path: 03-e3-confirm-turn-as-same-module
+      status: pending
+    - complexity: medium
+      depends_on: []
+      description: Port speak_and_listen / tts --listen / answer_arm_cue / overlap tests. speech.run_tts may stay but handoff leaves speech.py.
+      estimate_hours: 4
+      id: E4
+      locked: false
+      name: 'E4: Tests + thin speech facades'
+      path: 04-e4-tests-thin-speech-facades
+      status: pending
+estimate_hours: 20
+id: P1.M4
+locked: false
+name: 'M4: Deepen Speak-then-Listen Handoff'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 9
+    total_tasks: 9
+status: pending

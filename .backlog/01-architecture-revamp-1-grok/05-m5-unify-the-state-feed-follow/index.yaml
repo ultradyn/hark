@@ -1,0 +1,50 @@
+complexity: medium
+depends_on: []
+epics:
+    - complexity: medium
+      depends_on: []
+      description: 'Core follower interface: sources, partial lines, rotation/inode, cursors optional. Adapters: monitor (kinds+compact+lock) vs dashboard (multi-source+SSE cursors). Single compact profile. docs/plans/P1-M5-state-feed.md.'
+      estimate_hours: 2
+      id: E1
+      locked: false
+      name: 'E1: Plan State Feed unify'
+      path: 01-e1-plan-state-feed-unify
+      status: pending
+    - complexity: high
+      depends_on: []
+      description: 'One deep JSONL follower: partial line buffer, truncation/inode rotation, multi-path follow. Extract best of dashboard/tailer.'
+      estimate_hours: 6
+      id: E2
+      locked: false
+      name: 'E2: Core StateFeedFollower implementation'
+      path: 02-e2-core-statefeedfollower-impl
+      status: pending
+    - complexity: medium
+      depends_on: []
+      description: monitor_feed uses follower + MODE_A_WAKE_KINDS + lock; dashboard MultiTailer becomes adapter. monitor_profile/compact_mode_a_event collapse to one presentation path; watch may emit full HEP once.
+      estimate_hours: 5
+      id: E3
+      locked: false
+      name: 'E3: Monitor + dashboard adapters + single compact'
+      path: 03-e3-monitor-dashboard-adapters
+      status: pending
+    - complexity: medium
+      depends_on: []
+      description: Port test_monitor_feed + test_dashboard_tailer; add rotation/partial-line cases shared.
+      estimate_hours: 3
+      id: E4
+      locked: false
+      name: 'E4: Tests for follower + adapters'
+      path: 04-e4-tests-for-follower-adapters
+      status: pending
+estimate_hours: 16
+id: P1.M5
+locked: false
+name: 'M5: Unify the State Feed Follower'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 9
+    total_tasks: 9
+status: pending

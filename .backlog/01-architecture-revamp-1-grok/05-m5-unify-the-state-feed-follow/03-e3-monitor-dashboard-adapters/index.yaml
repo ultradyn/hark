@@ -1,0 +1,44 @@
+complexity: medium
+depends_on: []
+estimate_hours: 5
+id: P1.M5.E3
+locked: false
+name: 'E3: Monitor + dashboard adapters + single compact'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 3
+    total: 3
+status: pending
+tasks:
+    - complexity: medium
+      depends_on:
+        - P1.M5.E2.T002
+      estimate_hours: 2
+      file: T001-adapter-hark-monitor-over-stat.todo
+      id: T001
+      priority: high
+      status: pending
+      tags: []
+      title: 'Adapter: hark monitor over StateFeedFollower'
+    - complexity: medium
+      depends_on:
+        - P1.M5.E2.T002
+      estimate_hours: 2
+      file: T002-adapter-dashboard-multitailer.todo
+      id: T002
+      priority: high
+      status: pending
+      tags: []
+      title: 'Adapter: dashboard MultiTailer over same core'
+    - complexity: medium
+      depends_on:
+        - P1.M5.E3.T001
+      estimate_hours: 1
+      file: T003-unify-monitor-profile-ambient.todo
+      id: T003
+      priority: high
+      status: pending
+      tags: []
+      title: Unify monitor_profile / ambient compact presentation

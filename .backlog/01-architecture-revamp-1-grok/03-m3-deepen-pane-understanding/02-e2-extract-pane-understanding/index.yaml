@@ -1,0 +1,44 @@
+complexity: high
+depends_on: []
+estimate_hours: 8
+id: P1.M3.E2
+locked: false
+name: 'E2: Extract Pane Understanding module'
+stats:
+    blocked: 0
+    done: 0
+    in_progress: 0
+    pending: 3
+    total: 3
+status: pending
+tasks:
+    - complexity: medium
+      depends_on:
+        - P1.M3.E1.T002
+      estimate_hours: 2
+      file: T001-move-pure-heuristics-under-pan.todo
+      id: T001
+      priority: high
+      status: pending
+      tags: []
+      title: Move pure heuristics under Pane Understanding package
+    - complexity: high
+      depends_on:
+        - P1.M3.E2.T001
+      estimate_hours: 4
+      file: T002-move-edgetracker-process-false.todo
+      id: T002
+      priority: high
+      status: pending
+      tags: []
+      title: Move EdgeTracker process/false-done/busy into module
+    - complexity: low
+      depends_on:
+        - P1.M3.E2.T002
+      estimate_hours: 2
+      file: T003-thin-hep-make-remain-builders.todo
+      id: T003
+      priority: medium
+      status: pending
+      tags: []
+      title: Thin HEP make_* remain builders only

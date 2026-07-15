@@ -1,0 +1,25 @@
+---
+completed_at: null
+complexity: medium
+created_at: "2026-07-15T04:30:08Z"
+depends_on:
+    - P1.M4.E2.T003
+estimate_hours: 2
+id: P1.M4.E3.T001
+priority: high
+started_at: null
+status: pending
+tags: []
+title: 'Confirm profile: readback + silence listen + lexicon'
+updated_at: "2026-07-15T04:30:08Z"
+---
+# Confirm profile: readback + silence listen + lexicon
+
+## Requirements
+
+- Confirm profile: readback TTS + silence listen + lexicon
+
+## Acceptance Criteria
+
+- R2/R3 always confirm path intact
+

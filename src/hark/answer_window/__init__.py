@@ -28,6 +28,11 @@ from hark.answer_window.silence import (
     resolve_endpoint_strategy,
     silence_transition,
 )
+from hark.answer_window.text_join import (
+    join_radio_stt_segments,
+    monotonic_partial_text,
+    prefer_complete_transcript,
+)
 
 __all__ = [
     "AnswerWindowDeps",
@@ -41,7 +46,10 @@ __all__ = [
     "SilenceSession",
     "SilenceState",
     "effective_radio_idle_s",
+    "join_radio_stt_segments",
+    "monotonic_partial_text",
     "policy_from_config",
+    "prefer_complete_transcript",
     "radio_transition",
     "resolve_endpoint_strategy",
     "silence_transition",

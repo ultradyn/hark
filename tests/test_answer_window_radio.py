@@ -1,18 +1,23 @@
-"""E2.T001: RadioSession state machine + policy idle (no audio hardware)."""
+"""E2.T001/T002: RadioSession state machine + segment join / partial emit."""
 
 from __future__ import annotations
 
 import pytest
 
 from hark.answer_window import (
+    AnswerWindowDeps,
     AnswerWindowPolicy,
     RadioEvent,
     RadioSession,
     RadioState,
     effective_radio_idle_s,
+    join_radio_stt_segments,
+    monotonic_partial_text,
+    prefer_complete_transcript,
     radio_transition,
 )
 from hark.listen_end import EndMode
+from hark.partial import HOLD_INSTRUCTIONS, STREAMING_INSTRUCTIONS
 
 
 def _policy(**kwargs) -> AnswerWindowPolicy:
@@ -24,6 +29,9 @@ def _policy(**kwargs) -> AnswerWindowPolicy:
         radio_idle_end_silence_s=0.0,
         streaming=False,
         streaming_ack_min_quiet_s=2.0,
+        stream_partials=True,
+        stream_id="s-test",
+        partial_kind="ambient.partial",
     )
     base.update(kwargs)
     return AnswerWindowPolicy(**base)
@@ -184,3 +192,157 @@ def test_bound_answer_policy_streaming_default_off():
     post = policy_from_config(cfg, "post_wake")
     assert post.streaming is True
     assert post.arm_cue is True
+
+
+# --- E2.T002: segment join + partial emit owned by RadioSession ---
+
+
+def test_ingest_segment_join_and_monotonic():
+    s = RadioSession(policy=_policy(stream_id="s1"), stream_id="s1")
+    body1 = s.ingest_segment_transcript("hello world")
+    assert body1 == "hello world"
+    assert s.text_segments == ["hello world"]
+    assert s.joined_body() == "hello world"
+
+    body2 = s.ingest_segment_transcript("world there")
+    assert body2 == "hello world there"  # overlap trim
+    assert s.joined_body() == "hello world there"
+
+    # Empty segment does not erase prior
+    body3 = s.ingest_segment_transcript("  ")
+    assert body3 == "hello world there"
+    assert s.text_segments == ["hello world", "world there"]
+
+
+def test_monotonic_vs_last_partial_refuses_shrink():
+    """Joined/finalize body never shrinks below the last emitted partial."""
+    s = RadioSession(policy=_policy(stream_id="s1"), stream_id="s1")
+    s.ingest_segment_transcript("one two three")
+    s.note_partial_emitted("one two three")
+    # Simulate a flaky reassembly that drops tokens (segments are shorter)
+    s.text_segments[:] = ["one two"]
+    assert s.joined_body() == "one two"
+    assert s.finalize_joined_body() == "one two three"
+    assert monotonic_partial_text("one two three", "one two") == "one two three"
+
+
+def test_emit_partial_if_needed_hold_shape():
+    events: list[dict] = []
+    s = RadioSession(
+        policy=_policy(stream_id="s-hold", streaming=False),
+        stream_id="s-hold",
+    )
+    body = s.ingest_segment_transcript("hello radio", provider="xai")
+    assert s.emit_partial_if_needed(
+        body,
+        provider="xai",
+        stt_seq=1,
+        on_partial=events.append,
+        streaming=False,
+    )
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["partial"] is True
+    assert ev["final"] is False
+    assert ev["stream_id"] == "s-hold"
+    assert ev["seq"] == 1
+    assert ev["text"] == "hello radio"
+    assert ev["fragment"] == "hello radio"
+    assert ev["stt_seq"] == 1
+    assert ev["provider"] == "xai"
+    assert ev["streaming"] is False
+    assert "HOLD" in (ev.get("instructions") or "")
+    assert HOLD_INSTRUCTIONS in (ev.get("instructions") or "")
+    assert s.partial_seq == 1
+    assert s.last_partial_text == "hello radio"
+
+    # Same body → no second emit
+    assert not s.emit_partial_if_needed(
+        body, provider="xai", stt_seq=2, on_partial=events.append
+    )
+    assert len(events) == 1
+
+
+def test_emit_partial_streaming_shape_and_fragment():
+    events: list[dict] = []
+    s = RadioSession(
+        policy=_policy(
+            stream_id="s-stream",
+            streaming=True,
+            streaming_ack_min_quiet_s=2.5,
+        ),
+        stream_id="s-stream",
+    )
+    b1 = s.ingest_segment_transcript("plan the")
+    assert s.emit_partial_if_needed(
+        b1, provider="local", stt_seq=1, on_partial=events.append
+    )
+    b2 = s.ingest_segment_transcript("the feature over")
+    assert s.emit_partial_if_needed(
+        b2, provider="local", stt_seq=2, on_partial=events.append
+    )
+    assert len(events) == 2
+    assert events[1]["text"] == "plan the feature over"
+    assert events[1]["fragment"] == "feature over"
+    assert events[1]["seq"] == 2
+    assert events[1]["streaming"] is True
+    assert events[1]["ack_min_quiet_s"] == pytest.approx(2.5)
+    assert STREAMING_INSTRUCTIONS in (events[1].get("instructions") or "")
+
+
+def test_emit_partial_uses_deps_on_partial():
+    events: list[dict] = []
+    s = RadioSession(
+        policy=_policy(stream_id="s-deps"),
+        deps=AnswerWindowDeps(on_partial=events.append),
+        stream_id="s-deps",
+    )
+    body = s.ingest_segment_transcript("via deps")
+    assert s.emit_partial_if_needed(body, provider="xai", stt_seq=3)
+    assert len(events) == 1
+    assert events[0]["text"] == "via deps"
+
+
+def test_emit_partial_respects_stream_partials_off():
+    events: list[dict] = []
+    s = RadioSession(
+        policy=_policy(stream_id="s-off", stream_partials=False),
+        stream_id="s-off",
+    )
+    body = s.ingest_segment_transcript("secret")
+    assert not s.emit_partial_if_needed(
+        body, on_partial=events.append, provider="xai", stt_seq=1
+    )
+    assert events == []
+    assert s.partial_seq == 0
+
+
+def test_finalize_joined_body_prefers_complete():
+    s = RadioSession(policy=_policy(stream_id="s-fin"), stream_id="s-fin")
+    s.ingest_segment_transcript("hello world")
+    s.ingest_segment_transcript("world there friend")
+    s.note_partial_emitted("hello world there friend")
+    # Full re-STT shorter → keep joined
+    assert (
+        s.finalize_joined_body("hello world")
+        == "hello world there friend"
+    )
+    # Full re-STT longer extension → take it
+    assert (
+        s.finalize_joined_body("hello world there friend extra")
+        == "hello world there friend extra"
+    )
+    assert prefer_complete_transcript("a b", "a") == "a b"
+
+
+def test_text_join_helpers_reexported_from_speech():
+    from hark.speech import (
+        join_radio_stt_segments as j2,
+        monotonic_partial_text as m2,
+        prefer_complete_transcript as p2,
+    )
+
+    assert j2 is join_radio_stt_segments
+    assert m2 is monotonic_partial_text
+    assert p2 is prefer_complete_transcript
+    assert j2(["alpha beta", "beta gamma"]) == "alpha beta gamma"

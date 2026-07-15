@@ -1,19 +1,26 @@
-"""Radio Answer Window session: state machine + types (no STT provider details).
+"""Radio Answer Window session: state machine + segment text / partial HEP.
 
-Unit-testable without audio hardware. Capture/STT wiring lands in later tasks
-(E2.T002–T004); this module owns states, events, and pure transitions.
+Unit-testable without audio hardware. Capture loop wiring lands in later tasks;
+this module owns states, events, pure transitions, segment STT join, and
+partial emit (HEP shapes via :mod:`hark.partial`).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 from hark.answer_window.deps import AnswerWindowDeps
 from hark.answer_window.policy import AnswerWindowPolicy, effective_radio_idle_s
 from hark.answer_window.result import ListenResult
+from hark.answer_window.text_join import (
+    join_radio_stt_segments,
+    monotonic_partial_text,
+    prefer_complete_transcript,
+)
 from hark.listen_end import EndMode
+from hark.partial import make_partial_event, partial_fragment
 
 
 class RadioState(str, Enum):
@@ -94,10 +101,11 @@ def radio_transition(state: RadioState, event: RadioEvent) -> RadioState:
 
 @dataclass
 class RadioSession:
-    """Radio-profile session: owns state; no STT provider types on the interface.
+    """Radio-profile session: owns state, segment join, and partial HEP emit.
 
-    Later tasks move segment join / partial emit / control poll into methods on
-    this type. For E2.T001, :meth:`apply` exercises the state machine only.
+    No STT provider *types* on the public interface — only optional string
+    provider names and callables for partials. Capture loop still lives in
+    ``speech.run_listen`` until later E2 tasks move it behind ``open()``.
     """
 
     policy: AnswerWindowPolicy
@@ -110,6 +118,7 @@ class RadioSession:
     text_segments: list[str] = field(default_factory=list)
     end_phrase: str | None = None
     cancelled: bool = False
+    last_partial_event: dict[str, Any] | None = field(default=None, repr=False)
     _history: list[tuple[RadioState, RadioEvent, RadioState]] = field(
         default_factory=list, repr=False
     )
@@ -166,14 +175,114 @@ class RadioSession:
         return nxt
 
     def note_segment_text(self, text: str) -> None:
-        """Record a segment transcript (join lands in E2.T002)."""
+        """Record a segment transcript without join/monotonic (legacy helper)."""
         body = (text or "").strip()
         if body:
             self.text_segments.append(body)
 
+    def joined_body(self) -> str:
+        """Assemble cumulative text from per-segment STT (overlap-trimmed)."""
+        return join_radio_stt_segments(self.text_segments)
+
+    def ingest_segment_transcript(
+        self, text: str, *, provider: str | None = None
+    ) -> str:
+        """Append non-empty segment STT, join, return monotonic cumulative body.
+
+        ``provider`` is accepted for call-site symmetry but not stored as a
+        provider type — only the optional name string is used by callers.
+        """
+        del provider  # interface only; last provider stays on the capture loop
+        body = (text or "").strip()
+        if body:
+            self.text_segments.append(body)
+        joined = self.joined_body()
+        # Fallback to raw segment when join is empty but STT returned something
+        candidate = joined or body
+        return monotonic_partial_text(self.last_partial_text, candidate)
+
+    def finalize_joined_body(
+        self, full_stt_text: str | None = None
+    ) -> str:
+        """Joined + monotonic body; optionally merge a full-audio re-STT candidate.
+
+        Full re-STT may only *extend* completeness — never replace a longer
+        joined partial body with a shorter rewrite.
+        """
+        body = monotonic_partial_text(self.last_partial_text, self.joined_body())
+        if full_stt_text is not None:
+            body = prefer_complete_transcript(
+                body, (full_stt_text or "").strip()
+            )
+        return body
+
     def note_partial_emitted(self, text: str) -> None:
         self.partial_seq += 1
         self.last_partial_text = text or ""
+
+    def emit_partial_if_needed(
+        self,
+        body: str,
+        *,
+        provider: str | None = None,
+        stt_seq: int | None = None,
+        on_partial: Callable[[dict[str, Any]], None] | None = None,
+        streaming: bool | None = None,
+        streaming_ack_min_quiet_s: float | None = None,
+        partial_kind: str | None = None,
+    ) -> bool:
+        """Build and emit a partial HEP if policy allows and body advanced.
+
+        Returns True when a partial was emitted. Uses policy/deps defaults when
+        optional kwargs are omitted. Preserves existing HEP field shapes
+        (HOLD vs streaming strings via :func:`hark.partial.make_partial_event`).
+        """
+        body_so_far = (body or "").strip()
+        if not self.policy.stream_partials:
+            return False
+        if not body_so_far or body_so_far == self.last_partial_text:
+            return False
+        cb = on_partial if on_partial is not None else self.deps.on_partial
+        if cb is None:
+            return False
+
+        stream = self.stream_id
+        if not stream:
+            return False
+
+        is_streaming = (
+            bool(self.policy.streaming) if streaming is None else bool(streaming)
+        )
+        kind = partial_kind if partial_kind is not None else self.policy.partial_kind
+        ack = (
+            streaming_ack_min_quiet_s
+            if streaming_ack_min_quiet_s is not None
+            else self.policy.streaming_ack_min_quiet_s
+        )
+
+        prev_body = self.last_partial_text
+        frag = partial_fragment(prev_body, body_so_far)
+        self.partial_seq += 1
+        self.last_partial_text = body_so_far
+        ev = make_partial_event(
+            stream_id=stream,
+            seq=self.partial_seq,
+            text=body_so_far,
+            kind=kind,
+            provider=provider,
+            fragment=frag,
+            prev_text=prev_body,
+            streaming=is_streaming,
+            ack_min_quiet_s=(ack if is_streaming else None),
+        )
+        if stt_seq is not None:
+            ev["stt_seq"] = stt_seq
+        self.last_partial_event = ev
+        try:
+            cb(ev)
+        except Exception:
+            pass
+        return True
 
     def history(self) -> list[tuple[RadioState, RadioEvent, RadioState]]:
         return list(self._history)
@@ -208,4 +317,6 @@ class RadioSession:
             "end_phrase": self.end_phrase,
             "cancelled": self.cancelled,
             "terminal": self.is_terminal,
+            "segments": len(self.text_segments),
+            "joined_len": len(self.joined_body()),
         }

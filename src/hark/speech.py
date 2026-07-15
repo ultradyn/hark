@@ -50,13 +50,20 @@ from hark.listen_control import (
 from hark.endpointing import EndpointStrategy, build_endpoint_strategy
 from hark.listen_end import EndMode, evaluate_radio_transcript, parse_end_mode
 from hark.mic_coord import pause_ambient_for_mic, wait_until_tts_play_allowed
-from hark.partial import make_partial_event, new_stream_id
+from hark.partial import new_stream_id
 from hark.providers.base import ProviderError
 from hark.providers.resolve import resolve_stt, resolve_tts
 from hark.risk import classify_question, confirm_required
 from hark.syslog import log as syslog
 from hark.usage import UsageStore
+from hark.answer_window.policy import AnswerWindowPolicy
+from hark.answer_window.radio import RadioSession
 from hark.answer_window.result import ListenResult  # canonical; facade re-export
+from hark.answer_window.text_join import (  # re-export for back-compat
+    join_radio_stt_segments,
+    monotonic_partial_text,
+    prefer_complete_transcript,
+)
 
 
 def soft_truncate_text(text: str, max_chars: int) -> str:
@@ -886,72 +893,8 @@ def _transcribe_logged(
 
 
 
-def join_radio_stt_segments(segments: list[str]) -> str:
-    """Join per-segment STT without cumulative re-STT (avoids long-audio word loss).
-
-    Each radio segment is transcribed alone; we assemble text with light overlap
-    trim so repeated phrase tails do not double. Empty segments are skipped so a
-    failed mid-slice STT does not erase prior text.
-    """
-    out: list[str] = []
-    for raw in segments:
-        part = " ".join((raw or "").split()).strip()
-        if not part:
-            continue
-        if not out:
-            out.append(part)
-            continue
-        prev = out[-1]
-        # If new starts with end of previous (common STT re-prefix), drop overlap
-        prev_toks = prev.split()
-        part_toks = part.split()
-        max_olap = min(len(prev_toks), len(part_toks), 8)
-        olap = 0
-        for n in range(max_olap, 0, -1):
-            if prev_toks[-n:] == part_toks[:n]:
-                olap = n
-                break
-        if olap:
-            part_toks = part_toks[olap:]
-        if part_toks:
-            out.append(" ".join(part_toks))
-    return " ".join(out).strip()
-
-
-def prefer_complete_transcript(a: str, b: str) -> str:
-    """Pick the more complete of two transcripts without inventing words.
-
-    Used so a full-audio re-STT cannot *replace* a longer joined partial body
-    with a shorter rewrite (the original word-loss symptom).
-    """
-    aa = " ".join((a or "").split()).strip()
-    bb = " ".join((b or "").split()).strip()
-    if not aa:
-        return bb
-    if not bb:
-        return aa
-    if aa == bb:
-        return aa
-    # One properly extends the other
-    if bb.startswith(aa) or aa in bb:
-        return bb
-    if aa.startswith(bb) or bb in aa:
-        return aa
-    # Prefer more tokens (conservative: do not merge incompatible rewrites)
-    if len(bb.split()) > len(aa.split()):
-        return bb
-    return aa
-
-
-def monotonic_partial_text(prev: str, candidate: str) -> str:
-    """Never shrink the published partial body across radio slices."""
-    p = " ".join((prev or "").split()).strip()
-    c = " ".join((candidate or "").split()).strip()
-    if not p:
-        return c
-    if not c:
-        return p
-    return prefer_complete_transcript(p, c)
+# join_radio_stt_segments / monotonic_partial_text / prefer_complete_transcript
+# live in hark.answer_window.text_join (owned by RadioSession); imported above.
 
 
 def effective_radio_idle_end_s(
@@ -1516,13 +1459,28 @@ def run_listen(
             # Radio mode — segment until end phrase / agent finish / post-speech
             # idle (B074); stream partials. Short pauses stay open; long quiet
             # after speech has opened auto-finishes (same path as soft-end).
+            # Segment join + partial HEP owned by RadioSession (E2.T002).
             pieces: list[bytes] = []
-            text_segments: list[str] = []
+            radio_sess = RadioSession(
+                policy=AnswerWindowPolicy(
+                    profile="bound_answer",
+                    end_mode=EndMode.RADIO,
+                    max_listen_s=float(max_listen),
+                    stream_id=stream,
+                    partial_kind=partial_kind,
+                    stream_partials=bool(stream_partials),
+                    streaming=bool(ambient_streaming),
+                    streaming_ack_min_quiet_s=float(streaming_ack_min_quiet_s),
+                    end_silence_s=float(cfg.listen.end_silence_s),
+                    radio_idle_end_silence_s=float(
+                        getattr(cfg.listen, "radio_idle_end_silence_s", 0.0) or 0.0
+                    ),
+                ),
+                stream_id=stream,
+            )
             # B085: last segment tail for STT window overlap (real PCM, not silence)
             segment_overlap_tail = b""
             started = time.monotonic()
-            partial_seq = 0
-            last_partial_text = ""
             last_provider = getattr(stt, "name", "unknown")
             last_sample_rate = 16000
             speech_opened_once = False
@@ -1661,7 +1619,7 @@ def run_listen(
                                     end_phrase=hit.phrase,
                                     cancelled=True,
                                     stream_id=stream,
-                                    partials_emitted=partial_seq,
+                                    partials_emitted=radio_sess.partial_seq,
                                 )
                             return ListenResult(
                                 text=body,
@@ -1672,7 +1630,7 @@ def run_listen(
                                 end_mode=mode.value,
                                 end_phrase=hit.phrase,
                                 stream_id=stream,
-                                partials_emitted=partial_seq,
+                                partials_emitted=radio_sess.partial_seq,
                             )
                         body = (tr.text or "").strip()
                         store.record_stt(
@@ -1689,7 +1647,7 @@ def run_listen(
                             stream_id=stream,
                             idle_s=radio_idle_end,
                             text_len=len(body),
-                            partials_emitted=partial_seq,
+                            partials_emitted=radio_sess.partial_seq,
                         )
                         return ListenResult(
                             text=body,
@@ -1700,7 +1658,7 @@ def run_listen(
                             end_mode=mode.value,
                             end_phrase="radio_idle",
                             stream_id=stream,
-                            partials_emitted=partial_seq,
+                            partials_emitted=radio_sess.partial_seq,
                         )
                     if pieces:
                         continue
@@ -1762,14 +1720,14 @@ def run_listen(
                     except Exception:
                         pass
                     continue
-                if (tr.text or "").strip():
-                    text_segments.append((tr.text or "").strip())
-                # End-phrase / partial paths use assembled cumulative text
+                # RadioSession owns segment text accumulation + join + monotonic body
                 from types import SimpleNamespace
 
-                joined = join_radio_stt_segments(text_segments)
+                body_so_far = radio_sess.ingest_segment_transcript(
+                    tr.text, provider=getattr(tr, "provider", None)
+                )
                 tr = SimpleNamespace(
-                    text=joined or (tr.text or ""),
+                    text=body_so_far or (tr.text or ""),
                     provider=getattr(tr, "provider", last_provider),
                 )
                 # Agent may have requested end while we were capturing/STT
@@ -1793,7 +1751,7 @@ def run_listen(
                         end_phrase="agent:cancel",
                         cancelled=True,
                         stream_id=stream,
-                        partials_emitted=partial_seq,
+                        partials_emitted=radio_sess.partial_seq,
                     )
                 if agent_act == "finish":
                     _cue_stop_once(reason="agent:finish")
@@ -1812,7 +1770,7 @@ def run_listen(
                         end_mode=mode.value,
                         end_phrase="agent:finish",
                         stream_id=stream,
-                        partials_emitted=partial_seq,
+                        partials_emitted=radio_sess.partial_seq,
                     )
                 hit = evaluate_radio_transcript(
                     tr.text,
@@ -1826,43 +1784,19 @@ def run_listen(
                     ),
                 )
                 if hit is None:
-                    # Joined segment STT is append-only; still refuse shrink so a
-                    # flaky mid-slice rewrite cannot drop words the orchestrator already saw.
-                    body_so_far = monotonic_partial_text(
-                        last_partial_text, (tr.text or "").strip()
-                    )
-                    if (
-                        stream_partials
-                        and body_so_far
-                        and body_so_far != last_partial_text
-                        and on_partial is not None
+                    # Joined segment STT is append-only; RadioSession refuses shrink
+                    # so a flaky mid-slice rewrite cannot drop words already seen.
+                    if radio_sess.emit_partial_if_needed(
+                        body_so_far,
+                        provider=tr.provider,
+                        stt_seq=stt_seq,
+                        on_partial=on_partial,
+                        streaming=ambient_streaming,
+                        streaming_ack_min_quiet_s=streaming_ack_min_quiet_s,
+                        partial_kind=partial_kind,
                     ):
-                        from hark.partial import partial_fragment
-
-                        prev_body = last_partial_text
-                        frag = partial_fragment(prev_body, body_so_far)
-                        partial_seq += 1
-                        last_partial_text = body_so_far
-                        ev = make_partial_event(
-                            stream_id=stream,
-                            seq=partial_seq,
-                            text=body_so_far,
-                            kind=partial_kind,
-                            provider=tr.provider,
-                            fragment=frag,
-                            prev_text=prev_body,
-                            streaming=ambient_streaming,
-                            ack_min_quiet_s=(
-                                streaming_ack_min_quiet_s
-                                if ambient_streaming
-                                else None
-                            ),
-                        )
-                        ev["stt_seq"] = stt_seq
-                        try:
-                            on_partial(ev)
-                        except Exception:
-                            pass
+                        ev = radio_sess.last_partial_event or {}
+                        frag = ev.get("fragment") or ""
                         # Prefer fragment in logs so each radio slice is visible
                         # (full cumulative body is still on the event as text).
                         syslog(
@@ -1870,13 +1804,15 @@ def run_listen(
                             component="stt",
                             level="info",
                             stream_id=stream,
-                            seq=partial_seq,
+                            seq=radio_sess.partial_seq,
                             stt_seq=stt_seq,
                             fragment=(frag or "")[:300],
-                            text_len=len(body_so_far),
-                            text=(body_so_far[:120] + "…")
-                            if len(body_so_far) > 120
-                            else body_so_far,
+                            text_len=len(radio_sess.last_partial_text),
+                            text=(
+                                (radio_sess.last_partial_text[:120] + "…")
+                                if len(radio_sess.last_partial_text) > 120
+                                else radio_sess.last_partial_text
+                            ),
                             provider=tr.provider,
                             partial=True,
                             final=False,
@@ -1903,7 +1839,7 @@ def run_listen(
                         end_phrase=hit.phrase,
                         cancelled=True,
                         stream_id=stream,
-                        partials_emitted=partial_seq,
+                        partials_emitted=radio_sess.partial_seq,
                     )
                 return ListenResult(
                     text=body,
@@ -1912,7 +1848,7 @@ def run_listen(
                     end_mode=mode.value,
                     end_phrase=hit.phrase,
                     stream_id=stream,
-                    partials_emitted=partial_seq,
+                    partials_emitted=radio_sess.partial_seq,
                 )
 
             # Exit loop: agent finish with pieces, or max timeout
@@ -1930,9 +1866,7 @@ def run_listen(
                 if agent_act == "finish" or agent_act is None:
                     from types import SimpleNamespace
 
-                    joined = join_radio_stt_segments(text_segments)
-                    # Monotonic vs last partial the orchestrator already saw
-                    body = monotonic_partial_text(last_partial_text, joined)
+                    body = radio_sess.finalize_joined_body()
                     latency_ms = 0
                     tr_provider = last_provider
                     if len(pieces) >= 1:
@@ -1950,8 +1884,8 @@ def run_listen(
                             sample_rate=last_sample_rate or 16000,
                         )
                         tr_provider = getattr(tr_full, "provider", None) or tr_provider
-                        body = prefer_complete_transcript(
-                            body, (tr_full.text or "").strip()
+                        body = radio_sess.finalize_joined_body(
+                            (tr_full.text or "").strip()
                         )
                     tr = SimpleNamespace(text=body, provider=tr_provider)
                     if agent_act == "finish":
@@ -1969,7 +1903,7 @@ def run_listen(
                             end_mode=mode.value,
                             end_phrase="agent:finish",
                             stream_id=stream,
-                            partials_emitted=partial_seq,
+                            partials_emitted=radio_sess.partial_seq,
                         )
                     # max_listen / fall-through: return assembled body if any
                     if body:
@@ -1987,18 +1921,18 @@ def run_listen(
                             end_mode=mode.value,
                             end_phrase="max_listen",
                             stream_id=stream,
-                            partials_emitted=partial_seq,
+                            partials_emitted=radio_sess.partial_seq,
                         )
             if agent_act == "cancel":
                 return ListenResult(
-                    text=last_partial_text,
+                    text=radio_sess.last_partial_text,
                     provider=last_provider,
                     duration_ms=int(1000 * (time.monotonic() - started)),
                     end_mode=mode.value,
                     end_phrase="agent:cancel",
                     cancelled=True,
                     stream_id=stream,
-                    partials_emitted=partial_seq,
+                    partials_emitted=radio_sess.partial_seq,
                 )
             raise TimeoutError(f"radio listen exceeded max_listen_s={max_listen}")
         finally:

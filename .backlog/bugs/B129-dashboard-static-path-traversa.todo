@@ -1,17 +1,18 @@
 ---
+claimed_at: "2026-07-15T21:06:39Z"
+claimed_by: codex-urban-morn-b847
+completed_at: null
 complexity: low
 created_at: "2026-07-15T20:59:51Z"
 depends_on: []
 estimate_hours: 1
 id: B129
 priority: high
-status: pending
-tags:
-    - security
-    - dashboard
-    - path-traversal
+started_at: "2026-07-15T21:06:39Z"
+status: in_progress
+tags: []
 title: Dashboard static path traversal reads sibling directories with matching prefixes
-updated_at: "2026-07-15T20:59:51Z"
+updated_at: "2026-07-15T21:06:39Z"
 ---
 ## Evidence
 DashboardHandler.do_GET serves every non-api path without authentication. _serve_static URL-decodes the path, resolves root plus the relative path, then accepts it when str(target).startswith(str(root.resolve())). String prefixes do not prove path containment. With static root /tmp/X/web and sibling /tmp/X/web-secret/secret.txt, an unauthenticated GET /%2e%2e/web-secret/secret.txt returned HTTP 200 with TOP-SECRET. This was reproduced against a live DashboardServer on the current head. B066 is complete and does not record this concrete traversal.

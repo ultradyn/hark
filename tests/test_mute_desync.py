@@ -185,6 +185,82 @@ def test_repair_noop_when_clean(monkeypatch):
     assert rep["reasons"] == []
 
 
+def test_repair_unmutes_stuck_source_even_when_mute_applied_false(monkeypatch):
+    """B120/B123: mute intended but applied flag false — still fix stuck Mute:yes."""
+    pulse = {"src0": True}
+    logs: list[str] = []
+    monkeypatch.setattr(mm, "_which", lambda n: n == "pactl")
+    monkeypatch.setattr(mm, "default_source", lambda: "src0")
+    monkeypatch.setattr(mm, "source_is_muted", lambda s: pulse[s])
+    monkeypatch.setattr(
+        mm,
+        "set_source_mute",
+        lambda s, mute: pulse.__setitem__(s, mute) or True,
+    )
+    monkeypatch.setattr(mm, "set_alsa_mic_capture", lambda *a, **k: True)
+    monkeypatch.setattr(mm, "find_wave_alsa_card", lambda: None)
+    monkeypatch.setattr(
+        "hark.syslog.log", lambda kind, **kw: logs.append(kind)
+    )
+
+    rep = mm.repair_tts_mute_after_play(
+        mute_was_enabled=True,
+        mute_applied=False,
+        was_muted_before=False,
+    )
+    assert rep["repaired"] is True
+    assert "source_still_muted" in rep["reasons"]
+    assert pulse["src0"] is False
+    assert "mic.mute_desync" in logs
+
+
+def test_repair_unmutes_when_was_muted_before_unknown(monkeypatch):
+    """Unknown pre-mute state + stuck source → unmute (fail-safe for ambient)."""
+    pulse = {"src0": True}
+    monkeypatch.setattr(mm, "_which", lambda n: n == "pactl")
+    monkeypatch.setattr(mm, "default_source", lambda: "src0")
+    monkeypatch.setattr(mm, "source_is_muted", lambda s: pulse[s])
+    monkeypatch.setattr(
+        mm,
+        "set_source_mute",
+        lambda s, mute: pulse.__setitem__(s, mute) or True,
+    )
+    monkeypatch.setattr(mm, "set_alsa_mic_capture", lambda *a, **k: True)
+    monkeypatch.setattr(mm, "find_wave_alsa_card", lambda: None)
+
+    rep = mm.repair_tts_mute_after_play(
+        mute_was_enabled=True,
+        mute_applied=False,
+        was_muted_before=None,
+    )
+    assert rep["repaired"] is True
+    assert pulse["src0"] is False
+
+
+def test_repair_respects_user_pre_mute(monkeypatch):
+    """Do not fight intentional user mute (was_muted=True, we never applied)."""
+    pulse = {"src0": True}
+    calls: list[tuple] = []
+    monkeypatch.setattr(mm, "_which", lambda n: n == "pactl")
+    monkeypatch.setattr(mm, "default_source", lambda: "src0")
+    monkeypatch.setattr(mm, "source_is_muted", lambda s: pulse[s])
+    monkeypatch.setattr(
+        mm,
+        "set_source_mute",
+        lambda s, mute: calls.append((s, mute)) or pulse.__setitem__(s, mute) or True,
+    )
+    monkeypatch.setattr(mm, "set_alsa_mic_capture", lambda *a, **k: True)
+
+    rep = mm.repair_tts_mute_after_play(
+        mute_was_enabled=True,
+        mute_applied=False,
+        was_muted_before=True,
+    )
+    assert rep["repaired"] is False
+    assert pulse["src0"] is True
+    assert calls == []
+
+
 def test_run_tts_repairs_after_play(monkeypatch):
     """run_tts finally path calls repair even if play succeeds."""
     from hark.speech import run_tts
@@ -233,3 +309,4 @@ def test_run_tts_repairs_after_play(monkeypatch):
     assert len(repairs) == 1
     assert repairs[0]["mute_was_enabled"] is True
     assert repairs[0]["mute_applied"] is True
+    assert repairs[0].get("was_muted_before") is False

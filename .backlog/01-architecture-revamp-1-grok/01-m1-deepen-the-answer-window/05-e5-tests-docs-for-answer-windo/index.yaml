@@ -19,7 +19,7 @@ tasks:
       file: T001-port-radio-silence-tests-to-de.todo
       id: T001
       priority: high
-      status: in_progress
+      status: done
       tags: []
       title: Port radio/silence tests to deep interface
     - complexity: low

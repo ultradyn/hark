@@ -440,6 +440,36 @@ def write_worker_records(path: Path, records: Iterable[WorkerRecord]) -> None:
         _write_worker_records_unlocked(path, records)
 
 
+def _write_worker_records_direct_unlocked(
+    path: Path, records: Iterable[WorkerRecord]
+) -> None:
+    """Synchronously rewrite structured identities without an atomic rename."""
+    unique = {record.pid: record for record in records}
+    ordered = sorted(unique.values(), key=lambda record: record.pid)
+    if not ordered:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "".join(f"{record.to_json()}\n" for record in ordered)
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write(body)
+        handle.flush()
+        os.fsync(handle.fileno())
+    directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def write_worker_records_direct(
+    path: Path, records: Iterable[WorkerRecord]
+) -> None:
+    """Durably publish structured identities when atomic rename is unavailable."""
+    with worker_pidfile_lock(path):
+        _write_worker_records_direct_unlocked(path, records)
+
+
 def write_worker_pidfile_bytes(path: Path, payload: bytes | None) -> None:
     """Atomically restore raw legacy ownership within a larger transaction."""
     with worker_pidfile_lock(path):
@@ -661,7 +691,51 @@ def main(argv: Sequence[str] | None = None) -> int:
     compatible.add_argument("--watch", action="store_true")
     compatible.add_argument("--ambient", action="store_true")
     compatible.add_argument("--session", required=True)
+    capture = sub.add_parser("capture")
+    capture.add_argument("pid", type=int)
+    capture.add_argument("role", choices=sorted(WORKER_ROLES))
+    matches = sub.add_parser("match-records")
+    matches.add_argument("records", nargs="+")
+    send_records = sub.add_parser("signal-records")
+    send_records.add_argument("signal", type=_parse_signal)
+    send_records.add_argument("records", nargs="+")
+    publish = sub.add_parser("publish")
+    publish.add_argument("pidfile", type=Path)
+    publish.add_argument("records", nargs="+")
+    publish.add_argument("--direct", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.command == "capture":
+        record = capture_worker_identity(args.pid, role=args.role)
+        if record is None:
+            return 1
+        print(record.to_json())
+        return 0
+
+    if args.command in {"match-records", "signal-records", "publish"}:
+        supplied: list[WorkerRecord] = []
+        for raw_record in args.records:
+            record = _parse_stored_record(raw_record)
+            if record is None:
+                parser.error("invalid structured worker record")
+            supplied.append(record)
+        if args.command == "match-records":
+            for record in supplied:
+                if record_matches_process(record):
+                    print(record.to_json())
+            return 0
+        if args.command == "signal-records":
+            outcomes = [_signal_worker(record, args.signal) for record in supplied]
+            errors = [outcome for outcome in outcomes if outcome.error is not None]
+            for outcome in errors:
+                print(
+                    f"failed to signal worker pid {outcome.record.pid}: {outcome.error}",
+                    file=sys.stderr,
+                )
+            return 1 if errors else 0
+        writer = write_worker_records_direct if args.direct else write_worker_records
+        writer(args.pidfile, supplied)
+        return 0
 
     records = collect_worker_records(args.pidfile, discover=args.discover)
     if args.command == "compatible":

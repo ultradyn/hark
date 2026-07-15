@@ -140,26 +140,16 @@ collect_mode_a_pids_into() {
   result=("${parsed[@]}")
 }
 
-# Emergency durable ownership when post-spawn identity discovery itself fails.
-# Bare PIDs are the legacy format and will be migrated only after argv validation.
-write_legacy_pidfile() {
+write_attempt_worker_records() {
   (($# > 0)) || return 1
-  local temporary="${PIDFILE}.$$.tmp"
-  local status=0
-  acquire_pidfile_lock || return $?
-  printf '%s\n' "$@" >"$temporary" && mv -f "$temporary" "$PIDFILE" || status=$?
-  rm -f "$temporary"
-  release_pidfile_lock || status=$?
-  return "$status"
+  worker_identity publish "$PIDFILE" "$@"
 }
 
-# Last-resort publication for rollback survivors when atomic rename itself is
-# unavailable. The caller holds the ownership lock, so a synced direct rewrite
-# is preferable to returning with a live, unowned child.
-write_emergency_legacy_pidfile() {
+# Last-resort structured publication for exact rollback survivors when atomic
+# rename itself is unavailable. The helper fsyncs the file and parent directory.
+write_emergency_worker_records() {
   (($# > 0)) || return 1
-  printf '%s\n' "$@" >"$PIDFILE" || return $?
-  sync -d "$PIDFILE" 2>/dev/null
+  worker_identity publish "$PIDFILE" --direct "$@"
 }
 
 workers_match_request() {
@@ -169,55 +159,77 @@ workers_match_request() {
   worker_identity "${request[@]}" >/dev/null
 }
 
-attempt_pid_running() {
+capture_started_worker() {
   local pid="$1"
-  local stat
-  local after_comm
-  local state
-  kill -0 "$pid" 2>/dev/null || return 1
-  stat="$(<"/proc/$pid/stat")" 2>/dev/null || return 1
-  after_comm="${stat##*) }"
-  state="${after_comm%% *}"
-  [[ "$state" != "Z" ]]
+  local role="$2"
+  local record
+  record="$(worker_identity capture "$pid" "$role")" || return $?
+  started+=("$pid")
+  started_records+=("$record")
+}
+
+match_started_records_into() {
+  local destination="$1"
+  shift
+  local output
+  local -a parsed=()
+  output="$(worker_identity match-records "$@")" || return $?
+  if [[ -n "$output" ]]; then
+    mapfile -t parsed <<<"$output"
+  fi
+  local -n result="$destination"
+  result=("${parsed[@]}")
 }
 
 # A failed ownership publication cannot leave this attempt's children running
-# anonymously. Terminate and reap them; if a child somehow survives SIGKILL,
-# retry durable legacy ownership and make the exceptional state explicit.
+# anonymously. Every signal is authorized by the immutable start-time + role
+# identity captured immediately after spawn and reverified around pidfd send.
 rollback_started_workers() {
   (($# > 0)) || return 0
-  local -a attempted=("$@")
+  local -a attempted_records=("$@")
   local -a remaining=()
   local -a survivors=()
-  local pid
+  local index
+  local record
+  local survivor
+  local survived
   local tick
 
-  echo "rolling back unpublished Hark workers: ${attempted[*]}" >&2
-  for pid in "${attempted[@]}"; do
-    kill -TERM "$pid" 2>/dev/null || true
-  done
+  echo "rolling back unpublished Hark worker identities" >&2
+  if ! match_started_records_into remaining "${attempted_records[@]}"; then
+    echo "error: failed to verify rollback worker identities; refusing raw PID signals" >&2
+    survivors=("${attempted_records[@]}")
+  elif ((${#remaining[@]} > 0)); then
+    worker_identity signal-records TERM "${remaining[@]}" >/dev/null || true
+  fi
   for tick in {1..20}; do
-    remaining=()
-    for pid in "${attempted[@]}"; do
-      attempt_pid_running "$pid" && remaining+=("$pid")
-    done
+    match_started_records_into remaining "${attempted_records[@]}" || {
+      survivors=("${attempted_records[@]}")
+      break
+    }
     ((${#remaining[@]} > 0)) || break
     sleep 0.1
   done
-  for pid in "${remaining[@]}"; do
-    kill -KILL "$pid" 2>/dev/null || true
-  done
+  if ((${#remaining[@]} > 0)); then
+    worker_identity signal-records KILL "${remaining[@]}" >/dev/null || true
+  fi
   sleep 0.1
-  for pid in "${attempted[@]}"; do
-    if attempt_pid_running "$pid"; then
-      survivors+=("$pid")
-    else
-      wait "$pid" 2>/dev/null || true
-    fi
+  match_started_records_into survivors "${attempted_records[@]}" || \
+    survivors=("${attempted_records[@]}")
+
+  # Reap only original direct children whose captured identity no longer lives.
+  # `wait` does not signal and cannot target a reused non-child process.
+  for index in "${!attempted_records[@]}"; do
+    record="${attempted_records[$index]}"
+    survived=0
+    for survivor in "${survivors[@]}"; do
+      [[ "$survivor" != "$record" ]] || survived=1
+    done
+    ((survived == 1)) || wait "${started[$index]}" 2>/dev/null || true
   done
   if ((${#survivors[@]} > 0)); then
-    if write_legacy_pidfile "${survivors[@]}" || \
-      write_emergency_legacy_pidfile "${survivors[@]}"; then
+    if write_attempt_worker_records "${survivors[@]}" || \
+      write_emergency_worker_records "${survivors[@]}"; then
       echo "warning: retained surviving rollback workers in $PIDFILE: ${survivors[*]}" >&2
     else
       echo "critical: rollback survivors could not be published in $PIDFILE: ${survivors[*]}" >&2
@@ -397,6 +409,7 @@ if [[ $prev_count -gt 0 ]]; then
 fi
 
 started=()
+started_records=()
 if [[ "$skip_start" -eq 0 ]]; then
   if ! acquire_pidfile_lock; then
     echo "error: failed to acquire Hark worker ownership lock" >&2
@@ -430,7 +443,15 @@ if [[ "$skip_start" -eq 0 ]]; then
       exec nohup "${HARK[@]}" watch --session "$SESSION" --for-monitor \
         --statuses blocked,done
     ) >>"$WATCH_LOG" 2>&1 &
-    started+=("$!")
+    started_pid="$!"
+    if ! capture_started_worker "$started_pid" watch; then
+      echo "error: failed to capture spawned watch identity; waiting rather than signalling a raw PID" >&2
+      wait "$started_pid" 2>/dev/null || true
+      rollback_started_workers "${started_records[@]}" || true
+      release_pidfile_lock || true
+      release_start_lock || true
+      exit 1
+    fi
   fi
 
   if [[ "$DO_AMBIENT" -eq 1 ]]; then
@@ -450,7 +471,15 @@ print("  say: " + " / ".join(ps[:10]) + (" …" if len(ps) > 10 else ""))
       exec {START_LOCK_FD}>&-
       exec nohup "${HARK[@]}" ambient
     ) >>"$AMBIENT_LOG" 2>&1 &
-    started+=("$!")
+    started_pid="$!"
+    if ! capture_started_worker "$started_pid" ambient; then
+      echo "error: failed to capture spawned ambient identity; waiting rather than signalling a raw PID" >&2
+      wait "$started_pid" 2>/dev/null || true
+      rollback_started_workers "${started_records[@]}" || true
+      release_pidfile_lock || true
+      release_start_lock || true
+      exit 1
+    fi
   fi
 
   sleep 1
@@ -459,12 +488,12 @@ print("  say: " + " / ".join(ps[:10]) + (" …" if len(ps) > 10 else ""))
   # fall back to $! list if scan is empty (race before exec).
   if ! collect_mode_a_pids_into live; then
     echo "error: failed to discover started Hark workers" >&2
-    if ((${#started[@]} > 0)); then
-      if write_legacy_pidfile "${started[@]}"; then
-        echo "retaining legacy ownership in $PIDFILE" >&2
+    if ((${#started_records[@]} > 0)); then
+      if write_attempt_worker_records "${started_records[@]}"; then
+        echo "retaining structured ownership in $PIDFILE" >&2
       else
-        echo "error: failed to publish legacy ownership; rolling back" >&2
-        rollback_started_workers "${started[@]}" || true
+        echo "error: failed to publish structured ownership; rolling back" >&2
+        rollback_started_workers "${started_records[@]}" || true
       fi
     fi
     release_pidfile_lock || true
@@ -474,11 +503,11 @@ print("  say: " + " / ".join(ps[:10]) + (" …" if len(ps) > 10 else ""))
   if ((${#live[@]} > 0)); then
     : # collect_mode_a_pids already wrote canonical structured identities
   elif ((${#started[@]} > 0)); then
-    if write_legacy_pidfile "${started[@]}"; then
+    if write_attempt_worker_records "${started_records[@]}"; then
       live=("${started[@]}")
     else
       echo "error: failed to publish fallback worker ownership; rolling back" >&2
-      rollback_started_workers "${started[@]}" || true
+      rollback_started_workers "${started_records[@]}" || true
       release_pidfile_lock || true
       release_start_lock || true
       exit 1

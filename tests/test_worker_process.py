@@ -107,6 +107,19 @@ def test_worker_request_compatibility_requires_exact_roles_and_watch_session(
     )
 
 
+def test_direct_publication_keeps_structured_worker_identity(tmp_path: Path):
+    path = tmp_path / "mode-a.pids"
+    record = worker_process.WorkerRecord(
+        pid=4321, start_time="captured-start", role="ambient"
+    )
+
+    assert worker_process.main(
+        ["publish", str(path), "--direct", record.to_json()]
+    ) == 0
+
+    assert json.loads(path.read_text(encoding="utf-8")) == json.loads(record.to_json())
+
+
 @pytest.mark.parametrize(
     "argv",
     [
@@ -407,6 +420,32 @@ def test_signal_reverifies_after_opening_pidfd(
         os.close(write_fd)
 
 
+def test_signal_records_cli_does_not_signal_reused_spawn_identity(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A captured attempt record is not authority after its PID lifetime changes."""
+    record = worker_process.WorkerRecord(
+        pid=4321, start_time="spawn-time", role="watch"
+    )
+    read_fd, write_fd = os.pipe()
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(worker_process.os, "pidfd_open", lambda _pid: read_fd)
+    monkeypatch.setattr(worker_process, "record_matches_process", lambda _record: False)
+    monkeypatch.setattr(
+        worker_process.signal,
+        "pidfd_send_signal",
+        lambda fd, sig: sent.append((fd, sig)),
+    )
+    try:
+        assert worker_process.main(
+            ["signal-records", "TERM", record.to_json()]
+        ) == 0
+    finally:
+        os.close(write_fd)
+
+    assert sent == []
+
+
 @pytest.mark.parametrize(
     "failure_stage", ["pidfd_open", "pidfd_send_signal", "pidfd_unavailable"]
 )
@@ -604,19 +643,22 @@ signal_pids TERM 123 456
     )
 
 
-def test_shell_legacy_writer_uses_same_pidfile_lock(tmp_path: Path):
+def test_shell_structured_attempt_writer_uses_same_pidfile_lock(tmp_path: Path):
     repo = Path(__file__).resolve().parents[1]
     script = repo / "scripts" / "run-mode-a.sh"
     state = tmp_path / "state"
     pidfile = state / "hark" / "mode-a.pids"
     entered = tmp_path / "entered"
+    record = worker_process.WorkerRecord(
+        pid=1234, start_time="captured", role="watch"
+    )
     command = f"""
 set -euo pipefail
 export HARK_RUN_MODE_A_SOURCE_ONLY=1
 export XDG_STATE_HOME={state!s}
 source {script!s}
 printf 'entered\n' > {entered!s}
-write_legacy_pidfile 1234
+write_attempt_worker_records '{record.to_json()}'
 printf 'done\n'
 """
     process: subprocess.Popen[str] | None = None
@@ -640,29 +682,45 @@ printf 'done\n'
         stdout, stderr = process.communicate(timeout=2)
         assert process.returncode == 0, stderr
         assert stdout.strip() == "done"
-        assert pidfile.read_text(encoding="utf-8") == "1234\n"
+        assert json.loads(pidfile.read_text(encoding="utf-8")) == json.loads(
+            record.to_json()
+        )
     finally:
         if process is not None and process.poll() is None:
             process.kill()
             process.wait(timeout=2)
 
 
-def test_shell_rollback_durably_records_a_survivor_after_atomic_write_failure(
+def test_shell_rollback_durably_records_structured_survivor_after_atomic_failure(
     tmp_path: Path,
 ):
     repo = Path(__file__).resolve().parents[1]
     script = repo / "scripts" / "run-mode-a.sh"
     state = tmp_path / "state"
+    record = worker_process.WorkerRecord(
+        pid=4321, start_time="captured-start", role="watch"
+    ).to_json()
     command = f"""
 set -euo pipefail
 export HARK_RUN_MODE_A_SOURCE_ONLY=1
 export XDG_STATE_HOME={state!s}
 source {script!s}
-kill() {{ return 0; }}
+started=(4321)
 sleep() {{ return 0; }}
-attempt_pid_running() {{ return 0; }}
-write_legacy_pidfile() {{ return 42; }}
-rollback_started_workers 4321
+worker_identity() {{
+  case "$1" in
+    match-records) printf '%s\n' '{record}' ;;
+    signal-records) return 0 ;;
+    publish)
+      if [[ " $* " == *" --direct "* ]]; then
+        printf '%s\n' '{record}' > "$PIDFILE"
+      else
+        return 42
+      fi
+      ;;
+  esac
+}}
+rollback_started_workers '{record}'
 """
 
     result = subprocess.run(
@@ -674,8 +732,46 @@ rollback_started_workers 4321
     )
 
     pidfile = state / "hark" / "mode-a.pids"
-    assert pidfile.read_text(encoding="utf-8") == "4321\n"
+    assert json.loads(pidfile.read_text(encoding="utf-8"))["start_time"] == (
+        "captured-start"
+    )
     assert "retained surviving rollback workers" in result.stderr
+
+
+def test_shell_rollback_never_signals_a_reused_pid(tmp_path: Path):
+    repo = Path(__file__).resolve().parents[1]
+    script = repo / "scripts" / "run-mode-a.sh"
+    state = tmp_path / "state"
+    trace = tmp_path / "trace"
+    record = worker_process.WorkerRecord(
+        pid=4321, start_time="original-start", role="watch"
+    ).to_json()
+    command = f"""
+set -euo pipefail
+export HARK_RUN_MODE_A_SOURCE_ONLY=1
+export XDG_STATE_HOME={state!s}
+source {script!s}
+started=(4321)
+worker_identity() {{
+  case "$1" in
+    match-records) return 0 ;;
+    signal-records) printf '%s\n' "$*" >> {trace!s} ;;
+    *) return 42 ;;
+  esac
+}}
+rollback_started_workers '{record}'
+"""
+
+    subprocess.run(
+        ["bash", "-c", command],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert not trace.exists()
+    assert not (state / "hark" / "mode-a.pids").exists()
 
 
 def test_shell_stop_retains_pidfile_when_identity_collection_fails(tmp_path: Path):
@@ -777,33 +873,51 @@ def test_shell_start_refuses_when_initial_identity_collection_fails(tmp_path: Pa
     assert pidfile.read_text(encoding="utf-8") == "sentinel\n"
 
 
-def test_shell_post_spawn_collection_failure_retains_legacy_pid(tmp_path: Path):
+def test_shell_post_spawn_collection_failure_retains_structured_identity(
+    tmp_path: Path,
+):
     repo = Path(__file__).resolve().parents[1]
     script = repo / "scripts" / "run-mode-a.sh"
     state = tmp_path / "state"
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     count = tmp_path / "collect-count"
+    real_uv = shutil.which("uv")
+    assert real_uv is not None
+    fake_hark = tmp_path / "hark"
+    fake_hark.write_text(
+        "#!/usr/bin/env python3\n"
+        "import signal\n"
+        "import time\n"
+        "signal.signal(signal.SIGTERM, lambda *_args: exit(0))\n"
+        "while True:\n"
+        "    time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    fake_hark.chmod(0o755)
     uv = fake_bin / "uv"
     uv.write_text(
         "#!/bin/sh\n"
-        "if printf '%s\\n' \"$*\" | grep -q hark.worker_process; then\n"
+        "if printf '%s\\n' \"$*\" | grep -q 'hark.worker_process collect'; then\n"
         f"  n=$(cat {count!s} 2>/dev/null || echo 0)\n"
         "  n=$((n + 1))\n"
         f"  printf '%s\\n' \"$n\" > {count!s}\n"
         '  [ "$n" -le 2 ] && exit 0\n'
         "  exit 42\n"
         "fi\n"
-        'case "$*" in\n'
-        "  *'python -c'*) exit 0 ;;\n"
-        "esac\n"
-        "exec sleep 60\n",
+        'if [ "${1:-}" = run ] && [ "${2:-}" = hark ]; then\n'
+        "  shift 2\n"
+        '  exec "$FAKE_HARK" "$@"\n'
+        "fi\n"
+        'exec "$REAL_UV" "$@"\n',
         encoding="utf-8",
     )
     uv.chmod(0o755)
     env = os.environ.copy()
     env["XDG_STATE_HOME"] = str(state)
     env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    env["REAL_UV"] = real_uv
+    env["FAKE_HARK"] = str(fake_hark)
 
     result = subprocess.run(
         [str(script), "--no-ambient"],
@@ -814,10 +928,13 @@ def test_shell_post_spawn_collection_failure_retains_legacy_pid(tmp_path: Path):
         timeout=10,
     )
     pidfile = state / "hark" / "mode-a.pids"
-    recorded = int(pidfile.read_text(encoding="utf-8").strip())
+    stored = json.loads(pidfile.read_text(encoding="utf-8"))
+    recorded = stored["pid"]
     try:
         assert result.returncode != 0
-        assert "retaining legacy ownership" in result.stderr
+        assert "retaining structured ownership" in result.stderr
+        assert stored["start_time"]
+        assert stored["role"] == "watch"
         os.kill(recorded, 0)
     finally:
         try:
@@ -833,51 +950,54 @@ def test_shell_publication_failure_rolls_back_started_workers(
     """Both collector-error and successful-empty fallbacks are transactional."""
     repo = Path(__file__).resolve().parents[1]
     script = repo / "scripts" / "run-mode-a.sh"
-    real_mv = shutil.which("mv")
-    assert real_mv is not None
+    real_uv = shutil.which("uv")
+    assert real_uv is not None
     state = tmp_path / "state"
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     count = tmp_path / "collect-count"
     spawn_log = tmp_path / "spawn"
+    fake_hark = tmp_path / "hark"
+    fake_hark.write_text(
+        "#!/usr/bin/env python3\n"
+        "import signal\n"
+        "import time\n"
+        "signal.signal(signal.SIGTERM, lambda *_args: exit(0))\n"
+        "while True:\n"
+        "    time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    fake_hark.chmod(0o755)
     uv = fake_bin / "uv"
     fail_condition = '[ "$n" -gt 2 ] && exit 42\n' if collector_fails else ""
     uv.write_text(
         "#!/bin/sh\n"
-        "if printf '%s\\n' \"$*\" | grep -q hark.worker_process; then\n"
+        "if printf '%s\\n' \"$*\" | grep -q 'hark.worker_process collect'; then\n"
         f"  n=$(cat {count!s} 2>/dev/null || echo 0)\n"
         "  n=$((n + 1))\n"
         f"  printf '%s\\n' \"$n\" > {count!s}\n"
         f"  {fail_condition}"
         "  exit 0\n"
         "fi\n"
-        "case \"$*\" in\n"
-        "  *'python -c'*) exit 0 ;;\n"
-        "  *'run hark'*)\n"
+        "if printf '%s\\n' \"$*\" | grep -q 'hark.worker_process publish'; then\n"
+        "  exit 42\n"
+        "fi\n"
+        'if [ "${1:-}" = run ] && [ "${2:-}" = hark ]; then\n'
+        "    shift 2\n"
         f"    printf '%s\\n' \"$$\" > {spawn_log!s}\n"
-        "    exec sleep 60 ;;\n"
-        "esac\n"
-        "exit 42\n",
+        '    exec "$FAKE_HARK" "$@"\n'
+        "fi\n"
+        'exec "$REAL_UV" "$@"\n',
         encoding="utf-8",
     )
     uv.chmod(0o755)
-    mv = fake_bin / "mv"
-    mv.write_text(
-        "#!/bin/sh\n"
-        "for destination do :; done\n"
-        "case \"$destination\" in\n"
-        "  */mode-a.pids) exit 42 ;;\n"
-        "esac\n"
-        'exec "$REAL_MV" "$@"\n',
-        encoding="utf-8",
-    )
-    mv.chmod(0o755)
     env = os.environ.copy()
     env.update(
         {
             "XDG_STATE_HOME": str(state),
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
-            "REAL_MV": real_mv,
+            "REAL_UV": real_uv,
+            "FAKE_HARK": str(fake_hark),
         }
     )
 
@@ -891,7 +1011,7 @@ def test_shell_publication_failure_rolls_back_started_workers(
     )
 
     assert result.returncode != 0
-    assert "rolling back unpublished Hark workers" in result.stderr
+    assert "rolling back unpublished Hark worker identities" in result.stderr
     spawned = int(spawn_log.read_text(encoding="utf-8").strip())
     with pytest.raises(ProcessLookupError):
         os.kill(spawned, 0)

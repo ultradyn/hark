@@ -22,12 +22,14 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import IO, Collection, Iterable, Iterator, Sequence
 
 WORKER_ROLES = frozenset({"ambient", "watch"})
 RECORD_VERSION = 1
+WORKER_PIDFILE_ENV = "HARK_WORKER_PIDFILE"
+WORKER_ROLE_ENV = "HARK_WORKER_ROLE"
 
 
 @dataclass(frozen=True, order=True)
@@ -38,6 +40,9 @@ class WorkerRecord:
     start_time: str
     role: str
     version: int = RECORD_VERSION
+    pidfile: str | None = None
+    config: str | None = None
+    provisional: bool = False
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
@@ -294,21 +299,54 @@ def worker_role_from_argv(argv: Sequence[str]) -> str | None:
 
 
 def inspect_worker(
-    pid: int, *, expected_role: str | None = None
+    pid: int,
+    *,
+    expected_role: str | None = None,
+    expected_pidfile: Path | None = None,
+    expected_config: Path | None = None,
 ) -> WorkerRecord | None:
     """Inspect the current process occupying *pid*, if it is a Hark worker."""
     stat = _proc_stat(pid)
     argv = _proc_argv(pid)
-    if stat is None or argv is None:
+    environ = _proc_environ(pid)
+    if stat is None or argv is None or environ is None:
         return None
     role = worker_role_from_argv(argv)
     if role is None or (expected_role is not None and role != expected_role):
         return None
-    return WorkerRecord(pid=pid, start_time=stat[1], role=role)
+    if environ.get(WORKER_ROLE_ENV) != role:
+        return None
+    raw_pidfile = environ.get(WORKER_PIDFILE_ENV)
+    if not raw_pidfile:
+        return None
+    pidfile = str(Path(raw_pidfile).resolve(strict=False))
+    if expected_pidfile is not None and pidfile != str(
+        expected_pidfile.resolve(strict=False)
+    ):
+        return None
+    live_config = _config_path_from_environ(environ)
+    if live_config is None:
+        return None
+    config = str(live_config)
+    if expected_config is not None and config != str(
+        expected_config.resolve(strict=False)
+    ):
+        return None
+    return WorkerRecord(
+        pid=pid,
+        start_time=stat[1],
+        role=role,
+        pidfile=pidfile,
+        config=config,
+    )
 
 
 def capture_worker_identity(
-    pid: int, *, role: str, expected_parent_pid: int | None = None
+    pid: int,
+    *,
+    role: str,
+    expected_parent_pid: int | None = None,
+    pidfile: Path | None = None,
 ) -> WorkerRecord | None:
     """Capture a newly spawned, caller-owned worker before later validation."""
     if role not in WORKER_ROLES:
@@ -316,7 +354,16 @@ def capture_worker_identity(
     stat = _proc_stat(pid)
     if stat is None:
         return None
-    record = WorkerRecord(pid=pid, start_time=stat[1], role=role)
+    scope = str(pidfile.resolve(strict=False)) if pidfile is not None else None
+    config_path = _config_path_from_environ(dict(os.environ))
+    record = WorkerRecord(
+        pid=pid,
+        start_time=stat[1],
+        role=role,
+        pidfile=scope,
+        config=str(config_path) if config_path is not None else None,
+        provisional=True,
+    )
     if expected_parent_pid is not None:
         if expected_parent_pid <= 0 or _proc_ppid(pid) != expected_parent_pid:
             return None
@@ -334,7 +381,19 @@ def record_matches_lifetime(record: WorkerRecord) -> bool:
 
 def record_matches_process(record: WorkerRecord) -> bool:
     """Return whether *record* still names the same worker process lifetime."""
-    return inspect_worker(record.pid, expected_role=record.role) == record
+    if record.provisional:
+        return False
+    expected_pidfile = Path(record.pidfile) if record.pidfile is not None else None
+    expected_config = Path(record.config) if record.config is not None else None
+    return (
+        inspect_worker(
+            record.pid,
+            expected_role=record.role,
+            expected_pidfile=expected_pidfile,
+            expected_config=expected_config,
+        )
+        == record
+    )
 
 
 def wait_for_worker_role(
@@ -350,7 +409,8 @@ def wait_for_worker_role(
     while True:
         if not record_matches_lifetime(record):
             return False
-        if record_matches_process(record):
+        ready = replace(record, provisional=False)
+        if record_matches_process(ready):
             return True
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -369,6 +429,8 @@ def worker_records_match_request(
     requested_roles = {
         role for role, enabled in (("watch", watch), ("ambient", ambient)) if enabled
     }
+    if any(record.provisional for record in records):
+        return False
     if len(records) != len(requested_roles):
         return False
     if {record.role for record in records} != requested_roles:
@@ -426,7 +488,24 @@ def _parse_stored_record(line: str) -> WorkerRecord | None:
         or version != RECORD_VERSION
     ):
         return None
-    return WorkerRecord(pid=pid, start_time=start_time, role=role, version=version)
+    pidfile = value.get("pidfile")
+    config = value.get("config")
+    provisional = value.get("provisional", False)
+    if pidfile is not None and (not isinstance(pidfile, str) or not pidfile):
+        return None
+    if config is not None and (not isinstance(config, str) or not config):
+        return None
+    if not isinstance(provisional, bool):
+        return None
+    return WorkerRecord(
+        pid=pid,
+        start_time=start_time,
+        role=role,
+        version=version,
+        pidfile=pidfile,
+        config=config,
+        provisional=provisional,
+    )
 
 
 def _parse_legacy_pid(line: str) -> int | None:
@@ -462,7 +541,10 @@ def _write_worker_records_unlocked(path: Path, records: Iterable[WorkerRecord]) 
     unique = {record.pid: record for record in records}
     ordered = sorted(unique.values(), key=lambda record: record.pid)
     if not ordered:
+        existed = path.exists()
         path.unlink(missing_ok=True)
+        if existed:
+            _fsync_directory(path.parent)
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     body = "".join(f"{record.to_json()}\n" for record in ordered)
@@ -481,6 +563,7 @@ def _write_worker_records_unlocked(path: Path, records: Iterable[WorkerRecord]) 
             os.fsync(handle.fileno())
             temporary = Path(handle.name)
         os.replace(temporary, path)
+        _fsync_directory(path.parent)
     finally:
         if temporary is not None:
             try:
@@ -502,7 +585,10 @@ def _write_worker_records_direct_unlocked(
     unique = {record.pid: record for record in records}
     ordered = sorted(unique.values(), key=lambda record: record.pid)
     if not ordered:
+        existed = path.exists()
         path.unlink(missing_ok=True)
+        if existed:
+            _fsync_directory(path.parent)
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     body = "".join(f"{record.to_json()}\n" for record in ordered)
@@ -510,7 +596,11 @@ def _write_worker_records_direct_unlocked(
         handle.write(body)
         handle.flush()
         os.fsync(handle.fileno())
-    directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    _fsync_directory(path.parent)
+
+
+def _fsync_directory(directory: Path) -> None:
+    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(directory_fd)
     finally:
@@ -527,7 +617,10 @@ def write_worker_pidfile_bytes(path: Path, payload: bytes | None) -> None:
     """Atomically restore raw legacy ownership within a larger transaction."""
     with worker_pidfile_lock(path):
         if payload is None:
+            existed = path.exists()
             path.unlink(missing_ok=True)
+            if existed:
+                _fsync_directory(path.parent)
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary: Path | None = None
@@ -544,12 +637,30 @@ def write_worker_pidfile_bytes(path: Path, payload: bytes | None) -> None:
                 os.fsync(handle.fileno())
                 temporary = Path(handle.name)
             os.replace(temporary, path)
+            _fsync_directory(path.parent)
         finally:
             if temporary is not None:
                 try:
                     temporary.unlink(missing_ok=True)
                 except OSError:
                     pass
+
+
+def write_worker_pidfile_bytes_direct(path: Path, payload: bytes | None) -> None:
+    """Synchronously restore raw ownership when atomic replacement fails."""
+    with worker_pidfile_lock(path):
+        if payload is None:
+            existed = path.exists()
+            path.unlink(missing_ok=True)
+            if existed:
+                _fsync_directory(path.parent)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _fsync_directory(path.parent)
 
 
 def replace_owned_worker_records(
@@ -567,7 +678,7 @@ def replace_owned_worker_records(
         _write_worker_records_unlocked(path, merged)
 
 
-def _discover_workers() -> list[WorkerRecord]:
+def _discover_workers(path: Path, config_path: Path) -> list[WorkerRecord]:
     records: list[WorkerRecord] = []
     try:
         proc_entries = Path("/proc").iterdir()
@@ -576,10 +687,41 @@ def _discover_workers() -> list[WorkerRecord]:
     for entry in proc_entries:
         if not entry.name.isdigit():
             continue
-        record = inspect_worker(int(entry.name))
+        record = inspect_worker(
+            int(entry.name),
+            expected_pidfile=path,
+            expected_config=config_path,
+        )
         if record is not None:
             records.append(record)
-    return records
+
+    # `uv run hark ...` may briefly expose both a waiting wrapper and its Hark
+    # child. They are one logical worker only when ancestry proves that
+    # relationship; keep the leaf that actually owns the long-running role.
+    def is_ancestor(ancestor_pid: int, descendant_pid: int) -> bool:
+        seen: set[int] = set()
+        current = descendant_pid
+        for _ in range(64):
+            parent = _proc_ppid(current)
+            if parent is None or parent in seen:
+                return False
+            if parent == ancestor_pid:
+                return True
+            seen.add(parent)
+            current = parent
+        return False
+
+    return [
+        record
+        for record in records
+        if not any(
+            other.pid != record.pid
+            and other.role == record.role
+            and other.pidfile == record.pidfile
+            and is_ancestor(record.pid, other.pid)
+            for other in records
+        )
+    ]
 
 
 def collect_worker_records(
@@ -608,6 +750,10 @@ def _collect_worker_records_unlocked(
     rewrite: bool,
 ) -> list[WorkerRecord]:
     records: dict[int, WorkerRecord] = {}
+    expected_config_path = _config_path_from_environ(dict(os.environ))
+    if expected_config_path is None:
+        return []
+    expected_config = str(expected_config_path)
     try:
         original = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -620,17 +766,56 @@ def _collect_worker_records_unlocked(
             continue
         stored = _parse_stored_record(line)
         if stored is not None:
-            if record_matches_process(stored):
+            stored_scope = (
+                str(Path(stored.pidfile).resolve(strict=False))
+                if stored.pidfile is not None
+                else None
+            )
+            expected_scope = str(path.resolve(strict=False))
+            if stored_scope is not None and stored_scope != expected_scope:
+                continue
+            stored_config = (
+                str(Path(stored.config).resolve(strict=False))
+                if stored.config is not None
+                else None
+            )
+            if stored_config is not None and stored_config != expected_config:
+                continue
+            if stored.provisional:
+                # Provisional records were introduced with mandatory scope.
+                # Never infer authority for an unscoped provisional lifetime.
+                if (
+                    stored_scope is not None
+                    and stored_config is not None
+                    and record_matches_lifetime(stored)
+                ):
+                    records[stored.pid] = stored
+            elif stored_scope is None or stored_config is None:
+                # Migrate pre-scope structured records only from live processes
+                # that independently prove the exact role and current pidfile.
+                migrated = inspect_worker(
+                    stored.pid,
+                    expected_role=stored.role,
+                    expected_pidfile=path,
+                    expected_config=expected_config_path,
+                )
+                if migrated is not None and migrated.start_time == stored.start_time:
+                    records[migrated.pid] = migrated
+            elif record_matches_process(stored):
                 records[stored.pid] = stored
             continue
         legacy_pid = _parse_legacy_pid(line)
         if legacy_pid is not None:
-            migrated = inspect_worker(legacy_pid)
+            migrated = inspect_worker(
+                legacy_pid,
+                expected_pidfile=path,
+                expected_config=expected_config_path,
+            )
             if migrated is not None:
                 records[migrated.pid] = migrated
 
     if discover:
-        for record in _discover_workers():
+        for record in _discover_workers(path, expected_config_path):
             records[record.pid] = record
 
     result = sorted(records.values(), key=lambda record: record.pid)
@@ -668,6 +853,16 @@ def _send_pidfd_signal(pidfd: int, sig: int) -> None:
         raise OSError(error, os.strerror(error))
 
 
+def open_process_handle(pid: int) -> int:
+    """Open a lifetime-pinning pidfd for a just-spawned owned process."""
+    return _open_pidfd(pid)
+
+
+def signal_process_handle(pidfd: int, sig: int) -> None:
+    """Signal the exact lifetime pinned by *pidfd*."""
+    _send_pidfd_signal(pidfd, sig)
+
+
 def _signal_worker(
     record: WorkerRecord, sig: int, *, lifetime_only: bool = False
 ) -> WorkerSignalOutcome:
@@ -679,7 +874,11 @@ def _signal_worker(
     A process that has exited or changed identity is a benign miss; an error
     signalling a still verified process is reported separately.
     """
-    matches = record_matches_lifetime if lifetime_only else record_matches_process
+    matches = (
+        record_matches_lifetime
+        if lifetime_only or record.provisional
+        else record_matches_process
+    )
     try:
         pidfd = _open_pidfd(record.pid)
     except ProcessLookupError:
@@ -711,6 +910,11 @@ def _signal_worker(
 def signal_worker(record: WorkerRecord, sig: int) -> bool:
     """Return whether *sig* was sent to the exact recorded worker lifetime."""
     return _signal_worker(record, sig).sent
+
+
+def signal_worker_lifetime(record: WorkerRecord, sig: int) -> WorkerSignalOutcome:
+    """Signal a trusted spawn record before it has reached its final role."""
+    return _signal_worker(record, sig, lifetime_only=True)
 
 
 def signal_worker_records(
@@ -779,12 +983,22 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "capture":
         record = capture_worker_identity(
-            args.pid, role=args.role, expected_parent_pid=args.parent_pid
+            args.pid,
+            role=args.role,
+            expected_parent_pid=args.parent_pid,
+            pidfile=Path(os.environ[WORKER_PIDFILE_ENV])
+            if os.environ.get(WORKER_PIDFILE_ENV)
+            else None,
         )
         if record is None:
             return 1
+        if wait_for_worker_role(record, timeout_s=args.timeout):
+            print(replace(record, provisional=False).to_json())
+            return 0
+        # A failed pre-role launch still needs durable lifetime authority for
+        # rollback.  Callers capture stdout even when this command exits 2.
         print(record.to_json())
-        return 0 if wait_for_worker_role(record, timeout_s=args.timeout) else 2
+        return 2
 
     if args.command in {"match-records", "signal-records", "publish"}:
         supplied: list[WorkerRecord] = []

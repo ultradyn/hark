@@ -20,7 +20,7 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -28,13 +28,23 @@ from hark import __version__
 from hark.exitcodes import ERROR, OK, USAGE
 from hark.paths import state_dir
 from hark.worker_process import (
+    WORKER_PIDFILE_ENV,
+    WORKER_ROLE_ENV,
     WorkerRecord,
     capture_worker_identity,
     collect_worker_records,
+    open_process_handle,
     read_worker_records,
+    record_matches_lifetime,
+    record_matches_process,
     replace_owned_worker_records,
+    signal_process_handle,
+    signal_worker_records,
+    signal_worker_lifetime,
     worker_pidfile_lock,
+    wait_for_worker_role,
     write_worker_pidfile_bytes,
+    write_worker_pidfile_bytes_direct,
     write_worker_records,
 )
 
@@ -64,6 +74,12 @@ class WorkerSpawnError(OSError):
         if self.rollback_failures:
             message += "; rollback failures: " + "; ".join(self.rollback_failures)
         super().__init__(message)
+
+
+# If both durable publication paths fail, closing the only pidfd would discard
+# immutable authority over a surviving child. Retain those handles for process
+# lifetime and report their descriptors in the raised rollback diagnostics.
+_RETAINED_ROLLBACK_PIDFDS: dict[int, int] = {}
 
 
 @dataclass
@@ -329,6 +345,11 @@ def stop_harkd(
 
 def _hark_argv() -> list[str]:
     """Build argv prefix to re-enter the hark CLI (uv-friendly)."""
+    test_executable = os.environ.get("HARK_TEST_WORKER_EXECUTABLE")
+    if test_executable and os.environ.get("PYTEST_CURRENT_TEST"):
+        # Integration tests need a harmless long-running process with the same
+        # argv/provenance contract, without opening audio or network resources.
+        return [test_executable]
     # Prefer the same interpreter running this package.
     return [sys.executable, "-m", "hark"]
 
@@ -340,26 +361,42 @@ def _rollback_worker_start(
     original_pidfile: bytes | None,
     restore_pidfile: bool,
     owned_records: dict[int, WorkerRecord] | None = None,
+    owned_pidfds: dict[int, int] | None = None,
     timeout_s: float = 2.0,
 ) -> list[str]:
     """Stop/reap only workers owned by a failed startup attempt."""
     failures: list[str] = []
+    records = owned_records or {}
+    pidfds = owned_pidfds or {}
+
+    def signal_owned(role: str, proc: subprocess.Popen[Any], sig: int) -> bool:
+        record = records.get(proc.pid)
+        pidfd = pidfds.get(proc.pid)
+        if pidfd is not None:
+            if record is not None and not record_matches_lifetime(record):
+                return False
+            try:
+                signal_process_handle(pidfd, sig)
+                return True
+            except ProcessLookupError:
+                return False
+            except (OSError, ValueError) as exc:
+                failures.append(f"{role} pidfd signal {sig} failed ({exc})")
+                return False
+        if record is not None:
+            outcome = signal_worker_lifetime(record, sig)
+            if outcome.error is not None:
+                failures.append(f"{role} signal {sig} failed ({outcome.error})")
+            return outcome.sent
+        failures.append(
+            f"{role} has no immutable lifetime handle; refusing raw PID signal"
+        )
+        return False
 
     for role, proc in reversed(owned):
         if proc.poll() is not None:
             continue
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except OSError as group_exc:
-            # The child may have exited between poll and signal.
-            if proc.poll() is not None:
-                continue
-            try:
-                proc.terminate()
-            except OSError as proc_exc:
-                failures.append(
-                    f"{role} SIGTERM failed ({group_exc}); terminate failed ({proc_exc})"
-                )
+        signal_owned(role, proc, signal.SIGTERM)
 
     deadline = time.monotonic() + timeout_s
     for role, proc in reversed(owned):
@@ -374,16 +411,7 @@ def _rollback_worker_start(
             if proc.poll() is not None:
                 continue
 
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError as group_exc:
-            if proc.poll() is None:
-                try:
-                    proc.kill()
-                except OSError as proc_exc:
-                    failures.append(
-                        f"{role} SIGKILL failed ({group_exc}); kill failed ({proc_exc})"
-                    )
+        signal_owned(role, proc, signal.SIGKILL)
 
         try:
             proc.wait(timeout=1.0)
@@ -408,28 +436,87 @@ def _rollback_worker_start(
             + ", ".join(f"{role}={proc.pid}" for role, proc in survivors)
         )
 
+    # A pidfd pins each direct child, so it is safe to recover structured
+    # lifetime metadata here even when the earlier capture step failed.
+    for role, proc in survivors:
+        if proc.pid in records:
+            continue
+        recovered = capture_worker_identity(
+            proc.pid,
+            role=role,
+            expected_parent_pid=os.getpid(),
+            pidfile=pid_path,
+        )
+        if recovered is not None:
+            records[proc.pid] = recovered
+
+    retained_pidfds: set[int] = set()
+    untracked_survivors = [
+        (role, proc) for role, proc in survivors if proc.pid not in records
+    ]
+    for role, proc in untracked_survivors:
+        pidfd = pidfds.get(proc.pid)
+        if pidfd is None:
+            continue
+        _RETAINED_ROLLBACK_PIDFDS[proc.pid] = pidfd
+        retained_pidfds.add(pidfd)
+        failures.append(
+            f"retained pidfd {pidfd} for untracked surviving {role} worker {proc.pid}"
+        )
+
     if restore_pidfile or survivors:
+        payload: bytes | None
         try:
             if survivors:
                 payload = original_pidfile or b""
                 if payload and not payload.endswith(b"\n"):
                     payload += b"\n"
-                records = owned_records or {}
-                payload += b"".join(
-                    (
-                        f"{records[proc.pid].to_json()}\n".encode()
-                        if proc.pid in records
-                        else f"{proc.pid}\n".encode()
+                untracked = [f"{role}={proc.pid}" for role, proc in untracked_survivors]
+                if untracked:
+                    failures.append(
+                        "surviving workers lack structured provisional identity: "
+                        + ", ".join(untracked)
                     )
+                payload += b"".join(
+                    f"{replace(records[proc.pid], provisional=True).to_json()}\n".encode()
                     for _, proc in survivors
+                    if proc.pid in records
                 )
                 write_worker_pidfile_bytes(pid_path, payload)
             elif original_pidfile is None:
-                write_worker_pidfile_bytes(pid_path, None)
+                payload = None
+                write_worker_pidfile_bytes(pid_path, payload)
             else:
-                write_worker_pidfile_bytes(pid_path, original_pidfile)
+                payload = original_pidfile
+                write_worker_pidfile_bytes(pid_path, payload)
+        except OSError as atomic_exc:
+            try:
+                write_worker_pidfile_bytes_direct(pid_path, payload)
+                failures.append(
+                    f"pidfile atomic restore failed ({atomic_exc}); used direct fallback"
+                )
+            except OSError as direct_exc:
+                failures.append(
+                    "pidfile restore failed "
+                    f"(atomic: {atomic_exc}; direct: {direct_exc})"
+                )
+                for _, proc in survivors:
+                    pidfd = pidfds.get(proc.pid)
+                    if pidfd is None:
+                        continue
+                    _RETAINED_ROLLBACK_PIDFDS[proc.pid] = pidfd
+                    retained_pidfds.add(pidfd)
+                    failures.append(
+                        f"retained pidfd {pidfd} for surviving worker {proc.pid}"
+                    )
+
+    for pidfd in pidfds.values():
+        if pidfd in retained_pidfds:
+            continue
+        try:
+            os.close(pidfd)
         except OSError as exc:
-            failures.append(f"pidfile restore failed ({exc})")
+            failures.append(f"pidfd close failed ({exc})")
 
     return failures
 
@@ -483,11 +570,12 @@ def _spawn_mode_a_workers_locked(
 
     owned: list[tuple[str, subprocess.Popen[Any]]] = []
     owned_records: dict[int, WorkerRecord] = {}
+    owned_pidfds: dict[int, int] = {}
     failed_role = "watch"
     pidfile_touched = False
 
     def _spawn(role: str, argv: list[str], log_name: str) -> None:
-        nonlocal failed_role
+        nonlocal failed_role, pidfile_touched
         failed_role = role
         # Popen duplicates the descriptor into the child, so the supervisor's
         # copy can and must close immediately after the spawn attempt.
@@ -497,18 +585,51 @@ def _spawn_mode_a_workers_locked(
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                env={
+                    **os.environ,
+                    WORKER_PIDFILE_ENV: str(pid_path.resolve(strict=False)),
+                    WORKER_ROLE_ENV: role,
+                },
             )
+            if not proc.pid:
+                raise OSError("worker started without a process ID")
             # Retain ownership before even closing the parent log stream, since
             # context-manager cleanup is itself allowed to fail.
             owned.append((role, proc))
-        if not proc.pid:
-            raise OSError("worker started without a process ID")
+            try:
+                owned_pidfds[proc.pid] = open_process_handle(proc.pid)
+            except BaseException:
+                provisional = capture_worker_identity(
+                    proc.pid,
+                    role=role,
+                    expected_parent_pid=os.getpid(),
+                    pidfile=pid_path,
+                )
+                if provisional is not None:
+                    owned_records[proc.pid] = provisional
+                raise
         if proc.poll() is not None:
             raise OSError(f"worker exited immediately with status {proc.returncode}")
-        record = capture_worker_identity(proc.pid, role=role)
+        record = capture_worker_identity(
+            proc.pid,
+            role=role,
+            expected_parent_pid=os.getpid(),
+            pidfile=pid_path,
+        )
         if record is None:
             raise OSError(f"could not capture {role} worker process identity")
+        # The intended role is provisional until the exact captured lifetime
+        # execs a provenance-scoped Hark worker command.
         owned_records[proc.pid] = record
+        # Publish ownership before waiting for exec/role readiness. If the
+        # supervisor is interrupted, this exact lifetime remains recoverable.
+        failed_role = "pidfile"
+        pidfile_touched = True
+        write_worker_records(pid_path, owned_records.values())
+        failed_role = role
+        if not wait_for_worker_role(record, timeout_s=2.0):
+            raise OSError(f"{role} worker did not reach its expected role")
+        owned_records[proc.pid] = replace(record, provisional=False)
 
     try:
         if do_watch:
@@ -558,6 +679,7 @@ def _spawn_mode_a_workers_locked(
             original_pidfile=original_pidfile,
             restore_pidfile=pidfile_touched,
             owned_records=owned_records,
+            owned_pidfds=owned_pidfds,
         )
         if not isinstance(exc, Exception):
             note = (
@@ -569,6 +691,8 @@ def _spawn_mode_a_workers_locked(
             raise
         raise WorkerSpawnError(failed_role, exc, rollback_failures) from exc
 
+    for pidfd in owned_pidfds.values():
+        os.close(pidfd)
     return [proc for _, proc in owned]
 
 
@@ -581,10 +705,13 @@ def _refresh_owned_worker_records(
     for role, proc in owned:
         if not proc.pid or proc.poll() is not None:
             continue
-        record = capture_worker_identity(proc.pid, role=role)
+        record = capture_worker_identity(proc.pid, role=role, pidfile=pid_path)
         if record is None:
             raise OSError(f"could not refresh {role} worker process identity")
-        records.append(record)
+        ready = replace(record, provisional=False)
+        if not record_matches_process(ready):
+            raise OSError(f"could not verify refreshed {role} worker process identity")
+        records.append(ready)
     replace_owned_worker_records(pid_path, owned_pids=owned_pids, records=records)
     return records
 
@@ -595,30 +722,35 @@ def terminate_children(
     root: Path | None = None,
     timeout_s: float = 10.0,
 ) -> None:
+    """Stop supervised children using their durable immutable identities."""
     root = root or state_dir()
-    for proc in children:
-        if proc.poll() is None:
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except (ProcessLookupError, PermissionError, OSError):
-                try:
-                    proc.terminate()
-                except OSError:
-                    pass
+    pid_path = mode_a_pids_path(root)
+    child_pids = {proc.pid for proc in children if proc.pid}
+    records = {
+        record.pid: record
+        for record in collect_worker_records(pid_path, discover=False)
+        if record.pid in child_pids
+    }
+    signal_worker_records(
+        [records[proc.pid] for proc in children if proc.pid in records],
+        signal.SIGTERM,
+    )
     deadline = time.monotonic() + timeout_s
     for proc in children:
         remaining = max(0.0, deadline - time.monotonic())
         try:
             proc.wait(timeout=remaining if remaining > 0 else 0.1)
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, OSError):
+            record = records.get(proc.pid)
+            if record is not None:
+                signal_worker_records([record], signal.SIGKILL)
                 try:
-                    proc.kill()
-                except OSError:
+                    proc.wait(timeout=1.0)
+                except (subprocess.TimeoutExpired, OSError):
                     pass
-    collect_worker_records(mode_a_pids_path(root))
+        except OSError:
+            pass
+    collect_worker_records(pid_path)
 
 
 def run_foreground(

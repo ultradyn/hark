@@ -12,8 +12,14 @@ from pathlib import Path
 import pytest
 
 import hark.daemon as daemon
+import hark.worker_process as worker_process
 from hark.exitcodes import ERROR, OK
-from hark.worker_process import WorkerRecord, inspect_worker
+from hark.worker_process import (
+    WORKER_PIDFILE_ENV,
+    WORKER_ROLE_ENV,
+    WorkerRecord,
+    inspect_worker,
+)
 
 
 def spawn_hark_worker(role: str, directory: Path) -> subprocess.Popen[bytes]:
@@ -33,10 +39,22 @@ def spawn_hark_worker(role: str, directory: Path) -> subprocess.Popen[bytes]:
     child = subprocess.Popen(
         [str(launcher), role],
         start_new_session=True,
+        env={
+            **os.environ,
+            WORKER_PIDFILE_ENV: str((directory / "mode-a.pids").resolve()),
+            WORKER_ROLE_ENV: role,
+        },
     )
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:
-        if inspect_worker(child.pid, expected_role=role) is not None:
+        if (
+            inspect_worker(
+                child.pid,
+                expected_role=role,
+                expected_pidfile=directory / "mode-a.pids",
+            )
+            is not None
+        ):
             return child
         time.sleep(0.01)
     kill_child(child)
@@ -53,12 +71,15 @@ def kill_child(child: subprocess.Popen[bytes]) -> None:
 
 
 class FakeWorker:
+    registry: dict[int, "FakeWorker"] = {}
+
     def __init__(self, pid: int, *, returncode: int | None = None) -> None:
         self.pid = pid
         self.returncode = returncode
         self.wait_calls = 0
         self.terminate_error: OSError | None = None
         self.kill_error: OSError | None = None
+        FakeWorker.registry[pid] = self
 
     def poll(self) -> int | None:
         return self.returncode
@@ -86,10 +107,36 @@ def state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(
         daemon,
         "capture_worker_identity",
-        lambda pid, *, role: WorkerRecord(
-            pid=pid, start_time=f"start-{pid}", role=role
+        lambda pid, *, role, **_kwargs: WorkerRecord(
+            pid=pid,
+            start_time=f"start-{pid}",
+            role=role,
+            pidfile=str((tmp_path / "mode-a.pids").resolve()),
+            provisional=True,
         ),
     )
+    monkeypatch.setattr(daemon, "wait_for_worker_role", lambda *_a, **_k: True)
+    handles: dict[int, int] = {}
+
+    def open_handle(pid: int) -> int:
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        handles[read_fd] = pid
+        return read_fd
+
+    monkeypatch.setattr(daemon, "open_process_handle", open_handle)
+
+    def signal_handle(pidfd: int, sig: int) -> None:
+        worker = FakeWorker.registry[handles[pidfd]]
+        if sig == signal.SIGTERM and worker.terminate_error is not None:
+            raise worker.terminate_error
+        if sig == signal.SIGKILL and worker.kill_error is not None:
+            raise worker.kill_error
+        worker.returncode = -sig
+
+    monkeypatch.setattr(daemon, "signal_process_handle", signal_handle)
+    monkeypatch.setattr(daemon, "record_matches_lifetime", lambda _record: True)
+    monkeypatch.setattr(daemon, "record_matches_process", lambda _record: True)
     return tmp_path
 
 
@@ -120,13 +167,7 @@ def test_spawn_workers_rolls_back_when_identity_capture_fails(
     watch = FakeWorker(101)
 
     monkeypatch.setattr(daemon.subprocess, "Popen", lambda *_args, **_kwargs: watch)
-    monkeypatch.setattr(daemon, "capture_worker_identity", lambda _pid, *, role: None)
-
-    def killpg(pid: int, sig: int) -> None:
-        assert (pid, sig) == (watch.pid, signal.SIGTERM)
-        watch.returncode = -sig
-
-    monkeypatch.setattr(daemon.os, "killpg", killpg)
+    monkeypatch.setattr(daemon, "capture_worker_identity", lambda _pid, **_kwargs: None)
 
     with pytest.raises(
         daemon.WorkerSpawnError,
@@ -137,6 +178,48 @@ def test_spawn_workers_rolls_back_when_identity_capture_fails(
     assert watch.returncode == -signal.SIGTERM
     assert watch.wait_calls == 1
     assert not (state / "mode-a.pids").exists()
+
+
+def test_spawn_publishes_provisional_identity_before_role_wait(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    watch = FakeWorker(101)
+    observed: list[WorkerRecord] = []
+    monkeypatch.setattr(daemon.subprocess, "Popen", lambda *_args, **_kwargs: watch)
+
+    def observe_wait(_record: WorkerRecord, **_kwargs) -> bool:
+        observed.extend(daemon.read_worker_records(state / "mode-a.pids"))
+        return True
+
+    monkeypatch.setattr(daemon, "wait_for_worker_role", observe_wait)
+
+    daemon.spawn_mode_a_workers(root=state, do_ambient=False)
+
+    assert [(record.pid, record.role, record.provisional) for record in observed] == [
+        (101, "watch", True)
+    ]
+
+
+def test_pidfd_open_failure_durably_retains_unreaped_provisional_owner(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    watch = FakeWorker(101)
+    monkeypatch.setattr(daemon.subprocess, "Popen", lambda *_args, **_kwargs: watch)
+    monkeypatch.setattr(
+        daemon,
+        "open_process_handle",
+        lambda _pid: (_ for _ in ()).throw(PermissionError("pidfd denied")),
+    )
+
+    with pytest.raises(daemon.WorkerSpawnError) as caught:
+        daemon.spawn_mode_a_workers(root=state, do_ambient=False)
+
+    assert "pidfd denied" in str(caught.value)
+    assert "surviving workers still running: watch=101" in str(caught.value)
+    retained = daemon.read_worker_records(state / "mode-a.pids")
+    assert [(record.pid, record.role, record.provisional) for record in retained] == [
+        (101, "watch", True)
+    ]
 
 
 def test_spawn_workers_rolls_back_first_child_when_second_role_fails(
@@ -223,13 +306,7 @@ def test_spawn_workers_reports_rollback_signal_failure(
             return watch
         raise OSError("ambient fork refused")
 
-    def killpg(_pid: int, sig: int) -> None:
-        if sig == signal.SIGTERM:
-            raise PermissionError("group signal refused")
-        watch.returncode = -sig
-
     monkeypatch.setattr(daemon.subprocess, "Popen", fail_second)
-    monkeypatch.setattr(daemon.os, "killpg", killpg)
 
     with pytest.raises(daemon.WorkerSpawnError) as caught:
         daemon.spawn_mode_a_workers(root=state)
@@ -237,7 +314,7 @@ def test_spawn_workers_reports_rollback_signal_failure(
     message = str(caught.value)
     assert "ambient startup failed" in message
     assert "rollback failures" in message
-    assert "watch SIGTERM failed" in message
+    assert "watch pidfd signal 15 failed" in message
     assert "terminate refused" in message
     assert watch.returncode == -signal.SIGKILL
     assert watch.wait_calls == 2
@@ -275,9 +352,126 @@ def test_spawn_workers_records_and_reports_child_that_survives_rollback(
     assert watch.poll() is None
     assert watch.wait_calls == 2
     assert daemon.read_pids_file(pidfile) == [777]
-    assert [
-        (record.pid, record.role) for record in daemon.read_worker_records(pidfile)
-    ] == [(101, "watch")]
+    retained = daemon.read_worker_records(pidfile)
+    assert [(record.pid, record.role) for record in retained] == [(101, "watch")]
+    assert retained[0].provisional is True
+    assert retained[0].pidfile == str(pidfile.resolve())
+
+
+def test_rollback_recaptures_survivor_when_initial_identity_capture_failed(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    pidfile = state / "mode-a.pids"
+    watch = FakeWorker(101)
+    watch.terminate_error = OSError("terminate refused")
+    watch.kill_error = OSError("kill refused")
+    calls = 0
+
+    def capture(pid: int, *, role: str, **_kwargs) -> WorkerRecord | None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return None
+        return WorkerRecord(
+            pid=pid,
+            start_time=f"start-{pid}",
+            role=role,
+            pidfile=str(pidfile.resolve()),
+            config=str(worker_process._config_path_from_environ(dict(os.environ))),
+            provisional=True,
+        )
+
+    monkeypatch.setattr(daemon.subprocess, "Popen", lambda *_args, **_kwargs: watch)
+    monkeypatch.setattr(daemon, "capture_worker_identity", capture)
+
+    with pytest.raises(daemon.WorkerSpawnError) as caught:
+        daemon.spawn_mode_a_workers(root=state, do_ambient=False)
+
+    assert "surviving workers still running: watch=101" in str(caught.value)
+    retained = daemon.read_worker_records(pidfile)
+    assert [(record.pid, record.role, record.provisional) for record in retained] == [
+        (101, "watch", True)
+    ]
+
+
+def test_rollback_retains_pidfd_when_survivor_identity_cannot_be_recaptured(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    watch = FakeWorker(101)
+    watch.terminate_error = OSError("terminate refused")
+    watch.kill_error = OSError("kill refused")
+    monkeypatch.setattr(daemon.subprocess, "Popen", lambda *_args, **_kwargs: watch)
+    monkeypatch.setattr(
+        daemon, "capture_worker_identity", lambda *_args, **_kwargs: None
+    )
+
+    retained_fd: int | None = None
+    try:
+        with pytest.raises(daemon.WorkerSpawnError) as caught:
+            daemon.spawn_mode_a_workers(root=state, do_ambient=False)
+
+        retained_fd = daemon._RETAINED_ROLLBACK_PIDFDS.pop(watch.pid)
+        os.fstat(retained_fd)
+        assert f"retained pidfd {retained_fd} for untracked surviving watch" in str(
+            caught.value
+        )
+        assert daemon.read_worker_records(state / "mode-a.pids") == []
+    finally:
+        if retained_fd is not None:
+            os.close(retained_fd)
+
+
+@pytest.mark.parametrize("direct_fails", [False, True])
+def test_rollback_falls_back_or_retains_pidfd_when_survivor_publish_fails(
+    state: Path, monkeypatch: pytest.MonkeyPatch, direct_fails: bool
+):
+    pidfile = state / "mode-a.pids"
+    watch = FakeWorker(101)
+    watch.terminate_error = OSError("terminate refused")
+    watch.kill_error = OSError("kill refused")
+    calls = 0
+
+    def fail_second(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return watch
+        raise OSError("ambient fork refused")
+
+    real_direct = daemon.write_worker_pidfile_bytes_direct
+    monkeypatch.setattr(daemon.subprocess, "Popen", fail_second)
+    monkeypatch.setattr(
+        daemon,
+        "write_worker_pidfile_bytes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("rename denied")),
+    )
+    if direct_fails:
+        monkeypatch.setattr(
+            daemon,
+            "write_worker_pidfile_bytes_direct",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("direct denied")),
+        )
+    else:
+        monkeypatch.setattr(daemon, "write_worker_pidfile_bytes_direct", real_direct)
+
+    retained_fd: int | None = None
+    try:
+        with pytest.raises(daemon.WorkerSpawnError) as caught:
+            daemon.spawn_mode_a_workers(root=state)
+
+        if direct_fails:
+            retained_fd = daemon._RETAINED_ROLLBACK_PIDFDS.pop(watch.pid)
+            os.fstat(retained_fd)
+            assert f"retained pidfd {retained_fd}" in str(caught.value)
+        else:
+            assert "used direct fallback" in str(caught.value)
+            retained = daemon.read_worker_records(pidfile)
+            assert [(record.pid, record.provisional) for record in retained] == [
+                (101, True)
+            ]
+    finally:
+        if retained_fd is not None:
+            os.close(retained_fd)
 
 
 def test_spawn_workers_rolls_back_and_reports_early_child_exit(
@@ -308,7 +502,6 @@ def test_spawn_workers_restores_pidfile_when_write_fails(
 ):
     pidfile = state / "mode-a.pids"
     pidfile.write_bytes(b"777\n")
-    signalled: list[int] = []
     all_workers = [FakeWorker(101), FakeWorker(102)]
     workers = list(all_workers)
 
@@ -319,14 +512,8 @@ def test_spawn_workers_restores_pidfile_when_write_fails(
         path.write_bytes(b"partial")
         raise OSError("disk full")
 
-    def killpg(pid: int, sig: int) -> None:
-        signalled.append(pid)
-        proc = next(proc for proc in all_workers if proc.pid == pid)
-        proc.returncode = -sig
-
     monkeypatch.setattr(daemon.subprocess, "Popen", spawn)
     monkeypatch.setattr(daemon, "write_worker_records", fail_write)
-    monkeypatch.setattr(daemon.os, "killpg", killpg)
 
     with pytest.raises(
         daemon.WorkerSpawnError, match="pidfile startup failed.*disk full"
@@ -334,9 +521,10 @@ def test_spawn_workers_restores_pidfile_when_write_fails(
         daemon.spawn_mode_a_workers(root=state)
 
     assert pidfile.read_bytes() == b"777\n"
-    assert set(signalled) == {101, 102}
-    assert 777 not in signalled
-    assert all(proc.wait_calls == 1 for proc in all_workers)
+    assert all_workers[0].returncode == -signal.SIGTERM
+    assert all_workers[0].wait_calls == 1
+    assert all_workers[1].returncode is None
+    assert all_workers[1].wait_calls == 0
 
 
 def test_spawn_workers_successfully_starts_both_roles_and_closes_logs(

@@ -33,8 +33,10 @@ from hark.paths import state_dir
 from hark.worker_process import (
     WorkerRecord,
     collect_worker_records,
+    record_matches_lifetime,
     record_matches_process,
     signal_worker_records,
+    worker_records_match_request,
 )
 
 # Default grace after SIGTERM before SIGKILL (seconds). Matches run-mode-a.sh;
@@ -93,7 +95,15 @@ def assert_no_live_harkd(root: Path | None = None) -> None:
 
 
 def _still_same_workers(records: list[WorkerRecord]) -> list[WorkerRecord]:
-    return [record for record in records if record_matches_process(record)]
+    return [
+        record
+        for record in records
+        if (
+            record_matches_lifetime(record)
+            if record.provisional
+            else record_matches_process(record)
+        )
+    ]
 
 
 def stop_workers(
@@ -222,14 +232,31 @@ def start_workers(
     except DaemonConflict as exc:
         return {"ok": False, "error": str(exc), "pids": collect_worker_pids(root)}
 
-    existing = collect_worker_pids(root)
-    if existing:
+    path = mode_a_pids_path(root)
+    existing_records = collect_worker_records(path)
+    existing = [record.pid for record in existing_records]
+    if existing_records and worker_records_match_request(
+        existing_records,
+        watch=do_watch,
+        ambient=do_ambient,
+        session=session,
+    ):
         return {
             "ok": True,
             "already_running": True,
             "pids": existing,
             "message": (
                 f"workers already running (pids {', '.join(str(p) for p in existing)})"
+            ),
+        }
+    if existing_records:
+        return {
+            "ok": False,
+            "already_running": False,
+            "pids": existing,
+            "error": (
+                "existing workers do not exactly match requested roles, session, "
+                "and state scope; stop them before starting"
             ),
         }
 
@@ -249,13 +276,36 @@ def start_workers(
     if settle_s > 0:
         time.sleep(settle_s)
 
-    # Prefer live scan of what we wrote; drop children that died immediately.
-    live = collect_worker_pids(root)
-    if not live:
+    # Revalidate the exact requested ready roles after the settle window.  A
+    # nonempty partial set is failure, never a successful start.
+    live_records = collect_worker_records(path)
+    live = [record.pid for record in live_records]
+    if not worker_records_match_request(
+        live_records,
+        watch=do_watch,
+        ambient=do_ambient,
+        session=session,
+    ):
+        attempt_pids = set(started)
+        attempt_records = [
+            record for record in live_records if record.pid in attempt_pids
+        ]
+        signal_worker_records(attempt_records, signal.SIGTERM)
+        cleanup_deadline = time.monotonic() + 2.0
+        remaining = _still_same_workers(attempt_records)
+        while remaining and time.monotonic() < cleanup_deadline:
+            time.sleep(0.02)
+            remaining = _still_same_workers(remaining)
+        if remaining:
+            signal_worker_records(remaining, signal.SIGKILL)
+        collect_worker_records(path)
         return {
             "ok": False,
-            "error": "workers exited immediately after start (check ambient.jsonl / watch.jsonl)",
-            "pids": [],
+            "error": (
+                "workers did not settle into the exact requested role set "
+                "(check ambient.jsonl / watch.jsonl)"
+            ),
+            "pids": [record.pid for record in _still_same_workers(remaining)],
             "started": started,
         }
 

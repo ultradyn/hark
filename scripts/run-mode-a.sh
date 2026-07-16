@@ -38,7 +38,6 @@ FORCE=0
 SESSION="${HARK_SESSION:-default}"
 # Max wait for an in-flight recording (seconds)
 STOP_GRACE="${HARK_STOP_GRACE_S:-120}"
-SPAWN_CAPTURE_TIMEOUT="${HARK_SPAWN_CAPTURE_TIMEOUT_S:-2}"
 PIDFILE_LOCK_DEPTH=0
 PIDFILE_LOCK_FD=""
 START_LOCK_FD=""
@@ -141,127 +140,11 @@ collect_mode_a_pids_into() {
   result=("${parsed[@]}")
 }
 
-write_attempt_worker_records() {
-  (($# > 0)) || return 1
-  worker_identity publish "$PIDFILE" "$@"
-}
-
-# Last-resort structured publication for exact rollback survivors when atomic
-# rename itself is unavailable. The helper fsyncs the file and parent directory.
-write_emergency_worker_records() {
-  (($# > 0)) || return 1
-  worker_identity publish "$PIDFILE" --direct "$@"
-}
-
 workers_match_request() {
   local -a request=(compatible "$PIDFILE" --discover --session "$SESSION")
   [[ "$DO_WATCH" -eq 0 ]] || request+=(--watch)
   [[ "$DO_AMBIENT" -eq 0 ]] || request+=(--ambient)
   worker_identity "${request[@]}" >/dev/null
-}
-
-capture_started_worker() {
-  local pid="$1"
-  local role="$2"
-  local record
-  local status=0
-  record="$(
-    worker_identity capture "$pid" "$role" --timeout "$SPAWN_CAPTURE_TIMEOUT" \
-      --parent-pid "$$"
-  )" || status=$?
-  if [[ -n "$record" ]]; then
-    started+=("$pid")
-    started_records+=("$record")
-  fi
-  return "$status"
-}
-
-validate_spawn_capture_timeout() {
-  python3 -c '
-import math
-import sys
-
-try:
-    value = float(sys.argv[1])
-except ValueError:
-    raise SystemExit(1)
-if not math.isfinite(value) or value < 0 or value > 10:
-    raise SystemExit(1)
-print(f"{value:g}")
-' "$1"
-}
-
-match_started_records_into() {
-  local destination="$1"
-  shift
-  local output
-  local -a parsed=()
-  output="$(worker_identity match-records --lifetime-only "$@")" || return $?
-  if [[ -n "$output" ]]; then
-    mapfile -t parsed <<<"$output"
-  fi
-  local -n result="$destination"
-  result=("${parsed[@]}")
-}
-
-# A failed ownership publication cannot leave this attempt's children running
-# anonymously. Every signal is authorized by the immutable start-time + role
-# identity captured immediately after spawn and reverified around pidfd send.
-rollback_started_workers() {
-  (($# > 0)) || return 0
-  local -a attempted_records=("$@")
-  local -a remaining=()
-  local -a survivors=()
-  local index
-  local record
-  local survivor
-  local survived
-  local tick
-
-  echo "rolling back unpublished Hark worker identities" >&2
-  if ! match_started_records_into remaining "${attempted_records[@]}"; then
-    echo "error: failed to verify rollback worker identities; refusing raw PID signals" >&2
-    survivors=("${attempted_records[@]}")
-  elif ((${#remaining[@]} > 0)); then
-    worker_identity signal-records TERM --lifetime-only \
-      "${remaining[@]}" >/dev/null || true
-  fi
-  for tick in {1..20}; do
-    match_started_records_into remaining "${attempted_records[@]}" || {
-      survivors=("${attempted_records[@]}")
-      break
-    }
-    ((${#remaining[@]} > 0)) || break
-    sleep 0.1
-  done
-  if ((${#remaining[@]} > 0)); then
-    worker_identity signal-records KILL --lifetime-only \
-      "${remaining[@]}" >/dev/null || true
-  fi
-  sleep 0.1
-  match_started_records_into survivors "${attempted_records[@]}" || \
-    survivors=("${attempted_records[@]}")
-
-  # Reap only original direct children whose captured identity no longer lives.
-  # `wait` does not signal and cannot target a reused non-child process.
-  for index in "${!attempted_records[@]}"; do
-    record="${attempted_records[$index]}"
-    survived=0
-    for survivor in "${survivors[@]}"; do
-      [[ "$survivor" != "$record" ]] || survived=1
-    done
-    ((survived == 1)) || wait "${started[$index]}" 2>/dev/null || true
-  done
-  if ((${#survivors[@]} > 0)); then
-    if write_attempt_worker_records "${survivors[@]}" || \
-      write_emergency_worker_records "${survivors[@]}"; then
-      echo "warning: retained surviving rollback workers in $PIDFILE: ${survivors[*]}" >&2
-    else
-      echo "critical: rollback survivors could not be published in $PIDFILE: ${survivors[*]}" >&2
-      return 1
-    fi
-  fi
-  return 0
 }
 
 signal_pids() {
@@ -405,12 +288,6 @@ HARK=(uv run hark)
 # Always replace previous workers (pidfile and/or orphan ambient/watch)
 # for an ordinary invocation. Concurrent shell starts serialize here; a waiter
 # accepts the completed predecessor instead of immediately restarting it.
-if ! SPAWN_CAPTURE_TIMEOUT="$(
-  validate_spawn_capture_timeout "$SPAWN_CAPTURE_TIMEOUT"
-)"; then
-  echo "error: HARK_SPAWN_CAPTURE_TIMEOUT_S must be finite and between 0 and 10 seconds" >&2
-  exit 1
-fi
 if ! acquire_start_lock; then
   echo "error: failed to acquire Hark worker start lock" >&2
   exit 1
@@ -439,114 +316,59 @@ if [[ $prev_count -gt 0 ]]; then
   fi
 fi
 
-started=()
-started_records=()
 if [[ "$skip_start" -eq 0 ]]; then
-  if ! acquire_pidfile_lock; then
-    echo "error: failed to acquire Hark worker ownership lock" >&2
-    release_start_lock || true
-    exit 1
-  fi
-
-  # Recheck only after acquiring the lock that remains held through spawn and
-  # publication. A Python start may have won while an earlier worker stopped.
+  # Python owns the full Popen -> pidfd -> identity -> exact-role transaction.
+  # The shell never treats a background wrapper PID as worker authority.
   _current=()
   if ! collect_mode_a_pids_into _current; then
     echo "error: failed to recheck Hark worker identities; refusing to start" >&2
-    release_pidfile_lock || true
     release_start_lock || true
     exit 1
   fi
   if ((${#_current[@]} > 0)); then
-    echo "workers appeared while preparing start: ${_current[*]}"
-    live=("${_current[@]}")
-    skip_start=1
+    if workers_match_request; then
+      echo "compatible workers appeared while preparing start: ${_current[*]}"
+      live=("${_current[@]}")
+      skip_start=1
+    else
+      echo "error: workers appeared with incompatible roles, session, or state scope" >&2
+      release_start_lock || true
+      exit 1
+    fi
   fi
 fi
 
 if [[ "$skip_start" -eq 0 ]]; then
+  start_args=(start --json --session "$SESSION")
   if [[ "$DO_WATCH" -eq 1 ]]; then
-    echo "starting watch → $WATCH_LOG (session=$SESSION)"
-    (
-      unset HARK_WORKER_PIDFILE_LOCK_PATH HARK_WORKER_PIDFILE_LOCK_FD
-      exec {PIDFILE_LOCK_FD}>&-
-      exec {START_LOCK_FD}>&-
-      exec nohup "${HARK[@]}" watch --session "$SESSION" --for-monitor \
-        --statuses blocked,done
-    ) >>"$WATCH_LOG" 2>&1 &
-    started_pid="$!"
-    if ! capture_started_worker "$started_pid" watch; then
-      echo "error: spawned watch did not reach its expected role within the bounded capture window" >&2
-      rollback_started_workers "${started_records[@]}" || true
-      release_pidfile_lock || true
-      release_start_lock || true
-      exit 1
-    fi
+    start_args+=(--force-watch)
+  else
+    start_args+=(--no-watch)
   fi
+  [[ "$DO_AMBIENT" -eq 1 ]] || start_args+=(--no-ambient)
+  start_output="$(
+    unset HARK_WORKER_PIDFILE_LOCK_PATH HARK_WORKER_PIDFILE_LOCK_FD
+    exec {START_LOCK_FD}>&-
+    "${HARK[@]}" "${start_args[@]}"
+  )" || {
+    echo "error: trusted Python worker start failed" >&2
+    [[ -z "$start_output" ]] || echo "$start_output" >&2
+    release_start_lock || true
+    exit 1
+  }
 
-  if [[ "$DO_AMBIENT" -eq 1 ]]; then
-    echo "starting ambient loop → $AMBIENT_LOG"
-    # List configured wake/trigger phrases (custom via config [ambient])
-    PHRASE_LINE="$(
-      cd "$ROOT" && python3 -c '
-from hark.config import load_config
-ps = load_config().ambient.activation_phrases
-print("  say: " + " / ".join(ps[:10]) + (" …" if len(ps) > 10 else ""))
-' 2>/dev/null || echo "  say: hey hark / hey herald (or custom trigger_phrases)"
-    )"
-    echo "$PHRASE_LINE"
-    (
-      unset HARK_WORKER_PIDFILE_LOCK_PATH HARK_WORKER_PIDFILE_LOCK_FD
-      exec {PIDFILE_LOCK_FD}>&-
-      exec {START_LOCK_FD}>&-
-      exec nohup "${HARK[@]}" ambient
-    ) >>"$AMBIENT_LOG" 2>&1 &
-    started_pid="$!"
-    if ! capture_started_worker "$started_pid" ambient; then
-      echo "error: spawned ambient did not reach its expected role within the bounded capture window" >&2
-      rollback_started_workers "${started_records[@]}" || true
-      release_pidfile_lock || true
-      release_start_lock || true
-      exit 1
-    fi
-  fi
-
-  sleep 1
-
-  # Prefer full discovery (uv + python children) so the pidfile is complete;
-  # fall back to $! list if scan is empty (race before exec).
   if ! collect_mode_a_pids_into live; then
     echo "error: failed to discover started Hark workers" >&2
-    if ((${#started_records[@]} > 0)); then
-      if write_attempt_worker_records "${started_records[@]}"; then
-        echo "retaining structured ownership in $PIDFILE" >&2
-      else
-        echo "error: failed to publish structured ownership; rolling back" >&2
-        rollback_started_workers "${started_records[@]}" || true
-      fi
-    fi
-    release_pidfile_lock || true
     release_start_lock || true
     exit 1
   fi
-  if ((${#live[@]} > 0)); then
-    : # collect_mode_a_pids already wrote canonical structured identities
-  elif ((${#started[@]} > 0)); then
-    if write_attempt_worker_records "${started_records[@]}"; then
-      live=("${started[@]}")
-    else
-      echo "error: failed to publish fallback worker ownership; rolling back" >&2
-      rollback_started_workers "${started_records[@]}" || true
-      release_pidfile_lock || true
-      release_start_lock || true
-      exit 1
-    fi
-  else
-    : # the successful collector already canonicalized empty ownership
+  if ! workers_match_request; then
+    echo "error: workers did not settle into the exact requested role set" >&2
+    release_start_lock || true
+    exit 1
   fi
 fi
 
-release_pidfile_lock || true
 release_start_lock || true
 
 if [[ -f "$PIDFILE" ]]; then

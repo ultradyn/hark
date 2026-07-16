@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -34,10 +35,24 @@ def spawn_hark_worker(role: str, directory: Path) -> subprocess.Popen[bytes]:
     child = subprocess.Popen(
         [str(launcher), role],
         start_new_session=True,
+        env={
+            **os.environ,
+            worker_process.WORKER_PIDFILE_ENV: str(
+                (directory / "mode-a.pids").resolve()
+            ),
+            worker_process.WORKER_ROLE_ENV: role,
+        },
     )
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:
-        if worker_process.inspect_worker(child.pid, expected_role=role) is not None:
+        if (
+            worker_process.inspect_worker(
+                child.pid,
+                expected_role=role,
+                expected_pidfile=directory / "mode-a.pids",
+            )
+            is not None
+        ):
             return child
         time.sleep(0.01)
     kill_child(child)
@@ -103,7 +118,7 @@ def test_start_when_already_running(state: Path):
     child = spawn_hark_worker("ambient", state)
     try:
         (state / "mode-a.pids").write_text(f"{child.pid}\n", encoding="utf-8")
-        result = workers.start_workers(state, settle_s=0)
+        result = workers.start_workers(state, do_watch=False, settle_s=0)
         assert result["ok"] is True
         assert result["already_running"] is True
         assert child.pid in result["pids"]
@@ -136,10 +151,19 @@ def test_start_clears_stale_harkd_pid(state: Path, monkeypatch: pytest.MonkeyPat
         return [P()]
 
     monkeypatch.setattr(workers, "spawn_mode_a_workers", fake_spawn)
-    monkeypatch.setattr(
-        workers, "collect_worker_pids", lambda _root: [os.getpid()] if spawned else []
+    record = worker_process.WorkerRecord(
+        pid=os.getpid(),
+        start_time="fake",
+        role="ambient",
+        pidfile=str((state / "mode-a.pids").resolve()),
     )
-    result = workers.start_workers(state, settle_s=0)
+    monkeypatch.setattr(
+        workers,
+        "collect_worker_records",
+        lambda _path: [record] if spawned else [],
+    )
+    monkeypatch.setattr(workers, "worker_records_match_request", lambda *_a, **_k: True)
+    result = workers.start_workers(state, do_watch=False, settle_s=0)
     assert result["ok"] is True
     assert not result.get("already_running")
     assert spawned
@@ -169,6 +193,47 @@ def test_start_reports_transactional_spawn_failure(
     assert "rollback failures" in result["error"]
 
 
+def test_start_fails_and_cleans_up_partial_post_settle_role_set(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    spawned = [SimpleNamespace(pid=101), SimpleNamespace(pid=102)]
+    watch = worker_process.WorkerRecord(
+        101,
+        "watch-start",
+        "watch",
+        pidfile=str((state / "mode-a.pids").resolve()),
+    )
+    calls = 0
+    signalled: list[tuple[list[worker_process.WorkerRecord], int]] = []
+
+    def collect(_path):
+        nonlocal calls
+        calls += 1
+        return [] if calls == 1 else [watch]
+
+    monkeypatch.setattr(workers, "spawn_mode_a_workers", lambda **_kwargs: spawned)
+    monkeypatch.setattr(workers, "collect_worker_records", collect)
+    monkeypatch.setattr(
+        workers,
+        "worker_records_match_request",
+        lambda records, **_kwargs: (
+            {record.role for record in records} == {"watch", "ambient"}
+        ),
+    )
+    monkeypatch.setattr(
+        workers,
+        "signal_worker_records",
+        lambda records, sig: signalled.append((list(records), sig)) or list(records),
+    )
+    monkeypatch.setattr(workers, "_still_same_workers", lambda _records: [])
+
+    result = workers.start_workers(state, settle_s=0)
+
+    assert result["ok"] is False
+    assert "exact requested role set" in result["error"]
+    assert signalled == [([watch], signal.SIGTERM)]
+
+
 def test_stop_does_not_signal_unrelated_legacy_pid(state: Path):
     child = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -182,6 +247,28 @@ def test_stop_does_not_signal_unrelated_legacy_pid(state: Path):
         (state / "mode-a.pids").write_text(f"{child.pid}\n", encoding="utf-8")
         result = workers.stop_workers(state, timeout_s=0.0)
         assert result["ok"] is True, result
+        assert result["stopped"] == []
+        assert child.poll() is None
+        assert not (state / "mode-a.pids").exists()
+    finally:
+        kill_child(child)
+
+
+def test_stop_does_not_signal_unproven_python_script_named_hark(
+    state: Path, tmp_path: Path
+):
+    unrelated = tmp_path / "hark"
+    unrelated.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+    child = subprocess.Popen(
+        [sys.executable, str(unrelated), "ambient"],
+        start_new_session=True,
+    )
+    try:
+        (state / "mode-a.pids").write_text(f"{child.pid}\n", encoding="utf-8")
+
+        result = workers.stop_workers(state, timeout_s=0.0)
+
+        assert result["ok"] is True
         assert result["stopped"] == []
         assert child.poll() is None
         assert not (state / "mode-a.pids").exists()
@@ -245,7 +332,12 @@ def test_restart_stop_then_start(state: Path, monkeypatch: pytest.MonkeyPatch):
 
     def fake_stop(*_a, **_k):
         calls.append("stop")
-        return {"ok": True, "stopped": [], "message": "no Hark workers running", "pids": []}
+        return {
+            "ok": True,
+            "stopped": [],
+            "message": "no Hark workers running",
+            "pids": [],
+        }
 
     def fake_start(*_a, **_k):
         calls.append("start")
@@ -321,7 +413,9 @@ def test_cli_stop_not_running(
     code = cli.main(["stop", "--json"])
     assert code == OK
     out = capsys.readouterr().out
-    assert "no Hark workers" in out or '"ok": true' in out.lower() or '"ok": true' in out
+    assert (
+        "no Hark workers" in out or '"ok": true' in out.lower() or '"ok": true' in out
+    )
 
 
 def test_cli_start_already_running(
@@ -335,7 +429,7 @@ def test_cli_start_already_running(
     child = spawn_hark_worker("ambient", state)
     try:
         (state / "mode-a.pids").write_text(f"{child.pid}\n", encoding="utf-8")
-        code = cli.main(["start", "--json"])
+        code = cli.main(["start", "--no-watch", "--json"])
         assert code == OK
         out = capsys.readouterr().out
         assert "already_running" in out or str(child.pid) in out

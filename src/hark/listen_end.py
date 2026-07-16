@@ -194,6 +194,15 @@ _OVER_PHRASAL_PREV: frozenset[str] = frozenset(
 
 _PUNCT_TRAIL = re.compile(r"[\s\.\!\?\,\;\:…]+$", re.UNICODE)
 _WS = re.compile(r"\s+")
+_APOSTROPHE_TRANSLATION = str.maketrans(
+    {
+        "`": "'",  # grave accent / common STT substitution
+        "\u00b4": "'",  # acute accent
+        "\u02bc": "'",  # modifier letter apostrophe
+        "\u2018": "'",  # left single quotation mark
+        "\u2019": "'",  # right single quotation mark
+    }
+)
 # Sentence-ending punct at end of prefix before bare "over".
 # Comma counts as a soft sentence boundary so "okay, over" / "ready, over"
 # finalize (also covered by multi-word okay/ok over).
@@ -202,8 +211,10 @@ _WORD_TRAIL_PUNCT = re.compile(r"[\.\!\?\,\;\:…'\"”’]+$")
 
 
 def normalize_for_match(text: str) -> str:
-    text = unicodedata.normalize("NFKC", text or "")
-    text = text.replace("\u2019", "'").replace("`", "'")
+    # Canonicalize apostrophe-like input before NFKC: U+00B4 otherwise expands
+    # to a space plus combining accent and breaks contraction token matching.
+    text = (text or "").translate(_APOSTROPHE_TRANSLATION)
+    text = unicodedata.normalize("NFKC", text)
     text = text.lower().strip()
     text = _WS.sub(" ", text)
     return text

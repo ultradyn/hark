@@ -37,6 +37,16 @@ def test_negative_phrase_wins_over_affirmative(reply):
     assert classify_confirm_reply(reply) == "no"
 
 
+@pytest.mark.parametrize("apostrophe", ["\u2018", "\u02bc", "\u00b4"])
+def test_negative_contractions_accept_apostrophe_like_unicode(apostrophe):
+    assert classify_confirm_reply(f"yes I can{apostrophe}t approve this") == "no"
+
+
+@pytest.mark.parametrize("reply", ["yes, I scant approve", "yes, can\u2018tastic"])
+def test_negative_contractions_preserve_whole_token_boundaries(reply):
+    assert classify_confirm_reply(reply) == "yes"
+
+
 @pytest.mark.parametrize(
     "reply",
     [

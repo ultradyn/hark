@@ -217,6 +217,44 @@ def test_run_ask_confirm_cancel_on_no(monkeypatch, confirm_reply):
     assert out.get("confirm_reply") == confirm_reply
 
 
+@pytest.mark.parametrize("apostrophe", ["\u2018", "\u02bc", "\u00b4"])
+def test_run_ask_confirm_cancels_unicode_apostrophe_negation(monkeypatch, apostrophe):
+    cfg = HarkConfig()
+    cfg.confirm.mode = "always"
+    confirm_reply = f"yes I can{apostrophe}t approve this"
+
+    monkeypatch.setattr(
+        "hark.speech.speak_and_listen",
+        lambda *a, **k: (
+            {"ok": True},
+            ListenResult(
+                text="ship it",
+                provider="mock",
+                duration_ms=10,
+                end_mode="silence",
+                stream_id="answer",
+            ),
+        ),
+    )
+    monkeypatch.setattr("hark.speech.run_tts", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(
+        "hark.speech.run_listen",
+        lambda *a, **k: ListenResult(
+            text=confirm_reply,
+            provider="mock",
+            duration_ms=10,
+            end_mode="silence",
+            stream_id="confirm",
+        ),
+    )
+
+    out = run_ask(cfg, "Deploy now?", risk_hint="R2")
+
+    assert out["ok"] is False
+    assert out["cancelled"] is True
+    assert out["confirm_reply"] == confirm_reply
+
+
 def test_run_ask_confirmation_cancel_precedes_affirmative_text(monkeypatch):
     """Answer Window cancellation is authoritative even if STT text says yes."""
     cfg = HarkConfig()

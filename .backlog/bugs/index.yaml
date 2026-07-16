@@ -152,3 +152,4 @@ bugs:
     - file: B151-confirmation-accepts-negations.todo
     - file: B152-crashed-tunnel-owners-leave-un.todo
     - file: B153-repeated-sigint-cannot-stop-a.todo
+    - file: B154-providererror-code-0-makes-fai.todo

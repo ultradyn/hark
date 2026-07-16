@@ -1,0 +1,13 @@
+---
+complexity: medium
+created_at: "2026-07-16T13:22:42Z"
+depends_on: []
+estimate_hours: 1
+id: B154
+priority: high
+status: pending
+tags: []
+title: ProviderError code 0 makes failed hark ask exit successfully
+updated_at: "2026-07-16T13:22:42Z"
+---
+After B149, _provider_failure_result preserves ProviderError.code verbatim and cmd_ask returns it. If confirmation readback TTS or confirmation listen raises ProviderError(..., code=0), Hark emits structured failure JSON with ok=false but exits rc 0. Normalize or validate all provider failure exits to a nonzero valid CLI failure code. Add direct run_ask and cmd_ask regressions for both confirmation readback and confirmation-listen code=0 paths; preserve original answer text and TTS metadata.

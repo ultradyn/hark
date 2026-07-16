@@ -145,3 +145,4 @@ bugs:
     - file: B144-monitor-replay-to-live-handoff.todo
     - file: B145-hark-ask-repeatedly-hangs-afte.todo
     - file: B146-hark-ask-blocks-indefinitely-a.todo
+    - file: B147-confirmation-lexicon-accepts-a.todo

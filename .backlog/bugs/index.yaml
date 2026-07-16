@@ -155,3 +155,4 @@ bugs:
     - file: B154-providererror-code-0-makes-fai.todo
     - file: B155-live-state-follower-misses-sam.todo
     - file: B156-hostile-providererror-renderin.todo
+    - file: B157-quoted-negative-contractions-c.todo

@@ -1720,18 +1720,25 @@ def cmd_listen_end(args: argparse.Namespace) -> int:
 
 
 def cmd_ask(args: argparse.Namespace, cfg) -> int:
-    from hark.audio.capture import capture_interrupt_signals
+    from hark.audio.capture import ask_signal_operation, capture_interrupt_signals
     from hark.speech import run_ask
+    from hark.speak_then_listen.ask import interrupted_ask_result
 
     prompt = " ".join(args.text)
-    with capture_interrupt_signals():
-        result = run_ask(
-            cfg,
-            prompt,
-            confirm=args.confirm,
-            end_mode=args.end_mode,
-            provider=args.provider,
-        )
+    try:
+        with capture_interrupt_signals():
+            with ask_signal_operation():
+                result = run_ask(
+                    cfg,
+                    prompt,
+                    confirm=args.confirm,
+                    end_mode=args.end_mode,
+                    provider=args.provider,
+                )
+    except KeyboardInterrupt as exc:
+        # Covers handler installation/restoration and the interval after
+        # run_ask returns but before its scoped signal handlers are removed.
+        result = interrupted_ask_result(exc)
     if not result.get("ok"):
         result["exit"] = normalize_failure_exit(result.get("exit"), fallback=ERROR)
     result["for_event"] = getattr(args, "event_id", None)

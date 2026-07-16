@@ -43,36 +43,178 @@ class CaptureInterrupted(KeyboardInterrupt):
         super().__init__(f"capture interrupted by {signal_name}")
 
 
+class _CaptureSignalState:
+    """Cancellation shared by the ask thread and an overlap capture worker."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._cancelled = False
+        self._signum: int | None = None
+        self._attempts = 0
+        self._operations = 0
+
+    def begin_attempt(self) -> None:
+        with self._lock:
+            self._attempts += 1
+
+    def finish_attempt(self) -> None:
+        with self._lock:
+            self._attempts = max(0, self._attempts - 1)
+
+    def has_attempt(self) -> bool:
+        with self._lock:
+            return self._attempts > 0
+
+    def begin_operation(self) -> None:
+        with self._lock:
+            self._operations += 1
+
+    def finish_operation(self) -> None:
+        with self._lock:
+            self._operations = max(0, self._operations - 1)
+
+    def has_operation(self) -> bool:
+        with self._lock:
+            return self._operations > 0
+
+    def request(self, signum: int | None = None) -> None:
+        with self._lock:
+            self._cancelled = True
+            if signum is not None:
+                self._signum = signum
+
+    def interruption(self) -> KeyboardInterrupt | None:
+        with self._lock:
+            if not self._cancelled:
+                return None
+            signum = self._signum
+        if signum is None:
+            return KeyboardInterrupt("capture cancelled")
+        return CaptureInterrupted(signum)
+
+
+_capture_state_lock = threading.RLock()
+_capture_signal_state: _CaptureSignalState | None = None
+_active_stream_lock = threading.RLock()
 _active_input_stream: Any | None = None
 
 
-def _abort_input_stream(stream: Any) -> None:
+def _abort_input_stream(stream: Any) -> bool:
     try:
         stream.abort()
-    except Exception:
-        # The stream may already have stopped as the signal unwound read().
-        pass
+    except BaseException:
+        return False
+    return True
 
 
-def cancel_active_capture() -> bool:
+def _close_input_stream(stream: Any) -> bool:
+    try:
+        stream.close()
+    except BaseException:
+        return False
+    return True
+
+
+def _current_capture_state() -> _CaptureSignalState | None:
+    with _capture_state_lock:
+        return _capture_signal_state
+
+
+def capture_in_progress() -> bool:
+    """Whether the installed ask signal scope owns capture work."""
+    state = _current_capture_state()
+    if state is not None and state.has_attempt():
+        return True
+    with _active_stream_lock:
+        return _active_input_stream is not None
+
+
+def ask_operation_in_progress() -> bool:
+    """Whether ask is inside provider/TTS/listen work, not scope setup/teardown."""
+    state = _current_capture_state()
+    return state.has_operation() if state is not None else False
+
+
+def request_capture_cancel(signum: int | None = None) -> None:
+    """Make cancellation sticky for current and not-yet-registered capture."""
+    state = _current_capture_state()
+    if state is not None:
+        state.request(signum)
+
+
+def raise_if_capture_cancelled() -> None:
+    """Raise the signal scope's primary cancellation in a capture worker."""
+    state = _current_capture_state()
+    interruption = state.interruption() if state is not None else None
+    if interruption is not None:
+        raise interruption
+
+
+def register_capture_attempt() -> _CaptureSignalState | None:
+    """Register capture ownership and return the state that owns the lease."""
+    state = _current_capture_state()
+    if state is not None:
+        state.begin_attempt()
+    return state
+
+
+def release_capture_attempt(state: _CaptureSignalState | None) -> None:
+    """Release a lease returned by :func:`register_capture_attempt`."""
+    if state is not None:
+        state.finish_attempt()
+
+
+@contextmanager
+def capture_attempt() -> Iterator[None]:
+    """Register capture work early enough for pre-stream cancellation."""
+    state = register_capture_attempt()
+    try:
+        raise_if_capture_cancelled()
+        yield
+    finally:
+        release_capture_attempt(state)
+
+
+@contextmanager
+def ask_signal_operation() -> Iterator[None]:
+    """Mark the part of ask where capture-free SIGTERM must stay terminating."""
+    state = _current_capture_state()
+    if state is not None:
+        state.begin_operation()
+    try:
+        yield
+    finally:
+        if state is not None:
+            state.finish_operation()
+
+
+def cancel_active_capture(signum: int | None = None) -> bool:
     """Abort this process's active input stream, if any.
 
     No PID lookup or process signalling is performed: this is deliberately
     scoped to the PortAudio stream registered by this Python process.
     """
-    stream = _active_input_stream
+    request_capture_cancel(signum)
+    with _active_stream_lock:
+        stream = _active_input_stream
     if stream is None:
         return False
-    _abort_input_stream(stream)
-    return True
+    aborted = _abort_input_stream(stream)
+    if not aborted:
+        # ``abort`` is the truthful return contract. ``close`` is only a
+        # best-effort release fallback so the owning worker can unwind.
+        _close_input_stream(stream)
+    return aborted
 
 
 @contextmanager
 def _registered_input_stream(stream: Any) -> Iterator[None]:
     global _active_input_stream
-    previous = _active_input_stream
-    _active_input_stream = stream
+    with _active_stream_lock:
+        previous = _active_input_stream
+        _active_input_stream = stream
     try:
+        raise_if_capture_cancelled()
         yield
     except BaseException:
         # PortAudio's blocking Pa_ReadStream may not make progress on its own.
@@ -81,8 +223,29 @@ def _registered_input_stream(stream: Any) -> Iterator[None]:
         _abort_input_stream(stream)
         raise
     finally:
-        if _active_input_stream is stream:
-            _active_input_stream = previous
+        with _active_stream_lock:
+            if _active_input_stream is stream:
+                _active_input_stream = previous
+
+
+def _restore_signal_handlers(previous: dict[int, Any]) -> None:
+    """Restore every handler even if one restoration is interrupted."""
+    primary: BaseException | None = None
+    for signum, handler in previous.items():
+        try:
+            signal.signal(signum, handler)
+        except BaseException as exc:
+            if primary is None:
+                primary = exc
+    if primary is not None:
+        raise primary
+
+
+def _terminate_from_signal(signum: int) -> None:
+    """Restore OS termination when no capture exists to cancel."""
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+    os._exit(128 + signum)  # pragma: no cover - kill should not return
 
 
 @contextmanager
@@ -92,20 +255,47 @@ def capture_interrupt_signals() -> Iterator[None]:
         yield
         return
 
+    global _capture_signal_state
     watched = (signal.SIGINT, signal.SIGTERM)
     previous = {signum: signal.getsignal(signum) for signum in watched}
+    state = _CaptureSignalState()
+    with _capture_state_lock:
+        previous_state = _capture_signal_state
+        _capture_signal_state = state
 
     def _interrupt(signum: int, _frame: object) -> None:
-        cancel_active_capture()
+        had_capture = capture_in_progress()
+        cancel_active_capture(signum)
+        if (
+            signum == signal.SIGTERM
+            and not had_capture
+            and ask_operation_in_progress()
+        ):
+            _terminate_from_signal(signum)
         raise CaptureInterrupted(signum)
 
+    primary: BaseException | None = None
     try:
         for signum in watched:
             signal.signal(signum, _interrupt)
         yield
+    except BaseException as exc:
+        primary = exc
+        raise
     finally:
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
+        try:
+            try:
+                _restore_signal_handlers(previous)
+            except BaseException:
+                # Handler cleanup must not replace the interruption that caused
+                # the scope to unwind. With no primary, restoration failure is
+                # itself the interruption translated by the CLI boundary.
+                if primary is None:
+                    raise
+        finally:
+            with _capture_state_lock:
+                if _capture_signal_state is state:
+                    _capture_signal_state = previous_state
 
 
 class MicLease:

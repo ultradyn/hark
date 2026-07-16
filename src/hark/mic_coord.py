@@ -39,7 +39,12 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from hark.audio.capture import MicBusyError, MicLease
+from hark.audio.capture import (
+    MicBusyError,
+    MicLease,
+    capture_attempt,
+    raise_if_capture_cancelled,
+)
 from hark.paths import state_dir
 from hark.syslog import log as syslog
 
@@ -461,13 +466,16 @@ def wait_for_mic_free(*, timeout_s: float = DEFAULT_YIELD_TIMEOUT_S) -> None:
     deadline = time.monotonic() + max(0.1, timeout_s)
     last_err: Exception | None = None
     while time.monotonic() < deadline:
+        raise_if_capture_cancelled()
         try:
             # Probe: acquire and immediately release
             with MicLease("mic-probe"):
+                raise_if_capture_cancelled()
                 return
         except MicBusyError as exc:
             last_err = exc
             time.sleep(_POLL_S)
+    raise_if_capture_cancelled()
     raise MicBusyError(
         f"mic still busy after {timeout_s:.1f}s waiting for ambient to yield"
         + (f" ({last_err})" if last_err else "")
@@ -484,12 +492,13 @@ def pause_ambient_for_mic(
 
     Use around bound listen/ask so ambient wake scanning does not raise mic busy.
     """
-    token = request_ambient_pause(reason=reason)
-    try:
-        wait_for_mic_free(timeout_s=timeout_s)
-        yield
-    finally:
-        clear_ambient_pause(token)
+    with capture_attempt():
+        token = request_ambient_pause(reason=reason)
+        try:
+            wait_for_mic_free(timeout_s=timeout_s)
+            yield
+        finally:
+            clear_ambient_pause(token)
 
 
 def _pid_alive(pid: int | None) -> bool:

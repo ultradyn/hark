@@ -126,8 +126,13 @@ def test_external_cursor_grammar_is_strict_and_canonical():
 
 
 def test_multitailer_composite_cursor_and_delivery_split(tmp_path):
-    _write(tmp_path / "events.jsonl", {"event_id": "e1", "session_id": "s", "pane_id": "p"})
-    _write(tmp_path / "deliveries.jsonl", {"event_id": "e1", "status": "delivered", "ts": 1.0})
+    _write(
+        tmp_path / "events.jsonl", {"event_id": "e1", "session_id": "s", "pane_id": "p"}
+    )
+    _write(
+        tmp_path / "deliveries.jsonl",
+        {"event_id": "e1", "status": "delivered", "ts": 1.0},
+    )
     mt = MultiTailer(tmp_path)
     mt.start_from(None, default_tail=100)
     recs = list(mt.poll())
@@ -140,7 +145,9 @@ def test_multitailer_composite_cursor_and_delivery_split(tmp_path):
 
 
 def test_read_page_since_and_limit(tmp_path):
-    _write(tmp_path / "watch.jsonl", *({"kind": "agent.blocked", "n": i} for i in range(5)))
+    _write(
+        tmp_path / "watch.jsonl", *({"kind": "agent.blocked", "n": i} for i in range(5))
+    )
     records, cursor, complete = read_page(tmp_path, since=None, limit=500)
     assert len(records) == 5 and complete
     records2, cursor2, _ = read_page(tmp_path, since="watch:3", limit=500)
@@ -150,9 +157,7 @@ def test_read_page_since_and_limit(tmp_path):
     assert [r.payload["n"] for r in records3] == [3, 4]
     assert not complete3
 
-    page1, page1_cursor, page1_complete = read_page(
-        tmp_path, since="watch:0", limit=2
-    )
+    page1, page1_cursor, page1_complete = read_page(tmp_path, since="watch:0", limit=2)
     assert [r.payload["n"] for r in page1] == [0, 1]
     assert parse_cursor(page1_cursor)["watch"] == 2
     assert not page1_complete
@@ -198,12 +203,11 @@ def test_replay_order_never_reorders_nonmonotonic_cursor_key(tmp_path):
     )
     _write(tmp_path / "ambient.jsonl", {"kind": "ambient.prompt", "n": "a1", "ts": 2.0})
 
-    records, _, _ = read_page(
-        tmp_path, since="watch:0,ambient:0", limit=None
-    )
-    replay = [(record.payload["n"], cursor) for record, cursor in records_with_cursors(
-        records, "watch:0,ambient:0"
-    )]
+    records, _, _ = read_page(tmp_path, since="watch:0,ambient:0", limit=None)
+    replay = [
+        (record.payload["n"], cursor)
+        for record, cursor in records_with_cursors(records, "watch:0,ambient:0")
+    ]
 
     # Ambient wins the cross-source head comparison, but w2 remains behind w1
     # even though its payload timestamp is earlier.

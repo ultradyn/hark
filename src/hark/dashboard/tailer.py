@@ -93,9 +93,7 @@ def read_page(
 ) -> tuple[list[FeedRecord], str, bool]:
     """One-shot backfill page for GET /api/v1/events."""
     tailers = [
-        t
-        for t in default_tailers(state)
-        if sources is None or t.source in sources
+        t for t in default_tailers(state) if sources is None or t.source in sources
     ]
     mt = MultiTailer(state, tailers)
     mt.start_from(since, default_tail=history_limit if since is None else 0)
@@ -153,9 +151,7 @@ def _replay_order(records: list[FeedRecord]) -> list[FeedRecord]:
     heap: list[tuple[float, int, str, int]] = []
     for cursor_key, chain in chains.items():
         original_index, record = chain[0]
-        heapq.heappush(
-            heap, (_record_ts(record), original_index, cursor_key, 0)
-        )
+        heapq.heappush(heap, (_record_ts(record), original_index, cursor_key, 0))
 
     ordered: list[FeedRecord] = []
     while heap:

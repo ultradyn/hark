@@ -14,6 +14,7 @@ import queue
 import secrets
 import threading
 import time
+from collections import deque
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,6 +39,7 @@ MAX_JSON_BODY = 1 << 20  # 1 MiB
 MAX_AUDIO_BODY = 32 << 20  # 32 MiB
 LOCALHOST_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 SUBSCRIBER_QUEUE_SIZE = 1000
+SSE_REPLAY_PAGE_SIZE = 1000
 _DURABLE_CURSOR_KEYS = {
     "watch": "watch",
     "ambient": "ambient",
@@ -152,7 +154,11 @@ class TailPump(threading.Thread):
 
     def composite_cursor(self) -> str:
         cur = self.tailer.composite_cursor()
-        return f"{cur},serve:{self.hub.serve_seq}" if cur else f"serve:{self.hub.serve_seq}"
+        return (
+            f"{cur},serve:{self.hub.serve_seq}"
+            if cur
+            else f"serve:{self.hub.serve_seq}"
+        )
 
     def publish_serve(self, payload: dict[str, Any]) -> None:
         self.hub.serve_seq += 1
@@ -355,12 +361,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _err(self, status: int, code: str, message: str = "") -> None:
-        self._send_json(status, {"ok": False, "error": {"code": code, "message": message}})
+        self._send_json(
+            status, {"ok": False, "error": {"code": code, "message": message}}
+        )
 
     def _read_body(self, limit: int = MAX_JSON_BODY) -> bytes | None:
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0 or length > limit:
-            self._err(HTTPStatus.BAD_REQUEST, "bad_request", "missing or oversized body")
+            self._err(
+                HTTPStatus.BAD_REQUEST, "bad_request", "missing or oversized body"
+            )
             return None
         return self.rfile.read(length)
 
@@ -421,7 +431,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._serve_static(path)
             return
         if not self._authed():
-            self._err(HTTPStatus.UNAUTHORIZED, "unauthorized", "authentication required")
+            self._err(
+                HTTPStatus.UNAUTHORIZED, "unauthorized", "authentication required"
+            )
             return
         qs = parse_qs(url.query)
         try:
@@ -459,7 +471,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._handle_auth()
             return
         if not self._authed():
-            self._err(HTTPStatus.UNAUTHORIZED, "unauthorized", "authentication required")
+            self._err(
+                HTTPStatus.UNAUTHORIZED, "unauthorized", "authentication required"
+            )
             return
         try:
             if path == "/api/v1/answer":
@@ -563,21 +577,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _sse_replay(self, since: str, wanted: set[str] | None) -> str:
         """Write durable records after *since* and return the delivered cursor."""
         stream_cursor = since
-        records, _, _ = read_page(
-            self.server.state, since=since, sources=wanted, limit=None
-        )
-        for record, record_cursor in records_with_cursors(records, since):
-            self._sse_write(
-                {
-                    "schema": SCHEMA,
-                    "type": "event",
-                    "source": record.source,
-                    "cursor": record_cursor,
-                    "payload": record.payload,
-                }
+        while True:
+            records, page_cursor, complete = read_page(
+                self.server.state,
+                since=stream_cursor,
+                sources=wanted,
+                limit=SSE_REPLAY_PAGE_SIZE,
             )
-            stream_cursor = record_cursor
-        return stream_cursor
+            for record, record_cursor in records_with_cursors(records, stream_cursor):
+                self._sse_write(
+                    {
+                        "schema": SCHEMA,
+                        "type": "event",
+                        "source": record.source,
+                        "cursor": record_cursor,
+                        "payload": record.payload,
+                    }
+                )
+                stream_cursor = record_cursor
+            if complete:
+                # Invalid/blank source lines advance the durable follower but
+                # emit no envelope.  Advancing the internal replay boundary is
+                # safe and avoids rescanning them after every queue overflow.
+                return page_cursor if not records else stream_cursor
 
     def _recover_subscriber_overflow(
         self,
@@ -595,14 +617,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
         publish after the snapshot but before the drain) and non-durable serve
         events are retained for delivery.
         """
-        carried: list[dict[str, Any]] = []
+        carried: deque[dict[str, Any]] = deque(maxlen=SUBSCRIBER_QUEUE_SIZE)
         while True:
             subscriber.clear_overflow()
             stream_cursor = self._sse_replay(stream_cursor, wanted)
             if subscriber.overflowed:
                 continue
 
-            retained_durable: list[dict[str, Any]] = []
+            retained: list[dict[str, Any]] = []
+            non_durable: list[dict[str, Any]] = []
             queued = subscriber.qsize()
             for _ in range(queued):
                 try:
@@ -616,14 +639,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     # No disk replay can recover this envelope.  Carry it
                     # across retry passes instead of abandoning it when a
                     # later queue removal observes another overflow.
-                    carried.append(envelope)
+                    non_durable.append(envelope)
+                    retained.append(envelope)
                 elif not _durable_envelope_covered(envelope, stream_cursor):
-                    # Safe to retain only for this pass: if it retries, the
-                    # next durable replay will include this newer record.
-                    retained_durable.append(envelope)
+                    # Preserve queue order relative to non-durable envelopes.
+                    # If this pass retries, the next disk replay recovers it.
+                    retained.append(envelope)
             if subscriber.overflowed:
+                carried.extend(non_durable)
                 continue
-            return stream_cursor, [*carried, *retained_durable]
+            # Repeated overflow can produce non-durable events indefinitely.
+            # Keep the same hard bound as the subscriber queue.  Newer items
+            # from the successful pass are appended last, so replayable
+            # durable records win over older, unrecoverable serve chatter.
+            bounded = deque((*carried, *retained), maxlen=SUBSCRIBER_QUEUE_SIZE)
+            return stream_cursor, list(bounded)
 
     def _handle_stream(self, qs: dict[str, list[str]]) -> None:
         sources_raw = (qs.get("sources") or [None])[0]
@@ -668,7 +698,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 stream_cursor = self._sse_replay(since, wanted)
             last_ping = time.monotonic()
             last_spec_seq = 0
-            retained: list[dict[str, Any]] = []
+            retained: deque[dict[str, Any]] = deque(maxlen=SUBSCRIBER_QUEUE_SIZE)
             # Short timeout so spectrum can refresh near 60 fps without a
             # dedicated connection (coalesced latest frame only).
             while True:
@@ -678,7 +708,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     )
                     retained.extend(recovered_serve)
                 if retained:
-                    envelope = retained.pop(0)
+                    envelope = retained.popleft()
                 else:
                     try:
                         envelope = q.get(timeout=0.016)
@@ -782,7 +812,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._err(HTTPStatus.NOT_FOUND, "not_found", path)
                 return
             target = fallback
-        ctype = mimetypes.guess_type(str(logical_target))[0] or "application/octet-stream"
+        ctype = (
+            mimetypes.guess_type(str(logical_target))[0] or "application/octet-stream"
+        )
         data = target.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", ctype)
@@ -801,7 +833,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def build_server(cfg: HarkConfig, *, host: str | None = None, port: int | None = None) -> DashboardServer:
+def build_server(
+    cfg: HarkConfig, *, host: str | None = None, port: int | None = None
+) -> DashboardServer:
     return DashboardServer(
         cfg,
         host or cfg.dashboard.host,
@@ -809,7 +843,9 @@ def build_server(cfg: HarkConfig, *, host: str | None = None, port: int | None =
     )
 
 
-def run_serve(cfg: HarkConfig, *, host: str | None = None, port: int | None = None) -> int:
+def run_serve(
+    cfg: HarkConfig, *, host: str | None = None, port: int | None = None
+) -> int:
     try:
         server = build_server(cfg, host=host, port=port)
     except ValueError as exc:
@@ -818,7 +854,9 @@ def run_serve(cfg: HarkConfig, *, host: str | None = None, port: int | None = No
         eprint(f"hark serve: {exc}")
         return 2
     bind = f"{server.server_address[0]}:{server.server_address[1]}"
-    print(f"hark serve: http://{bind}/  (auth {'on' if server.auth_required else 'off'})")
+    print(
+        f"hark serve: http://{bind}/  (auth {'on' if server.auth_required else 'off'})"
+    )
     try:
         from hark.update_check import maybe_print_update_notice
 

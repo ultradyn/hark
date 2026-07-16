@@ -165,10 +165,19 @@ def test_auth_flow_cookie_and_bearer(state, tmp_path):
 
 def test_events_backfill_and_page(state, tmp_path):
     _write_jsonl(state / "watch.jsonl", HEP_BLOCKED)
-    _write_jsonl(state / "system.jsonl", {
-        "ts": 1.0, "seq": 1, "level": "info", "component": "tts",
-        "event": "tts.ok", "message": "ok", "data": {}, "pid": 1,
-    })
+    _write_jsonl(
+        state / "system.jsonl",
+        {
+            "ts": 1.0,
+            "seq": 1,
+            "level": "info",
+            "component": "tts",
+            "event": "tts.ok",
+            "message": "ok",
+            "data": {},
+            "pid": 1,
+        },
+    )
     server = _server(tmp_path)
     try:
         status, body = _get_json(server, "/api/v1/events")
@@ -303,10 +312,7 @@ def test_stream_reconnect_nonmonotonic_timestamps_never_skips_same_source(
 def test_resumed_rest_limit_cursor_does_not_skip_front_records(state, tmp_path):
     _write_jsonl(
         state / "watch.jsonl",
-        *(
-            {**HEP_BLOCKED, "event_id": f"event-{n}", "n": n}
-            for n in range(3)
-        ),
+        *({**HEP_BLOCKED, "event_id": f"event-{n}", "n": n} for n in range(3)),
     )
     server = _server(tmp_path)
     try:
@@ -367,9 +373,7 @@ def test_stream_replay_preserves_source_filter_and_unseen_cursor(state, tmp_path
         "watch%3A-1",
     ),
 )
-def test_stream_rejects_invalid_cursor_before_sse_headers(
-    state, tmp_path, raw_cursor
-):
+def test_stream_rejects_invalid_cursor_before_sse_headers(state, tmp_path, raw_cursor):
     server = _server(tmp_path)
     try:
         connection = _conn(server)
@@ -388,9 +392,7 @@ def test_stream_canonicalizes_cursor_before_sse_id(state, tmp_path):
     server = _server(tmp_path)
     connection = None
     try:
-        connection, response = _open_stream(
-            server, "/api/v1/stream?since=watch%3A000"
-        )
+        connection, response = _open_stream(server, "/api/v1/stream?since=watch%3A000")
         hello_id, hello = _read_sse_event(response)
         assert hello["type"] == "hello"
         assert hello_id == "watch:0"
@@ -589,6 +591,45 @@ def test_stream_queue_overflow_durably_catches_up_and_reconnects(
         server.shutdown()
 
 
+def test_sse_replay_pages_backfill_with_bounded_reads(state, monkeypatch):
+    import hark.dashboard.server as dashboard_server
+
+    monkeypatch.setattr(dashboard_server, "SSE_REPLAY_PAGE_SIZE", 2)
+    _write_jsonl(
+        state / "watch.jsonl",
+        *({**HEP_BLOCKED, "event_id": f"paged-{n}", "n": n} for n in range(5)),
+    )
+    read_limits = []
+    real_read_page = dashboard_server.read_page
+
+    def recording_read_page(*args, **kwargs):
+        read_limits.append(kwargs["limit"])
+        return real_read_page(*args, **kwargs)
+
+    monkeypatch.setattr(dashboard_server, "read_page", recording_read_page)
+
+    class FakeHandler:
+        server = type("Server", (), {"state": state})()
+        delivered = []
+
+        def _sse_write(self, envelope):
+            self.delivered.append(envelope)
+
+    handler = FakeHandler()
+    cursor = dashboard_server.DashboardHandler._sse_replay(
+        handler, "watch:0", {"watch"}
+    )
+
+    assert read_limits == [2, 2, 2]
+    assert [envelope["payload"]["n"] for envelope in handler.delivered] == list(
+        range(5)
+    )
+    assert [
+        parse_cursor(envelope["cursor"])["watch"] for envelope in handler.delivered
+    ] == [1, 2, 3, 4, 5]
+    assert parse_cursor(cursor)["watch"] == 5
+
+
 def test_overflow_drain_discards_only_cursor_covered_envelopes():
     from hark.dashboard.server import _durable_envelope_covered
 
@@ -661,6 +702,94 @@ def test_overflow_retry_carries_serve_retained_before_late_overflow():
     assert retained == [serve]
 
 
+def test_overflow_recovery_preserves_queue_order_and_bounds_retained(monkeypatch):
+    import hark.dashboard.server as dashboard_server
+
+    monkeypatch.setattr(dashboard_server, "SUBSCRIBER_QUEUE_SIZE", 3)
+    durable = {
+        "schema": "hark.dashboard.v1",
+        "type": "event",
+        "source": "watch",
+        "cursor": "watch:2",
+        "payload": {"kind": "agent.blocked"},
+    }
+    serve = {
+        "schema": "hark.dashboard.v1",
+        "type": "event",
+        "source": "serve",
+        "cursor": "watch:2,serve:1",
+        "payload": {"kind": "serve.dictation"},
+    }
+
+    class FakeHandler:
+        def _sse_replay(self, since, wanted):
+            return "watch:1"
+
+    subscriber = dashboard_server.SubscriberQueue()
+    subscriber.put_nowait(durable)
+    subscriber.put_nowait(serve)
+    subscriber.mark_overflow()
+
+    _, retained = dashboard_server.DashboardHandler._recover_subscriber_overflow(
+        FakeHandler(), subscriber, "watch:1", None
+    )
+
+    # Sending the serve envelope first would advertise watch:2 and let a
+    # disconnect skip the durable watch event that was actually queued first.
+    assert retained == [durable, serve]
+    assert len(retained) <= dashboard_server.SUBSCRIBER_QUEUE_SIZE
+
+
+def test_overflow_recovery_bounds_non_durable_carry_across_retries(monkeypatch):
+    import hark.dashboard.server as dashboard_server
+
+    monkeypatch.setattr(dashboard_server, "SUBSCRIBER_QUEUE_SIZE", 3)
+
+    def serve(n):
+        return {
+            "schema": "hark.dashboard.v1",
+            "type": "event",
+            "source": "serve",
+            "cursor": f"serve:{n + 1}",
+            "payload": {"kind": "serve.dictation", "n": n},
+        }
+
+    class RepeatedLateOverflowQueue(dashboard_server.SubscriberQueue):
+        def __init__(self):
+            super().__init__()
+            self.removals = 0
+
+        def get_nowait(self):
+            envelope = super().get_nowait()
+            self.removals += 1
+            if self.removals in (3, 6):
+                self.mark_overflow()
+            return envelope
+
+    subscriber = RepeatedLateOverflowQueue()
+    for n in range(3):
+        subscriber.put_nowait(serve(n))
+    subscriber.mark_overflow()
+
+    class FakeHandler:
+        replay_calls = 0
+
+        def _sse_replay(self, since, wanted):
+            self.replay_calls += 1
+            if self.replay_calls > 1:
+                offset = (self.replay_calls - 1) * 3
+                for n in range(offset, offset + 3):
+                    subscriber.put_nowait(serve(n))
+            return since
+
+    _, retained = dashboard_server.DashboardHandler._recover_subscriber_overflow(
+        FakeHandler(), subscriber, "watch:0", None
+    )
+
+    assert [envelope["payload"]["n"] for envelope in retained] == [6, 7, 8]
+    assert len(retained) == dashboard_server.SUBSCRIBER_QUEUE_SIZE
+
+
 def test_overflow_drain_retains_append_after_replay_snapshot(
     state, tmp_path, monkeypatch
 ):
@@ -704,10 +833,7 @@ def test_overflow_drain_retains_append_after_replay_snapshot(
 
         _write_jsonl(
             state / "watch.jsonl",
-            *(
-                {**HEP_BLOCKED, "event_id": f"race-{n}", "n": n}
-                for n in range(4)
-            ),
+            *({**HEP_BLOCKED, "event_id": f"race-{n}", "n": n} for n in range(4)),
         )
         with server.hub._lock:
             subscriber = server.hub._subs[0]
@@ -797,7 +923,8 @@ def test_stream_spectrum_coalesced(state, tmp_path):
         status, body = _get_json(server, "/api/v1/events")
         assert status == 200
         assert not any(
-            (e.get("payload") or {}).get("kind") == "serve.spectrum" for e in body["events"]
+            (e.get("payload") or {}).get("kind") == "serve.spectrum"
+            for e in body["events"]
         )
         assert spec["cursor"] == cursor_before
     finally:
@@ -835,8 +962,11 @@ def test_answer_register_on_demand(state, tmp_path, monkeypatch):
     _write_jsonl(state / "watch.jsonl", hep)
 
     live = AgentInfo(
-        session_id="local", pane_id="w1:p6", agent="claude",
-        status="blocked", revision=3,
+        session_id="local",
+        pane_id="w1:p6",
+        agent="claude",
+        status="blocked",
+        revision=3,
     )
     fake = FakeHerdrClient(live, pane_text)
     monkeypatch.setattr(dash_api, "_client_for", lambda cfg, sid: fake)
@@ -865,13 +995,21 @@ def test_answer_register_on_demand(state, tmp_path, monkeypatch):
 
 def test_answer_stale_revision_rejected(state, tmp_path, monkeypatch):
     store = DeliveryStore()
-    store.save_event(BoundEvent(
-        event_id="evstale", session_id="local", pane_id="w1:p1",
-        pane_revision=3, question_fingerprint="blake2b:x",
-    ))
+    store.save_event(
+        BoundEvent(
+            event_id="evstale",
+            session_id="local",
+            pane_id="w1:p1",
+            pane_revision=3,
+            question_fingerprint="blake2b:x",
+        )
+    )
     live = AgentInfo(
-        session_id="local", pane_id="w1:p1", agent="claude",
-        status="blocked", revision=9,
+        session_id="local",
+        pane_id="w1:p1",
+        agent="claude",
+        status="blocked",
+        revision=9,
     )
     monkeypatch.setattr(
         dash_api, "_client_for", lambda cfg, sid: FakeHerdrClient(live, "Q?")
@@ -915,10 +1053,15 @@ def test_prompt_appends_ambient_and_returns_event_id(state, tmp_path):
 
 def test_deliveries_and_usage_snapshots(state, tmp_path):
     store = DeliveryStore()
-    store.save_event(BoundEvent(
-        event_id="e1", session_id="local", pane_id="w1:p1",
-        pane_revision=1, question_fingerprint="fp",
-    ))
+    store.save_event(
+        BoundEvent(
+            event_id="e1",
+            session_id="local",
+            pane_id="w1:p1",
+            pane_revision=1,
+            question_fingerprint="fp",
+        )
+    )
     store.mark("e2", "delivered")
     server = _server(tmp_path)
     try:
@@ -966,9 +1109,7 @@ def _get_static(server, path: str) -> tuple[int, bytes]:
     return status, body
 
 
-def _get_static_with_headers(
-    server, path: str
-) -> tuple[int, bytes, dict[str, str]]:
+def _get_static_with_headers(server, path: str) -> tuple[int, bytes, dict[str, str]]:
     c = _conn(server)
     try:
         c.request("GET", path)
@@ -994,9 +1135,7 @@ def test_static_serves_valid_asset(state, tmp_path, static_root):
         server.shutdown()
 
 
-def test_static_contained_missing_path_uses_spa_fallback(
-    state, tmp_path, static_root
-):
+def test_static_contained_missing_path_uses_spa_fallback(state, tmp_path, static_root):
     server = _server(tmp_path)
     try:
         assert _get_static(server, "/settings/profile") == (
@@ -1043,9 +1182,7 @@ def test_static_rejects_matching_prefix_sibling_traversal(
     (sibling / "secret.txt").write_bytes(b"TOP-SECRET")
     server = _server(tmp_path)
     try:
-        status, body = _get_static(
-            server, f"/{dot_segment}/{sibling.name}/secret.txt"
-        )
+        status, body = _get_static(server, f"/{dot_segment}/{sibling.name}/secret.txt")
         assert status == HTTPStatus.NOT_FOUND
         assert b"TOP-SECRET" not in body
     finally:
@@ -1088,7 +1225,9 @@ def test_dictation_bad_mode_400_and_no_capture(state, tmp_path, monkeypatch):
     monkeypatch.setattr("hark.speech.run_listen", forbid)
     server = _server(tmp_path)
     try:
-        status, body, _ = _post_json(server, "/api/v1/dictation/start", {"mode": "browser"})
+        status, body, _ = _post_json(
+            server, "/api/v1/dictation/start", {"mode": "browser"}
+        )
         assert status == 400 and body["error"]["code"] == "bad_request"
         status, body, _ = _post_json(server, "/api/v1/dictation/stop", {})
         assert status == 409 and body["error"]["code"] == "no_capture"

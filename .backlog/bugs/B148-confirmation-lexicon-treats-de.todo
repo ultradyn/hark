@@ -1,0 +1,13 @@
+---
+complexity: low
+created_at: "2026-07-16T00:05:18Z"
+depends_on: []
+estimate_hours: 1
+id: B148
+priority: high
+status: pending
+tags: []
+title: Confirmation lexicon treats deferred or conditional replies as immediate approval
+updated_at: "2026-07-16T00:05:18Z"
+---
+Evidence\nclassify_confirm_reply currently returns "yes" for multi-clause spoken replies including "yes but wait", "yes hold on", "okay wait a second", "sure after I review it", "yes if the tests pass", "yes unless the tests fail", and "yes maybe". run_ask therefore proceeds immediately even though the operator deferred, conditioned, or hedged permission.\n\nExpected\nA confirmation is accepted only when the reply is an unambiguous immediate approval. Defer, condition, and hedge markers produce unclear or cancellation, with focused classifier and run_ask tests.\n\nActual\nAn affirmative token at the start or end wins unless a small NEGATE token is present, so conditional and defer clauses are ignored.

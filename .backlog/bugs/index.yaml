@@ -146,3 +146,4 @@ bugs:
     - file: B145-hark-ask-repeatedly-hangs-afte.todo
     - file: B146-hark-ask-blocks-indefinitely-a.todo
     - file: B147-confirmation-lexicon-accepts-a.todo
+    - file: B148-confirmation-lexicon-treats-de.todo

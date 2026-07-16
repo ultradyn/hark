@@ -1,13 +1,17 @@
 ---
+claimed_at: "2026-07-16T14:01:55Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-16T14:01:26Z"
 depends_on: []
 estimate_hours: 1
 id: B155
 priority: high
-status: pending
+started_at: "2026-07-16T14:01:55Z"
+status: in_progress
 tags: []
 title: Live state follower misses same-prefix equal or longer in-place rewrites
-updated_at: "2026-07-16T14:01:26Z"
+updated_at: "2026-07-16T14:01:55Z"
 ---
 ## Evidence\nA live SourceFollower already positioned at EOF does not detect an in-place truncate/rewrite when the inode and first complete record are preserved and the replacement byte length is equal or larger. Deterministic reproduction: start on [same, old1, old2], rewrite the same inode to [same, new1, new2], then poll; it emits nothing and leaves the cursor unchanged. Rewriting to [same, new1, new2, new3] emits only new3. The live path compares inode, first-line identity, and size shrink, but does not revalidate the rolling consumed-prefix checkpoint.\n\nThis predates B131 and is distinct from B131's persisted-cursor resume fix.\n\n## Expected\nA live follower must detect same-prefix equal-size and longer in-place replacements and conservatively replay the replacement from its first complete record, preferring duplicates over silent loss.\n\n## Actual\nReplacement records at already-consumed offsets are silently skipped; an equal-size rewrite may be completely invisible.\n\n## Acceptance criteria\n- Cover an already-open follower at EOF.\n- Detect same-inode, same-first-record replacements of equal and larger byte size.\n- Replay every replacement record from sequence 1 without minting a cursor over unseen bytes.\n- Preserve ordinary append, partial-line, truncation, and rotation behavior.\n- Cover core follower plus one dashboard/live adapter path.

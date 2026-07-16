@@ -194,14 +194,24 @@ _OVER_PHRASAL_PREV: frozenset[str] = frozenset(
 
 _PUNCT_TRAIL = re.compile(r"[\s\.\!\?\,\;\:…]+$", re.UNICODE)
 _WS = re.compile(r"\s+")
-_APOSTROPHE_TRANSLATION = str.maketrans(
+# Public normalization policy used by the destructive confirmation boundary to
+# distinguish explicitly supported apostrophe substitutions from unknown marks.
+APOSTROPHE_EQUIVALENTS = frozenset(
     {
-        "`": "'",  # grave accent / common STT substitution
-        "\u00b4": "'",  # acute accent
-        "\u02bc": "'",  # modifier letter apostrophe
-        "\u2018": "'",  # left single quotation mark
-        "\u2019": "'",  # right single quotation mark
+        "`",  # grave accent / common STT substitution
+        "\u00b4",  # acute accent
+        "\u02b9",  # modifier letter prime
+        "\u02bc",  # modifier letter apostrophe
+        "\u1fef",  # Greek varia (compatibility equivalent to grave)
+        "\u2018",  # left single quotation mark
+        "\u2019",  # right single quotation mark
+        "\u201b",  # single high-reversed-9 quotation mark
+        "\u2032",  # prime
+        "\uff40",  # fullwidth grave accent
     }
+)
+_APOSTROPHE_TRANSLATION = str.maketrans(
+    {variant: "'" for variant in APOSTROPHE_EQUIVALENTS}
 )
 # Sentence-ending punct at end of prefix before bare "over".
 # Comma counts as a soft sentence boundary so "okay, over" / "ready, over"
@@ -210,11 +220,22 @@ _SENTENCE_END = re.compile(r"[.!?…;:,]+$")
 _WORD_TRAIL_PUNCT = re.compile(r"[\.\!\?\,\;\:…'\"”’]+$")
 
 
-def normalize_for_match(text: str) -> str:
-    # Canonicalize apostrophe-like input before NFKC: U+00B4 otherwise expands
-    # to a space plus combining accent and breaks contraction token matching.
-    text = (text or "").translate(_APOSTROPHE_TRANSLATION)
+def _canonicalize_apostrophe_family(text: str) -> str:
+    """Return NFKC text with the bounded apostrophe family mapped to ASCII.
+
+    Translation is deliberately two-sided: the first pass protects spacing
+    U+00B4 from destructive compatibility expansion, while the second catches
+    compatibility characters (including U+FF40 and U+1FEF) already normalized
+    by this function or an upstream caller.
+    """
+    text = text.translate(_APOSTROPHE_TRANSLATION)
     text = unicodedata.normalize("NFKC", text)
+    text = text.translate(_APOSTROPHE_TRANSLATION)
+    return text
+
+
+def normalize_for_match(text: str) -> str:
+    text = _canonicalize_apostrophe_family(text or "")
     text = text.lower().strip()
     text = _WS.sub(" ", text)
     return text
@@ -436,9 +457,7 @@ def evaluate_radio_transcript(
             )
         end = find_terminal_phrase(candidate, end_phrases, kind="end")
         if end is not None:
-            return PhraseHit(
-                kind=end.kind, phrase=end.phrase, body=end.body, raw=raw
-            )
+            return PhraseHit(kind=end.kind, phrase=end.phrase, body=end.body, raw=raw)
         if soft_end_phrases_enabled:
             soft = find_terminal_phrase(
                 candidate,
@@ -449,9 +468,7 @@ def evaluate_radio_transcript(
             if soft is not None:
                 # Soft over / okay over are always finish, never cancel (B103).
                 kind = "end" if soft.kind != "end" else soft.kind
-                return PhraseHit(
-                    kind=kind, phrase=soft.phrase, body=soft.body, raw=raw
-                )
+                return PhraseHit(kind=kind, phrase=soft.phrase, body=soft.body, raw=raw)
     return None
 
 
@@ -465,9 +482,7 @@ def parse_end_mode(value: str | None, default: EndMode = EndMode.SILENCE) -> End
         return default
     if v in ("radio", "prosign", "phrase", "end_phrase", "end-phrase"):
         return EndMode.RADIO
-    raise ValueError(
-        f"unknown listen end_mode {value!r}; use 'silence' or 'radio'"
-    )
+    raise ValueError(f"unknown listen end_mode {value!r}; use 'silence' or 'radio'")
 
 
 def should_keep_listening(

@@ -798,7 +798,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # here. Its executor may still own an uncooperative provider thread;
         # returning 130 begins ordinary shutdown while the pool's retained
         # handler gives a repeated Ctrl-C a traceback-free hard-exit path.
-        from hark.speech import TtsSynthesisInterrupted
+        from hark.tts_interrupt_policy import TtsSynthesisInterrupted
 
         if isinstance(exc, TtsSynthesisInterrupted):
             return exc.exit_code

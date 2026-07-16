@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +24,327 @@ def _queue_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(pb, "tts_play_lock_path", lambda: lock)
     monkeypatch.setattr(pb, "tts_play_queue_path", lambda: queue)
     return lock, queue
+
+
+def _flock_holder(lock, *, env):
+    code = """
+import fcntl
+import os
+import sys
+
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644)
+fcntl.flock(fd, fcntl.LOCK_EX)
+print("READY", flush=True)
+sys.stdin.read()
+"""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", code, str(lock)],
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.stdout is not None
+    assert proc.stdout.readline().strip() == "READY"
+    return proc
+
+
+def _patch_run_tts_dependencies(monkeypatch):
+    class FakeTts:
+        def synthesize(self, text, voice=None):
+            return SimpleNamespace(
+                audio=b"ID3fake",
+                provider="fake",
+                content_type="audio/mpeg",
+                voice=voice or "eve",
+            )
+
+    class FakeUsage:
+        def record_tts(self, **_kwargs):
+            return None
+
+    monkeypatch.setattr("hark.speech.resolve_tts", lambda *a, **k: FakeTts())
+    monkeypatch.setattr("hark.speech.UsageStore", FakeUsage)
+    monkeypatch.setattr(
+        "hark.speech.repair_tts_mute_after_play",
+        lambda **k: {"repaired": False},
+    )
+    monkeypatch.setattr(
+        "hark.conference.apply_conference_hold",
+        lambda *a, **k: SimpleNamespace(skipped=False, as_meta=lambda: {"held": False}),
+    )
+
+
+def _tts_config():
+    cfg = HarkConfig()
+    cfg.audio.defer_tts_while_listening = False
+    cfg.audio.hold_during_conference = False
+    return cfg
+
+
+def test_claim_lock_timeout_reports_owner_and_queue(tmp_path):
+    """A wedged playback flock must fail boundedly with actionable state (B146)."""
+    state = tmp_path / "state"
+    state.mkdir()
+    lock = state / "hark" / "tts_play.lock"
+    lock.parent.mkdir()
+    queue = state / "hark" / "tts_play_queue.json"
+    env = os.environ.copy()
+    env["XDG_STATE_HOME"] = str(state)
+    env["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
+    holder = _flock_holder(lock, env=env)
+    queue.write_text(
+        json.dumps(
+            {
+                "next": 8,
+                "serving": 7,
+                "cancelled": [],
+                "holders": {"7": {"pid": holder.pid, "claimed_at": time.time() - 2}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    code = """
+import json
+from hark.audio import playback as pb
+
+pb._PLAY_LOCK_ACQUIRE_TIMEOUT_S = 0.15
+try:
+    pb.claim_tts_play_ticket()
+except TimeoutError as exc:
+    print(json.dumps({
+        "type": type(exc).__name__,
+        "operation": getattr(exc, "operation", None),
+        "lock_owner_pid": getattr(exc, "lock_owner_pid", None),
+        "serving": getattr(exc, "queue_state", {}).get("serving"),
+        "queue_owner_pid": getattr(exc, "queue_owner_pid", None),
+        "message": str(exc),
+    }))
+else:
+    raise SystemExit("claim unexpectedly succeeded")
+"""
+    contender = subprocess.Popen(
+        [sys.executable, "-c", code],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        stdout, stderr = contender.communicate(timeout=2.0)
+        assert contender.returncode == 0, stderr
+        report = json.loads(stdout)
+        assert report["type"] == "TtsPlayLockTimeout"
+        assert report["operation"] == "claim"
+        assert report["lock_owner_pid"] == holder.pid
+        assert report["serving"] == 7
+        assert report["queue_owner_pid"] == holder.pid
+        assert "serving=7" in report["message"]
+    finally:
+        if contender.poll() is None:
+            contender.kill()
+            contender.wait()
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+
+
+def test_exclusive_lock_timeout_defers_ticket_abandonment(tmp_path, monkeypatch):
+    """Lock timeout returns promptly and cleanup completes after lock release."""
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    env = os.environ.copy()
+    holder = _flock_holder(lock, env=env)
+    monkeypatch.setattr(pb, "_PLAY_LOCK_ACQUIRE_TIMEOUT_S", 0.12)
+    try:
+        started = time.monotonic()
+        with pytest.raises(pb.TtsPlayLockTimeout) as caught:
+            with pb.exclusive_playback(ticket=ticket):
+                raise AssertionError("must not enter playback")
+        assert time.monotonic() - started < 1.0
+        assert caught.value.operation == "wait"
+        assert caught.value.ticket == ticket
+        assert ticket in pb._our_tickets
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+
+    deadline = time.monotonic() + 2.0
+    while ticket in pb._our_tickets and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert ticket not in pb._our_tickets
+    assert pb.inspect_tts_play_queue()["serving"] == ticket + 1
+
+
+def test_exclusive_lock_timeout_recovers_if_deferred_thread_start_fails_once(
+    tmp_path, monkeypatch
+):
+    """A failed first cleanup-worker publication must not orphan the ticket."""
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    holder = _flock_holder(lock, env=os.environ.copy())
+    monkeypatch.setattr(pb, "_PLAY_LOCK_ACQUIRE_TIMEOUT_S", 0.12)
+    real_start = threading.Thread.start
+    starts = 0
+
+    def fail_first_start(thread):
+        nonlocal starts
+        if thread.name.startswith("hark-tts-abandon-"):
+            starts += 1
+            if starts == 1:
+                raise RuntimeError("thread publication failed")
+        return real_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", fail_first_start)
+    try:
+        with pytest.raises(pb.TtsPlayLockTimeout):
+            with pb.exclusive_playback(ticket=ticket):
+                raise AssertionError("must not enter playback")
+        assert starts == 2
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+
+    deadline = time.monotonic() + 2.0
+    while ticket in pb._our_tickets and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert ticket not in pb._our_tickets
+    assert pb.inspect_tts_play_queue()["serving"] == ticket + 1
+
+
+def test_exclusive_cleanup_preserves_primary_exception(tmp_path, monkeypatch):
+    """Queue-cleanup failures must not replace the playback/body failure."""
+    _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    original_write = pb._queue_write
+
+    class PrimaryFailure(BaseException):
+        pass
+
+    def fail_write(*_args, **_kwargs):
+        raise RuntimeError("cleanup write failed")
+
+    try:
+        with pytest.raises(PrimaryFailure, match="body failed"):
+            with pb.exclusive_playback(ticket=ticket):
+                monkeypatch.setattr(pb, "_queue_write", fail_write)
+                raise PrimaryFailure("body failed")
+    finally:
+        monkeypatch.setattr(pb, "_queue_write", original_write)
+        pb.abandon_tts_play_ticket(ticket)
+
+
+def test_run_tts_configured_wait_timeout_is_total_and_keeps_lock_details(
+    tmp_path, monkeypatch
+):
+    """run_tts cleanup must not add a second lock wait after delegation."""
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    holder = _flock_holder(lock, env=os.environ.copy())
+    monkeypatch.setattr(pb, "_PLAY_LOCK_ACQUIRE_TIMEOUT_S", 0.5)
+    _patch_run_tts_dependencies(monkeypatch)
+
+    def delayed_claim(**kwargs):
+        assert kwargs["lock_timeout_s"] == pytest.approx(0.12)
+        time.sleep(0.07)
+        return ticket
+
+    monkeypatch.setattr("hark.speech.claim_tts_play_ticket", delayed_claim)
+    cfg = _tts_config()
+    started = time.monotonic()
+    try:
+        with pytest.raises(pb.TtsPlayLockTimeout) as caught:
+            run_tts(
+                cfg,
+                "bounded playback",
+                play=True,
+                mute_mic=False,
+                conference_policy="force",
+                use_cache=False,
+                play_wait_timeout_s=0.12,
+            )
+        elapsed = time.monotonic() - started
+        assert 0.1 <= elapsed < 0.18
+        assert caught.value.operation == "wait"
+        assert caught.value.lock_owner_pid == holder.pid
+        assert caught.value.queue_owner_pid == os.getpid()
+        assert caught.value.queue_state["next"] == ticket + 1
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+
+    deadline = time.monotonic() + 2.0
+    while ticket in pb._our_tickets and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert ticket not in pb._our_tickets
+
+
+def test_run_tts_configured_wait_timeout_bounds_initial_claim(tmp_path, monkeypatch):
+    """The configured queue budget applies before synth at claim time too."""
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    holder = _flock_holder(lock, env=os.environ.copy())
+    monkeypatch.setattr(pb, "_PLAY_LOCK_ACQUIRE_TIMEOUT_S", 0.5)
+    _patch_run_tts_dependencies(monkeypatch)
+    started = time.monotonic()
+    try:
+        with pytest.raises(pb.TtsPlayLockTimeout) as caught:
+            run_tts(
+                _tts_config(),
+                "bounded initial claim",
+                play=True,
+                mute_mic=False,
+                conference_policy="force",
+                use_cache=False,
+                play_wait_timeout_s=0.12,
+            )
+        assert time.monotonic() - started < 0.4
+        assert caught.value.operation == "claim"
+        assert caught.value.lock_owner_pid == holder.pid
+        assert caught.value.ticket is None
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+
+
+def test_cli_configured_wait_timeout_prints_owner_diagnostics(
+    tmp_path, monkeypatch, capsys
+):
+    """The CLI timeout surface retains the typed lock diagnostics (B146)."""
+    from hark import cli
+
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    holder = _flock_holder(lock, env=os.environ.copy())
+    monkeypatch.setattr(pb, "_PLAY_LOCK_ACQUIRE_TIMEOUT_S", 0.12)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+    def blocked_dispatch(_args, _cfg):
+        with pb.exclusive_playback(ticket=ticket, wait_timeout_s=0.12):
+            raise AssertionError("must not enter playback")
+
+    monkeypatch.setattr(cli, "dispatch", blocked_dispatch)
+    try:
+        assert cli.main(["doctor"]) == cli.TIMEOUT
+        stderr = capsys.readouterr().err
+        assert "hark: timeout:" in stderr
+        assert "operation=wait" in stderr
+        assert f"lock_owner_pid={holder.pid}" in stderr
+        assert f"queue_owner_pid={os.getpid()}" in stderr
+        assert f"next={ticket + 1}" in stderr
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+
+    deadline = time.monotonic() + 2.0
+    while ticket in pb._our_tickets and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert ticket not in pb._our_tickets
 
 
 def test_exclusive_playback_serializes_fifo(tmp_path, monkeypatch):
@@ -38,7 +363,9 @@ def test_exclusive_playback_serializes_fifo(tmp_path, monkeypatch):
 
     # a claims ticket first; b starts slightly later but finishes "work" faster
     t1 = threading.Thread(target=worker, args=("a", 0.15))
-    t2 = threading.Thread(target=worker, args=("b", 0.05), kwargs={"delay_before": 0.03})
+    t2 = threading.Thread(
+        target=worker, args=("b", 0.05), kwargs={"delay_before": 0.03}
+    )
     t1.start()
     t2.start()
     t1.join()
@@ -53,7 +380,9 @@ def test_five_tickets_play_in_launch_order(tmp_path, monkeypatch):
     play_order: list[int] = []
     # Claim in launch order (main thread), like sequential process starts
     tickets = [pb.claim_tts_play_ticket() for _ in range(5)]
-    assert tickets == [0, 1, 2, 3, 4] or tickets == list(range(tickets[0], tickets[0] + 5))
+    assert tickets == [0, 1, 2, 3, 4] or tickets == list(
+        range(tickets[0], tickets[0] + 5)
+    )
 
     def worker(i: int) -> None:
         # Higher i "synths" faster — would race ahead without FIFO tickets
@@ -159,9 +488,7 @@ def test_exclusive_playback_skips_dead_head(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        pb, "_pid_alive", lambda pid: pid != dead_pid and pid > 0
-    )
+    monkeypatch.setattr(pb, "_pid_alive", lambda pid: pid != dead_pid and pid > 0)
     # Claim ticket 1; exclusive should heal past 0 and play
     ticket = pb.claim_tts_play_ticket()
     assert ticket == 1
@@ -256,9 +583,7 @@ def test_run_tts_pipelines_next_chunk_synth(monkeypatch):
     )
     monkeypatch.setattr(
         "hark.conference.apply_conference_hold",
-        lambda *a, **k: SimpleNamespace(
-            skipped=False, as_meta=lambda: {"held": False}
-        ),
+        lambda *a, **k: SimpleNamespace(skipped=False, as_meta=lambda: {"held": False}),
     )
     # exclusive_playback identity for unit test (no flock races with parallel suites)
     from contextlib import contextmanager

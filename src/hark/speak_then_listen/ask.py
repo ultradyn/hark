@@ -16,6 +16,23 @@ from hark.providers.base import ProviderError
 from hark.risk import classify_question, confirm_required
 
 
+def _provider_failure_result(
+    exc: ProviderError,
+    *,
+    tts_info: Any,
+    text: str | None = None,
+) -> dict[str, Any]:
+    result = {
+        "ok": False,
+        "error": str(exc),
+        "exit": getattr(exc, "code", PROVIDER),
+        "tts": tts_info,
+    }
+    if text is not None:
+        result["text"] = text
+    return result
+
+
 def run_ask(
     cfg: HarkConfig,
     prompt: str,
@@ -49,12 +66,10 @@ def run_ask(
             "tts": getattr(exc, "tts_info", None),
         }
     except ProviderError as exc:
-        return {
-            "ok": False,
-            "error": str(exc),
-            "exit": getattr(exc, "code", PROVIDER),
-            "tts": getattr(exc, "tts_info", None),
-        }
+        return _provider_failure_result(
+            exc,
+            tts_info=getattr(exc, "tts_info", None),
+        )
 
     if listened.cancelled:
         return {
@@ -90,7 +105,14 @@ def run_ask(
     if need_confirm:
         # Confirming: readback TTS + silence Answer Window + lexicon (HandoffState.CONFIRMING).
         readback = f"I heard: {listened.text}. Say yes to send, or cancel."
-        speech_mod.run_tts(cfg, readback, provider=provider, play=True)
+        try:
+            speech_mod.run_tts(cfg, readback, provider=provider, play=True)
+        except ProviderError as exc:
+            return _provider_failure_result(
+                exc,
+                text=listened.text,
+                tts_info=tts_info,
+            )
         try:
             conf = speech_mod.run_listen(
                 cfg,
@@ -107,6 +129,12 @@ def run_ask(
                 "text": listened.text,
                 "tts": tts_info,
             }
+        except ProviderError as exc:
+            return _provider_failure_result(
+                exc,
+                text=listened.text,
+                tts_info=tts_info,
+            )
         if conf.cancelled:
             return {
                 "ok": False,

@@ -1,0 +1,13 @@
+---
+complexity: medium
+created_at: "2026-07-16T16:01:21Z"
+depends_on: []
+estimate_hours: 1.5
+id: B158
+priority: high
+status: pending
+tags: []
+title: Mixed-script confusable negative contractions can approve confirmation
+updated_at: "2026-07-16T16:01:21Z"
+---
+Evidence: the destructive confirmation classifier performs NFKC but no mixed-script/confusable fail-closed check. Replies that visually contain an explicit negative contraction can therefore be approved when one ASCII letter is replaced by a Cyrillic lookalike: classify_confirm_reply("yes I cаn’t approve this") returns yes with U+0430 CYRILLIC SMALL LETTER A; "yes I сan’t approve this" also returns yes with U+0441 CYRILLIC SMALL LETTER ES. A real R2 run_ask confirmation returns ok true and exit 0 for the first input. This is separate from B151 separator provenance: the separator is a supported U+2019 and the evasion is in the contraction skeleton letters. Expected: confirmation must fail closed on a mixed-script/confusable token that otherwise resembles a bounded negative contraction, without treating ordinary multilingual words as negatives or weakening whole-token boundaries. Add direct and real R2 regressions plus ordinary multilingual controls.

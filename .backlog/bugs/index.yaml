@@ -154,3 +154,4 @@ bugs:
     - file: B153-repeated-sigint-cannot-stop-a.todo
     - file: B154-providererror-code-0-makes-fai.todo
     - file: B155-live-state-follower-misses-sam.todo
+    - file: B156-hostile-providererror-renderin.todo

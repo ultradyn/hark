@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-16T00:38:13Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-16T13:21:59Z"
 complexity: medium
 created_at: "2026-07-16T00:37:18Z"
 depends_on: []
+duration_minutes: 763.7761278763334
 estimate_hours: 1
 id: B149
 priority: medium
 started_at: "2026-07-16T00:38:13Z"
-status: in_progress
+status: done
 tags: []
 title: Confirmation-turn provider failures escape hark ask structured result
-updated_at: "2026-07-16T00:38:13Z"
+updated_at: "2026-07-16T13:21:59Z"
 ---
 ## Evidence
 

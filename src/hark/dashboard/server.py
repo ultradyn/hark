@@ -15,6 +15,7 @@ import secrets
 import threading
 import time
 from collections import deque
+from contextlib import closing
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,10 +26,15 @@ from urllib.parse import parse_qs, unquote, urlparse
 from hark import __version__
 from hark.config import HarkConfig
 from hark.dashboard import api
-from hark.dashboard.tailer import MultiTailer, read_page, records_with_cursors
+from hark.dashboard.tailer import (
+    MultiTailer,
+    iter_replay_records,
+    read_page,
+    records_with_cursors,
+)
 from hark.events import utc_now_iso
 from hark.paths import state_dir
-from hark.state_feed import canonicalize_cursor, parse_cursor
+from hark.state_feed import FeedRecord, canonicalize_cursor, parse_cursor
 from hark.syslog import log
 
 SCHEMA = "hark.dashboard.v1"
@@ -39,7 +45,6 @@ MAX_JSON_BODY = 1 << 20  # 1 MiB
 MAX_AUDIO_BODY = 32 << 20  # 32 MiB
 LOCALHOST_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 SUBSCRIBER_QUEUE_SIZE = 1000
-SSE_REPLAY_PAGE_SIZE = 1000
 _DURABLE_CURSOR_KEYS = {
     "watch": "watch",
     "ambient": "ambient",
@@ -117,14 +122,20 @@ class Hub:
 
     def publish(self, envelope: dict[str, Any]) -> None:
         with self._lock:
-            subs = list(self._subs)
-        for q in subs:
-            try:
-                q.put_nowait(envelope)
-            except queue.Full:
-                # Never block the pump, but make the loss observable so the
-                # SSE handler can catch durable records up from disk.
-                q.mark_overflow()
+            # Subscription order is atomic with queue publication: a new
+            # subscriber cannot appear between cursor-frontier publication
+            # and the queue writes that make that frontier safe.
+            for q in self._subs:
+                if q.overflowed:
+                    # Recovery replays durable records from disk.  Do not let
+                    # later non-durable envelopes enter ahead of that replay.
+                    continue
+                try:
+                    q.put_nowait(envelope)
+                except queue.Full:
+                    # Never block the pump, but make the loss observable so
+                    # the SSE handler can catch durable records up from disk.
+                    q.mark_overflow()
 
     def set_spectrum(self, payload: dict[str, Any]) -> None:
         """Overwrite the latest live spectrum frame (coalesced)."""
@@ -150,48 +161,66 @@ class TailPump(threading.Thread):
         # requests — otherwise a record written right after connect can be
         # skipped as history (observed as a flaky stream test)
         self.tailer.start_live()
-        self._stop = threading.Event()
+        self._publish_lock = threading.Lock()
+        self._published_durable_cursor = self.tailer.composite_cursor()
+        self._stop_event = threading.Event()
 
-    def composite_cursor(self) -> str:
-        cur = self.tailer.composite_cursor()
+    def _composite_cursor_locked(self, durable_cursor: str) -> str:
         return (
-            f"{cur},serve:{self.hub.serve_seq}"
-            if cur
+            f"{durable_cursor},serve:{self.hub.serve_seq}"
+            if durable_cursor
             else f"serve:{self.hub.serve_seq}"
         )
 
+    def composite_cursor(self) -> str:
+        # The follower may already have parsed the next durable record while
+        # the pump thread has not published it yet.  Expose only the durable
+        # frontier that has completed Hub.publish, never the raw follower.
+        with self._publish_lock:
+            return self._composite_cursor_locked(self._published_durable_cursor)
+
     def publish_serve(self, payload: dict[str, Any]) -> None:
-        self.hub.serve_seq += 1
-        self.hub.publish(
-            {
-                "schema": SCHEMA,
-                "type": "event",
-                "source": "serve",
-                "cursor": self.composite_cursor(),
-                "payload": payload,
-            }
-        )
+        with self._publish_lock:
+            self.hub.serve_seq += 1
+            self.hub.publish(
+                {
+                    "schema": SCHEMA,
+                    "type": "event",
+                    "source": "serve",
+                    "cursor": self._composite_cursor_locked(
+                        self._published_durable_cursor
+                    ),
+                    "payload": payload,
+                }
+            )
+
+    def _publish_record(self, rec: FeedRecord) -> None:
+        """Publish one durable record and then advance the safe frontier."""
+        with self._publish_lock:
+            durable_cursor = self.tailer.composite_cursor()
+            self.hub.publish(
+                {
+                    "schema": SCHEMA,
+                    "type": "event",
+                    "source": rec.source,
+                    "cursor": self._composite_cursor_locked(durable_cursor),
+                    "payload": rec.payload,
+                }
+            )
+            self._published_durable_cursor = durable_cursor
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             progressed = False
             for rec in self.tailer.poll():
                 progressed = True
-                self.hub.publish(
-                    {
-                        "schema": SCHEMA,
-                        "type": "event",
-                        "source": rec.source,
-                        "cursor": self.composite_cursor(),
-                        "payload": rec.payload,
-                    }
-                )
+                self._publish_record(rec)
             if not progressed:
-                self._stop.wait(self.poll_s)
+                self._stop_event.wait(self.poll_s)
         self.tailer.close()
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
 
 class SpectrumPump(threading.Thread):
@@ -577,14 +606,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _sse_replay(self, since: str, wanted: set[str] | None) -> str:
         """Write durable records after *since* and return the delivered cursor."""
         stream_cursor = since
-        while True:
-            records, page_cursor, complete = read_page(
-                self.server.state,
-                since=stream_cursor,
-                sources=wanted,
-                limit=SSE_REPLAY_PAGE_SIZE,
-            )
-            for record, record_cursor in records_with_cursors(records, stream_cursor):
+        records = iter_replay_records(self.server.state, since=since, sources=wanted)
+        with closing(records):
+            for record, record_cursor in records_with_cursors(records, since):
                 self._sse_write(
                     {
                         "schema": SCHEMA,
@@ -595,11 +619,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     }
                 )
                 stream_cursor = record_cursor
-            if complete:
-                # Invalid/blank source lines advance the durable follower but
-                # emit no envelope.  Advancing the internal replay boundary is
-                # safe and avoids rescanning them after every queue overflow.
-                return page_cursor if not records else stream_cursor
+        return stream_cursor
 
     def _recover_subscriber_overflow(
         self,

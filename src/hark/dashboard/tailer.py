@@ -10,8 +10,9 @@ Cursor format (composite): ``key:seq,key:seq,…`` — see DASHBOARD.md.
 from __future__ import annotations
 
 import heapq
+from collections import deque
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 from hark.state_feed import (
     FeedRecord,
@@ -88,7 +89,7 @@ def read_page(
     *,
     since: str | None,
     sources: set[str] | None = None,
-    limit: int | None = 500,
+    limit: int = 500,
     history_limit: int = 2000,
 ) -> tuple[list[FeedRecord], str, bool]:
     """One-shot backfill page for GET /api/v1/events."""
@@ -97,23 +98,60 @@ def read_page(
     ]
     mt = MultiTailer(state, tailers)
     mt.start_from(since, default_tail=history_limit if since is None else 0)
-    records = list(mt.poll())
-    mt.close()
-    records = _replay_order(records)
-    complete = limit is None or len(records) <= limit
-    if limit is not None and not complete:
-        # A fresh page is explicitly a recent-tail snapshot.  A resumed page
-        # is forward pagination: retain the earliest unseen records so its
-        # cursor cannot jump over an omitted record.
-        records = records[-limit:] if since is None and limit else records[:limit]
-    cursor = mt.composite_cursor()
-    if since is not None and not complete:
-        cursor = _cursor_after(records, since)
-    return records, cursor, complete
+    try:
+        ordered = _iter_replay_order(mt.tailers)
+        if since is None:
+            # A fresh page is a bounded recent-tail snapshot.  Materializing
+            # only the requested tail avoids retaining every record from the
+            # per-source ``history_limit`` windows.
+            page_limit = max(limit, 0)
+            recent: deque[FeedRecord] = deque(maxlen=page_limit)
+            count = 0
+            for record in ordered:
+                count += 1
+                recent.append(record)
+            return list(recent), mt.composite_cursor(), count <= page_limit
+
+        # Forward paging must not scan/materialize the whole unseen suffix.
+        # Pull one bounded lookahead record solely to determine completeness;
+        # the response cursor advances only through records actually returned.
+        page_limit = max(limit, 0)
+        materialized: list[FeedRecord] = []
+        for _ in range(page_limit + 1):
+            try:
+                materialized.append(next(ordered))
+            except StopIteration:
+                break
+        complete = len(materialized) <= page_limit
+        records = materialized if complete else materialized[:page_limit]
+        cursor = mt.composite_cursor() if complete else _cursor_after(records, since)
+        return records, cursor, complete
+    finally:
+        mt.close()
+
+
+def iter_replay_records(
+    state: Path,
+    *,
+    since: str,
+    sources: set[str] | None = None,
+) -> Iterator[FeedRecord]:
+    """Stream a forward replay in one bounded-memory source merge."""
+    tailers = [
+        tailer
+        for tailer in default_tailers(state)
+        if sources is None or tailer.source in sources
+    ]
+    mt = MultiTailer(state, tailers)
+    mt.start_from(since, default_tail=0)
+    try:
+        yield from _iter_replay_order(mt.tailers)
+    finally:
+        mt.close()
 
 
 def records_with_cursors(
-    records: list[FeedRecord], since: str | None
+    records: Iterable[FeedRecord], since: str | None
 ) -> Iterator[tuple[FeedRecord, str]]:
     """Pair records with a composite cursor at that exact replay boundary.
 
@@ -136,37 +174,36 @@ def _cursor_after(records: list[FeedRecord], since: str) -> str:
     return cursor
 
 
-def _replay_order(records: list[FeedRecord]) -> list[FeedRecord]:
-    """Timestamp-best-effort interleave without reordering a cursor stream.
+def _iter_replay_order(
+    tailers: list[SourceFollower],
+) -> Iterator[FeedRecord]:
+    """Lazily interleave source heads without reordering a cursor stream.
 
     Payload clocks are not guaranteed monotonic.  A global timestamp sort can
     therefore emit ``watch:2`` before ``watch:1`` and make a mid-page resume
-    skip the unseen first record.  Treat each cursor key as an ordered chain
-    and merge only the current head of each chain by timestamp.
+    skip the unseen first record.  Each source iterator is an ordered chain;
+    keep only its current head in the heap.  Memory and parsing are therefore
+    bounded by the requested page plus one lookahead, not the unseen suffix.
     """
-    chains: dict[str, list[tuple[int, FeedRecord]]] = {}
-    for original_index, record in enumerate(records):
-        chains.setdefault(record.cursor_key, []).append((original_index, record))
+    heap: list[tuple[float, int, FeedRecord, Iterator[FeedRecord]]] = []
+    for source_index, tailer in enumerate(tailers):
+        iterator = iter(tailer.poll())
+        try:
+            record = next(iterator)
+        except StopIteration:
+            continue
+        heapq.heappush(heap, (_record_ts(record), source_index, record, iterator))
 
-    heap: list[tuple[float, int, str, int]] = []
-    for cursor_key, chain in chains.items():
-        original_index, record = chain[0]
-        heapq.heappush(heap, (_record_ts(record), original_index, cursor_key, 0))
-
-    ordered: list[FeedRecord] = []
     while heap:
-        _, _, cursor_key, chain_index = heapq.heappop(heap)
-        chain = chains[cursor_key]
-        _, record = chain[chain_index]
-        ordered.append(record)
-        next_index = chain_index + 1
-        if next_index < len(chain):
-            original_index, next_record = chain[next_index]
-            heapq.heappush(
-                heap,
-                (_record_ts(next_record), original_index, cursor_key, next_index),
-            )
-    return ordered
+        _, source_index, record, iterator = heapq.heappop(heap)
+        yield record
+        try:
+            next_record = next(iterator)
+        except StopIteration:
+            continue
+        heapq.heappush(
+            heap, (_record_ts(next_record), source_index, next_record, iterator)
+        )
 
 
 def _record_ts(rec: FeedRecord) -> float:
@@ -196,6 +233,7 @@ __all__ = [
     "Record",
     "SourceTailer",
     "default_tailers",
+    "iter_replay_records",
     "parse_cursor",
     "read_page",
     "records_with_cursors",

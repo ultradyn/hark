@@ -15,7 +15,7 @@ import pytest
 from hark.config import load_config
 from hark.dashboard import api as dash_api
 from hark.dashboard.server import DashboardServer
-from hark.dashboard.tailer import parse_cursor
+from hark.dashboard.tailer import parse_cursor, read_page
 from hark.delivery import BoundEvent, DeliveryStore
 from hark.herdr.client import AgentInfo
 
@@ -101,6 +101,39 @@ def _read_sse_event(response) -> tuple[str, dict]:
         elif line == "\n" and data is not None:
             assert event_id == data["cursor"]
             return event_id, data
+
+
+def _pause_first_replay_snapshot(
+    monkeypatch,
+    dashboard_server,
+    snapshot_taken: threading.Event,
+    release_snapshot: threading.Event,
+    *,
+    timeout: float,
+):
+    """Pause after the first lazy replay iterator reaches its snapshot EOF."""
+    real_iter_replay = dashboard_server.iter_replay_records
+    first_call = True
+
+    def paused_iter_replay(*args, **kwargs):
+        nonlocal first_call
+        iterator = iter(real_iter_replay(*args, **kwargs))
+        if first_call:
+            first_call = False
+            try:
+                first = next(iterator)
+            except StopIteration:
+                first = None
+            snapshot_taken.set()
+            assert release_snapshot.wait(timeout), (
+                "test did not release replay snapshot"
+            )
+            if first is not None:
+                yield first
+        yield from iterator
+
+    monkeypatch.setattr(dashboard_server, "iter_replay_records", paused_iter_replay)
+    return real_iter_replay
 
 
 HEP_BLOCKED = {
@@ -241,6 +274,61 @@ def test_stream_hello_and_live_event(state, tmp_path):
     finally:
         c.close()
         server.shutdown()
+
+
+def test_serve_publish_cannot_snapshot_unpublished_durable_cursor(state):
+    from hark.dashboard.server import Hub, TailPump
+
+    hub = Hub()
+    pump = TailPump(hub, state, poll_s=0.001)
+    subscriber = hub.subscribe()
+    follower_advanced = threading.Event()
+    release_durable_publish = threading.Event()
+    real_publish_record = pump._publish_record
+
+    def paused_publish_record(record):
+        # TailPump.run has already received the record, so the follower's raw
+        # composite cursor is watch:1.  Hold the exact pre-publication gap.
+        follower_advanced.set()
+        assert release_durable_publish.wait(5)
+        real_publish_record(record)
+        pump.stop()
+
+    pump._publish_record = paused_publish_record
+    _write_jsonl(
+        state / "watch.jsonl",
+        {**HEP_BLOCKED, "event_id": "publication-race", "n": 1},
+    )
+    pump.start()
+    try:
+        assert follower_advanced.wait(5)
+        assert parse_cursor(pump.tailer.composite_cursor())["watch"] == 1
+
+        pump.publish_serve({"kind": "serve.dictation", "state": "recording"})
+        serve = subscriber.get(timeout=5)
+        assert serve["source"] == "serve"
+        assert parse_cursor(serve["cursor"])["watch"] == 0
+
+        # A reconnect after this serve frame still replays the durable record.
+        records, _, _ = read_page(
+            state,
+            since=serve["cursor"],
+            sources={"watch"},
+            limit=10,
+        )
+        assert [record.payload["event_id"] for record in records] == [
+            "publication-race"
+        ]
+
+        release_durable_publish.set()
+        durable = subscriber.get(timeout=5)
+        assert durable["source"] == "watch"
+        assert parse_cursor(durable["cursor"])["watch"] == 1
+    finally:
+        release_durable_publish.set()
+        pump.stop()
+        pump.join(timeout=5)
+        assert not pump.is_alive()
 
 
 def test_stream_reconnect_after_hello_and_each_replay_frame_is_lossless(
@@ -416,17 +504,15 @@ def test_rest_to_stream_handoff_captures_concurrent_append_and_live_reconnect(
         assert [e["payload"]["n"] for e in page["events"]] == [0]
         assert parse_cursor(page["cursor"])["watch"] == 1
 
-        real_read_page = dashboard_server.read_page
         snapshot_taken = threading.Event()
         release_snapshot = threading.Event()
-
-        def paused_read_page(*args, **kwargs):
-            result = real_read_page(*args, **kwargs)
-            snapshot_taken.set()
-            assert release_snapshot.wait(5), "test did not release replay snapshot"
-            return result
-
-        monkeypatch.setattr(dashboard_server, "read_page", paused_read_page)
+        real_iter_replay = _pause_first_replay_snapshot(
+            monkeypatch,
+            dashboard_server,
+            snapshot_taken,
+            release_snapshot,
+            timeout=5,
+        )
         connection, response = _open_stream(
             server, f"/api/v1/stream?since={page['cursor']}"
         )
@@ -446,7 +532,7 @@ def test_rest_to_stream_handoff_captures_concurrent_append_and_live_reconnect(
         connection.close()
         connection = None
         release_snapshot.set()
-        monkeypatch.setattr(dashboard_server, "read_page", real_read_page)
+        monkeypatch.setattr(dashboard_server, "iter_replay_records", real_iter_replay)
         connection, response = _open_stream(
             server,
             "/api/v1/stream",
@@ -490,17 +576,15 @@ def test_rest_to_stream_handoff_captures_rotation_after_snapshot(
     connection = None
     try:
         _, page = _get_json(server, "/api/v1/events?sources=watch")
-        real_read_page = dashboard_server.read_page
         snapshot_taken = threading.Event()
         release_snapshot = threading.Event()
-
-        def paused_read_page(*args, **kwargs):
-            result = real_read_page(*args, **kwargs)
-            snapshot_taken.set()
-            assert release_snapshot.wait(5)
-            return result
-
-        monkeypatch.setattr(dashboard_server, "read_page", paused_read_page)
+        _pause_first_replay_snapshot(
+            monkeypatch,
+            dashboard_server,
+            snapshot_taken,
+            release_snapshot,
+            timeout=5,
+        )
         connection, response = _open_stream(
             server, f"/api/v1/stream?since={page['cursor']}"
         )
@@ -526,17 +610,15 @@ def test_stream_queue_overflow_durably_catches_up_and_reconnects(
     server = _server(tmp_path)
     connection = None
     try:
-        real_read_page = dashboard_server.read_page
         snapshot_taken = threading.Event()
         release_snapshot = threading.Event()
-
-        def paused_read_page(*args, **kwargs):
-            result = real_read_page(*args, **kwargs)
-            snapshot_taken.set()
-            assert release_snapshot.wait(10), "test did not release replay snapshot"
-            return result
-
-        monkeypatch.setattr(dashboard_server, "read_page", paused_read_page)
+        real_iter_replay = _pause_first_replay_snapshot(
+            monkeypatch,
+            dashboard_server,
+            snapshot_taken,
+            release_snapshot,
+            timeout=10,
+        )
         connection, response = _open_stream(
             server, "/api/v1/stream?sources=watch&since=watch%3A0"
         )
@@ -571,7 +653,7 @@ def test_stream_queue_overflow_durably_catches_up_and_reconnects(
 
         connection.close()
         connection = None
-        monkeypatch.setattr(dashboard_server, "read_page", real_read_page)
+        monkeypatch.setattr(dashboard_server, "iter_replay_records", real_iter_replay)
         connection, response = _open_stream(
             server,
             "/api/v1/stream?sources=watch",
@@ -591,22 +673,22 @@ def test_stream_queue_overflow_durably_catches_up_and_reconnects(
         server.shutdown()
 
 
-def test_sse_replay_pages_backfill_with_bounded_reads(state, monkeypatch):
+def test_sse_replay_uses_one_streaming_forward_scan(state, monkeypatch):
     import hark.dashboard.server as dashboard_server
 
-    monkeypatch.setattr(dashboard_server, "SSE_REPLAY_PAGE_SIZE", 2)
     _write_jsonl(
         state / "watch.jsonl",
         *({**HEP_BLOCKED, "event_id": f"paged-{n}", "n": n} for n in range(5)),
     )
-    read_limits = []
-    real_read_page = dashboard_server.read_page
+    replay_scans = 0
+    real_iter_replay = dashboard_server.iter_replay_records
 
-    def recording_read_page(*args, **kwargs):
-        read_limits.append(kwargs["limit"])
-        return real_read_page(*args, **kwargs)
+    def recording_iter_replay(*args, **kwargs):
+        nonlocal replay_scans
+        replay_scans += 1
+        yield from real_iter_replay(*args, **kwargs)
 
-    monkeypatch.setattr(dashboard_server, "read_page", recording_read_page)
+    monkeypatch.setattr(dashboard_server, "iter_replay_records", recording_iter_replay)
 
     class FakeHandler:
         server = type("Server", (), {"state": state})()
@@ -620,7 +702,7 @@ def test_sse_replay_pages_backfill_with_bounded_reads(state, monkeypatch):
         handler, "watch:0", {"watch"}
     )
 
-    assert read_limits == [2, 2, 2]
+    assert replay_scans == 1
     assert [envelope["payload"]["n"] for envelope in handler.delivered] == list(
         range(5)
     )
@@ -628,6 +710,41 @@ def test_sse_replay_pages_backfill_with_bounded_reads(state, monkeypatch):
         parse_cursor(envelope["cursor"])["watch"] for envelope in handler.delivered
     ] == [1, 2, 3, 4, 5]
     assert parse_cursor(cursor)["watch"] == 5
+
+
+def test_sse_replay_disconnect_stops_materializing_unseen_suffix(state, monkeypatch):
+    import hark.dashboard.tailer as dashboard_tailer
+    from hark.dashboard.server import DashboardHandler
+
+    _write_jsonl(
+        state / "watch.jsonl",
+        *({**HEP_BLOCKED, "event_id": f"streamed-{n}", "n": n} for n in range(5000)),
+    )
+    materialized = 0
+    real_record_ts = dashboard_tailer._record_ts
+
+    def counted_record_ts(record):
+        nonlocal materialized
+        materialized += 1
+        return real_record_ts(record)
+
+    monkeypatch.setattr(dashboard_tailer, "_record_ts", counted_record_ts)
+
+    class FakeHandler:
+        server = type("Server", (), {"state": state})()
+        delivered = 0
+
+        def _sse_write(self, envelope):
+            self.delivered += 1
+            if self.delivered == 2:
+                raise BrokenPipeError
+
+    handler = FakeHandler()
+    with pytest.raises(BrokenPipeError):
+        DashboardHandler._sse_replay(handler, "watch:0", {"watch"})
+
+    assert handler.delivered == 2
+    assert materialized == 2
 
 
 def test_overflow_drain_discards_only_cursor_covered_envelopes():
@@ -646,6 +763,27 @@ def test_overflow_drain_discards_only_cursor_covered_envelopes():
         envelope("delivery", "delivery:4", {"type": "outcome"}), highwater
     )
     assert not _durable_envelope_covered(envelope("serve", "serve:1"), highwater)
+
+
+def test_overflow_fence_rejects_serve_ahead_of_dropped_durable(monkeypatch):
+    import hark.dashboard.server as dashboard_server
+
+    monkeypatch.setattr(dashboard_server, "SUBSCRIBER_QUEUE_SIZE", 1)
+    hub = dashboard_server.Hub()
+    subscriber = hub.subscribe()
+    first = {"source": "watch", "cursor": "watch:1"}
+    dropped = {"source": "watch", "cursor": "watch:2"}
+    unsafe_serve = {"source": "serve", "cursor": "watch:2,serve:1"}
+
+    hub.publish(first)
+    hub.publish(dropped)
+    assert subscriber.overflowed
+    assert subscriber.get_nowait() == first
+
+    # Even with capacity available again, the overflow fence stays closed
+    # until replay recovers the dropped durable record.
+    hub.publish(unsafe_serve)
+    assert subscriber.empty()
 
 
 def test_overflow_retry_carries_serve_retained_before_late_overflow():
@@ -796,20 +934,12 @@ def test_overflow_drain_retains_append_after_replay_snapshot(
     import hark.dashboard.server as dashboard_server
 
     monkeypatch.setattr(dashboard_server, "SUBSCRIBER_QUEUE_SIZE", 3)
-    real_read_page = dashboard_server.read_page
     real_replay = dashboard_server.DashboardHandler._sse_replay
     initial_snapshot = threading.Event()
     release_initial = threading.Event()
     recovery_snapshot = threading.Event()
     release_recovery = threading.Event()
     replay_calls = 0
-
-    def paused_read_page(*args, **kwargs):
-        result = real_read_page(*args, **kwargs)
-        if not initial_snapshot.is_set():
-            initial_snapshot.set()
-            assert release_initial.wait(10)
-        return result
 
     def paused_replay(handler, since, wanted):
         nonlocal replay_calls
@@ -820,7 +950,13 @@ def test_overflow_drain_retains_append_after_replay_snapshot(
             assert release_recovery.wait(10)
         return result
 
-    monkeypatch.setattr(dashboard_server, "read_page", paused_read_page)
+    _pause_first_replay_snapshot(
+        monkeypatch,
+        dashboard_server,
+        initial_snapshot,
+        release_initial,
+        timeout=10,
+    )
     monkeypatch.setattr(dashboard_server.DashboardHandler, "_sse_replay", paused_replay)
     server = _server(tmp_path)
     connection = None

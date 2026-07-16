@@ -178,7 +178,7 @@ def test_replay_cursor_advances_only_after_each_sorted_record(tmp_path):
     _write(tmp_path / "ambient.jsonl", {"kind": "ambient.prompt", "n": "a1", "ts": 2.0})
 
     records, page_cursor, complete = read_page(
-        tmp_path, since="watch:0,ambient:0", limit=None
+        tmp_path, since="watch:0,ambient:0", limit=100
     )
     replay = [
         (record.payload["n"], cursor)
@@ -203,7 +203,7 @@ def test_replay_order_never_reorders_nonmonotonic_cursor_key(tmp_path):
     )
     _write(tmp_path / "ambient.jsonl", {"kind": "ambient.prompt", "n": "a1", "ts": 2.0})
 
-    records, _, _ = read_page(tmp_path, since="watch:0,ambient:0", limit=None)
+    records, _, _ = read_page(tmp_path, since="watch:0,ambient:0", limit=100)
     replay = [
         (record.payload["n"], cursor)
         for record, cursor in records_with_cursors(records, "watch:0,ambient:0")
@@ -216,3 +216,59 @@ def test_replay_order_never_reorders_nonmonotonic_cursor_key(tmp_path):
         ("w1", "watch:1,ambient:1"),
         ("w2", "watch:2,ambient:1"),
     ]
+
+
+def test_forward_page_materializes_only_limit_plus_source_heads(tmp_path, monkeypatch):
+    import hark.dashboard.tailer as dashboard_tailer
+
+    _write(
+        tmp_path / "watch.jsonl",
+        *({"kind": "agent.blocked", "n": n, "ts": float(n)} for n in range(5000)),
+    )
+    materialized = 0
+    real_record_ts = dashboard_tailer._record_ts
+
+    def counted_record_ts(record):
+        nonlocal materialized
+        materialized += 1
+        return real_record_ts(record)
+
+    monkeypatch.setattr(dashboard_tailer, "_record_ts", counted_record_ts)
+    records, cursor, complete = read_page(
+        tmp_path, since="watch:0", sources={"watch"}, limit=2
+    )
+
+    assert [record.payload["n"] for record in records] == [0, 1]
+    assert parse_cursor(cursor)["watch"] == 2
+    assert complete is False
+    assert materialized == 3
+
+
+def test_repeated_forward_pages_do_not_rescan_the_unseen_suffix(tmp_path, monkeypatch):
+    import hark.dashboard.tailer as dashboard_tailer
+
+    _write(
+        tmp_path / "watch.jsonl",
+        *({"kind": "agent.blocked", "n": n, "ts": float(n)} for n in range(5)),
+    )
+    materialized = 0
+    real_record_ts = dashboard_tailer._record_ts
+
+    def counted_record_ts(record):
+        nonlocal materialized
+        materialized += 1
+        return real_record_ts(record)
+
+    monkeypatch.setattr(dashboard_tailer, "_record_ts", counted_record_ts)
+    cursor = "watch:0"
+    seen = []
+    while True:
+        records, cursor, complete = read_page(
+            tmp_path, since=cursor, sources={"watch"}, limit=2
+        )
+        seen.extend(record.payload["n"] for record in records)
+        if complete:
+            break
+
+    assert seen == list(range(5))
+    assert materialized == 7  # 3 + 3 + 1, never the old 5 + 3 + 1

@@ -63,6 +63,7 @@ from hark.wake_learn import (
 DEFAULT_BOOT_WAKE_LABEL = "hey hark"
 _EXCEPTION_DETAIL_MAX_CHARS = 240
 _EXCEPTION_TYPE_MAX_CHARS = 80
+_EVENT_ID_MAX_CHARS = 160
 _LAST_SUCCESS_TEXT_MAX_CHARS = 240
 _LAST_SUCCESS_PROVIDER_MAX_CHARS = 120
 
@@ -75,7 +76,9 @@ def primary_wake_label(cfg: HarkConfig) -> str:
     """
     amb = cfg.ambient
     mode = str(getattr(amb, "wake_mode", "") or "").strip().lower()
-    names = [str(n).strip() for n in (getattr(amb, "names", None) or []) if str(n).strip()]
+    names = [
+        str(n).strip() for n in (getattr(amb, "names", None) or []) if str(n).strip()
+    ]
     phrases = [
         str(p).strip()
         for p in (getattr(amb, "activation_phrases", None) or [])
@@ -146,44 +149,54 @@ class AmbientResult:
     kind: str | None = None
 
 
-def _safe_bounded_text(value: Any, *, max_chars: int) -> str | None:
-    """Render an operational field without letting hostile objects escape logging."""
+def _safe_text(value: Any) -> str | None:
+    """Render strict-UTF-8 text without letting hostile objects escape."""
     if value is None:
         return None
     try:
         rendered = str(value)
         if not isinstance(rendered, str):
             return None
-        text = str.strip(rendered)
+        text = _sanitize_utf8_text(str.strip(rendered))
     except BaseException:
         return None
-    return text[:max_chars] or None
+    return text or None
+
+
+def _safe_bounded_text(value: Any, *, max_chars: int) -> str | None:
+    """Render bounded strict-UTF-8 text for event and log fields."""
+    text = _safe_text(value)
+    return text[:max_chars] if text else None
+
+
+def _sanitize_utf8_text(text: str) -> str:
+    """Replace lone surrogates while preserving all valid Unicode verbatim."""
+    try:
+        text.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        return "".join(
+            "\N{REPLACEMENT CHARACTER}" if 0xD800 <= ord(char) <= 0xDFFF else char
+            for char in text
+        )
+    return text
 
 
 def _safe_exception_type_name(exc: BaseException) -> str:
     """Return a bounded exception type name that itself cannot raise."""
     try:
-        name = type(exc).__name__
-        if isinstance(name, str):
-            name = str.strip(name)
-            if name:
-                return name[:_EXCEPTION_TYPE_MAX_CHARS]
+        name = _safe_bounded_text(
+            type(exc).__name__, max_chars=_EXCEPTION_TYPE_MAX_CHARS
+        )
+        if name:
+            return name
     except BaseException:
         pass
     return "Exception"
 
 
-def _safe_exception_detail(exc: BaseException) -> str:
-    """Return bounded exception detail, falling back when ``__str__`` is broken."""
-    fallback = _safe_exception_type_name(exc)
-    try:
-        rendered = str(exc)
-        if not isinstance(rendered, str):
-            return fallback
-        detail = str.strip(rendered)
-    except BaseException:
-        return fallback
-    return (detail or fallback)[:_EXCEPTION_DETAIL_MAX_CHARS]
+def _safe_exception_text(exc: BaseException) -> str:
+    """Return full safe text for classification; callers bound emitted copies."""
+    return _safe_text(exc) or _safe_exception_type_name(exc)
 
 
 def _apply_policy_to_backend(backend: WakeBackend, policy: WakePolicy) -> None:
@@ -577,7 +590,9 @@ def _single_post_wake_listen(
 
     def _emit_partial(ev: dict[str, Any]) -> None:
         ev = {**ev, "phrase": hit.phrase}
-        _emit_ambient_hep(ev, out=out, on_partial=on_partial, syslog_kind="ambient.partial")
+        _emit_ambient_hep(
+            ev, out=out, on_partial=on_partial, syslog_kind="ambient.partial"
+        )
 
     from hark.answer_window.policy import policy_from_config
 
@@ -612,10 +627,11 @@ def _single_post_wake_listen(
             partial_kind="ambient.partial",
         )
     except Exception as exc:
-        err_s = _safe_exception_detail(exc)
+        error_text = _safe_exception_text(exc)
+        err_s = error_text[:_EXCEPTION_DETAIL_MAX_CHARS]
         is_no_open = (
-            "no speech detected" in err_s.lower()
-            or "no speech captured" in err_s.lower()
+            "no speech detected" in error_text.lower()
+            or "no speech captured" in error_text.lower()
         )
         syslog(
             "ambient.error",
@@ -714,9 +730,7 @@ def _conversation_after_wake(
     end_silence = float(getattr(cfg.listen, "end_silence_s", 2.1) or 2.1)
     # Turn quiet ≈ max(ack quiet, end_silence) so turn-taking matches B105 gate.
     turn_silence = max(end_silence, ack_quiet)
-    end_phrases = tuple(
-        getattr(cfg.listen, "end_phrases", None) or DEFAULT_END_PHRASES
-    )
+    end_phrases = tuple(getattr(cfg.listen, "end_phrases", None) or DEFAULT_END_PHRASES)
     cancel_phrases = tuple(
         getattr(cfg.listen, "cancel_phrases", None) or DEFAULT_CANCEL_PHRASES
     )
@@ -770,9 +784,7 @@ def _conversation_after_wake(
             # Re-arm cue each turn so operator hears the channel is still open.
             arm_cue=bool(getattr(amb, "post_wake_arm_cue", True)),
             lead_in_ms=(
-                int(getattr(amb, "post_wake_lead_in_ms", 150) or 0)
-                if is_first
-                else 50
+                int(getattr(amb, "post_wake_lead_in_ms", 150) or 0) if is_first else 50
             ),
         )
 
@@ -797,10 +809,11 @@ def _conversation_after_wake(
             listened = run_listen(cfg, policy=pol)
         except Exception as exc:
             error_type = _safe_exception_type_name(exc)
-            err_s = _safe_exception_detail(exc)
+            error_text = _safe_exception_text(exc)
+            err_s = error_text[:_EXCEPTION_DETAIL_MAX_CHARS]
             is_no_open = (
-                "no speech detected" in err_s.lower()
-                or "no speech captured" in err_s.lower()
+                "no speech detected" in error_text.lower()
+                or "no speech captured" in error_text.lower()
             )
             if is_first:
                 event_id = new_event_id()
@@ -856,6 +869,15 @@ def _conversation_after_wake(
                 (last_listen or {}).get("provider"),
                 max_chars=_LAST_SUCCESS_PROVIDER_MAX_CHARS,
             )
+            failure_stream_detail = _safe_bounded_text(
+                stream_id, max_chars=_EVENT_ID_MAX_CHARS
+            )
+            last_event_detail = _safe_bounded_text(
+                last_event_id, max_chars=_EVENT_ID_MAX_CHARS
+            )
+            last_stream_detail = _safe_bounded_text(
+                last_stream_id, max_chars=_EVENT_ID_MAX_CHARS
+            )
 
             if is_conversation_idle:
                 syslog(
@@ -874,12 +896,13 @@ def _conversation_after_wake(
                     level="error",
                     message=error_detail,
                     conversation_id=conversation_id,
-                    stream_id=stream_id,
+                    stream_id=failure_stream_detail,
                     reason=end_reason,
                     listen_error=error_detail,
+                    error_type=error_type,
                     turns=turn,
-                    last_event_id=last_event_id,
-                    last_stream_id=last_stream_id,
+                    last_event_id=last_event_detail,
+                    last_stream_id=last_stream_detail,
                     last_turn=turn,
                     last_text=last_text_detail,
                     last_provider=last_provider_detail,
@@ -915,9 +938,9 @@ def _conversation_after_wake(
                     {
                         "listen_error": error_detail,
                         "error_type": error_type,
-                        "failure_stream_id": stream_id,
-                        "last_event_id": last_event_id,
-                        "last_stream_id": last_stream_id,
+                        "failure_stream_id": failure_stream_detail,
+                        "last_event_id": last_event_detail,
+                        "last_stream_id": last_stream_detail,
                         "last_turn": turn,
                         "last_text": last_text_detail,
                         "last_provider": last_provider_detail,
@@ -957,6 +980,11 @@ def _conversation_after_wake(
 
         sid = listened.stream_id or stream_id
         body = (listened.text or "").strip()
+        event_stream_id = _safe_bounded_text(sid, max_chars=_EVENT_ID_MAX_CHARS)
+        event_body = _sanitize_utf8_text(body)
+        event_provider = _safe_bounded_text(
+            listened.provider, max_chars=_LAST_SUCCESS_PROVIDER_MAX_CHARS
+        )
 
         if listened.cancelled:
             event_id = new_event_id()
@@ -965,10 +993,10 @@ def _conversation_after_wake(
                 "kind": "ambient.cancelled",
                 "event_id": event_id,
                 "observed_at": utc_now_iso(),
-                "stream_id": sid,
+                "stream_id": event_stream_id,
                 "conversation_id": conversation_id,
                 "turn": turn + 1,
-                "text": body or None,
+                "text": event_body or None,
                 "phrase": hit.phrase,
                 "partial": False,
                 "final": True,
@@ -1040,10 +1068,10 @@ def _conversation_after_wake(
                 "kind": "ambient.cancelled",
                 "event_id": event_id,
                 "observed_at": utc_now_iso(),
-                "stream_id": sid,
+                "stream_id": event_stream_id,
                 "conversation_id": conversation_id,
                 "turn": turn + 1,
-                "text": hit_phrase.body or body,
+                "text": _sanitize_utf8_text(hit_phrase.body or body),
                 "phrase": hit.phrase,
                 "end_phrase": hit_phrase.phrase,
                 "partial": False,
@@ -1096,6 +1124,14 @@ def _conversation_after_wake(
             "conversation_id": conversation_id,
             "turn": turn,
         }
+        event_listen_meta = {
+            **listen_meta,
+            "provider": event_provider,
+            "end_phrase": _safe_bounded_text(
+                listen_meta["end_phrase"],
+                max_chars=_LAST_SUCCESS_PROVIDER_MAX_CHARS,
+            ),
+        }
         last_text = turn_text
         last_stream_id = sid
         last_event_id = event_id
@@ -1109,18 +1145,21 @@ def _conversation_after_wake(
                 "kind": "ambient.prompt",
                 "event_id": event_id,
                 "observed_at": utc_now_iso(),
-                "stream_id": sid,
+                "stream_id": event_stream_id,
                 "conversation_id": conversation_id,
                 "turn": turn,
-                "text": turn_text,
+                "text": _sanitize_utf8_text(turn_text),
                 "phrase": hit.phrase,
-                "provider": listened.provider,
-                "end_phrase": hit_phrase.phrase,
+                "provider": event_provider,
+                "end_phrase": _safe_bounded_text(
+                    hit_phrase.phrase,
+                    max_chars=_LAST_SUCCESS_PROVIDER_MAX_CHARS,
+                ),
                 "partial": False,
                 "final": True,
                 "streaming": True,
                 "conversation": True,
-                "listen": listen_meta,
+                "listen": event_listen_meta,
                 "partials_emitted": listened.partials_emitted,
                 "instructions": (
                     "FINAL conversation turn (explicit end phrase). "
@@ -1157,15 +1196,15 @@ def _conversation_after_wake(
 
         # Normal quiet-ended turn — full reply OK; stay in conversation.
         turn_ev = make_turn_event(
-            stream_id=sid,
-            text=turn_text,
+            stream_id=event_stream_id or "",
+            text=_sanitize_utf8_text(turn_text),
             conversation_id=conversation_id,
             turn=turn,
-            provider=listened.provider,
+            provider=event_provider,
             phrase=hit.phrase,
             event_id=event_id,
             ack_min_quiet_s=ack_quiet,
-            listen=listen_meta,
+            listen=event_listen_meta,
         )
         _emit_ambient_hep(
             turn_ev, out=out, on_partial=on_partial, syslog_kind="ambient.turn"
@@ -1245,13 +1284,8 @@ def complete_after_wake(
     """
     del announce
     if bool(getattr(cfg.ambient, "streaming", False)):
-        return _conversation_after_wake(
-            cfg, hit, on_partial=on_partial, out=out
-        )
-    return _single_post_wake_listen(
-        cfg, hit, on_partial=on_partial, out=out
-    )
-
+        return _conversation_after_wake(cfg, hit, on_partial=on_partial, out=out)
+    return _single_post_wake_listen(cfg, hit, on_partial=on_partial, out=out)
 
 
 def _wake_deadline(timeout_s: float | None, amb_timeout_s: float | None) -> float:
@@ -1384,10 +1418,9 @@ def apply_config_reload(
     ).lower()
     model_changed = new_cfg.ambient.model_path != cfg.ambient.model_path
     new_wake_label = primary_wake_label(new_cfg)
-    wake_label_changed = (
-        (prev_wake_label or "").strip().lower()
-        != (new_wake_label or "").strip().lower()
-    )
+    wake_label_changed = (prev_wake_label or "").strip().lower() != (
+        new_wake_label or ""
+    ).strip().lower()
 
     info: dict[str, Any] = {
         "phrases": phrases,
@@ -1436,8 +1469,10 @@ def apply_config_reload(
 def ambient_event_line(result: AmbientResult) -> dict[str, Any]:
     if result.kind:
         kind = result.kind
-    elif result.activated and result.text and not (
-        result.listen and result.listen.get("cancelled")
+    elif (
+        result.activated
+        and result.text
+        and not (result.listen and result.listen.get("cancelled"))
     ):
         kind = "ambient.prompt"
     elif result.listen and result.listen.get("cancelled"):
@@ -1475,9 +1510,7 @@ def ambient_event_line(result: AmbientResult) -> dict[str, Any]:
         )
         base["warning"] = None
     elif kind == "ambient.cancelled":
-        base["instructions"] = (
-            "Cancelled — ignore prior partials for this stream_id."
-        )
+        base["instructions"] = "Cancelled — ignore prior partials for this stream_id."
         # B124: reload-aborted active listen (operator heard stop cue)
         if result.listen and result.listen.get("listen_aborted"):
             base["listen_aborted"] = True
@@ -1614,8 +1647,7 @@ def run_ambient_loop(
             "event_id": new_event_id(),
             "observed_at": utc_now_iso(),
             "error": (
-                "no sherpa_kws model_path — "
-                "run ./scripts/download-sherpa-kws-model.sh"
+                "no sherpa_kws model_path — run ./scripts/download-sherpa-kws-model.sh"
             ),
         }
         emit_hep(err, out)
@@ -1760,9 +1792,7 @@ def run_ambient_loop(
                 try:
                     cfg, backend, info = apply_config_reload(cfg, backend)
                     info["source"] = src
-                    _emit_reload_event(
-                        out, info, source=src, listen_aborted=aborted
-                    )
+                    _emit_reload_event(out, info, source=src, listen_aborted=aborted)
                     # Live-reload name/phrase change → one-shot TTS (no cache).
                     if announce and info.get("wake_label_changed"):
                         try:

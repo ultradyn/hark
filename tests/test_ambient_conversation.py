@@ -25,6 +25,17 @@ class _NonStringStrRuntimeError(RuntimeError):
         return 123
 
 
+class _SurrogateNameMeta(type):
+    def __getattribute__(cls, name):
+        if name == "__name__":
+            return "Surrogate\ud800RuntimeError"
+        return super().__getattribute__(name)
+
+
+class _SurrogateNamedRuntimeError(RuntimeError, metaclass=_SurrogateNameMeta):
+    pass
+
+
 def _hit() -> WakeHit:
     return WakeHit(
         phrase="hey iris",
@@ -59,9 +70,15 @@ def test_streaming_conversation_no_rewake_between_turns(monkeypatch):
         listen_calls.append(
             {
                 "policy": pol,
-                "end_mode": getattr(pol, "end_mode", None) if pol else kwargs.get("end_mode"),
-                "streaming": getattr(pol, "streaming", None) if pol else kwargs.get("streaming"),
-                "profile": getattr(pol, "profile", None) if pol else kwargs.get("profile"),
+                "end_mode": getattr(pol, "end_mode", None)
+                if pol
+                else kwargs.get("end_mode"),
+                "streaming": getattr(pol, "streaming", None)
+                if pol
+                else kwargs.get("streaming"),
+                "profile": getattr(pol, "profile", None)
+                if pol
+                else kwargs.get("profile"),
                 "initial_timeout_s": (
                     getattr(pol, "initial_timeout_s", None) if pol else None
                 ),
@@ -93,7 +110,14 @@ def test_streaming_conversation_no_rewake_between_turns(monkeypatch):
     assert len(listen_calls) == 3
     for c in listen_calls:
         assert c["policy"] is not None
-        assert str(c["end_mode"].value if hasattr(c["end_mode"], "value") else c["end_mode"]) == "silence"
+        assert (
+            str(
+                c["end_mode"].value
+                if hasattr(c["end_mode"], "value")
+                else c["end_mode"]
+            )
+            == "silence"
+        )
         assert c["streaming"] is True
         assert c["profile"] == "post_wake"
     # Later turns use conversation idle as gate timeout
@@ -199,6 +223,7 @@ def test_streaming_later_listen_failure_is_not_idle(monkeypatch, failure, reason
     assert len(error_logs) == 1
     assert error_logs[0]["reason"] == reason
     assert error_logs[0]["listen_error"] == detail
+    assert error_logs[0]["error_type"] == type(failure).__name__
     assert error_logs[0]["last_event_id"] == result.event_id
     assert error_logs[0]["last_stream_id"] == "last-success-stream"
     assert error_logs[0]["last_turn"] == 1
@@ -270,6 +295,125 @@ def test_streaming_later_hostile_exception_rendering_is_contained(monkeypatch, f
     assert error_log["last_provider"] == long_provider[:120]
 
 
+def test_streaming_failure_bounds_exact_10k_stream_id_but_preserves_result(
+    monkeypatch,
+):
+    """Diagnostic HEP stays below 10 KiB without truncating the in-memory result."""
+    cfg = HarkConfig(ambient=AmbientConfig(streaming=True))
+    calls = {"n": 0}
+    logs: list[tuple[str, dict]] = []
+    long_stream_id = "s" * 10_000
+    assert len(long_stream_id) == 10_000
+
+    def fake_listen(cfg_arg, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ListenResult(
+                text="successful turn",
+                provider="fake-provider",
+                duration_ms=5,
+                end_mode="silence",
+                stream_id=long_stream_id,
+            )
+        raise RuntimeError("later listen failed")
+
+    out = io.StringIO()
+    monkeypatch.setattr(ambient, "run_listen", fake_listen)
+    monkeypatch.setattr(
+        ambient, "syslog", lambda kind, **fields: logs.append((kind, fields))
+    )
+    monkeypatch.setattr(ambient, "shutdown_requested", lambda: False)
+    monkeypatch.setattr(ambient, "reload_requested", lambda: False)
+
+    result = complete_after_wake(cfg, _hit(), announce=False, out=out)
+
+    lines = [line for line in out.getvalue().splitlines() if line.strip()]
+    assert lines
+    assert all(len(line.encode("utf-8")) < 10 * 1024 for line in lines)
+    events = [json.loads(line) for line in lines]
+    turn = next(event for event in events if event["kind"] == "ambient.turn")
+    end = next(event for event in events if event["kind"] == "ambient.conversation_end")
+    assert turn["stream_id"] == long_stream_id[:160]
+    assert end["last_stream_id"] == long_stream_id[:160]
+    error_log = next(fields for kind, fields in logs if kind == "ambient.error")
+    assert error_log["last_stream_id"] == long_stream_id[:160]
+
+    assert result.stream_id == long_stream_id
+    assert result.text == "successful turn"
+    assert result.listen and result.listen["provider"] == "fake-provider"
+
+
+def test_streaming_failure_sanitizes_lone_surrogates_for_strict_utf8(monkeypatch):
+    """Exception and last-turn diagnostics always encode as strict UTF-8."""
+    cfg = HarkConfig(ambient=AmbientConfig(streaming=True))
+    calls = {"n": 0}
+    logs: list[tuple[str, dict]] = []
+    last_text = "successful\ud800turn"
+    last_provider = "provider\udfffname"
+    last_stream_id = "stream\ud800id"
+
+    def fake_listen(cfg_arg, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ListenResult(
+                text=last_text,
+                provider=last_provider,
+                duration_ms=5,
+                end_mode="silence",
+                stream_id=last_stream_id,
+            )
+        raise _SurrogateNamedRuntimeError("detail\udfffbroken")
+
+    raw = io.BytesIO()
+    out = io.TextIOWrapper(
+        raw,
+        encoding="utf-8",
+        errors="strict",
+        write_through=True,
+    )
+    monkeypatch.setattr(ambient, "run_listen", fake_listen)
+    monkeypatch.setattr(
+        ambient, "syslog", lambda kind, **fields: logs.append((kind, fields))
+    )
+    monkeypatch.setattr(ambient, "shutdown_requested", lambda: False)
+    monkeypatch.setattr(ambient, "reload_requested", lambda: False)
+
+    result = complete_after_wake(cfg, _hit(), announce=False, out=out)
+    payload = raw.getvalue().decode("utf-8", errors="strict")
+    events = [json.loads(line) for line in payload.splitlines() if line.strip()]
+    turn = next(event for event in events if event["kind"] == "ambient.turn")
+    end = next(event for event in events if event["kind"] == "ambient.conversation_end")
+
+    replacement = "\N{REPLACEMENT CHARACTER}"
+    assert turn["stream_id"] == f"stream{replacement}id"
+    assert turn["text"] == f"successful{replacement}turn"
+    assert turn["provider"] == f"provider{replacement}name"
+    assert end["listen_error"] == f"detail{replacement}broken"
+    assert end["error_type"] == f"Surrogate{replacement}RuntimeError"
+    assert end["last_stream_id"] == f"stream{replacement}id"
+    assert end["last_text"] == f"successful{replacement}turn"
+    assert end["last_provider"] == f"provider{replacement}name"
+    error_log = next(fields for kind, fields in logs if kind == "ambient.error")
+    assert error_log["error_type"] == f"Surrogate{replacement}RuntimeError"
+
+    def assert_strict_utf8(value):
+        if isinstance(value, str):
+            value.encode("utf-8", errors="strict")
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                assert_strict_utf8(key)
+                assert_strict_utf8(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                assert_strict_utf8(item)
+
+    assert_strict_utf8(events)
+    assert_strict_utf8(logs)
+    assert result.text == last_text
+    assert result.stream_id == last_stream_id
+    assert result.listen and result.listen["provider"] == last_provider
+
+
 def test_streaming_later_runtime_with_no_speech_text_is_not_idle(monkeypatch):
     """Idle classification requires TimeoutError, not a matching message alone."""
     cfg = HarkConfig(ambient=AmbientConfig(streaming=True))
@@ -299,6 +443,57 @@ def test_streaming_later_runtime_with_no_speech_text_is_not_idle(monkeypatch):
     events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
     end = next(event for event in events if event["kind"] == "ambient.conversation_end")
     assert end["reason"] == "listen_failed"
+
+
+def test_streaming_later_timeout_classifies_marker_after_bounded_detail(monkeypatch):
+    """Idle classification uses the full safe error text, not its event excerpt."""
+    cfg = HarkConfig(ambient=AmbientConfig(streaming=True))
+    calls = {"n": 0}
+    failure = TimeoutError("x" * 300 + " no speech detected")
+
+    def fake_listen(cfg_arg, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ListenResult(
+                text="first turn",
+                provider="fake",
+                duration_ms=5,
+                end_mode="silence",
+                stream_id="turn-1",
+            )
+        raise failure
+
+    out = io.StringIO()
+    monkeypatch.setattr(ambient, "run_listen", fake_listen)
+    monkeypatch.setattr(ambient, "syslog", lambda *a, **k: None)
+    monkeypatch.setattr(ambient, "shutdown_requested", lambda: False)
+    monkeypatch.setattr(ambient, "reload_requested", lambda: False)
+
+    result = complete_after_wake(cfg, _hit(), announce=False, out=out)
+
+    assert result.listen and result.listen["reason"] == "conversation_idle"
+    events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    end = next(event for event in events if event["kind"] == "ambient.conversation_end")
+    assert end["reason"] == "conversation_idle"
+
+
+def test_streaming_first_timeout_classifies_marker_after_bounded_detail(monkeypatch):
+    """First-turn no_open compatibility also uses the full safe error text."""
+    cfg = HarkConfig(ambient=AmbientConfig(streaming=True))
+    failure = TimeoutError("x" * 300 + " no speech captured")
+    monkeypatch.setattr(
+        ambient,
+        "run_listen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(failure),
+    )
+    monkeypatch.setattr(ambient, "syslog", lambda *a, **k: None)
+    monkeypatch.setattr(ambient, "shutdown_requested", lambda: False)
+    monkeypatch.setattr(ambient, "reload_requested", lambda: False)
+
+    result = complete_after_wake(cfg, _hit(), announce=False)
+
+    assert result.listen and result.listen["reason"] == "no_open"
+    assert result.listen["error"] == "x" * 240
 
 
 @pytest.mark.parametrize(
@@ -444,7 +639,9 @@ def test_bound_answer_still_ignores_ambient_streaming():
 
 def test_run_ambient_streaming_does_not_call_wake_between_turns(monkeypatch):
     """run_ambient: one wake wait, multi-turn conversation, then return (loop re-arms)."""
-    cfg = HarkConfig(ambient=AmbientConfig(streaming=True, enabled=True, engine="text_probe"))
+    cfg = HarkConfig(
+        ambient=AmbientConfig(streaming=True, enabled=True, engine="text_probe")
+    )
     wake_calls = {"n": 0}
     listen_n = {"n": 0}
 
@@ -591,7 +788,9 @@ def test_present_ambient_turn_compact():
     assert compact["conversation_id"] == "c1"
     assert compact["streaming"] is True
     assert compact["final"] is False
-    assert "TTS" in compact["instructions"] or "reply" in compact["instructions"].lower()
+    assert (
+        "TTS" in compact["instructions"] or "reply" in compact["instructions"].lower()
+    )
 
 
 def test_mode_a_wake_kinds_include_turn():

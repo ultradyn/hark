@@ -75,6 +75,12 @@ def _durable_envelope_covered(envelope: dict[str, Any], highwater: str) -> bool:
     highwater_position = parse_cursor_positions(highwater).get(cursor_key)
     if envelope_position is None or highwater_position is None:
         return False
+    if (envelope_position.incarnation is None) != (
+        highwater_position.incarnation is None
+    ):
+        # A legacy sequence alone cannot prove that it names the same file
+        # incarnation as a checkpointed live position (or vice versa).
+        return False
     if (
         envelope_position.incarnation is not None
         and highwater_position.incarnation is not None
@@ -786,8 +792,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         or envelope["source"] in wanted
                         or envelope["type"] == "hello"
                     ):
-                        self._sse_write(envelope)
-                        stream_cursor = envelope["cursor"]
+                        durable = _durable_cursor_key(envelope) is not None
+                        covered = durable and _durable_envelope_covered(
+                            envelope, stream_cursor
+                        )
+                        if not covered:
+                            self._sse_write(envelope)
+                            # Only an envelope actually delivered to the
+                            # client may advance its reconnect position.
+                            stream_cursor = envelope["cursor"]
                     last_ping = time.monotonic()
                 # Live mic spectrum (B087): not stored in history; cursor unchanged
                 allow_spec = wanted is None or "serve" in wanted

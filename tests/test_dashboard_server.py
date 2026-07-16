@@ -678,6 +678,74 @@ def test_initial_replay_drops_covered_live_queue_duplicate(
         server.shutdown()
 
 
+def test_late_publish_after_empty_overlap_drain_is_still_deduplicated(
+    state, tmp_path, monkeypatch
+):
+    import hark.dashboard.server as dashboard_server
+
+    server = _server(tmp_path)
+    publish_entered = threading.Event()
+    release_publish = threading.Event()
+    publish_finished = threading.Event()
+    drain_observed_empty = threading.Event()
+    real_publish_record = server.pump._publish_record
+    real_drain = dashboard_server.DashboardHandler._drain_replay_overlap
+    first_publish = True
+
+    def blocked_first_publish(record):
+        nonlocal first_publish
+        if first_publish:
+            first_publish = False
+            publish_entered.set()
+            assert release_publish.wait(5)
+        real_publish_record(record)
+        publish_finished.set()
+
+    def drain_then_release_publish(handler, subscriber, stream_cursor, wanted):
+        retained = real_drain(handler, subscriber, stream_cursor, wanted)
+        assert subscriber.empty()
+        drain_observed_empty.set()
+        release_publish.set()
+        assert publish_finished.wait(5)
+        return retained
+
+    server.pump._publish_record = blocked_first_publish
+    monkeypatch.setattr(
+        dashboard_server.DashboardHandler,
+        "_drain_replay_overlap",
+        drain_then_release_publish,
+    )
+    connection = None
+    try:
+        _write_jsonl(
+            state / "watch.jsonl",
+            {**HEP_BLOCKED, "event_id": "late-overlap-1", "n": 1},
+        )
+        assert publish_entered.wait(5)
+
+        connection, response = _open_stream(
+            server, "/api/v1/stream?sources=watch&since=watch%3A0"
+        )
+        assert _read_sse_event(response)[0] == "watch:0"
+        first_cursor, first = _read_sse_event(response)
+        assert drain_observed_empty.wait(5)
+        assert first["payload"]["event_id"] == "late-overlap-1"
+        assert parse_cursor(first_cursor)["watch"] == 1
+
+        _write_jsonl(
+            state / "watch.jsonl",
+            {**HEP_BLOCKED, "event_id": "late-overlap-2", "n": 2},
+        )
+        second_cursor, second = _read_sse_event(response)
+        assert second["payload"]["event_id"] == "late-overlap-2"
+        assert parse_cursor(second_cursor)["watch"] == 2
+    finally:
+        release_publish.set()
+        if connection is not None:
+            connection.close()
+        server.shutdown()
+
+
 def test_rest_to_stream_handoff_captures_rotation_after_snapshot(
     state, tmp_path, monkeypatch
 ):
@@ -886,6 +954,17 @@ def test_overflow_drain_discards_only_cursor_covered_envelopes():
             f"watch:1@{incarnation_a}~{checkpoint}~10",
         ),
         f"watch:4@{incarnation_b}~{checkpoint}~40",
+    )
+    assert not _durable_envelope_covered(
+        envelope(
+            "watch",
+            f"watch:1@{incarnation_a}~{checkpoint}~10",
+        ),
+        "watch:4",
+    )
+    assert not _durable_envelope_covered(
+        envelope("watch", "watch:1"),
+        f"watch:4@{incarnation_a}~{checkpoint}~40",
     )
 
 

@@ -1,17 +1,18 @@
 ---
 claimed_at: "2026-07-15T23:17:31Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-16T13:27:27Z"
 complexity: medium
 created_at: "2026-07-15T23:14:33Z"
 depends_on: []
+duration_minutes: 849.93386501835
 estimate_hours: 1
 id: B141
 priority: high
 started_at: "2026-07-15T23:17:31Z"
-status: in_progress
+status: done
 tags: []
 title: Hark ask question text is not visible in Codex while listening
-updated_at: "2026-07-15T23:17:31Z"
+updated_at: "2026-07-16T13:27:27Z"
 ---
 During Hark dogfooding from Codex, 'hark ask' speaks the question and starts listening, but the question banner/tool output does not become visible in the Codex transcript until the answer window finishes. The operator cannot read a long architecture question while composing the voice reply. Workaround: the skill/orchestrator must print the exact question in chat before invoking 'hark ask'. Consider flushing/surfacing question text before TTS/listen or documenting this Codex-specific requirement in the Hark skill.

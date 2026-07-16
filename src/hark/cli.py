@@ -18,7 +18,17 @@ from hark.config import (
 )
 from hark.delivery import DeliveryStore
 from hark.doctor import run_doctor
-from hark.exitcodes import ABORT, AUDIO, ERROR, HERDR, OK, PROVIDER, TIMEOUT, USAGE
+from hark.exitcodes import (
+    ABORT,
+    AUDIO,
+    ERROR,
+    HERDR,
+    OK,
+    PROVIDER,
+    TIMEOUT,
+    USAGE,
+    normalize_failure_exit,
+)
 from hark.fingerprint import question_fingerprint
 from hark.herdr.client import HerdrClient, HerdrError
 from hark.paths import default_config_path, state_dir
@@ -753,7 +763,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return HERDR
     except ProviderError as exc:
         eprint(f"hark: provider: {exc}")
-        return getattr(exc, "code", PROVIDER) or PROVIDER
+        return normalize_failure_exit(getattr(exc, "code", None), fallback=PROVIDER)
     except TimeoutError as exc:
         eprint(f"hark: timeout: {exc}")
         return TIMEOUT
@@ -1720,6 +1730,8 @@ def cmd_ask(args: argparse.Namespace, cfg) -> int:
         end_mode=args.end_mode,
         provider=args.provider,
     )
+    if not result.get("ok"):
+        result["exit"] = normalize_failure_exit(result.get("exit"), fallback=ERROR)
     result["for_event"] = getattr(args, "event_id", None)
     print(json.dumps(result, indent=2 if args.json else None))
     return int(result.get("exit", OK if result.get("ok") else ERROR))

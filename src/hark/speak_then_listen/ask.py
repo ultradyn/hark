@@ -11,7 +11,7 @@ from typing import Any
 
 from hark.config import HarkConfig
 from hark.confirm_lexicon import classify_confirm_reply
-from hark.exitcodes import ABORT, OK, PROVIDER, TIMEOUT
+from hark.exitcodes import ABORT, OK, PROVIDER, TIMEOUT, normalize_failure_exit
 from hark.providers.base import ProviderError
 from hark.risk import classify_question, confirm_required
 
@@ -25,7 +25,7 @@ def _provider_failure_result(
     result = {
         "ok": False,
         "error": str(exc),
-        "exit": getattr(exc, "code", PROVIDER),
+        "exit": normalize_failure_exit(getattr(exc, "code", None), fallback=PROVIDER),
         "tts": tts_info,
     }
     if text is not None:

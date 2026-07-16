@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import hark.speech as speech_mod
 from hark.audio import playback as pb
 from hark.config import HarkConfig
 from hark.exitcodes import TIMEOUT
@@ -1005,6 +1006,10 @@ def test_run_tts_pipelines_next_chunk_synth(monkeypatch):
     monkeypatch.setattr("hark.speech.lookup_cached_tts", fake_lookup)
     monkeypatch.setattr("hark.speech.store_cached_tts", lambda *a, **k: None)
     monkeypatch.setattr("hark.speech.resolve_tts", fake_resolve)
+    monkeypatch.setattr(
+        "hark.speech._synth_transport_factory",
+        speech_mod._in_process_synth_transport_factory,
+    )
     monkeypatch.setattr("hark.speech.play_wav_bytes", fake_play)
     monkeypatch.setattr("hark.speech.duck_media", lambda *a, **k: FakeDuck())
     monkeypatch.setattr("hark.speech.mic_muted_during_tts", lambda **k: FakeMute())

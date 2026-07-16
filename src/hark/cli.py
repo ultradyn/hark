@@ -767,7 +767,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception:
         pass
     try:
-        return dispatch(args, cfg)
+        from hark.tts_interrupt_policy import cli_tts_interrupt_scope
+
+        with cli_tts_interrupt_scope():
+            return dispatch(args, cfg)
     except HerdrError as exc:
         eprint(f"hark: herdr error: {exc}")
         return HERDR
@@ -790,6 +793,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if "mic" in msg.lower() or "sounddevice" in msg.lower() or "audio" in msg.lower():
             return AUDIO
         return ERROR
+    except KeyboardInterrupt as exc:
+        # B153: only the synthesis pool's typed first interrupt is handled
+        # here. Its executor may still own an uncooperative provider thread;
+        # returning 130 begins ordinary shutdown while the pool's retained
+        # handler gives a repeated Ctrl-C a traceback-free hard-exit path.
+        from hark.speech import TtsSynthesisInterrupted
+
+        if isinstance(exc, TtsSynthesisInterrupted):
+            return exc.exit_code
+        raise
 
 
 def dispatch(args: argparse.Namespace, cfg) -> int:

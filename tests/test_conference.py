@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+import hark.speech as speech_mod
 from hark.config import AudioConfig, HarkConfig, load_config
 from hark.conference import (
     ConferenceMatch,
@@ -360,6 +361,10 @@ def test_run_tts_holds_then_speaks(monkeypatch):
 
     monkeypatch.setattr("hark.conference.apply_conference_hold", fake_hold)
     monkeypatch.setattr("hark.speech.resolve_tts", lambda *a, **k: FakeTts())
+    monkeypatch.setattr(
+        "hark.speech._synth_transport_factory",
+        speech_mod._in_process_synth_transport_factory,
+    )
     monkeypatch.setattr("hark.speech.lookup_cached_tts", lambda *a, **k: None)
     monkeypatch.setattr(
         "hark.speech.play_wav_bytes",

@@ -1,19 +1,7 @@
 critical_path:
-    - P1.M1.E1.T001
-    - P1.M1.E1.T003
-    - P1.M1.E2.T001
-    - P1.M1.E2.T004
-    - P1.M1.E4.T001
-    - P1.M1.E4.T002
-    - P1.M1.E4.T003
-    - P1.M4.E2.T001
-    - P1.M4.E2.T003
-    - P1.M4.E3.T001
-    - P1.M4.E3.T002
-    - P1.M4.E4.T001
-    - P1.M4.E4.T002
+    - I007
 description: Voice bridge for Herdr agents (Mode A Python prototype; Rust client later)
-next_available: P1.M2.E1.T001
+next_available: B001
 phases:
     - depends_on: []
       description: 'Deepen shallow/wide modules surfaced by /improve-codebase-architecture (2026-07-15). Aim: testability + AI-navigability via deep modules (small interface, large implementation) at clean seams. Report: ~/served-html/architecture-review-hark-latest.html. Domain: Mode A voice bridge, HEP, bound delivery, Answer Window, false-done. Vocab: module, interface, depth, seam, adapter, leverage, locality. ADRs 002/007/008/009/014 stay load-bearing.'
@@ -28,8 +16,8 @@ phases:
 project: hark
 stats:
     blocked: 0
-    done: 114
-    in_progress: 0
-    pending: 66
-    total_tasks: 180
+    done: 195
+    in_progress: 19
+    pending: 11
+    total_tasks: 225
 timeline_weeks: 12

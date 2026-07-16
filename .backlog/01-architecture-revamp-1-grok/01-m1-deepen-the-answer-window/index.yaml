@@ -52,8 +52,8 @@ locked: false
 name: 'M1: Deepen the Answer Window'
 stats:
     blocked: 0
-    done: 0
+    done: 16
     in_progress: 0
-    pending: 16
+    pending: 0
     total_tasks: 16
 status: done

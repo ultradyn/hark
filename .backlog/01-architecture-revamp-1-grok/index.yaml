@@ -61,9 +61,9 @@ milestones:
 name: Architecture revamp 1 (Grok)
 stats:
     blocked: 0
-    done: 0
+    done: 58
     in_progress: 0
-    pending: 58
+    pending: 0
     total_tasks: 58
 status: done
 weeks: 8

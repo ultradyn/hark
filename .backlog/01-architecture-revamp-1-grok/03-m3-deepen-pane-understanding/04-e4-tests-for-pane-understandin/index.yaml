@@ -6,9 +6,9 @@ locked: false
 name: 'E4: Tests for Pane Understanding'
 stats:
     blocked: 0
-    done: 0
+    done: 2
     in_progress: 0
-    pending: 2
+    pending: 0
     total: 2
 status: done
 tasks:

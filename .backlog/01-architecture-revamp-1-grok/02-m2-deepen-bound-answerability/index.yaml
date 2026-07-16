@@ -43,8 +43,8 @@ locked: false
 name: 'M2: Deepen Bound Answerability'
 stats:
     blocked: 0
-    done: 0
+    done: 8
     in_progress: 0
-    pending: 8
+    pending: 0
     total_tasks: 8
 status: done

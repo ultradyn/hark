@@ -6,9 +6,9 @@ locked: false
 name: 'E1: Plan Speak-then-Listen deepen'
 stats:
     blocked: 0
-    done: 0
+    done: 2
     in_progress: 0
-    pending: 2
+    pending: 0
     total: 2
 status: done
 tasks:

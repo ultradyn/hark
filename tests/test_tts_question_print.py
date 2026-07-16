@@ -245,9 +245,7 @@ def test_cmd_ask_uses_run_ask_print_path(monkeypatch, capsys):
     code = cli.cmd_ask(args, HarkConfig())
     assert code == OK
     assert printed
-    assert seen_kwargs == [
-        {"confirm": "never", "end_mode": None, "provider": None}
-    ]
+    assert seen_kwargs == [{"confirm": "never", "end_mode": None, "provider": None}]
     captured = capsys.readouterr()
     assert "hark question" in captured.err
     assert '"ok": true' in captured.out.lower() or '"ok": true' in captured.out
@@ -292,9 +290,7 @@ def test_run_tts_alone_does_not_print_question(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         "hark.conference.apply_conference_hold",
-        lambda *a, **k: SimpleNamespace(
-            skipped=False, as_meta=lambda: {"held": False}
-        ),
+        lambda *a, **k: SimpleNamespace(skipped=False, as_meta=lambda: {"held": False}),
     )
 
     cfg = HarkConfig()

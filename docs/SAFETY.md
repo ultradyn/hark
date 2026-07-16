@@ -60,10 +60,18 @@ See [plans/P1-M2-answerability.md](plans/P1-M2-answerability.md).
 |------|----------|---------|
 | **R0** informational | status ack | never (or no answer) |
 | **R1** ordinary | free text, simple choice | **only when unsure** (short/noisy/low confidence/ambiguous multi-target) |
-| **R2** authorization | “allow?”, permission menus | **always** readback + confirm/cancel |
-| **R3** destructive / secrets / deploy / publish / credentials | high-impact | **always** verbatim scope readback; optional second factor later |
+| **R2** authorization | “allow?”, permission menus | **always** readback + confirm/cancel by configured policy |
+| **R3** destructive / secrets / deploy / publish / credentials | high-impact | **always** verbatim scope readback by configured policy; optional second factor later |
 
 Classifier is **conservative**: when unsure whether R1 vs R2, treat as R2.
+
+The table describes the default `auto` policy. Configured
+`[confirm].mode = "always"` confirms every risk class; configured `"never"`
+suppresses R0/R1 confirmation but does not bypass R2/R3. An explicit
+`hark ask --confirm never` or `run_ask(..., confirm="never")` is a one-call
+operator override and skips the second confirmation for every risk class,
+including R2/R3. Omitting the per-call option applies configured policy; the
+explicit override does not persist or weaken later asks.
 
 ### Agent-content distrust
 

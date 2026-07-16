@@ -40,9 +40,13 @@ def classify_question(text: str, choices: list[str] | None = None) -> RiskResult
     t = text or ""
     if _R3.search(t):
         return RiskResult(risk="R3", kind="destructive", confidence=0.85)
-    if _R2.search(t) or (choices and len(choices) >= 2 and any(
-        re.search(r"yes|no|allow|deny|approve|reject", c, re.I) for c in choices
-    )):
+    if _R2.search(t) or (
+        choices
+        and len(choices) >= 2
+        and any(
+            re.search(r"yes|no|allow|deny|approve|reject", c, re.I) for c in choices
+        )
+    ):
         return RiskResult(risk="R2", kind="permission", confidence=0.8)
     if choices or _MENU_HINT.search(t):
         return RiskResult(risk="R1", kind="choice", confidence=0.7)
@@ -51,17 +55,26 @@ def classify_question(text: str, choices: list[str] | None = None) -> RiskResult
     return RiskResult(risk="R1", kind="free_text", confidence=0.65)
 
 
-def confirm_required(risk: str, mode: str) -> bool:
+def confirm_required(
+    risk: str,
+    mode: str,
+    *,
+    explicit_override: bool = False,
+) -> bool:
     """Whether spoken confirmation is required before delivery.
 
-    R2/R3 always confirm. R0 never. R1 follows mode (auto → only when unsure).
+    Configured policy keeps R2/R3 mandatory even when ``mode=never``. An
+    explicit per-call/CLI ``never`` is operator authority to bypass the second
+    confirmation for this ask only. ``always`` applies to every risk class.
     """
+    if explicit_override and mode == "never":
+        return False
+    if mode == "always":
+        return True
     if risk in ("R2", "R3"):
         return True
     if risk == "R0":
         return False
-    if mode == "always":
-        return True
     if mode == "never":
         return False
     # auto: library marks "unsure" cases separately; default no force

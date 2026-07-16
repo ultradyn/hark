@@ -75,17 +75,11 @@ def test_run_tts_play_stack_order_conference_mute_duck(monkeypatch):
         )()
         order.append("duck_exit")
 
-    monkeypatch.setattr(
-        "hark.conference.apply_conference_hold", fake_hold
-    )
+    monkeypatch.setattr("hark.conference.apply_conference_hold", fake_hold)
     monkeypatch.setattr("hark.speech.mic_muted_during_tts", fake_mute)
     monkeypatch.setattr("hark.speech.duck_media", fake_duck)
-    monkeypatch.setattr(
-        "hark.speech.claim_tts_play_ticket", lambda: object()
-    )
-    monkeypatch.setattr(
-        "hark.speech.abandon_tts_play_ticket", lambda *a, **k: None
-    )
+    monkeypatch.setattr("hark.speech.claim_tts_play_ticket", lambda: object())
+    monkeypatch.setattr("hark.speech.abandon_tts_play_ticket", lambda *a, **k: None)
 
     @contextmanager
     def fake_exclusive(*, ticket=None, wait_timeout_s=None):
@@ -93,9 +87,7 @@ def test_run_tts_play_stack_order_conference_mute_duck(monkeypatch):
         yield
 
     monkeypatch.setattr("hark.speech.exclusive_playback", fake_exclusive)
-    monkeypatch.setattr(
-        "hark.speech.lookup_cached_tts", lambda *a, **k: b"\x00\x01"
-    )
+    monkeypatch.setattr("hark.speech.lookup_cached_tts", lambda *a, **k: b"\x00\x01")
     monkeypatch.setattr(
         "hark.speech.play_wav_bytes",
         lambda *a, **k: type("PR", (), {"duration_ms": 10})(),
@@ -116,6 +108,7 @@ def test_run_tts_play_stack_order_conference_mute_duck(monkeypatch):
             },
         )(),
     )
+
     # UsageStore no-op
     class Store:
         def record_tts(self, **kw):
@@ -127,9 +120,7 @@ def test_run_tts_play_stack_order_conference_mute_duck(monkeypatch):
     assert result["ok"]
     # conference before mute/duck; mute wraps duck
     assert order.index("conference:hold") < order.index("mute_enter:True")
-    assert order.index("mute_enter:True") < order.index(
-        "duck_enter:True:excl=True"
-    )
+    assert order.index("mute_enter:True") < order.index("duck_enter:True:excl=True")
     assert order.index("duck_enter:True:excl=True") < order.index("duck_exit")
     assert order.index("duck_exit") < order.index("mute_exit")
 
@@ -199,9 +190,7 @@ def test_run_ask_confirm_cancel_on_no(monkeypatch):
             ),
         ),
     )
-    monkeypatch.setattr(
-        "hark.speech.run_tts", lambda *a, **k: {"ok": True}
-    )
+    monkeypatch.setattr("hark.speech.run_tts", lambda *a, **k: {"ok": True})
     monkeypatch.setattr(
         "hark.speech.run_listen",
         lambda *a, **k: ListenResult(
@@ -217,6 +206,45 @@ def test_run_ask_confirm_cancel_on_no(monkeypatch):
     assert out["ok"] is False
     assert out.get("cancelled") is True
     assert out.get("confirm_reply") == "cancel"
+
+
+def test_run_ask_confirmation_cancel_precedes_affirmative_text(monkeypatch):
+    """Answer Window cancellation is authoritative even if STT text says yes."""
+    cfg = HarkConfig()
+    monkeypatch.setattr(
+        "hark.speech.speak_and_listen",
+        lambda *a, **k: (
+            {"ok": True},
+            ListenResult(
+                text="ship it",
+                provider="mock",
+                duration_ms=10,
+                end_mode="silence",
+                stream_id="answer",
+            ),
+        ),
+    )
+    monkeypatch.setattr("hark.speech.run_tts", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(
+        "hark.speech.run_listen",
+        lambda *a, **k: ListenResult(
+            text="yes",
+            provider="mock",
+            duration_ms=10,
+            end_mode="silence",
+            end_phrase="agent:cancel",
+            cancelled=True,
+            stream_id="confirm",
+        ),
+    )
+
+    out = run_ask(cfg, "Publish this package?", risk_hint="R3")
+
+    assert out["ok"] is False
+    assert out["cancelled"] is True
+    assert out["confirm_reply"] == "yes"
+    assert out["end_phrase"] == "agent:cancel"
+    assert out["exit"] != 0
 
 
 @pytest.mark.parametrize(
@@ -266,13 +294,15 @@ def test_run_ask_confirmation_policy_by_risk(
     )
     monkeypatch.setattr(
         "hark.speech.run_listen",
-        lambda *a, **k: calls.append("listen")
-        or ListenResult(
-            text="  Yes. ",
-            provider="mock",
-            duration_ms=10,
-            end_mode="silence",
-            stream_id="confirm",
+        lambda *a, **k: (
+            calls.append("listen")
+            or ListenResult(
+                text="  Yes. ",
+                provider="mock",
+                duration_ms=10,
+                end_mode="silence",
+                stream_id="confirm",
+            )
         ),
     )
 

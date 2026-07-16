@@ -37,5 +37,27 @@ def test_negative_phrase_wins_over_affirmative(reply):
     assert classify_confirm_reply(reply) == "no"
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Yes, but wait.",
+        "Okay, wait a second.",
+        "Yes, if the tests pass.",
+        "Yes, wait.",
+        "Yes, but.",
+        "Okay, if.",
+        "Yes, unless.",
+    ],
+)
+def test_punctuated_defer_remains_unclear(reply):
+    """B142 parent behavior: punctuation must not turn deferral into approval."""
+    assert classify_confirm_reply(reply) == "unclear"
+
+
+def test_yes_why_not_is_affirmative_idiom():
+    assert classify_confirm_reply("yes why not") == "yes"
+    assert classify_confirm_reply("Yes, why not?") == "yes"
+
+
 def test_unclear():
     assert classify_confirm_reply("maybe later purple") == "unclear"

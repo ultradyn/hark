@@ -7,6 +7,7 @@ import re
 from hark.listen_end import normalize_for_match
 
 _PUNCTUATION = re.compile(r"[^\w\s']+", re.UNICODE)
+_ADJOINING_PUNCTUATION_SEPARATOR = re.compile(r"^[^\w\s']+", re.UNICODE)
 _PUNCTUATED_DEFER_CUES = ("but", "wait", "if", "unless")
 _AFFIRMATIVE_IDIOMS = frozenset({"yes why not"})
 
@@ -64,10 +65,13 @@ def classify_confirm_reply(text: str) -> str:
     # Preserve the parent classifier's fail-closed behavior for punctuated
     # deferrals/conditions. Broad unpunctuated language belongs to B148.
     for affirm in sorted(AFFIRM, key=len, reverse=True):
-        prefix = f"{affirm},"
-        if not t.startswith(prefix):
+        if not t.startswith(affirm):
             continue
-        remainder = t[len(prefix) :].strip()
+        tail = t[len(affirm) :]
+        separator = _ADJOINING_PUNCTUATION_SEPARATOR.match(tail)
+        if separator is None:
+            continue
+        remainder = tail[separator.end() :].strip()
         normalized_remainder = " ".join(_PUNCTUATION.sub(" ", remainder).split())
         if any(
             normalized_remainder == cue or normalized_remainder.startswith(cue + " ")

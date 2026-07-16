@@ -47,6 +47,16 @@ def test_negative_phrase_wins_over_affirmative(reply):
         "Yes, but.",
         "Okay, if.",
         "Yes, unless.",
+        "Yes; wait.",
+        "Yes—wait.",
+        "Yes. Wait.",
+        "Yes: wait.",
+        "Sure; if tests pass.",
+        "Yes? If tests pass.",
+        "Yes… unless reviewed.",
+        "Okay… wait.",
+        "Go ahead—unless reviewed.",
+        "Yes—but go ahead.",
     ],
 )
 def test_punctuated_defer_remains_unclear(reply):

@@ -36,6 +36,18 @@ class _SurrogateNamedRuntimeError(RuntimeError, metaclass=_SurrogateNameMeta):
     pass
 
 
+class _NoSpeechNameMeta(type):
+    def __getattribute__(cls, name):
+        if name == "__name__":
+            return "no speech detected"
+        return super().__getattribute__(name)
+
+
+class _HostileNoSpeechNamedTimeoutError(TimeoutError, metaclass=_NoSpeechNameMeta):
+    def __str__(self) -> str:
+        raise RuntimeError("exception rendering failed")
+
+
 def _hit() -> WakeHit:
     return WakeHit(
         phrase="hey iris",
@@ -445,6 +457,40 @@ def test_streaming_later_runtime_with_no_speech_text_is_not_idle(monkeypatch):
     assert end["reason"] == "listen_failed"
 
 
+def test_streaming_hostile_type_fallback_is_not_idle_evidence(monkeypatch):
+    """A hostile type-name fallback cannot impersonate a rendered timeout."""
+    cfg = HarkConfig(ambient=AmbientConfig(streaming=True))
+    calls = {"n": 0}
+
+    def fake_listen(cfg_arg, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ListenResult(
+                text="first turn",
+                provider="fake",
+                duration_ms=5,
+                end_mode="silence",
+                stream_id="turn-1",
+            )
+        raise _HostileNoSpeechNamedTimeoutError()
+
+    out = io.StringIO()
+    monkeypatch.setattr(ambient, "run_listen", fake_listen)
+    monkeypatch.setattr(ambient, "syslog", lambda *a, **k: None)
+    monkeypatch.setattr(ambient, "shutdown_requested", lambda: False)
+    monkeypatch.setattr(ambient, "reload_requested", lambda: False)
+
+    result = complete_after_wake(cfg, _hit(), announce=False, out=out)
+
+    assert result.listen and result.listen["reason"] == "listen_failed"
+    assert result.listen["error"] == "no speech detected"
+    events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    end = next(event for event in events if event["kind"] == "ambient.conversation_end")
+    assert end["reason"] == "listen_failed"
+    assert end["listen_error"] == "no speech detected"
+    assert end["error_type"] == "no speech detected"
+
+
 def test_streaming_later_timeout_classifies_marker_after_bounded_detail(monkeypatch):
     """Idle classification uses the full safe error text, not its event excerpt."""
     cfg = HarkConfig(ambient=AmbientConfig(streaming=True))
@@ -791,6 +837,39 @@ def test_present_ambient_turn_compact():
     assert (
         "TTS" in compact["instructions"] or "reply" in compact["instructions"].lower()
     )
+
+
+def test_present_conversation_end_preserves_bounded_failure_diagnostics():
+    from hark.state_feed.present import present_for_monitor
+
+    event = {
+        "schema": "hark.event.v1",
+        "kind": "ambient.conversation_end",
+        "event_id": "end-1",
+        "observed_at": "2026-01-01T00:00:00Z",
+        "conversation_id": "conversation-1",
+        "turns": 8,
+        "reason": "listen_failed",
+        "listen_error": "e" * 400,
+        "error_type": "T" * 120,
+        "failure_stream_id": "f" * 220,
+        "last_event_id": "v" * 220,
+        "last_stream_id": "s" * 220,
+        "last_turn": 7,
+        "last_text": "x" * 400,
+        "last_provider": "p" * 200,
+    }
+
+    compact = present_for_monitor(event)
+
+    assert compact["listen_error"] == "e" * 240
+    assert compact["error_type"] == "T" * 80
+    assert compact["failure_stream_id"] == "f" * 160
+    assert compact["last_event_id"] == "v" * 160
+    assert compact["last_stream_id"] == "s" * 160
+    assert compact["last_turn"] == 7
+    assert compact["last_text"] == "x" * 240
+    assert compact["last_provider"] == "p" * 120
 
 
 def test_mode_a_wake_kinds_include_turn():

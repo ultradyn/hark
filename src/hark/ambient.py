@@ -194,9 +194,16 @@ def _safe_exception_type_name(exc: BaseException) -> str:
     return "Exception"
 
 
-def _safe_exception_text(exc: BaseException) -> str:
-    """Return full safe text for classification; callers bound emitted copies."""
-    return _safe_text(exc) or _safe_exception_type_name(exc)
+def _safe_exception_details(exc: BaseException) -> tuple[str | None, str, str]:
+    """Return rendered text, display fallback, and type without conflating them.
+
+    Only successfully rendered exception text is suitable for semantic
+    classification.  The type name is a display fallback, not evidence about
+    the failure itself: hostile exception classes can control both surfaces.
+    """
+    error_type = _safe_exception_type_name(exc)
+    rendered = _safe_text(exc)
+    return rendered, rendered or error_type, error_type
 
 
 def _apply_policy_to_backend(backend: WakeBackend, policy: WakePolicy) -> None:
@@ -627,11 +634,11 @@ def _single_post_wake_listen(
             partial_kind="ambient.partial",
         )
     except Exception as exc:
-        error_text = _safe_exception_text(exc)
+        rendered_error, error_text, _error_type = _safe_exception_details(exc)
         err_s = error_text[:_EXCEPTION_DETAIL_MAX_CHARS]
-        is_no_open = (
-            "no speech detected" in error_text.lower()
-            or "no speech captured" in error_text.lower()
+        is_no_open = rendered_error is not None and (
+            "no speech detected" in rendered_error.lower()
+            or "no speech captured" in rendered_error.lower()
         )
         syslog(
             "ambient.error",
@@ -808,12 +815,11 @@ def _conversation_after_wake(
         try:
             listened = run_listen(cfg, policy=pol)
         except Exception as exc:
-            error_type = _safe_exception_type_name(exc)
-            error_text = _safe_exception_text(exc)
+            rendered_error, error_text, error_type = _safe_exception_details(exc)
             err_s = error_text[:_EXCEPTION_DETAIL_MAX_CHARS]
-            is_no_open = (
-                "no speech detected" in error_text.lower()
-                or "no speech captured" in error_text.lower()
+            is_no_open = rendered_error is not None and (
+                "no speech detected" in rendered_error.lower()
+                or "no speech captured" in rendered_error.lower()
             )
             if is_first:
                 event_id = new_event_id()

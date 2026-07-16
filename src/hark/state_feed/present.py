@@ -6,6 +6,20 @@ from typing import Any
 
 from hark.events import monitor_profile
 
+_CONVERSATION_END_DIAGNOSTIC_LIMITS = {
+    "listen_error": 240,
+    "error_type": 80,
+    "failure_stream_id": 160,
+    "last_event_id": 160,
+    "last_stream_id": 160,
+    "last_text": 240,
+    "last_provider": 120,
+}
+
+
+def _bounded_diagnostic(value: Any, max_chars: int) -> str | None:
+    return value[:max_chars] if isinstance(value, str) and value else None
+
 
 def present_for_monitor(event: dict[str, Any]) -> dict[str, Any]:
     """Single HEP presentation profile for harness Monitors.
@@ -14,7 +28,11 @@ def present_for_monitor(event: dict[str, Any]) -> dict[str, Any]:
     Applied once at the presentation edge (monitor emit), not twice.
     """
     kind = str(event.get("kind") or "")
-    if kind.startswith("agent.") or kind in ("watch.armed", "watch.error", "target.invalidated"):
+    if kind.startswith("agent.") or kind in (
+        "watch.armed",
+        "watch.error",
+        "target.invalidated",
+    ):
         return monitor_profile(event)
 
     compact: dict[str, Any] = {
@@ -79,11 +97,19 @@ def present_for_monitor(event: dict[str, Any]) -> dict[str, Any]:
                 "partial": False,
                 "streaming": True,
                 "instructions": event.get("instructions")
-                or (
-                    "Conversation session ended. Wake re-armed; no new prompt."
-                ),
+                or ("Conversation session ended. Wake re-armed; no new prompt."),
             }
         )
+        compact.update(
+            {
+                key: _bounded_diagnostic(event.get(key), max_chars)
+                for key, max_chars in _CONVERSATION_END_DIAGNOSTIC_LIMITS.items()
+            }
+        )
+        if isinstance(event.get("last_turn"), int) and not isinstance(
+            event.get("last_turn"), bool
+        ):
+            compact["last_turn"] = event["last_turn"]
     elif kind == "ambient.partial":
         from hark.partial import partial_compact_instructions
 
@@ -210,4 +236,3 @@ def present_for_monitor(event: dict[str, Any]) -> dict[str, Any]:
                 compact[key] = event[key]
 
     return {k: v for k, v in compact.items() if v is not None}
-

@@ -1,16 +1,17 @@
 ---
+claimed_at: "2026-07-16T19:49:40Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-16T19:46:35Z"
 depends_on: []
 estimate_hours: 1.5
 id: B159
 priority: high
-status: pending
-tags:
-    - confirmation
-    - security
-    - unicode
+started_at: "2026-07-16T19:49:40Z"
+status: in_progress
+tags: []
 title: Format characters inside negative confirmation tokens can authorize R2
-updated_at: "2026-07-16T19:46:35Z"
+updated_at: "2026-07-16T19:49:40Z"
 ---
 Evidence: on current master e900f7cf3e7d735fc15910a5dd66355cf4c222b0, classify_confirm_reply returns "yes" for explicit refusal-shaped replies with a U+200B ZERO WIDTH SPACE inserted inside the negative token, including "yes I ca\u200bn’t approve this", "yes c\u200bancel", and "yes n\u200bot". A real configured R2 run_ask returns ok=true and exit=0 for each. The behavior predates B151 exact-head work and is distinct from B157 quoted contractions and B158 mixed-script confusables. Root cause: confirmation provenance checks only separator spans; later punctuation normalization turns interior Format characters into spaces, causing whole-token NEGATE matching to miss while the leading affirmative wins. Expected: at the destructive confirmation boundary, Format/mark material inserted within a bounded negative token must fail closed without substring false positives or regressions to benign Unicode prose. Add direct classifier and real configured-R2 regressions across representative multi-letter NEGATE terms, whole-word boundary controls, and bounded scaling.

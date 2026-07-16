@@ -306,17 +306,18 @@ def _has_observable_normalized_bridge_evidence(
     points, and nonalphabetic expansion material remain observable. Raw source
     provenance is checked separately before this fallback.
     """
-    if facts.whitespace_prefix[end] != facts.whitespace_prefix[start]:
-        return False
+    whitespace_count = facts.whitespace_prefix[end] - facts.whitespace_prefix[start]
     significant_start = facts.significant_prefix[start]
     significant_end = facts.significant_prefix[end]
     significant_length = significant_end - significant_start
-    if not significant_length:
-        return False
+    # M*/Cf material remains observable even when compatibility normalization
+    # also emitted literal whitespace.  Whitespace alone is not evidence: raw
+    # prose boundaries must continue to separate ordinary words.
     if significant_length != end - start:
         return True
     nonalphabetic_prefix = facts.nonalphabetic_significant_prefix
-    return nonalphabetic_prefix[end] != nonalphabetic_prefix[start]
+    nonalphabetic_count = nonalphabetic_prefix[end] - nonalphabetic_prefix[start]
+    return nonalphabetic_count > whitespace_count
 
 
 def _projection_span_has_compatibility_source(
@@ -345,45 +346,78 @@ def _iter_compatibility_bridge_spans(
     for left, right in _CONTRACTION_PARTS:
         earliest_left: tuple[int, int] | None = None
         latest_left: tuple[int, int] | None = None
+        normalized_left: tuple[int, int] | None = None
+        last_raw_whitespace: int | None = None
         for index in range(len(text)):
             if facts.raw_source_is_whitespace[index]:
                 earliest_left = None
                 latest_left = None
+                if normalized_left is not None:
+                    last_raw_whitespace = index
             left_end = index + len(left)
-            if (
+            is_left_start = (
                 _ascii_literal_at(text, index, left)
                 and left_end < len(text)
-                and not facts.raw_source_is_whitespace[left_end]
                 and not facts.word_base_before[index]
-            ):
+            )
+            if is_left_start and facts.raw_source_is_whitespace[left_end]:
+                # This is not an ordinary in-token candidate. Retain it only
+                # for the normalized compatibility-whitespace fallback below.
+                normalized_left = (index, left_end)
+                last_raw_whitespace = left_end
+            elif is_left_start:
                 latest_left = (index, left_end)
                 if earliest_left is None:
                     earliest_left = latest_left
-            if earliest_left is None or latest_left is None or index <= latest_left[1]:
+                # Two effective compatibility-whitespace sources expand to a
+                # non-ASCII alphabetic prefix before their internal spaces.
+                # Retain only that externally observable shape; ordinary ASCII
+                # words such as "candle" remain hard-boundary prose.
+                normalized_left = latest_left if not text[left_end].isascii() else None
+                last_raw_whitespace = None
+            active_left = normalized_left or latest_left
+            if index <= (active_left[1] if active_left is not None else -1):
                 continue
             right_end = index + len(right)
-            if not (
-                _ascii_literal_at(text, index, right)
+            if not _ascii_literal_at(text, index, right):
+                continue
+            if earliest_left is not None and latest_left is not None:
+                if not facts.raw_source_is_whitespace[
+                    index - 1
+                ] and _is_complete_confirmation_span(facts, latest_left[0], right_end):
+                    earliest_separator_span = (earliest_left[1], index)
+                    if _projection_span_has_compatibility_source(
+                        projection, facts, *earliest_separator_span
+                    ):
+                        yield earliest_separator_span
+                        continue
+                    latest_separator_span = (latest_left[1], index)
+                    if _has_observable_normalized_bridge_evidence(
+                        facts, *earliest_separator_span
+                    ) or (
+                        latest_separator_span != earliest_separator_span
+                        and _has_observable_normalized_bridge_evidence(
+                            facts, *latest_separator_span
+                        )
+                    ):
+                        yield earliest_separator_span
+                        continue
+            # Compatibility whitespace becomes indistinguishable from literal
+            # prose whitespace after NFKC/NFKD. Retain a separate fallback from
+            # the last left side, but require observable evidence *after the
+            # final raw whitespace*. This catches SPACE+M*/Cf/nonalphabetic
+            # bridges without reconnecting ordinary multi-word prose.
+            if (
+                normalized_left is not None
+                and last_raw_whitespace is not None
+                and index > last_raw_whitespace + 1
                 and not facts.raw_source_is_whitespace[index - 1]
-                and _is_complete_confirmation_span(facts, latest_left[0], right_end)
-            ):
-                continue
-            earliest_separator_span = (earliest_left[1], index)
-            if _projection_span_has_compatibility_source(
-                projection, facts, *earliest_separator_span
-            ):
-                yield earliest_separator_span
-                continue
-            latest_separator_span = (latest_left[1], index)
-            if _has_observable_normalized_bridge_evidence(
-                facts, *earliest_separator_span
-            ) or (
-                latest_separator_span != earliest_separator_span
+                and _is_complete_confirmation_span(facts, normalized_left[0], right_end)
                 and _has_observable_normalized_bridge_evidence(
-                    facts, *latest_separator_span
+                    facts, last_raw_whitespace + 1, index
                 )
             ):
-                yield earliest_separator_span
+                yield (normalized_left[1], index)
 
 
 def _analyze_contraction_provenance(text: str) -> _ContractionProvenance:

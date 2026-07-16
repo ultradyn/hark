@@ -3,6 +3,10 @@ import unicodedata
 import pytest
 
 import hark.confirm_lexicon as confirm_lexicon
+from confirm_security_corpus import (
+    NORMATIVE_CONTRACTIONS,
+    NORMATIVE_NEGATION_CORPUS,
+)
 from confirm_unicode_cases import (
     ALPHABETIC_TRIPLE_COMPATIBILITY_REPRODUCTIONS,
     APOSTROPHE_VARIANTS,
@@ -26,6 +30,7 @@ from confirm_unicode_cases import (
     alphabetic_compatibility_triples,
     alphanumeric_compatibility_expansions,
     boundary_ending_compatibility_expansions,
+    compatibility_whitespace_sources,
     is_fully_collapsed_alphabetic_material,
     leading_compatibility_whitespace_sources,
     repeated_symbol_compatibility_bridges,
@@ -54,6 +59,13 @@ def test_affirm_ignores_terminal_punctuation_casing_and_whitespace(reply):
 def test_negate():
     assert classify_confirm_reply("cancel") == "no"
     assert classify_confirm_reply("nope") == "no"
+
+
+def test_production_negation_lexicon_contains_fixed_security_corpus():
+    assert NORMATIVE_NEGATION_CORPUS <= confirm_lexicon.NEGATE
+    # Pin this contraction independently: Unicode case generation must fail if
+    # production accidentally drops the refusal that motivated this oracle fix.
+    assert "don't" in confirm_lexicon.NEGATE
 
 
 @pytest.mark.parametrize(
@@ -279,6 +291,103 @@ def test_all_compatibility_whitespace_sources_remain_attached_to_literal_alpha()
     assert len(trailing_sources) >= 15
     assert audited >= 1_400
     assert failures == []
+
+
+def test_normalized_compatibility_whitespace_keeps_all_transparent_evidence():
+    transparent = transparent_boundary_codepoints()
+    normalizations = ("NFKC", "NFKD")
+    failures = []
+    audited = 0
+
+    for edge in transparent:
+        bridge = "\u00a0" + edge + "\u1d43"
+        for normalization in normalizations:
+            material = unicodedata.normalize(normalization, bridge)
+            for left, right in CONTRACTION_PARTS:
+                audited += 1
+                reply = f"yes I {left}{material}{right} approve this"
+                if classify_confirm_reply(reply) == "yes":
+                    failures.append((f"U+{ord(edge):04X}", normalization, left, right))
+                    if len(failures) == 20:
+                        break
+            if len(failures) == 20:
+                break
+        if len(failures) == 20:
+            break
+
+    assert all(
+        unicodedata.category(character).startswith("M")
+        or unicodedata.category(character) == "Cf"
+        for character in transparent
+    )
+    assert {"\u0301", "\u200b", "\u200d", "\ufe0f"} <= set(transparent)
+    assert audited == (
+        len(transparent) * len(normalizations) * len(NORMATIVE_CONTRACTIONS)
+    )
+    assert failures == []
+
+
+def test_all_normalized_compatibility_whitespace_sources_keep_format_evidence():
+    sources = compatibility_whitespace_sources()
+    normalizations = ("NFKC", "NFKD")
+    failures = []
+    audited = 0
+
+    for source in sources:
+        bridge = source + "\u200b\u1d43"
+        for normalization in normalizations:
+            material = unicodedata.normalize(normalization, bridge)
+            for left, right in CONTRACTION_PARTS:
+                audited += 1
+                reply = f"yes I {left}{material}{right} approve this"
+                if classify_confirm_reply(reply) == "yes":
+                    failures.append(
+                        (f"U+{ord(source):04X}", normalization, left, right)
+                    )
+
+    assert all(
+        unicodedata.normalize("NFKD", source) != unicodedata.normalize("NFD", source)
+        and any(
+            character.isspace() for character in unicodedata.normalize("NFKD", source)
+        )
+        for source in sources
+    )
+    assert {"\u00a0", "\u00a8", "\u2002"} <= set(sources)
+    assert audited == len(sources) * len(normalizations) * len(NORMATIVE_CONTRACTIONS)
+    assert failures == []
+
+
+@pytest.mark.parametrize(
+    "bridge",
+    (
+        "\u00a0\u200b\u1d43",  # SPACE + Cf + compatibility alpha
+        "\u00a8\u1d43",  # SPACE + combining diaeresis + compatibility alpha
+        "\u00a0/\u1d43",  # SPACE + nonalphabetic significant evidence
+    ),
+)
+@pytest.mark.parametrize("normalization", ("NFKC", "NFKD"))
+@pytest.mark.parametrize("parts", CONTRACTION_PARTS)
+def test_normalized_whitespace_with_surviving_bridge_evidence_fails_closed(
+    bridge, normalization, parts
+):
+    left, right = parts
+    material = unicodedata.normalize(normalization, bridge)
+    reply = f"yes I {left}{material}{right} approve this"
+
+    assert classify_confirm_reply(reply) == "unclear"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    (
+        "yes I can at",
+        "yes I can make it",
+        "yes I can certainly do it",
+        "yes I can recommend it",
+    ),
+)
+def test_ordinary_raw_whitespace_remains_a_hard_prose_boundary(reply):
+    assert classify_confirm_reply(reply) == "yes"
 
 
 @pytest.mark.parametrize("bridge", ALPHABETIC_TRIPLE_COMPATIBILITY_REPRODUCTIONS)

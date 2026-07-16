@@ -4,7 +4,17 @@ import sys
 import unicodedata
 from functools import cache
 
-from hark.confirm_lexicon import NEGATE
+from confirm_security_corpus import (
+    NORMATIVE_CONTRACTIONS,
+    NORMATIVE_NEGATION_CORPUS,
+)
+from hark.confirm_lexicon import NEGATE as PRODUCTION_NEGATE
+
+
+# Fail before generating Unicode variants if production drops a normative
+# refusal. Case derivation below remains wholly fixed-test-data driven.
+assert NORMATIVE_NEGATION_CORPUS <= PRODUCTION_NEGATE
+assert "don't" in PRODUCTION_NEGATE
 
 APOSTROPHE_VARIANTS = (
     "\u2018",
@@ -115,10 +125,7 @@ COMPATIBILITY_WHITESPACE_ALPHA_REPRODUCTIONS = (
     "a\u2002",  # literal alpha before compatibility whitespace source
     "\u1fee\u3396\U0001d569",  # recursive whitespace + square ml + math x
 )
-CONTRACTION_PARTS = tuple(
-    phrase.split("'", 1)
-    for phrase in sorted(phrase for phrase in NEGATE if "'" in phrase)
-)
+CONTRACTION_PARTS = tuple(phrase.split("'", 1) for phrase in NORMATIVE_CONTRACTIONS)
 EDGE_MATERIAL_REPRODUCTIONS = (
     "yes I can\u203ct\u0301 approve this",
     "yes I can\u203ct\ufe0f approve this",
@@ -266,6 +273,17 @@ def trailing_compatibility_whitespace_sources() -> tuple[str, ...]:
         for character in map(chr, range(sys.maxunicode + 1))
         if has_effective_compatibility_provenance(character)
         and unicodedata.normalize("NFKD", character).endswith(" ")
+    )
+
+
+@cache
+def compatibility_whitespace_sources() -> tuple[str, ...]:
+    """Every effective source whose compatibility expansion contains whitespace."""
+    return tuple(
+        character
+        for character in map(chr, range(sys.maxunicode + 1))
+        if has_effective_compatibility_provenance(character)
+        and any(part.isspace() for part in unicodedata.normalize("NFKD", character))
     )
 
 

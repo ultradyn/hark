@@ -28,6 +28,7 @@ from confirm_unicode_cases import (
     SUPPORTED_FULLWIDTH_CONTRACTION_CASES,
     UNSUPPORTED_IN_WORD_FRAGMENTS,
     WORD_BASE_BOUNDARY_CONTROLS,
+    compatibility_whitespace_sources,
     is_fully_collapsed_alphabetic_material,
 )
 from hark.config import HarkConfig
@@ -419,6 +420,23 @@ def test_run_ask_rejects_compatibility_whitespace_with_alphabetic_material(
         if normalization is None
         else unicodedata.normalize(normalization, bridge)
     )
+    confirm_reply = f"yes I {left}{material}{right} approve this"
+
+    out = _run_ask_with_confirmation(monkeypatch, confirm_reply)
+
+    assert out["ok"] is False
+    assert out["cancelled"] is True
+    assert out["confirm_reply"] == confirm_reply
+
+
+@pytest.mark.parametrize("normalization", ("NFKC", "NFKD"))
+@pytest.mark.parametrize("parts", CONTRACTION_PARTS)
+def test_run_ask_rejects_normalized_whitespace_with_surviving_format_evidence(
+    monkeypatch, normalization, parts
+):
+    left, right = parts
+    source = compatibility_whitespace_sources()[0]
+    material = unicodedata.normalize(normalization, source + "\u200b\u1d43")
     confirm_reply = f"yes I {left}{material}{right} approve this"
 
     out = _run_ask_with_confirmation(monkeypatch, confirm_reply)

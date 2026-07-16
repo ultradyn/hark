@@ -1,17 +1,18 @@
 ---
 claimed_at: "2026-07-15T23:30:52Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-16T00:49:13Z"
 complexity: medium
 created_at: "2026-07-15T23:29:04Z"
 depends_on: []
+duration_minutes: 78.3527206314
 estimate_hours: 1
 id: B142
 priority: high
 started_at: "2026-07-15T23:30:52Z"
-status: in_progress
+status: done
 tags: []
 title: hark ask reports cancelled after clear affirmative reply
-updated_at: "2026-07-15T23:30:52Z"
+updated_at: "2026-07-16T00:49:13Z"
 ---
 While dogfooding with 'hark ask --confirm never', Hark transcribed a clear affirmative architecture answer ('three slices is fine ... three different PRs') and reported confirm_reply='Yes.', but returned ok=false, cancelled=true, exit=7. The answer was usable, yet the command status contradicted both transcript and confirmation. The CLI should not enter confirmation under --confirm never, and a positive confirmation must not produce cancelled=true. This occurred after the duplicate Hark instance issue had been identified.

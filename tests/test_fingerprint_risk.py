@@ -27,8 +27,11 @@ def test_risk_r2():
 def test_confirm_policy():
     assert confirm_required("R2", "auto") is True
     assert confirm_required("R3", "never") is True
+    assert confirm_required("R2", "never", explicit_override=True) is False
+    assert confirm_required("R3", "never", explicit_override=True) is False
     assert confirm_required("R1", "auto") is False
     assert confirm_required("R1", "always") is True
+    assert confirm_required("R0", "always") is True
 
 
 def test_parse_target():

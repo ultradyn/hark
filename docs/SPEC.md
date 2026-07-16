@@ -124,7 +124,12 @@ Agent-specific parsers MAY improve confidence; low confidence → longer verbati
 See [SAFETY.md](SAFETY.md).
 
 - R0/R1: confirm **auto** (when unsure).  
-- R2/R3: confirm **always**.  
+- R2/R3: confirm **always** under configured policy.
+- Configured `always` confirms every risk; configured `never` suppresses R0/R1
+  confirmation but not R2/R3.
+- Explicit per-call `--confirm never` / `run_ask(confirm="never")` bypasses the
+  second confirmation for that ask, including R2/R3. Configured
+  `[confirm].mode = "never"` still forces R2/R3 confirmation.
 
 ## 9. Audio
 
@@ -210,7 +215,7 @@ max_chars = 500
 # playback_speed = 1.0  # pitch-preserving tempo; non-default needs ffmpeg
 
 [confirm]
-mode = "auto"   # for R0/R1; R2/R3 force always
+mode = "auto"   # configured policy: R2/R3 force always; per-call never may override
 
 [safety]
 deny_patterns = []  # optional hard blocks

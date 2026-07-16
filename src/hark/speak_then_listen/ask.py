@@ -14,6 +14,8 @@ from hark.confirm_lexicon import classify_confirm_reply
 from hark.exitcodes import ABORT, OK, PROVIDER, TIMEOUT
 from hark.providers.base import ProviderError
 from hark.risk import classify_question, confirm_required
+
+
 def run_ask(
     cfg: HarkConfig,
     prompt: str,
@@ -30,7 +32,8 @@ def run_ask(
     """
     from hark import speech as speech_mod
 
-    confirm_mode = confirm or cfg.confirm.mode
+    explicit_confirm = confirm is not None
+    confirm_mode = confirm if explicit_confirm else cfg.confirm.mode
     try:
         tts_info, listened = speech_mod.speak_and_listen(
             cfg,
@@ -78,11 +81,11 @@ def run_ask(
         }
 
     risk = risk_hint or classify_question(prompt).risk
-    need_confirm = confirm_required(risk, confirm_mode)
-    if confirm_mode == "always":
-        need_confirm = True
-    if confirm_mode == "never" and risk not in ("R2", "R3"):
-        need_confirm = False
+    need_confirm = confirm_required(
+        risk,
+        confirm_mode,
+        explicit_override=explicit_confirm,
+    )
 
     if need_confirm:
         # Confirming: readback TTS + silence Answer Window + lexicon (HandoffState.CONFIRMING).
@@ -104,6 +107,16 @@ def run_ask(
                 "text": listened.text,
                 "tts": tts_info,
             }
+        if conf.cancelled:
+            return {
+                "ok": False,
+                "cancelled": True,
+                "confirm_reply": conf.text,
+                "text": listened.text,
+                "end_phrase": conf.end_phrase,
+                "exit": ABORT,
+                "tts": tts_info,
+            }
         decision = classify_confirm_reply(conf.text)
         if decision != "yes":
             return {
@@ -111,6 +124,7 @@ def run_ask(
                 "cancelled": True,
                 "confirm_reply": conf.text,
                 "text": listened.text,
+                "end_phrase": conf.end_phrase,
                 "exit": ABORT,
                 "tts": tts_info,
             }

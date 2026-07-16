@@ -29,7 +29,12 @@ ambient wake (see B069 survey).
 
 ## ADR-005: Confirm policy split by risk
 
-R0/R1: confirm when unsure. R2/R3: always. Conservative classification.
+R0/R1: confirm when unsure. R2/R3: always under configured policy.
+Configured `always` confirms every risk; configured `never` suppresses R0/R1
+confirmation but not R2/R3. Conservative classification. An explicit one-call
+`hark ask --confirm never` or `run_ask(confirm="never")` is operator authority
+to bypass the second confirmation for that ask, including R2/R3; configured
+`mode = "never"` does not provide that bypass.
 
 ## ADR-006: Socket-first Herdr; poll fallback
 

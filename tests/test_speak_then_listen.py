@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from contextlib import contextmanager
 
+import pytest
+
 from hark.config import HarkConfig
 from hark.speech import ListenResult, run_ask, speak_and_listen
 from hark.speak_then_listen import HandoffState, attach_tts_info
@@ -73,17 +75,11 @@ def test_run_tts_play_stack_order_conference_mute_duck(monkeypatch):
         )()
         order.append("duck_exit")
 
-    monkeypatch.setattr(
-        "hark.conference.apply_conference_hold", fake_hold
-    )
+    monkeypatch.setattr("hark.conference.apply_conference_hold", fake_hold)
     monkeypatch.setattr("hark.speech.mic_muted_during_tts", fake_mute)
     monkeypatch.setattr("hark.speech.duck_media", fake_duck)
-    monkeypatch.setattr(
-        "hark.speech.claim_tts_play_ticket", lambda: object()
-    )
-    monkeypatch.setattr(
-        "hark.speech.abandon_tts_play_ticket", lambda *a, **k: None
-    )
+    monkeypatch.setattr("hark.speech.claim_tts_play_ticket", lambda: object())
+    monkeypatch.setattr("hark.speech.abandon_tts_play_ticket", lambda *a, **k: None)
 
     @contextmanager
     def fake_exclusive(*, ticket=None, wait_timeout_s=None):
@@ -91,9 +87,7 @@ def test_run_tts_play_stack_order_conference_mute_duck(monkeypatch):
         yield
 
     monkeypatch.setattr("hark.speech.exclusive_playback", fake_exclusive)
-    monkeypatch.setattr(
-        "hark.speech.lookup_cached_tts", lambda *a, **k: b"\x00\x01"
-    )
+    monkeypatch.setattr("hark.speech.lookup_cached_tts", lambda *a, **k: b"\x00\x01")
     monkeypatch.setattr(
         "hark.speech.play_wav_bytes",
         lambda *a, **k: type("PR", (), {"duration_ms": 10})(),
@@ -114,6 +108,7 @@ def test_run_tts_play_stack_order_conference_mute_duck(monkeypatch):
             },
         )(),
     )
+
     # UsageStore no-op
     class Store:
         def record_tts(self, **kw):
@@ -125,9 +120,7 @@ def test_run_tts_play_stack_order_conference_mute_duck(monkeypatch):
     assert result["ok"]
     # conference before mute/duck; mute wraps duck
     assert order.index("conference:hold") < order.index("mute_enter:True")
-    assert order.index("mute_enter:True") < order.index(
-        "duck_enter:True:excl=True"
-    )
+    assert order.index("mute_enter:True") < order.index("duck_enter:True:excl=True")
     assert order.index("duck_enter:True:excl=True") < order.index("duck_exit")
     assert order.index("duck_exit") < order.index("mute_exit")
 
@@ -197,9 +190,7 @@ def test_run_ask_confirm_cancel_on_no(monkeypatch):
             ),
         ),
     )
-    monkeypatch.setattr(
-        "hark.speech.run_tts", lambda *a, **k: {"ok": True}
-    )
+    monkeypatch.setattr("hark.speech.run_tts", lambda *a, **k: {"ok": True})
     monkeypatch.setattr(
         "hark.speech.run_listen",
         lambda *a, **k: ListenResult(
@@ -215,6 +206,116 @@ def test_run_ask_confirm_cancel_on_no(monkeypatch):
     assert out["ok"] is False
     assert out.get("cancelled") is True
     assert out.get("confirm_reply") == "cancel"
+
+
+def test_run_ask_confirmation_cancel_precedes_affirmative_text(monkeypatch):
+    """Answer Window cancellation is authoritative even if STT text says yes."""
+    cfg = HarkConfig()
+    monkeypatch.setattr(
+        "hark.speech.speak_and_listen",
+        lambda *a, **k: (
+            {"ok": True},
+            ListenResult(
+                text="ship it",
+                provider="mock",
+                duration_ms=10,
+                end_mode="silence",
+                stream_id="answer",
+            ),
+        ),
+    )
+    monkeypatch.setattr("hark.speech.run_tts", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(
+        "hark.speech.run_listen",
+        lambda *a, **k: ListenResult(
+            text="yes",
+            provider="mock",
+            duration_ms=10,
+            end_mode="silence",
+            end_phrase="agent:cancel",
+            cancelled=True,
+            stream_id="confirm",
+        ),
+    )
+
+    out = run_ask(cfg, "Publish this package?", risk_hint="R3")
+
+    assert out["ok"] is False
+    assert out["cancelled"] is True
+    assert out["confirm_reply"] == "yes"
+    assert out["end_phrase"] == "agent:cancel"
+    assert out["exit"] != 0
+
+
+@pytest.mark.parametrize(
+    ("confirm", "configured_mode", "risk", "expect_confirm"),
+    [
+        ("never", "always", "R0", False),
+        ("never", "always", "R1", False),
+        ("never", "always", "R2", False),
+        ("never", "always", "R3", False),
+        ("auto", "always", "R0", False),
+        ("auto", "always", "R1", False),
+        ("auto", "always", "R2", True),
+        ("auto", "always", "R3", True),
+        ("always", "never", "R0", True),
+        ("always", "never", "R1", True),
+        ("always", "never", "R2", True),
+        ("always", "never", "R3", True),
+        (None, "never", "R0", False),
+        (None, "never", "R1", False),
+        (None, "never", "R2", True),
+        (None, "never", "R3", True),
+    ],
+)
+def test_run_ask_confirmation_policy_by_risk(
+    monkeypatch, confirm, configured_mode, risk, expect_confirm
+):
+    cfg = HarkConfig()
+    cfg.confirm.mode = configured_mode
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "hark.speech.speak_and_listen",
+        lambda *a, **k: (
+            {"ok": True},
+            ListenResult(
+                text="three slices is fine",
+                provider="mock",
+                duration_ms=10,
+                end_mode="silence",
+                stream_id="answer",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "hark.speech.run_tts",
+        lambda *a, **k: calls.append("tts") or {"ok": True},
+    )
+    monkeypatch.setattr(
+        "hark.speech.run_listen",
+        lambda *a, **k: (
+            calls.append("listen")
+            or ListenResult(
+                text="  Yes. ",
+                provider="mock",
+                duration_ms=10,
+                end_mode="silence",
+                stream_id="confirm",
+            )
+        ),
+    )
+
+    out = run_ask(
+        cfg,
+        "Should I publish this package?",
+        confirm=confirm,
+        risk_hint=risk,
+    )
+
+    assert out["ok"] is True
+    assert out.get("cancelled") is not True
+    assert ("listen" in calls) is expect_confirm
 
 
 def test_run_ask_timeout_preserves_tts_info(monkeypatch):

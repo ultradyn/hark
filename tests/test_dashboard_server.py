@@ -18,6 +18,7 @@ from hark.dashboard.server import DashboardServer
 from hark.dashboard.tailer import parse_cursor, read_page
 from hark.delivery import BoundEvent, DeliveryStore
 from hark.herdr.client import AgentInfo
+from hark.state_feed import CursorPosition, format_cursor, parse_cursor_positions
 
 
 @pytest.fixture()
@@ -746,6 +747,63 @@ def test_late_publish_after_empty_overlap_drain_is_still_deduplicated(
         server.shutdown()
 
 
+def test_live_loop_delivers_rewritten_seq_below_old_highwater(state, tmp_path):
+    _write_jsonl(
+        state / "watch.jsonl",
+        {**HEP_BLOCKED, "event_id": "rewrite-old-1", "n": 1},
+        {**HEP_BLOCKED, "event_id": "rewrite-old-2", "n": 2},
+        {**HEP_BLOCKED, "event_id": "rewrite-old-3", "n": 3},
+    )
+    server = _server(tmp_path)
+    connection = None
+    try:
+        connection, response = _open_stream(
+            server, "/api/v1/stream?sources=watch&since=watch%3A1"
+        )
+        assert _read_sse_event(response)[0] == "watch:1"
+        replay_cursor, replay_two = _read_sse_event(response)
+        highwater_cursor, replay_three = _read_sse_event(response)
+        assert replay_two["payload"]["event_id"] == "rewrite-old-2"
+        assert replay_three["payload"]["event_id"] == "rewrite-old-3"
+        assert parse_cursor(highwater_cursor)["watch"] == 3
+
+        positions = parse_cursor_positions(replay_cursor)
+        replay_position = positions["watch"]
+        assert replay_position.incarnation is not None
+        assert replay_position.checkpoint is not None
+        conflicting_checkpoint = (
+            "0" * 32 if replay_position.checkpoint != "0" * 32 else "1" * 32
+        )
+        positions["watch"] = CursorPosition(
+            seq=replay_position.seq,
+            incarnation=replay_position.incarnation,
+            checkpoint=conflicting_checkpoint,
+            byte_offset=replay_position.byte_offset,
+        )
+        conflicting_cursor = format_cursor(positions)
+        server.hub.publish(
+            {
+                "schema": "hark.dashboard.v1",
+                "type": "event",
+                "source": "watch",
+                "cursor": conflicting_cursor,
+                "payload": {
+                    **HEP_BLOCKED,
+                    "event_id": "rewrite-new-2",
+                    "n": "replacement",
+                },
+            }
+        )
+
+        delivered_cursor, delivered = _read_sse_event(response)
+        assert delivered_cursor == conflicting_cursor
+        assert delivered["payload"]["event_id"] == "rewrite-new-2"
+    finally:
+        if connection is not None:
+            connection.close()
+        server.shutdown()
+
+
 def test_rest_to_stream_handoff_captures_rotation_after_snapshot(
     state, tmp_path, monkeypatch
 ):
@@ -875,6 +933,9 @@ def test_sse_replay_uses_one_streaming_forward_scan(state, monkeypatch):
         server = type("Server", (), {"state": state})()
         delivered = []
 
+        def __init__(self):
+            self._delivered_witnesses = dashboard_server.DeliveredDurableWitnesses()
+
         def _sse_write(self, envelope):
             self.delivered.append(envelope)
 
@@ -895,7 +956,7 @@ def test_sse_replay_uses_one_streaming_forward_scan(state, monkeypatch):
 
 def test_sse_replay_disconnect_stops_materializing_unseen_suffix(state, monkeypatch):
     import hark.dashboard.tailer as dashboard_tailer
-    from hark.dashboard.server import DashboardHandler
+    from hark.dashboard.server import DashboardHandler, DeliveredDurableWitnesses
 
     _write_jsonl(
         state / "watch.jsonl",
@@ -915,6 +976,9 @@ def test_sse_replay_disconnect_stops_materializing_unseen_suffix(state, monkeypa
         server = type("Server", (), {"state": state})()
         delivered = 0
 
+        def __init__(self):
+            self._delivered_witnesses = DeliveredDurableWitnesses()
+
         def _sse_write(self, envelope):
             self.delivered += 1
             if self.delivered == 2:
@@ -928,44 +992,120 @@ def test_sse_replay_disconnect_stops_materializing_unseen_suffix(state, monkeypa
     assert materialized == 2
 
 
-def test_overflow_drain_discards_only_cursor_covered_envelopes():
-    from hark.dashboard.server import _durable_envelope_covered
+def test_failed_sse_write_is_not_recorded_as_delivered(state):
+    from hark.dashboard.server import DashboardHandler, DeliveredDurableWitnesses
+
+    _write_jsonl(
+        state / "watch.jsonl",
+        {**HEP_BLOCKED, "event_id": "failed-write", "n": 1},
+    )
+
+    class FakeHandler:
+        server = type("Server", (), {"state": state})()
+
+        def __init__(self):
+            self._delivered_witnesses = DeliveredDurableWitnesses()
+
+        def _sse_write(self, envelope):
+            raise BrokenPipeError
+
+    handler = FakeHandler()
+    with pytest.raises(BrokenPipeError):
+        DashboardHandler._sse_replay(handler, "watch:0", {"watch"})
+
+    assert len(handler._delivered_witnesses) == 0
+
+
+def test_filtered_replay_sources_are_not_witnessed(state):
+    from hark.dashboard.server import DashboardHandler, DeliveredDurableWitnesses
+
+    _write_jsonl(
+        state / "watch.jsonl",
+        {**HEP_BLOCKED, "event_id": "wanted", "n": 1},
+    )
+    _write_jsonl(
+        state / "ambient.jsonl",
+        {"kind": "ambient.prompt", "event_id": "filtered", "n": 2},
+    )
+
+    class FakeHandler:
+        server = type("Server", (), {"state": state})()
+
+        def __init__(self):
+            self._delivered_witnesses = DeliveredDurableWitnesses()
+            self.delivered = []
+
+        def _sse_write(self, envelope):
+            self.delivered.append(envelope)
+
+    handler = FakeHandler()
+    DashboardHandler._sse_replay(
+        handler,
+        "watch:0,ambient:0",
+        {"watch"},
+    )
+
+    assert [envelope["source"] for envelope in handler.delivered] == ["watch"]
+    assert len(handler._delivered_witnesses) == 1
+    assert handler._delivered_witnesses.covers(handler.delivered[0])
+
+
+def test_delivered_witness_covers_only_exact_full_proof():
+    from hark.dashboard.server import DeliveredDurableWitnesses
 
     def envelope(source, cursor, payload=None):
         return {"source": source, "cursor": cursor, "payload": payload or {}}
 
-    highwater = "watch:4,bound:2,delivery:3"
-    assert _durable_envelope_covered(envelope("watch", "watch:4"), highwater)
-    assert not _durable_envelope_covered(envelope("watch", "watch:5"), highwater)
-    assert _durable_envelope_covered(
-        envelope("delivery", "bound:2", {"type": "bound"}), highwater
-    )
-    assert not _durable_envelope_covered(
-        envelope("delivery", "delivery:4", {"type": "outcome"}), highwater
-    )
-    assert not _durable_envelope_covered(envelope("serve", "serve:1"), highwater)
+    witnesses = DeliveredDurableWitnesses()
+    assert not witnesses.covers(envelope("watch", "watch:4"))
+    assert not witnesses.covers(envelope("serve", "serve:1"))
 
     incarnation_a = "a" * 32
     incarnation_b = "b" * 32
     checkpoint = "c" * 32
-    assert not _durable_envelope_covered(
-        envelope(
-            "watch",
-            f"watch:1@{incarnation_a}~{checkpoint}~10",
-        ),
-        f"watch:4@{incarnation_b}~{checkpoint}~40",
+    other_checkpoint = "d" * 32
+    proved_one = f"watch:1@{incarnation_a}~{checkpoint}~10"
+    witnesses.add(envelope("watch", proved_one))
+    assert witnesses.covers(envelope("watch", proved_one))
+    assert not witnesses.covers(
+        envelope("watch", f"watch:1@{incarnation_a}~{other_checkpoint}~10")
     )
-    assert not _durable_envelope_covered(
-        envelope(
-            "watch",
-            f"watch:1@{incarnation_a}~{checkpoint}~10",
-        ),
-        "watch:4",
+    assert not witnesses.covers(
+        envelope("watch", f"watch:1@{incarnation_a}~{checkpoint}~11")
     )
-    assert not _durable_envelope_covered(
-        envelope("watch", "watch:1"),
-        f"watch:4@{incarnation_a}~{checkpoint}~40",
+    assert not witnesses.covers(
+        envelope("watch", f"watch:2@{incarnation_a}~{other_checkpoint}~20")
     )
+    assert not witnesses.covers(
+        envelope("watch", f"watch:1@{incarnation_a}~{checkpoint}")
+    )
+    witnesses_other = DeliveredDurableWitnesses()
+    witnesses_other.add(envelope("watch", f"watch:1@{incarnation_b}~{checkpoint}~10"))
+    assert not witnesses_other.covers(envelope("watch", proved_one))
+
+
+def test_delivered_witness_eviction_is_duplicate_safe(monkeypatch):
+    import hark.dashboard.server as dashboard_server
+
+    monkeypatch.setattr(dashboard_server, "SUBSCRIBER_QUEUE_SIZE", 1)
+    witnesses = dashboard_server.DeliveredDurableWitnesses()
+    incarnation = "a" * 32
+
+    def envelope(seq):
+        return {
+            "source": "watch",
+            "cursor": f"watch:{seq}@{incarnation}~{str(seq) * 32}~{seq * 10}",
+            "payload": {},
+        }
+
+    first, second, third = envelope(1), envelope(2), envelope(3)
+    witnesses.add(first)
+    witnesses.add(second)
+    witnesses.add(third)
+
+    assert not witnesses.covers(first)  # eviction delivers; it never loses data
+    assert witnesses.covers(second)
+    assert witnesses.covers(third)
 
 
 def test_overflow_fence_rejects_serve_ahead_of_dropped_durable(monkeypatch):
@@ -990,7 +1130,11 @@ def test_overflow_fence_rejects_serve_ahead_of_dropped_durable(monkeypatch):
 
 
 def test_overflow_retry_carries_serve_retained_before_late_overflow():
-    from hark.dashboard.server import DashboardHandler, SubscriberQueue
+    from hark.dashboard.server import (
+        DashboardHandler,
+        DeliveredDurableWitnesses,
+        SubscriberQueue,
+    )
 
     serve = {
         "schema": "hark.dashboard.v1",
@@ -1003,7 +1147,7 @@ def test_overflow_retry_carries_serve_retained_before_late_overflow():
         "schema": "hark.dashboard.v1",
         "type": "event",
         "source": "watch",
-        "cursor": "watch:1",
+        "cursor": f"watch:1@{'a' * 32}~{'b' * 32}~10",
         "payload": {"kind": "agent.blocked"},
     }
 
@@ -1024,9 +1168,13 @@ def test_overflow_retry_carries_serve_retained_before_late_overflow():
     class FakeHandler:
         replay_calls = 0
 
+        def __init__(self):
+            self._delivered_witnesses = DeliveredDurableWitnesses()
+
         def _sse_replay(self, since, wanted):
             self.replay_calls += 1
-            return "watch:1"
+            self._delivered_witnesses.add(covered)
+            return covered["cursor"]
 
     subscriber = LateOverflowQueue()
     subscriber.put_nowait(serve)
@@ -1038,7 +1186,7 @@ def test_overflow_retry_carries_serve_retained_before_late_overflow():
         handler, subscriber, "watch:0", None
     )
 
-    assert cursor == "watch:1"
+    assert cursor == covered["cursor"]
     assert handler.replay_calls == 2
     assert retained == [serve]
 
@@ -1063,6 +1211,9 @@ def test_overflow_recovery_preserves_queue_order_and_bounds_retained(monkeypatch
     }
 
     class FakeHandler:
+        def __init__(self):
+            self._delivered_witnesses = dashboard_server.DeliveredDurableWitnesses()
+
         def _sse_replay(self, since, wanted):
             return "watch:1"
 
@@ -1114,6 +1265,9 @@ def test_overflow_recovery_bounds_non_durable_carry_across_retries(monkeypatch):
 
     class FakeHandler:
         replay_calls = 0
+
+        def __init__(self):
+            self._delivered_witnesses = dashboard_server.DeliveredDurableWitnesses()
 
         def _sse_replay(self, since, wanted):
             self.replay_calls += 1

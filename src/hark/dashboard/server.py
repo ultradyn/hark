@@ -35,6 +35,7 @@ from hark.dashboard.tailer import (
 from hark.events import utc_now_iso
 from hark.paths import state_dir
 from hark.state_feed import (
+    CursorPosition,
     FeedRecord,
     canonicalize_cursor,
     parse_cursor_positions,
@@ -55,6 +56,7 @@ _DURABLE_CURSOR_KEYS = {
     "system": "system",
     "usage": "usage",
 }
+_DurablePosition = tuple[str, int, str, str, int]
 
 
 def _durable_cursor_key(envelope: dict[str, Any]) -> str | None:
@@ -66,28 +68,55 @@ def _durable_cursor_key(envelope: dict[str, Any]) -> str | None:
     return _DURABLE_CURSOR_KEYS.get(source)
 
 
-def _durable_envelope_covered(envelope: dict[str, Any], highwater: str) -> bool:
-    """Whether a queued durable envelope is proven included in *highwater*."""
+def _proved_position(
+    cursor_key: str, position: CursorPosition
+) -> _DurablePosition | None:
+    if (
+        position.incarnation is None
+        or position.checkpoint is None
+        or position.byte_offset is None
+    ):
+        return None
+    return (
+        cursor_key,
+        position.seq,
+        position.incarnation,
+        position.checkpoint,
+        position.byte_offset,
+    )
+
+
+def _durable_position(envelope: dict[str, Any]) -> _DurablePosition | None:
     cursor_key = _durable_cursor_key(envelope)
     if cursor_key is None:
-        return False
-    envelope_position = parse_cursor_positions(envelope.get("cursor")).get(cursor_key)
-    highwater_position = parse_cursor_positions(highwater).get(cursor_key)
-    if envelope_position is None or highwater_position is None:
-        return False
-    if (envelope_position.incarnation is None) != (
-        highwater_position.incarnation is None
-    ):
-        # A legacy sequence alone cannot prove that it names the same file
-        # incarnation as a checkpointed live position (or vice versa).
-        return False
-    if (
-        envelope_position.incarnation is not None
-        and highwater_position.incarnation is not None
-        and envelope_position.incarnation != highwater_position.incarnation
-    ):
-        return False
-    return envelope_position.seq <= highwater_position.seq
+        return None
+    position = parse_cursor_positions(envelope.get("cursor")).get(cursor_key)
+    return _proved_position(cursor_key, position) if position is not None else None
+
+
+class DeliveredDurableWitnesses:
+    """Bounded exact positions successfully written to one SSE client."""
+
+    def __init__(self) -> None:
+        self._limit = max(1, SUBSCRIBER_QUEUE_SIZE * 2)
+        self._order: deque[_DurablePosition] = deque()
+        self._seen: set[_DurablePosition] = set()
+
+    def add(self, envelope: dict[str, Any]) -> None:
+        position = _durable_position(envelope)
+        if position is None or position in self._seen:
+            return
+        while len(self._order) >= self._limit:
+            self._seen.remove(self._order.popleft())
+        self._order.append(position)
+        self._seen.add(position)
+
+    def covers(self, envelope: dict[str, Any]) -> bool:
+        position = _durable_position(envelope)
+        return position is not None and position in self._seen
+
+    def __len__(self) -> int:
+        return len(self._seen)
 
 
 class SubscriberQueue(queue.Queue):
@@ -630,15 +659,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
         records = iter_replay_records(self.server.state, since=since, sources=wanted)
         with closing(records):
             for record, record_cursor in records_with_cursors(records, since):
-                self._sse_write(
-                    {
-                        "schema": SCHEMA,
-                        "type": "event",
-                        "source": record.source,
-                        "cursor": record_cursor,
-                        "payload": record.payload,
-                    }
-                )
+                envelope = {
+                    "schema": SCHEMA,
+                    "type": "event",
+                    "source": record.source,
+                    "cursor": record_cursor,
+                    "payload": record.payload,
+                }
+                self._sse_write(envelope)
+                self._delivered_witnesses.add(envelope)
                 stream_cursor = record_cursor
         return stream_cursor
 
@@ -652,11 +681,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         The queue remains subscribed throughout.  Clearing the flag before the
         durable scan means any publication racing the scan sets it again and
-        forces another pass.  Once a pass completes without overflow, every
-        queued durable items are discarded only when their own cursor key is
-        proven covered by the scan high-water.  Anything newer (including a
-        publish after the snapshot but before the drain) and non-durable serve
-        events are retained for delivery.
+        forces another pass. Once a pass completes without overflow, queued
+        durable items are discarded only when their exact proved positions
+        were successfully written during replay. Newer, rewritten, evicted,
+        legacy, and non-durable envelopes are retained for delivery.
         """
         carried: deque[dict[str, Any]] = deque(maxlen=SUBSCRIBER_QUEUE_SIZE)
         while True:
@@ -682,7 +710,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     # later queue removal observes another overflow.
                     non_durable.append(envelope)
                     retained.append(envelope)
-                elif not _durable_envelope_covered(envelope, stream_cursor):
+                elif not self._delivered_witnesses.covers(envelope):
                     # Preserve queue order relative to non-durable envelopes.
                     # If this pass retries, the next disk replay recovers it.
                     retained.append(envelope)
@@ -716,7 +744,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if _durable_cursor_key(envelope) is None:
                 non_durable.append(envelope)
                 retained.append(envelope)
-            elif not _durable_envelope_covered(envelope, stream_cursor):
+            elif not self._delivered_witnesses.covers(envelope):
                 retained.append(envelope)
         # If publication overflowed during the drain, disk recovery will emit
         # every durable item again.  Only the non-durable items need carrying.
@@ -734,6 +762,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         pump = self.server.pump
         q, subscribed_cursor = pump.subscribe_with_cursor()
+        self._delivered_witnesses = DeliveredDurableWitnesses()
 
         # body ends when the connection does (SSE); no keep-alive reuse
         self.close_connection = True
@@ -792,12 +821,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         or envelope["source"] in wanted
                         or envelope["type"] == "hello"
                     ):
-                        durable = _durable_cursor_key(envelope) is not None
-                        covered = durable and _durable_envelope_covered(
-                            envelope, stream_cursor
-                        )
+                        covered = self._delivered_witnesses.covers(envelope)
                         if not covered:
                             self._sse_write(envelope)
+                            self._delivered_witnesses.add(envelope)
                             # Only an envelope actually delivered to the
                             # client may advance its reconnect position.
                             stream_cursor = envelope["cursor"]

@@ -70,10 +70,25 @@ def register_active_listen(
     if streaming_ack_min_quiet_s is not None:
         payload["streaming_ack_min_quiet_s"] = float(streaming_ack_min_quiet_s)
     path = active_path()
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    # Fresh capture: clear prior voice activity so quiet is measured from start.
-    clear_voice_activity()
-    return path
+    try:
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        # Fresh capture: clear prior voice activity so quiet is measured from start.
+        clear_voice_activity()
+        return path
+    except BaseException:
+        # Publication succeeded but ownership was not returned to the caller.
+        # Remove only this exact marker; a concurrent newer listen wins.
+        try:
+            current = json.loads(path.read_text(encoding="utf-8"))
+            same_owner = all(
+                current.get(field) == payload[field]
+                for field in ("stream_id", "pid", "started_at")
+            )
+            if same_owner:
+                path.unlink(missing_ok=True)
+        except BaseException:
+            pass
+        raise
 
 
 def clear_active_listen(stream_id: str | None = None) -> None:

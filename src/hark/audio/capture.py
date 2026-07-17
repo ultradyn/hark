@@ -62,6 +62,8 @@ class _CaptureSignalState:
         self._signum: int | None = None
         self._reason: str | None = None
         self._wake_signal_reason: str | None = None
+        self._interruption_surfaced = False
+        self._interruption_deferred = False
         self._attempts = 0
         self._cleanup_depth = 0
 
@@ -116,17 +118,40 @@ class _CaptureSignalState:
             self._wake_signal_reason = None
             return reason
 
+    def _interruption_locked(self) -> KeyboardInterrupt | None:
+        if not self._cancelled:
+            return None
+        if self._reason is not None:
+            return CaptureCancelled(self._reason)
+        if self._signum is None:
+            return KeyboardInterrupt("capture cancelled")
+        return CaptureInterrupted(self._signum)
+
     def interruption(self) -> KeyboardInterrupt | None:
         with self._lock:
-            if not self._cancelled:
-                return None
-            signum = self._signum
-            reason = self._reason
-        if reason is not None:
-            return CaptureCancelled(reason)
-        if signum is None:
-            return KeyboardInterrupt("capture cancelled")
-        return CaptureInterrupted(signum)
+            return self._interruption_locked()
+
+    def take_interruption(self) -> KeyboardInterrupt | None:
+        """Mark the pending interruption surfaced and return its exception."""
+        with self._lock:
+            interruption = self._interruption_locked()
+            if interruption is not None:
+                self._interruption_surfaced = True
+            return interruption
+
+    def interruption_surfaced(self) -> bool:
+        with self._lock:
+            return self._interruption_surfaced
+
+    def defer_interruption(self) -> None:
+        """Remember that a signal handler suppressed cancellation for cleanup."""
+        with self._lock:
+            if not self._interruption_surfaced:
+                self._interruption_deferred = True
+
+    def interruption_deferred(self) -> bool:
+        with self._lock:
+            return self._interruption_deferred
 
     def begin_cleanup(self) -> None:
         with self._lock:
@@ -244,7 +269,17 @@ class _ParentLifetimeGuard:
                     fallback.append(identity)
                     continue
                 try:
-                    pidfds.append(pidfd_open(identity[0], 0))
+                    pidfd = pidfd_open(identity[0], 0)
+                    pidfds.append(pidfd)
+                    if identity[1] is not None:
+                        try:
+                            _parent, opened_start = _proc_parent_and_start(identity[0])
+                        except OSError:
+                            parent_gone = True
+                            break
+                        if opened_start != identity[1]:
+                            parent_gone = True
+                            break
                 except (FileNotFoundError, ProcessLookupError):
                     parent_gone = True
                     break
@@ -500,7 +535,7 @@ def raise_if_capture_cancelled(
 ) -> None:
     """Raise cancellation from an explicit attempt or the current scope."""
     owner = state if state is not None else _current_capture_state()
-    interruption = owner.interruption() if owner is not None else None
+    interruption = owner.take_interruption() if owner is not None else None
     if interruption is not None:
         raise interruption
 
@@ -559,7 +594,6 @@ def cancellation_cleanup(
     if owner is None:
         yield
         return
-    already_cancelled = owner.interruption() is not None
     owner.begin_cleanup()
     try:
         try:
@@ -569,7 +603,11 @@ def cancellation_cleanup(
                 raise
     finally:
         owner.finish_cleanup()
-    if primary is None and not already_cancelled:
+    if (
+        primary is None
+        and owner.interruption_deferred()
+        and not owner.interruption_surfaced()
+    ):
         raise_if_capture_cancelled(owner)
 
 
@@ -702,16 +740,25 @@ def capture_interrupt_signals() -> Iterator[None]:
         wake_reason = state.consume_wake_signal(signum)
         if wake_reason is not None:
             cancel_active_capture(reason=wake_reason)
-            if not state.cleaning_up():
-                raise CaptureCancelled(wake_reason)
-            return
+            if state.cleaning_up():
+                state.defer_interruption()
+                return
+            interruption = state.take_interruption()
+            assert interruption is not None
+            raise interruption
         first = state.request(signum)
         cancel_active_capture(signum)
-        if not first or state.cleaning_up():
-            # Repeated signals reinforce stream abort but cannot interrupt
-            # teardown, replace the first cause, or strand cleanup state.
+        if state.cleaning_up():
+            # Finish teardown, then surface a first cancellation that the
+            # signal handler could not safely raise in-place.
+            state.defer_interruption()
             return
-        raise CaptureInterrupted(signum)
+        if not first:
+            # Repeated signals reinforce stream abort but never replace cause.
+            return
+        interruption = state.take_interruption()
+        assert interruption is not None
+        raise interruption
 
     primary: BaseException | None = None
     parent_guard = _ParentLifetimeGuard(state)

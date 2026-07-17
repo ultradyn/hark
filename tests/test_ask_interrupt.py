@@ -1009,6 +1009,95 @@ def test_first_signal_during_scope_teardown_finishes_state_cleanup(monkeypatch):
     assert signal.getsignal(signal.SIGTERM) is old_sigterm
 
 
+def test_unsurfaced_parent_cancel_during_cleanup_raises_after_cleanup(monkeypatch):
+    installed: dict[int, object] = {}
+
+    def capture_handler(signum, handler):
+        installed[signum] = handler
+        return None
+
+    monkeypatch.setattr(capture_mod.signal, "signal", capture_handler)
+
+    with pytest.raises(capture_mod.CaptureCancelled) as caught:
+        with capture_mod.capture_interrupt_signals():
+            state = capture_mod._capture_signal_state
+            assert state is not None
+            assert state.prepare_wake_signal("orchestrator_disappeared") is True
+            with capture_mod.cancellation_cleanup(state):
+                handler = installed[signal.SIGTERM]
+                assert callable(handler)
+                handler(signal.SIGTERM, None)
+
+    assert caught.value.reason == "orchestrator_disappeared"
+
+
+def test_active_listen_registration_rolls_back_on_interrupt(monkeypatch, tmp_path):
+    import hark.listen_control as listen_control
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+
+    def interrupt_after_publication() -> None:
+        os.kill(os.getpid(), signal.SIGINT)
+
+    monkeypatch.setattr(
+        listen_control,
+        "clear_voice_activity",
+        interrupt_after_publication,
+    )
+
+    with pytest.raises(capture_mod.CaptureInterrupted):
+        with capture_mod.capture_interrupt_signals():
+            listen_control.register_active_listen("publication-race", mode="silence")
+
+    assert listen_control.active_path().exists() is False
+
+
+def test_parent_guard_rejects_reused_ancestor_pid(monkeypatch):
+    read_fd, write_fd = os.pipe()
+    state = capture_mod._CaptureSignalState()
+    cancels: list[str | None] = []
+    kills: list[tuple[int, int]] = []
+
+    monkeypatch.setattr(
+        capture_mod,
+        "_ancestor_identities",
+        lambda: ((424242, "original-start"),),
+    )
+    monkeypatch.setattr(capture_mod.os, "pidfd_open", lambda _pid, _flags: read_fd)
+    monkeypatch.setattr(
+        capture_mod,
+        "_proc_parent_and_start",
+        lambda _pid: (1, "reused-start"),
+    )
+    monkeypatch.setattr(
+        capture_mod.select,
+        "select",
+        lambda *_args, **_kwargs: pytest.fail("guard watched a reused PID"),
+    )
+    monkeypatch.setattr(
+        capture_mod,
+        "cancel_active_capture",
+        lambda *_args, reason=None, **_kwargs: cancels.append(reason) or True,
+    )
+    monkeypatch.setattr(
+        capture_mod.os,
+        "kill",
+        lambda pid, signum: kills.append((pid, signum)),
+    )
+
+    guard = capture_mod._ParentLifetimeGuard(state)
+    try:
+        guard._watch()
+    finally:
+        os.close(write_fd)
+
+    interruption = state.interruption()
+    assert isinstance(interruption, capture_mod.CaptureCancelled)
+    assert interruption.reason == "orchestrator_disappeared"
+    assert cancels == ["orchestrator_disappeared"]
+    assert kills == [(os.getpid(), signal.SIGTERM)]
+
+
 def test_ambient_pause_cleanup_does_not_replace_primary(monkeypatch):
     import hark.mic_coord as mic_coord
 

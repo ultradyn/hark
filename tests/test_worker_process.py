@@ -378,34 +378,30 @@ def kill_child(child: subprocess.Popen[bytes]) -> None:
     child.wait(timeout=2)
 
 
-def test_legacy_worker_is_migrated_with_role_and_start_time(tmp_path: Path):
+def test_bare_pid_of_live_scoped_worker_is_retained_without_migration(
+    tmp_path: Path,
+):
     child = spawn_process(tmp_path, role="ambient")
     path = tmp_path / "mode-a.pids"
+    original = f"pid={child.pid}\n"
     try:
-        path.write_text(f"pid={child.pid}\n", encoding="utf-8")
-        records = worker_process.collect_worker_records(path)
-        assert [(record.pid, record.role) for record in records] == [
-            (child.pid, "ambient")
-        ]
-        stored = json.loads(path.read_text(encoding="utf-8"))
-        assert stored == {
-            "boot_id": records[0].boot_id,
-            "config": records[0].config,
-            "legacy": False,
-            "pid": child.pid,
-            "pidfile": str(path.resolve()),
-            "provisional": False,
-            "role": "ambient",
-            "spawn_token": None,
-            "start_time": records[0].start_time,
-            "version": 1,
-        }
+        path.write_text(original, encoding="utf-8")
+
+        with pytest.raises(
+            worker_process.WorkerStateUnavailableError,
+            match="no historical start time",
+        ) as caught:
+            worker_process.collect_worker_records(path)
+
+        assert caught.value.pids == (child.pid,)
+        assert child.poll() is None
+        assert path.read_text(encoding="utf-8") == original
     finally:
         kill_child(child)
 
 
-def test_actual_pre_b127_worker_without_markers_is_migrated(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_structured_pre_scope_markerless_worker_is_migrated_from_historical_lifetime(
+    tmp_path: Path,
 ):
     shim = tmp_path / "shim" / "hark"
     shim.mkdir(parents=True)
@@ -424,15 +420,30 @@ def test_actual_pre_b127_worker_without_markers_is_migrated(
     )
     path = tmp_path / "mode-a.pids"
     try:
-        path.write_text(f"{child.pid}\n", encoding="utf-8")
+        live = None
+        deadline = time.monotonic() + 2.0
+        while live is None and time.monotonic() < deadline:
+            live = worker_process.inspect_worker(
+                child.pid,
+                expected_role="ambient",
+                expected_pidfile=path,
+                require_markers=False,
+            )
+            if live is None:
+                time.sleep(0.01)
+        assert live is not None
+        historical = worker_process.WorkerRecord(
+            pid=live.pid, start_time=live.start_time, role=live.role
+        )
+        path.write_text(historical.to_json() + "\n", encoding="utf-8")
+
         records = worker_process.collect_worker_records(path)
-        assert [
-            (record.pid, record.role, record.provisional) for record in records
-        ] == [(child.pid, "ambient", False)]
-        assert records[0].boot_id == worker_process._current_boot_id()
-        assert records[0].spawn_token is None
+
+        assert [(record.pid, record.role) for record in records] == [
+            (child.pid, "ambient")
+        ]
         assert records[0].legacy is True
-        assert worker_process.collect_worker_records(path) == records
+        assert records[0].pidfile == str(path.resolve())
     finally:
         kill_child(child)
 
@@ -781,6 +792,117 @@ def test_signal_reverifies_after_opening_pidfd(
         assert sent == []
     finally:
         os.close(write_fd)
+
+
+def test_signal_worker_records_treats_identity_mismatch_as_benign(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    record = worker_process.WorkerRecord(pid=4321, start_time="old", role="watch")
+    read_fd, write_fd = os.pipe()
+    sent: list[int] = []
+    monkeypatch.setattr(
+        worker_process.os, "pidfd_open", lambda _pid: read_fd, raising=False
+    )
+    monkeypatch.setattr(worker_process, "record_matches_process", lambda _record: False)
+    monkeypatch.setattr(
+        worker_process.signal,
+        "pidfd_send_signal",
+        lambda _fd, sig: sent.append(sig),
+        raising=False,
+    )
+    try:
+        result = worker_process.signal_worker_records([record], signal.SIGTERM)
+    finally:
+        os.close(write_fd)
+
+    assert result.errors == ()
+    assert result.sent_records == ()
+    assert sent == []
+
+
+def test_signal_worker_records_continues_after_procfs_verification_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    first = worker_process.WorkerRecord(pid=41001, start_time="first", role="watch")
+    second = worker_process.WorkerRecord(
+        pid=41002, start_time="second", role="ambient"
+    )
+    attempted: list[int] = []
+    sent: list[int] = []
+    write_fds: list[int] = []
+
+    def open_pidfd(_pid: int) -> int:
+        read_fd, write_fd = os.pipe()
+        write_fds.append(write_fd)
+        return read_fd
+
+    def matches(record: worker_process.WorkerRecord) -> bool:
+        attempted.append(record.pid)
+        if record is first:
+            raise worker_process._ProcfsUnavailableError("procfs denied")
+        return True
+
+    monkeypatch.setattr(worker_process.os, "pidfd_open", open_pidfd, raising=False)
+    monkeypatch.setattr(worker_process, "record_matches_process", matches)
+    monkeypatch.setattr(
+        worker_process.signal,
+        "pidfd_send_signal",
+        lambda _fd, _sig: sent.append(second.pid),
+        raising=False,
+    )
+    try:
+        result = worker_process.signal_worker_records(
+            [first, second], signal.SIGTERM
+        )
+    finally:
+        for descriptor in write_fds:
+            os.close(descriptor)
+
+    assert attempted == [first.pid, second.pid]
+    assert sent == [second.pid]
+    assert result.sent_records == (second,)
+    assert len(result.errors) == 1
+    assert result.errors[0].record == first
+    assert "identity verification" in (result.errors[0].error or "")
+    assert "procfs denied" in (result.errors[0].error or "")
+
+
+def test_signal_worker_reports_pidfd_close_error_after_signal(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    record = worker_process.WorkerRecord(
+        pid=41003, start_time="verified", role="watch"
+    )
+    read_fd, write_fd = os.pipe()
+    sent: list[int] = []
+    real_close = os.close
+
+    monkeypatch.setattr(
+        worker_process.os, "pidfd_open", lambda _pid: read_fd, raising=False
+    )
+    monkeypatch.setattr(worker_process, "record_matches_process", lambda _r: True)
+    monkeypatch.setattr(
+        worker_process.signal,
+        "pidfd_send_signal",
+        lambda _fd, sig: sent.append(sig),
+        raising=False,
+    )
+
+    def fail_close(descriptor: int) -> None:
+        real_close(descriptor)
+        raise OSError("close denied")
+
+    monkeypatch.setattr(worker_process.os, "close", fail_close)
+    try:
+        result = worker_process.signal_worker_records([record], signal.SIGTERM)
+    finally:
+        real_close(write_fd)
+
+    assert sent == [signal.SIGTERM]
+    assert result.sent_records == (record,)
+    assert len(result.errors) == 1
+    assert "pidfd close failed" in (result.errors[0].error or "")
+    assert "close denied" in (result.errors[0].error or "")
 
 
 def test_signal_records_cli_does_not_signal_reused_spawn_identity(

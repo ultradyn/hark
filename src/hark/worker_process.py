@@ -3,8 +3,8 @@
 ``mode-a.pids`` used to contain bare process IDs.  A PID only identifies a
 slot in the process table and may be reused, so it is not safe authority for a
 later signal.  This module owns the versioned JSON-lines replacement and keeps
-legacy files compatible by migrating only processes whose live command line is
-recognisably a Hark ambient or watch worker.
+legacy files compatible by removing dead or clearly unrelated bare entries while
+failing closed for live Hark-shaped occupants whose historical lifetime is unknown.
 """
 
 from __future__ import annotations
@@ -36,7 +36,11 @@ WORKER_SPAWN_TOKEN_ENV = "HARK_WORKER_SPAWN_TOKEN"
 
 
 class WorkerStateUnavailableError(RuntimeError):
-    """The kernel could not prove whether recorded ownership is still live."""
+    """Recorded ownership cannot be resolved without risking another process."""
+
+    def __init__(self, message: str, *, pids: Iterable[int] = ()) -> None:
+        self.pids = tuple(sorted(set(pids)))
+        super().__init__(message)
 
 
 class _ProcfsUnavailableError(OSError):
@@ -69,6 +73,49 @@ class WorkerSignalOutcome:
     record: WorkerRecord
     sent: bool = False
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkerSignalResult:
+    """Complete result of signalling a batch without abandoning later records."""
+
+    signal: int
+    outcomes: tuple[WorkerSignalOutcome, ...]
+
+    @property
+    def errors(self) -> tuple[WorkerSignalOutcome, ...]:
+        return tuple(outcome for outcome in self.outcomes if outcome.error is not None)
+
+    @property
+    def sent_records(self) -> tuple[WorkerRecord, ...]:
+        return tuple(outcome.record for outcome in self.outcomes if outcome.sent)
+
+    def raise_for_errors(self) -> None:
+        if self.errors:
+            raise WorkerSignalError([self])
+
+
+class WorkerSignalError(RuntimeError):
+    """One or more verified worker lifetimes could not be signalled."""
+
+    def __init__(self, results: Iterable[WorkerSignalResult]) -> None:
+        self.results = tuple(result for result in results if result.errors)
+        details: list[str] = []
+        for result in self.results:
+            try:
+                signal_name = signal.Signals(result.signal).name
+            except ValueError:
+                signal_name = str(result.signal)
+            details.extend(
+                f"{signal_name} pid {outcome.record.pid}: {outcome.error}"
+                for outcome in result.errors
+            )
+        super().__init__(
+            "failed to signal verified worker"
+            + ("s" if len(details) != 1 else "")
+            + ": "
+            + "; ".join(details)
+        )
 
 
 @dataclass
@@ -979,10 +1026,11 @@ def collect_worker_records(
 ) -> list[WorkerRecord]:
     """Load, validate, migrate, and optionally discover current workers.
 
-    Bare legacy PIDs are accepted only when their current process shape is a
-    Hark worker.  Malformed, dead, role-mismatched, or PID-reused entries are
-    omitted.  Rewriting removes those unsafe entries and upgrades valid legacy
-    entries to structured records.
+    Bare legacy PIDs never authorise signalling because they contain no
+    historical start time. Dead or clearly unrelated entries are omitted, but
+    a live Hark-shaped occupant makes ownership unavailable and leaves the raw
+    pidfile untouched. Structured pre-scope records may still be migrated after
+    their historical PID/start-time/role tuple is validated.
     """
     with worker_pidfile_lock(path, exclusive=rewrite):
         return _collect_worker_records_unlocked(
@@ -1065,7 +1113,8 @@ def _collect_worker_records_unlocked(
             except _ProcfsUnavailableError as exc:
                 raise WorkerStateUnavailableError(
                     f"cannot verify recorded worker pid {stored.pid}; "
-                    "retaining ownership state"
+                    "retaining ownership state",
+                    pids=[stored.pid],
                 ) from exc
             continue
         legacy_pid = _parse_legacy_pid(line)
@@ -1080,10 +1129,16 @@ def _collect_worker_records_unlocked(
             except _ProcfsUnavailableError as exc:
                 raise WorkerStateUnavailableError(
                     f"cannot verify legacy worker pid {legacy_pid}; "
-                    "retaining ownership state"
+                    "retaining ownership state",
+                    pids=[legacy_pid],
                 ) from exc
             if migrated is not None:
-                records[migrated.pid] = migrated
+                raise WorkerStateUnavailableError(
+                    f"legacy bare pid {legacy_pid} has no historical start time; "
+                    "refusing to signal its live Hark-shaped occupant and "
+                    "retaining ownership state",
+                    pids=[legacy_pid],
+                )
 
     if discover:
         for record in _discover_workers(path, expected_config_path):
@@ -1150,32 +1205,68 @@ def _signal_worker(
         if lifetime_only or record.provisional
         else record_matches_process
     )
+
+    def verify(stage: str) -> tuple[bool | None, str | None]:
+        try:
+            return matches(record), None
+        except Exception as exc:
+            return None, f"{stage} identity verification failed: {exc}"
+
     try:
         pidfd = _open_pidfd(record.pid)
     except ProcessLookupError:
         return WorkerSignalOutcome(record)
     except PidfdUnavailableError as exc:
-        if not matches(record):
+        matched, verify_error = verify("after pidfd unavailable")
+        if verify_error is not None:
+            return WorkerSignalOutcome(
+                record, error=f"pidfd unavailable: {exc}; {verify_error}"
+            )
+        if not matched:
             return WorkerSignalOutcome(record)
         return WorkerSignalOutcome(record, error=f"pidfd unavailable: {exc}")
-    except (OSError, ValueError) as exc:
-        if not matches(record):
+    except Exception as exc:
+        matched, verify_error = verify("after pidfd_open failure")
+        if verify_error is not None:
+            return WorkerSignalOutcome(
+                record, error=f"pidfd_open failed: {exc}; {verify_error}"
+            )
+        if not matched:
             return WorkerSignalOutcome(record)
         return WorkerSignalOutcome(record, error=f"pidfd_open failed: {exc}")
-    try:
-        if not matches(record):
-            return WorkerSignalOutcome(record)
+
+    matched, verify_error = verify("post-pidfd-open")
+    if verify_error is not None:
+        outcome = WorkerSignalOutcome(record, error=verify_error)
+    elif not matched:
+        outcome = WorkerSignalOutcome(record)
+    else:
         try:
             _send_pidfd_signal(pidfd, sig)
         except ProcessLookupError:
-            return WorkerSignalOutcome(record)
+            outcome = WorkerSignalOutcome(record)
         except PidfdUnavailableError as exc:
-            return WorkerSignalOutcome(record, error=f"pidfd unavailable: {exc}")
-        except (OSError, ValueError) as exc:
-            return WorkerSignalOutcome(record, error=f"pidfd_send_signal failed: {exc}")
-        return WorkerSignalOutcome(record, sent=True)
-    finally:
+            outcome = WorkerSignalOutcome(record, error=f"pidfd unavailable: {exc}")
+        except Exception as exc:
+            outcome = WorkerSignalOutcome(
+                record, error=f"pidfd_send_signal failed: {exc}"
+            )
+        else:
+            outcome = WorkerSignalOutcome(record, sent=True)
+
+    try:
         os.close(pidfd)
+    except Exception as exc:
+        close_error = f"pidfd close failed: {exc}"
+        outcome = replace(
+            outcome,
+            error=(
+                f"{outcome.error}; {close_error}"
+                if outcome.error is not None
+                else close_error
+            ),
+        )
+    return outcome
 
 
 def signal_worker(record: WorkerRecord, sig: int) -> bool:
@@ -1190,8 +1281,19 @@ def signal_worker_lifetime(record: WorkerRecord, sig: int) -> WorkerSignalOutcom
 
 def signal_worker_records(
     records: Iterable[WorkerRecord], sig: int
-) -> list[WorkerRecord]:
-    return [record for record in records if signal_worker(record, sig)]
+) -> WorkerSignalResult:
+    """Attempt every record and preserve benign misses separately from errors."""
+    outcomes: list[WorkerSignalOutcome] = []
+    for record in records:
+        try:
+            outcome = _signal_worker(record, sig)
+        except Exception as exc:
+            outcome = WorkerSignalOutcome(
+                record,
+                error=f"unexpected signal attempt failure: {type(exc).__name__}: {exc}",
+            )
+        outcomes.append(outcome)
+    return WorkerSignalResult(sig, tuple(outcomes))
 
 
 def _parse_signal(value: str) -> int:

@@ -32,6 +32,7 @@ from hark.lifecycle import set_shutdown_reason
 from hark.paths import state_dir
 from hark.worker_process import (
     WorkerRecord,
+    WorkerSignalError,
     WorkerStateUnavailableError,
     collect_worker_records,
     record_matches_lifetime,
@@ -132,7 +133,7 @@ def stop_workers(
         return {
             "ok": False,
             "error": str(exc),
-            "pids": [],
+            "pids": list(exc.pids),
             "message": "worker identity unavailable; retaining ownership state",
         }
     live = [record.pid for record in records]
@@ -146,7 +147,7 @@ def stop_workers(
         }
 
     set_shutdown_reason(reason)
-    signal_worker_records(records, signal.SIGTERM)
+    signal_results = [signal_worker_records(records, signal.SIGTERM)]
 
     deadline = time.monotonic() + max(0.0, float(timeout_s))
     while time.monotonic() < deadline:
@@ -159,6 +160,14 @@ def stop_workers(
                 busy.unlink(missing_ok=True)
             except OSError:
                 pass
+            if signal_results[0].errors:
+                return {
+                    "ok": False,
+                    "stopped": live,
+                    "killed": [],
+                    "error": str(WorkerSignalError(signal_results)),
+                    "pids": [],
+                }
             return {
                 "ok": True,
                 "stopped": live,
@@ -177,8 +186,9 @@ def stop_workers(
     still = [record.pid for record in still_records]
     killed: list[int] = []
     if still_records:
-        killed_records = signal_worker_records(still_records, signal.SIGKILL)
-        killed = [record.pid for record in killed_records]
+        kill_result = signal_worker_records(still_records, signal.SIGKILL)
+        signal_results.append(kill_result)
+        killed = [record.pid for record in kill_result.sent_records]
         # brief wait for reaping
         kill_deadline = time.monotonic() + 2.0
         while time.monotonic() < kill_deadline:
@@ -190,14 +200,20 @@ def stop_workers(
         still_records = _still_same_workers(still_records)
         still = [record.pid for record in still_records]
 
-    if still:
+    signal_failures = [result for result in signal_results if result.errors]
+    if still or signal_failures:
         collect_worker_records(path)
+        errors: list[str] = []
+        if signal_failures:
+            errors.append(str(WorkerSignalError(signal_failures)))
+        if still:
+            errors.append(f"still running after SIGKILL: {still}")
         return {
             "ok": False,
             "stopped": [p for p in live if p not in still],
             "killed": killed,
             "still_running": still,
-            "error": f"still running after SIGKILL: {still}",
+            "error": "; ".join(errors),
             "pids": still,
         }
 
@@ -245,7 +261,7 @@ def start_workers(
     try:
         existing_records = collect_worker_records(path)
     except WorkerStateUnavailableError as exc:
-        return {"ok": False, "error": str(exc), "pids": []}
+        return {"ok": False, "error": str(exc), "pids": list(exc.pids)}
     existing = [record.pid for record in existing_records]
     if existing_records and worker_records_match_request(
         existing_records,
@@ -325,22 +341,27 @@ def start_workers(
         attempt_records = [
             record for record in live_records if record.pid in attempt_pids
         ]
-        signal_worker_records(attempt_records, signal.SIGTERM)
+        signal_results = [signal_worker_records(attempt_records, signal.SIGTERM)]
         cleanup_deadline = time.monotonic() + 2.0
         remaining = _still_same_workers(attempt_records)
         while remaining and time.monotonic() < cleanup_deadline:
             time.sleep(0.02)
             remaining = _still_same_workers(remaining)
         if remaining:
-            signal_worker_records(remaining, signal.SIGKILL)
+            signal_results.append(signal_worker_records(remaining, signal.SIGKILL))
+        survivors = _still_same_workers(remaining)
         collect_worker_records(path)
+        errors = [
+            "workers did not settle into the exact requested role set "
+            "(check ambient.jsonl / watch.jsonl)"
+        ]
+        signal_failures = [result for result in signal_results if result.errors]
+        if signal_failures:
+            errors.append(str(WorkerSignalError(signal_failures)))
         return {
             "ok": False,
-            "error": (
-                "workers did not settle into the exact requested role set "
-                "(check ambient.jsonl / watch.jsonl)"
-            ),
-            "pids": [record.pid for record in _still_same_workers(remaining)],
+            "error": "; ".join(errors),
+            "pids": [record.pid for record in survivors],
             "started": started,
         }
 

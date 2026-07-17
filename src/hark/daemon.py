@@ -32,10 +32,13 @@ from hark.worker_process import (
     WORKER_ROLE_ENV,
     WORKER_SPAWN_TOKEN_ENV,
     WorkerRecord,
+    WorkerSignalError,
+    WorkerSignalResult,
     WorkerSpawnClaim,
     capture_worker_identity,
     collect_worker_records,
     create_worker_spawn_claim,
+    inspect_worker,
     open_process_handle,
     provisional_record_from_claim,
     read_worker_records,
@@ -61,6 +64,37 @@ MIC_LOCK_NAME = "mic.lock"
 
 class DaemonConflict(RuntimeError):
     """Another owner already holds always-on workers or harkd."""
+
+
+@dataclass(frozen=True)
+class WorkerCleanupIssue:
+    """One stage that prevented complete supervised-child cleanup."""
+
+    stage: str
+    role: str | None
+    pid: int | None
+    error: str
+
+
+class WorkerCleanupError(WorkerSignalError):
+    """Structured aggregate of signalling, authority, and survivor failures."""
+
+    def __init__(
+        self,
+        signal_results: Sequence[WorkerSignalResult],
+        issues: Sequence[WorkerCleanupIssue],
+    ) -> None:
+        self.results = tuple(result for result in signal_results if result.errors)
+        self.issues = tuple(issues)
+        details: list[str] = []
+        if self.results:
+            details.append(str(WorkerSignalError(self.results)))
+        details.extend(
+            f"{issue.stage} for {issue.role or 'unknown-role'}"
+            f" pid {issue.pid if issue.pid is not None else 'unknown'}: {issue.error}"
+            for issue in self.issues
+        )
+        RuntimeError.__init__(self, "worker cleanup failed: " + "; ".join(details))
 
 
 class WorkerSpawnError(OSError):
@@ -932,52 +966,183 @@ def _refresh_owned_worker_records(
     for role, proc in owned:
         if not proc.pid or proc.poll() is not None:
             continue
-        record = capture_worker_identity(proc.pid, role=role, pidfile=pid_path)
-        if record is None:
-            raise OSError(f"could not refresh {role} worker process identity")
-        ready = replace(record, provisional=False)
-        if not record_matches_process(ready):
+        record = inspect_worker(
+            proc.pid,
+            expected_role=role,
+            expected_pidfile=pid_path,
+        )
+        if record is None or not record_matches_process(record):
             raise OSError(f"could not verify refreshed {role} worker process identity")
-        records.append(ready)
+        records.append(record)
     replace_owned_worker_records(pid_path, owned_pids=owned_pids, records=records)
     return records
 
 
 def terminate_children(
-    children: Sequence[subprocess.Popen[Any]],
+    children: Sequence[
+        subprocess.Popen[Any] | tuple[str, subprocess.Popen[Any]]
+    ],
     *,
     root: Path | None = None,
     timeout_s: float = 10.0,
 ) -> None:
-    """Stop supervised children using their durable immutable identities."""
+    """Stop supervised children through marker identity plus a pinned pidfd."""
     root = root or state_dir()
     pid_path = mode_a_pids_path(root)
-    child_pids = {proc.pid for proc in children if proc.pid}
-    records = {
-        record.pid: record
-        for record in collect_worker_records(pid_path, discover=False)
-        if record.pid in child_pids
-    }
-    signal_worker_records(
-        [records[proc.pid] for proc in children if proc.pid in records],
-        signal.SIGTERM,
-    )
-    deadline = time.monotonic() + timeout_s
-    for proc in children:
+    issues: list[WorkerCleanupIssue] = []
+    supervised: list[tuple[str | None, subprocess.Popen[Any]]] = []
+    for child in children:
+        if isinstance(child, tuple):
+            role, proc = child
+        else:
+            role, proc = None, child
+        supervised.append((role, proc))
+
+    owned_pids: set[int] = set()
+    records: dict[int, WorkerRecord] = {}
+    roles: dict[int, str | None] = {}
+    for supplied_role, proc in supervised:
+        pid = getattr(proc, "pid", None)
+        if not isinstance(pid, int) or pid <= 0:
+            issues.append(
+                WorkerCleanupIssue(
+                    "identity recovery", supplied_role, None, "missing process ID"
+                )
+            )
+            continue
+        owned_pids.add(pid)
+        roles[pid] = supplied_role
+        try:
+            if proc.poll() is not None:
+                continue
+        except Exception as exc:
+            issues.append(
+                WorkerCleanupIssue("status check", supplied_role, pid, str(exc))
+            )
+        try:
+            record = inspect_worker(
+                pid,
+                expected_role=supplied_role,
+                expected_pidfile=pid_path,
+            )
+        except Exception as exc:
+            issues.append(
+                WorkerCleanupIssue("identity recovery", supplied_role, pid, str(exc))
+            )
+            continue
+        if record is None:
+            try:
+                exited = proc.poll() is not None
+            except Exception:
+                exited = False
+            if not exited:
+                issues.append(
+                    WorkerCleanupIssue(
+                        "identity recovery",
+                        supplied_role,
+                        pid,
+                        "exact marker-scoped identity unavailable",
+                    )
+                )
+            continue
+        roles[pid] = record.role
+        records[pid] = record
+
+    if records:
+        try:
+            replace_owned_worker_records(
+                pid_path, owned_pids=owned_pids, records=records.values()
+            )
+        except Exception as exc:
+            issues.append(
+                WorkerCleanupIssue("ownership publication", None, None, str(exc))
+            )
+
+    signal_results: list[WorkerSignalResult] = []
+    term_result = signal_worker_records(records.values(), signal.SIGTERM)
+    signal_results.append(term_result)
+
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    timed_out: list[subprocess.Popen[Any]] = []
+    for supplied_role, proc in supervised:
+        pid = getattr(proc, "pid", None)
+        if not isinstance(pid, int) or pid <= 0:
+            continue
         remaining = max(0.0, deadline - time.monotonic())
         try:
             proc.wait(timeout=remaining if remaining > 0 else 0.1)
         except subprocess.TimeoutExpired:
-            record = records.get(proc.pid)
-            if record is not None:
-                signal_worker_records([record], signal.SIGKILL)
-                try:
-                    proc.wait(timeout=1.0)
-                except (subprocess.TimeoutExpired, OSError):
-                    pass
-        except OSError:
+            timed_out.append(proc)
+        except Exception as exc:
+            issues.append(
+                WorkerCleanupIssue("TERM wait", roles.get(pid, supplied_role), pid, str(exc))
+            )
+            try:
+                if proc.poll() is None:
+                    timed_out.append(proc)
+            except Exception:
+                timed_out.append(proc)
+
+    kill_records = [
+        records[proc.pid]
+        for proc in timed_out
+        if isinstance(getattr(proc, "pid", None), int) and proc.pid in records
+    ]
+    if kill_records:
+        signal_results.append(signal_worker_records(kill_records, signal.SIGKILL))
+    for proc in timed_out:
+        pid = getattr(proc, "pid", None)
+        try:
+            proc.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
             pass
-    collect_worker_records(pid_path)
+        except Exception as exc:
+            issues.append(
+                WorkerCleanupIssue("KILL wait", roles.get(pid), pid, str(exc))
+            )
+
+    survivors: list[subprocess.Popen[Any]] = []
+    for supplied_role, proc in supervised:
+        pid = getattr(proc, "pid", None)
+        try:
+            running = proc.poll() is None
+        except Exception as exc:
+            running = True
+            issues.append(
+                WorkerCleanupIssue(
+                    "survivor status", roles.get(pid, supplied_role), pid, str(exc)
+                )
+            )
+        if running:
+            survivors.append(proc)
+            issues.append(
+                WorkerCleanupIssue(
+                    "surviving supervised worker",
+                    roles.get(pid, supplied_role),
+                    pid,
+                    "still running after TERM/KILL waits",
+                )
+            )
+
+    survivor_records = [
+        records[proc.pid]
+        for proc in survivors
+        if isinstance(getattr(proc, "pid", None), int) and proc.pid in records
+    ]
+    if survivor_records or not survivors:
+        try:
+            replace_owned_worker_records(
+                pid_path, owned_pids=owned_pids, records=survivor_records
+            )
+        except Exception as exc:
+            issues.append(
+                WorkerCleanupIssue(
+                    "survivor ownership publication", None, None, str(exc)
+                )
+            )
+
+    if issues or any(result.errors for result in signal_results):
+        raise WorkerCleanupError(signal_results, issues)
 
 
 def run_foreground(
@@ -994,6 +1159,8 @@ def run_foreground(
     children: list[subprocess.Popen[Any]] = []
     owned_children: list[tuple[str, subprocess.Popen[Any]]] = []
     shutting_down = {"flag": False}
+    pidfile_acquired = False
+    result = OK
 
     def _handle_stop(signum: int, _frame: object) -> None:
         shutting_down["flag"] = True
@@ -1002,75 +1169,106 @@ def run_foreground(
     prev_int = signal.signal(signal.SIGINT, _handle_stop)
 
     try:
-        acquire_harkd_pidfile(root, pid=os.getpid())
-    except DaemonConflict as exc:
-        print(f"harkd: {exc}", file=sys.stderr)
-        return ERROR
-
-    try:
-        if workers:
-            try:
-                children = spawn_mode_a_workers(
-                    session=session,
-                    do_watch=do_watch,
-                    do_ambient=do_ambient,
-                    root=root,
-                )
-            except OSError as exc:
-                print(f"harkd: failed to spawn workers: {exc}", file=sys.stderr)
-                release_harkd_pidfile(root, pid=os.getpid())
-                return ERROR
-            roles = (["watch"] if do_watch else []) + (
-                ["ambient"] if do_ambient else []
-            )
-            owned_children = list(zip(roles, children, strict=True))
-            print(
-                f"harkd: started with workers pids={[c.pid for c in children]} "
-                f"(state={root})",
-                flush=True,
-            )
+        try:
+            acquire_harkd_pidfile(root, pid=os.getpid())
+        except DaemonConflict as exc:
+            print(f"harkd: {exc}", file=sys.stderr)
+            result = ERROR
         else:
-            print(
-                f"harkd: running foreground supervisor pid={os.getpid()} "
-                f"(no workers; state={root}) — see docs/HARKD.md",
-                flush=True,
-            )
-
-        while not shutting_down["flag"]:
-            # If we own workers and they all exited, leave.
-            if children and all(c.poll() is not None for c in children):
-                print("harkd: all workers exited", flush=True)
-                break
-            # Refresh mode-a.pids with still-live children
-            if children:
+            pidfile_acquired = True
+            if workers:
                 try:
-                    _refresh_owned_worker_records(
-                        owned_children, pid_path=mode_a_pids_path(root)
+                    children = spawn_mode_a_workers(
+                        session=session,
+                        do_watch=do_watch,
+                        do_ambient=do_ambient,
+                        root=root,
                     )
                 except OSError as exc:
-                    print(
-                        f"harkd: failed to refresh worker identity: {exc}",
-                        file=sys.stderr,
+                    print(f"harkd: failed to spawn workers: {exc}", file=sys.stderr)
+                    result = ERROR
+                else:
+                    roles = (["watch"] if do_watch else []) + (
+                        ["ambient"] if do_ambient else []
                     )
-                    return ERROR
-            # Keep our own pidfile honest
-            if not harkd_pid_path(root).is_file():
-                # External clear — re-assert ownership while we run
-                try:
-                    acquire_harkd_pidfile(root, pid=os.getpid())
-                except DaemonConflict:
-                    print("harkd: lost pidfile exclusivity", file=sys.stderr)
-                    break
-            time.sleep(idle_sleep_s)
+                    owned_children = list(zip(roles, children, strict=True))
+                    print(
+                        f"harkd: started with workers pids={[c.pid for c in children]} "
+                        f"(state={root})",
+                        flush=True,
+                    )
+            else:
+                print(
+                    f"harkd: running foreground supervisor pid={os.getpid()} "
+                    f"(no workers; state={root}) — see docs/HARKD.md",
+                    flush=True,
+                )
 
-        return OK
+            while result == OK and not shutting_down["flag"]:
+                if children and all(c.poll() is not None for c in children):
+                    print("harkd: all workers exited", flush=True)
+                    break
+                if children:
+                    try:
+                        _refresh_owned_worker_records(
+                            owned_children, pid_path=mode_a_pids_path(root)
+                        )
+                    except OSError as exc:
+                        print(
+                            f"harkd: failed to refresh worker identity: {exc}",
+                            file=sys.stderr,
+                        )
+                        result = ERROR
+                        break
+                if not harkd_pid_path(root).is_file():
+                    try:
+                        acquire_harkd_pidfile(root, pid=os.getpid())
+                    except DaemonConflict:
+                        print("harkd: lost pidfile exclusivity", file=sys.stderr)
+                        result = ERROR
+                        break
+                time.sleep(idle_sleep_s)
     finally:
-        if children:
-            terminate_children(children, root=root)
-        release_harkd_pidfile(root, pid=os.getpid())
-        signal.signal(signal.SIGTERM, prev_term)
-        signal.signal(signal.SIGINT, prev_int)
-        print("harkd: stopped", flush=True)
+        try:
+            if children:
+                try:
+                    terminate_children(owned_children, root=root)
+                except WorkerSignalError as exc:
+                    print(f"harkd: failed to stop workers: {exc}", file=sys.stderr)
+                    result = ERROR
+                except Exception as exc:
+                    print(f"harkd: failed to stop workers: {exc}", file=sys.stderr)
+                    result = ERROR
+        finally:
+            try:
+                if pidfile_acquired:
+                    try:
+                        release_harkd_pidfile(root, pid=os.getpid())
+                    except Exception as exc:
+                        print(f"harkd: failed to release pidfile: {exc}", file=sys.stderr)
+                        result = ERROR
+            finally:
+                restore_interrupt: BaseException | None = None
+                for signum, previous in (
+                    (signal.SIGTERM, prev_term),
+                    (signal.SIGINT, prev_int),
+                ):
+                    try:
+                        signal.signal(signum, previous)
+                    except (KeyboardInterrupt, SystemExit) as exc:
+                        if restore_interrupt is None:
+                            restore_interrupt = exc
+                    except Exception as exc:
+                        print(
+                            f"harkd: failed to restore signal handler: {exc}",
+                            file=sys.stderr,
+                        )
+                        result = ERROR
+                if restore_interrupt is not None:
+                    raise restore_interrupt
+        if result == OK:
+            print("harkd: stopped", flush=True)
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -59,6 +59,48 @@ def spawn_hark_worker(role: str, directory: Path) -> subprocess.Popen[bytes]:
     raise AssertionError(f"worker argv did not become ready for role {role}")
 
 
+def spawn_markerless_hark_worker(role: str, directory: Path) -> subprocess.Popen[bytes]:
+    """Live Hark-shaped process launched independently without ownership markers."""
+    package_root = directory / "markerless"
+    package = package_root / "hark"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__main__.py").write_text(
+        "import signal, time\n"
+        "signal.signal(signal.SIGTERM, lambda *_args: exit(0))\n"
+        "while True: time.sleep(0.05)\n",
+        encoding="utf-8",
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-m", "hark", role],
+        start_new_session=True,
+        env={**os.environ, "PYTHONPATH": str(package_root)},
+    )
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if (
+            worker_process.inspect_worker(
+                child.pid,
+                expected_role=role,
+                expected_pidfile=directory / "mode-a.pids",
+                require_markers=False,
+            )
+            is not None
+        ):
+            return child
+        time.sleep(0.01)
+    kill_child(child)
+    raise AssertionError(f"markerless worker did not become ready for role {role}")
+
+
+def write_live_worker_record(child: subprocess.Popen[bytes], state: Path) -> None:
+    record = worker_process.inspect_worker(
+        child.pid, expected_pidfile=state / "mode-a.pids"
+    )
+    assert record is not None
+    worker_process.write_worker_records(state / "mode-a.pids", [record])
+
+
 def kill_child(child: subprocess.Popen[bytes]) -> None:
     if child.poll() is None:
         try:
@@ -117,7 +159,7 @@ def test_stop_clears_stale_pidfile(state: Path):
 def test_start_when_already_running(state: Path):
     child = spawn_hark_worker("ambient", state)
     try:
-        (state / "mode-a.pids").write_text(f"{child.pid}\n", encoding="utf-8")
+        write_live_worker_record(child, state)
         result = workers.start_workers(state, do_watch=False, settle_s=0)
         assert result["ok"] is True
         assert result["already_running"] is True
@@ -262,11 +304,19 @@ def test_start_fails_and_cleans_up_partial_post_settle_role_set(
             {record.role for record in records} == {"watch", "ambient"}
         ),
     )
-    monkeypatch.setattr(
-        workers,
-        "signal_worker_records",
-        lambda records, sig: signalled.append((list(records), sig)) or list(records),
-    )
+
+    def signal_records(records, sig):
+        materialized = list(records)
+        signalled.append((materialized, sig))
+        return worker_process.WorkerSignalResult(
+            sig,
+            tuple(
+                worker_process.WorkerSignalOutcome(record, sent=True)
+                for record in materialized
+            ),
+        )
+
+    monkeypatch.setattr(workers, "signal_worker_records", signal_records)
     monkeypatch.setattr(workers, "_still_same_workers", lambda _records: [])
 
     result = workers.start_workers(state, settle_s=0)
@@ -274,6 +324,114 @@ def test_start_fails_and_cleans_up_partial_post_settle_role_set(
     assert result["ok"] is False
     assert "exact requested role set" in result["error"]
     assert signalled == [([watch], signal.SIGTERM)]
+
+
+def test_start_post_settle_cleanup_reports_term_and_kill_signal_failures(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    child = spawn_hark_worker("watch", state)
+    path = state / "mode-a.pids"
+    record = worker_process.inspect_worker(
+        child.pid, expected_role="watch", expected_pidfile=path
+    )
+    assert record is not None
+
+    def fake_spawn(**_kwargs):
+        worker_process.write_worker_records(path, [record])
+        return [child]
+
+    clock = iter([0.0, 3.0])
+    monkeypatch.setattr(workers, "spawn_mode_a_workers", fake_spawn)
+    monkeypatch.setattr(
+        workers, "worker_records_match_request", lambda *_args, **_kwargs: False
+    )
+    monkeypatch.setattr(workers.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        worker_process.os,
+        "pidfd_open",
+        lambda _pid: os.open("/dev/null", os.O_RDONLY),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_process.signal,
+        "pidfd_send_signal",
+        lambda _fd, _sig: (_ for _ in ()).throw(PermissionError("denied")),
+        raising=False,
+    )
+    try:
+        result = workers.start_workers(state, settle_s=0)
+
+        assert result["ok"] is False
+        assert "SIGTERM" in result["error"]
+        assert "SIGKILL" in result["error"]
+        assert result["pids"] == [child.pid]
+        assert child.poll() is None
+        assert worker_process.read_worker_records(path) == [record]
+    finally:
+        kill_child(child)
+
+
+def test_stop_reports_verified_term_pidfd_open_failure_and_retains_owner(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    child = spawn_hark_worker("ambient", state)
+    path = state / "mode-a.pids"
+    try:
+        write_live_worker_record(child, state)
+        original = path.read_text(encoding="utf-8")
+        monkeypatch.setattr(
+            worker_process.os,
+            "pidfd_open",
+            lambda _pid: (_ for _ in ()).throw(PermissionError("denied")),
+            raising=False,
+        )
+
+        result = workers.stop_workers(state, timeout_s=0.0)
+
+        assert result["ok"] is False
+        assert "SIGTERM" in result["error"]
+        assert "pidfd_open failed" in result["error"]
+        assert result["pids"] == [child.pid]
+        assert child.poll() is None
+        assert path.read_text(encoding="utf-8") == original
+    finally:
+        kill_child(child)
+
+
+def test_stop_reports_verified_kill_pidfd_send_failure_and_retains_owner(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    child = spawn_hark_worker("ambient", state)
+    path = state / "mode-a.pids"
+    try:
+        write_live_worker_record(child, state)
+        original = path.read_text(encoding="utf-8")
+        monkeypatch.setattr(
+            worker_process.os,
+            "pidfd_open",
+            lambda _pid: os.open("/dev/null", os.O_RDONLY),
+            raising=False,
+        )
+
+        def fail_kill(_fd: int, sig: int) -> None:
+            if sig == signal.SIGKILL:
+                raise PermissionError("denied")
+
+        monkeypatch.setattr(
+            worker_process.signal, "pidfd_send_signal", fail_kill, raising=False
+        )
+
+        result = workers.stop_workers(state, timeout_s=0.0)
+
+        assert result["ok"] is False
+        assert "SIGKILL" in result["error"]
+        assert "pidfd_send_signal failed" in result["error"]
+        assert result["pids"] == [child.pid]
+        assert result["killed"] == []
+        assert child.poll() is None
+        assert path.read_text(encoding="utf-8") == original
+    finally:
+        kill_child(child)
 
 
 def test_stop_does_not_signal_unrelated_legacy_pid(state: Path):
@@ -340,15 +498,36 @@ def test_stop_does_not_signal_simulated_reused_pid(state: Path):
         kill_child(child)
 
 
-def test_stop_migrates_and_signals_legitimate_legacy_worker(state: Path):
-    child = spawn_hark_worker("watch", state)
+def test_stop_fails_closed_for_bare_pid_of_live_markerless_hark_worker(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    child = spawn_markerless_hark_worker("ambient", state)
+    path = state / "mode-a.pids"
     try:
-        (state / "mode-a.pids").write_text(f"{child.pid}\n", encoding="utf-8")
-        result = workers.stop_workers(state, timeout_s=5.0)
-        assert result["ok"] is True, result
-        assert child.pid in result["stopped"]
-        child.wait(timeout=5)
-        assert not (state / "mode-a.pids").exists()
+        path.write_text(f"{child.pid}\n", encoding="utf-8")
+        sent: list[tuple[int, int]] = []
+        monkeypatch.setattr(
+            worker_process.signal,
+            "pidfd_send_signal",
+            lambda fd, sig: sent.append((fd, sig)),
+            raising=False,
+        )
+
+        result = workers.stop_workers(state, timeout_s=0.0)
+
+        assert result["ok"] is False
+        assert "legacy" in result["error"].lower()
+        assert result["pids"] == [child.pid]
+        assert sent == []
+        assert child.poll() is None
+        assert path.read_text(encoding="utf-8") == f"{child.pid}\n"
+
+        start_result = workers.start_workers(state, do_watch=False, settle_s=0)
+        assert start_result["ok"] is False
+        assert start_result["pids"] == [child.pid]
+        assert sent == []
+        assert child.poll() is None
+        assert path.read_text(encoding="utf-8") == f"{child.pid}\n"
     finally:
         kill_child(child)
 
@@ -357,7 +536,7 @@ def test_graceful_stop_preserves_busy_cleanup_and_restart_reason(state: Path):
     child = spawn_hark_worker("ambient", state)
     try:
         (state / "busy.lock").write_text("recording\n", encoding="utf-8")
-        (state / "mode-a.pids").write_text(f"{child.pid}\n", encoding="utf-8")
+        write_live_worker_record(child, state)
         result = workers.stop_workers(state, timeout_s=5.0, reason="restart")
         assert result["ok"] is True, result
         child.wait(timeout=5)
@@ -470,7 +649,7 @@ def test_cli_start_already_running(
     monkeypatch.setattr(workers, "state_dir", lambda: state)
     child = spawn_hark_worker("ambient", state)
     try:
-        (state / "mode-a.pids").write_text(f"{child.pid}\n", encoding="utf-8")
+        write_live_worker_record(child, state)
         code = cli.main(["start", "--no-watch", "--json"])
         assert code == OK
         out = capsys.readouterr().out

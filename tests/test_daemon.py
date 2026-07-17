@@ -19,6 +19,7 @@ from hark.exitcodes import ERROR, OK
 from hark.worker_process import (
     WORKER_PIDFILE_ENV,
     WORKER_ROLE_ENV,
+    WORKER_SPAWN_TOKEN_ENV,
     WorkerRecord,
     inspect_worker,
 )
@@ -26,7 +27,13 @@ from hark.worker_process import (
 REAL_SPAWN_OWNED_POPEN = daemon._spawn_owned_popen
 
 
-def spawn_hark_worker(role: str, directory: Path) -> subprocess.Popen[bytes]:
+def spawn_hark_worker(
+    role: str,
+    directory: Path,
+    *,
+    spawn_token: str | None = None,
+    with_markers: bool = True,
+) -> subprocess.Popen[bytes]:
     launcher = directory / "hark"
     launcher.write_text(
         "#!/usr/bin/env python3\n"
@@ -40,29 +47,50 @@ def spawn_hark_worker(role: str, directory: Path) -> subprocess.Popen[bytes]:
         encoding="utf-8",
     )
     launcher.chmod(0o755)
+    child_env = dict(os.environ)
+    if with_markers:
+        child_env.update(
+            {
+                WORKER_PIDFILE_ENV: str((directory / "mode-a.pids").resolve()),
+                WORKER_ROLE_ENV: role,
+            }
+        )
+    else:
+        child_env.pop(WORKER_PIDFILE_ENV, None)
+        child_env.pop(WORKER_ROLE_ENV, None)
+        child_env.pop(WORKER_SPAWN_TOKEN_ENV, None)
+    if spawn_token is not None:
+        child_env[WORKER_SPAWN_TOKEN_ENV] = spawn_token
     child = subprocess.Popen(
         [str(launcher), role],
         start_new_session=True,
-        env={
-            **os.environ,
-            WORKER_PIDFILE_ENV: str((directory / "mode-a.pids").resolve()),
-            WORKER_ROLE_ENV: role,
-        },
+        env=child_env,
     )
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:
-        if (
-            inspect_worker(
-                child.pid,
-                expected_role=role,
-                expected_pidfile=directory / "mode-a.pids",
+        if with_markers:
+            ready = (
+                inspect_worker(
+                    child.pid,
+                    expected_role=role,
+                    expected_pidfile=directory / "mode-a.pids",
+                )
+                is not None
             )
-            is not None
-        ):
+        else:
+            argv = worker_process._proc_argv(child.pid)
+            ready = argv is not None and worker_process.worker_role_from_argv(argv) == role
+        if ready:
             return child
         time.sleep(0.01)
     kill_child(child)
     raise AssertionError(f"worker argv did not become ready for role {role}")
+
+
+def write_live_worker_record(child: subprocess.Popen[bytes], state: Path) -> None:
+    record = inspect_worker(child.pid, expected_pidfile=state / "mode-a.pids")
+    assert record is not None
+    worker_process.write_worker_records(state / "mode-a.pids", [record])
 
 
 def kill_child(child: subprocess.Popen[bytes]) -> None:
@@ -894,7 +922,7 @@ def test_spawn_workers_rechecks_existing_ownership_inside_transaction(
 ):
     child = spawn_hark_worker("watch", state)
     pidfile = state / "mode-a.pids"
-    pidfile.write_text(f"{child.pid}\n", encoding="utf-8")
+    write_live_worker_record(child, state)
     monkeypatch.setattr(
         daemon.subprocess,
         "Popen",
@@ -909,9 +937,200 @@ def test_spawn_workers_rechecks_existing_ownership_inside_transaction(
         ):
             daemon.spawn_mode_a_workers(root=state, do_ambient=False)
         assert child.poll() is None
-        assert pidfile.read_text(encoding="utf-8") == f"{child.pid}\n"
+        assert [
+            record.pid for record in worker_process.read_worker_records(pidfile)
+        ] == [child.pid]
     finally:
         kill_child(child)
+
+
+def test_refresh_owned_worker_records_preserves_real_spawn_identity(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        daemon, "capture_worker_identity", worker_process.capture_worker_identity
+    )
+    monkeypatch.setattr(
+        daemon, "record_matches_process", worker_process.record_matches_process
+    )
+    child = spawn_hark_worker("watch", state, spawn_token="refresh-token")
+    path = state / "mode-a.pids"
+    try:
+        actual = inspect_worker(
+            child.pid, expected_role="watch", expected_pidfile=path
+        )
+        assert actual is not None
+        assert actual.spawn_token == "refresh-token"
+
+        refreshed = daemon._refresh_owned_worker_records(
+            [("watch", child)], pid_path=path
+        )
+
+        assert refreshed == [actual]
+        assert worker_process.read_worker_records(path) == [actual]
+        assert worker_process.record_matches_process(actual)
+    finally:
+        kill_child(child)
+
+
+def test_terminate_children_recovers_missing_pidfile_before_signalling(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    child = spawn_hark_worker("watch", state, spawn_token="cleanup-token")
+    path = state / "mode-a.pids"
+    observed: list[list[WorkerRecord]] = []
+    real_signal_records = daemon.signal_worker_records
+
+    def observe_signal(records, sig):
+        observed.append(worker_process.read_worker_records(path))
+        return real_signal_records(records, sig)
+
+    monkeypatch.setattr(daemon, "signal_worker_records", observe_signal)
+    path.unlink(missing_ok=True)
+    try:
+        daemon.terminate_children([child], root=state, timeout_s=2.0)
+
+        assert child.poll() is not None
+        assert len(observed) == 1
+        assert len(observed[0]) == 1
+        recovered = observed[0][0]
+        assert (recovered.pid, recovered.role, recovered.spawn_token) == (
+            child.pid,
+            "watch",
+            "cleanup-token",
+        )
+        assert worker_process.record_matches_process(recovered) is False
+    finally:
+        kill_child(child)
+
+
+def test_terminate_children_reports_unrecoverable_survivor_and_retains_safe_owner(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    safe = spawn_hark_worker("watch", state, spawn_token="safe-token")
+    missing_authority = spawn_hark_worker("ambient", state, with_markers=False)
+    path = state / "mode-a.pids"
+    path.write_text("corrupt\n", encoding="utf-8")
+    monkeypatch.setattr(
+        worker_process.signal,
+        "pidfd_send_signal",
+        lambda _fd, _sig: (_ for _ in ()).throw(PermissionError("denied")),
+        raising=False,
+    )
+    try:
+        with pytest.raises(worker_process.WorkerSignalError) as caught:
+            daemon.terminate_children(
+                [safe, missing_authority], root=state, timeout_s=0.0
+            )
+
+        assert "identity recovery" in str(caught.value)
+        assert "surviving supervised worker" in str(caught.value)
+        retained = worker_process.read_worker_records(path)
+        assert len(retained) == 1
+        assert retained[0].pid == safe.pid
+        assert retained[0].spawn_token == "safe-token"
+        assert worker_process.record_matches_process(retained[0])
+    finally:
+        kill_child(safe)
+        kill_child(missing_authority)
+
+
+def test_terminate_children_reports_term_and_kill_signal_failures_and_retains_owner(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    child = spawn_hark_worker("watch", state)
+    path = state / "mode-a.pids"
+    try:
+        write_live_worker_record(child, state)
+        original = path.read_text(encoding="utf-8")
+        monkeypatch.setattr(
+            worker_process.os,
+            "pidfd_open",
+            lambda _pid: os.open("/dev/null", os.O_RDONLY),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            worker_process.signal,
+            "pidfd_send_signal",
+            lambda _fd, _sig: (_ for _ in ()).throw(PermissionError("denied")),
+            raising=False,
+        )
+
+        with pytest.raises(worker_process.WorkerSignalError) as caught:
+            daemon.terminate_children([child], root=state, timeout_s=0.0)
+
+        assert "SIGTERM" in str(caught.value)
+        assert "SIGKILL" in str(caught.value)
+        assert "pidfd_send_signal failed" in str(caught.value)
+        assert child.poll() is None
+        assert path.read_text(encoding="utf-8") == original
+    finally:
+        kill_child(child)
+
+
+def test_run_foreground_returns_error_for_routine_cleanup_signal_failure(
+    state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    watch = FakeWorker(101, returncode=0)
+    record = WorkerRecord(pid=101, start_time="known", role="watch")
+    failure = worker_process.WorkerSignalError(
+        [
+            worker_process.WorkerSignalResult(
+                signal.SIGTERM,
+                (
+                    worker_process.WorkerSignalOutcome(
+                        record, error="pidfd_open failed: denied"
+                    ),
+                ),
+            )
+        ]
+    )
+    monkeypatch.setattr(daemon, "spawn_mode_a_workers", lambda **_kwargs: [watch])
+    monkeypatch.setattr(
+        daemon,
+        "terminate_children",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+    )
+
+    assert (
+        daemon.run_foreground(root=state, workers=True, do_watch=True, do_ambient=False)
+        == ERROR
+    )
+    captured = capsys.readouterr()
+    assert "failed to stop workers" in captured.err
+    assert "pidfd_open failed" in captured.err
+    assert "harkd: stopped" not in captured.out
+
+
+def test_run_foreground_cleanup_exception_returns_error_and_restores_state(
+    state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    watch = FakeWorker(101, returncode=0)
+    previous_term = signal.getsignal(signal.SIGTERM)
+    previous_int = signal.getsignal(signal.SIGINT)
+    monkeypatch.setattr(daemon, "spawn_mode_a_workers", lambda **_kwargs: [watch])
+    monkeypatch.setattr(
+        daemon,
+        "terminate_children",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("cleanup inspection failed")
+        ),
+    )
+
+    assert (
+        daemon.run_foreground(
+            root=state, workers=True, do_watch=True, do_ambient=False
+        )
+        == ERROR
+    )
+    assert not (state / "harkd.pid").exists()
+    assert signal.getsignal(signal.SIGTERM) == previous_term
+    assert signal.getsignal(signal.SIGINT) == previous_int
+    assert "cleanup inspection failed" in capsys.readouterr().err
 
 
 def test_run_foreground_reports_transactional_worker_failure(
@@ -963,7 +1182,19 @@ def test_run_foreground_rebuilds_worker_identity_state(
         watch.returncode = 0
         ambient.returncode = 0
 
+    def inspect_fake(pid: int, *, expected_role: str, **_kwargs) -> WorkerRecord:
+        return WorkerRecord(
+            pid=pid,
+            start_time=f"start-{pid}",
+            role=expected_role,
+            pidfile=str(pidfile.resolve()),
+            config=str((state / "config.toml").resolve()),
+            boot_id=worker_process._current_boot_id(),
+            spawn_token=f"token-{pid}",
+        )
+
     monkeypatch.setattr(daemon, "spawn_mode_a_workers", fake_spawn)
+    monkeypatch.setattr(daemon, "inspect_worker", inspect_fake)
     monkeypatch.setattr(daemon.time, "sleep", finish_after_refresh)
 
     assert daemon.run_foreground(root=state, workers=True, idle_sleep_s=0) == OK
@@ -975,7 +1206,7 @@ def test_run_foreground_refresh_failure_terminates_workers_and_returns_error(
 ):
     watch = FakeWorker(101)
     ambient = FakeWorker(102)
-    terminated: list[FakeWorker] = []
+    terminated: list[tuple[str, FakeWorker]] = []
 
     monkeypatch.setattr(
         daemon,
@@ -994,7 +1225,7 @@ def test_run_foreground_refresh_failure_terminates_workers_and_returns_error(
     )
 
     assert daemon.run_foreground(root=state, workers=True, idle_sleep_s=0) == ERROR
-    assert terminated == [watch, ambient]
+    assert terminated == [("watch", watch), ("ambient", ambient)]
 
 
 def test_pid_alive_self():
@@ -1058,7 +1289,7 @@ def test_assert_can_start_allows_own_pid(state: Path):
 def test_assert_can_start_refuses_mode_a(state: Path):
     child = spawn_hark_worker("watch", state)
     try:
-        (state / "mode-a.pids").write_text(f"{child.pid}\n", encoding="utf-8")
+        write_live_worker_record(child, state)
         with pytest.raises(daemon.DaemonConflict, match="Hark workers"):
             daemon.assert_can_start(state)
     finally:
@@ -1211,7 +1442,7 @@ def test_refuse_start_when_mode_a_pids_live(state: Path):
     """Integration-style: mode-a.pids with our pid blocks acquire."""
     child = spawn_hark_worker("ambient", state)
     try:
-        (state / "mode-a.pids").write_text(f"{child.pid}\n", encoding="utf-8")
+        write_live_worker_record(child, state)
         with pytest.raises(daemon.DaemonConflict, match="Hark workers"):
             daemon.acquire_harkd_pidfile(state, pid=os.getpid())
     finally:

@@ -245,12 +245,28 @@ class _ParentLifetimeGuard:
     def start(self) -> None:
         if not self._ancestors:
             return
-        self._thread = _ParentWatchThread(
-            target=self._watch,
-            name="hark-ask-parent-watch",
-            daemon=True,
-        )
-        self._thread.start()
+        thread: threading.Thread | None = None
+        try:
+            # Thread.start waits on an internal Event/Condition. A pending
+            # process signal must not raise until that lock state is restored.
+            with cancellation_cleanup(self._state):
+                thread = _ParentWatchThread(
+                    target=self._watch,
+                    name="hark-ask-parent-watch",
+                    daemon=True,
+                )
+                self._thread = thread
+                thread.start()
+        except BaseException:
+            launched = False
+            if thread is not None:
+                try:
+                    launched = thread.ident is not None or thread.is_alive()
+                except BaseException:
+                    launched = True
+            if not launched:
+                self._thread = None
+            raise
 
     def stop(self) -> None:
         self._stop.set()
@@ -415,29 +431,38 @@ def _start_stream_cleanup(owner: _StreamCleanupOwner) -> threading.Thread:
     """Claim and start an owner without holding cancellation registry locks."""
     key = id(owner.stream)
     previous_mask: set[signal.Signals] | None = None
-    if threading.current_thread() is threading.main_thread() and hasattr(
-        signal, "pthread_sigmask"
-    ):
-        previous_mask = signal.pthread_sigmask(
-            signal.SIG_BLOCK,
-            {signal.SIGINT, signal.SIGTERM},
-        )
+    mask_signals = (
+        threading.current_thread() is threading.main_thread()
+        and hasattr(signal, "pthread_sigmask")
+    )
 
+    worker = owner.worker
+    assert worker is not None
     try:
-        with _stream_cancel_lock:
-            worker = owner.worker
-            assert worker is not None
-            if owner.start_claimed:
-                return worker
-            owner.start_claimed = True
-
+        if mask_signals:
+            # Query the old mask without changing it first. If Python raises a
+            # pending signal after the subsequent SIG_BLOCK C call, the outer
+            # finally already knows exactly which mask to restore.
+            previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+            signal.pthread_sigmask(
+                signal.SIG_BLOCK,
+                {signal.SIGINT, signal.SIGTERM},
+            )
         try:
-            worker.start()
-        except BaseException as exc:
-            # A delivered signal may interrupt Thread.start after kernel launch
-            # on platforms without pthread_sigmask. Keep that owner so repeats
-            # cannot fan out. Ordinary start failures are definitive pre-launch.
-            launched = owner.entered.is_set() or isinstance(exc, KeyboardInterrupt)
+            # Cover both the start-claim publication and Thread.start's internal
+            # Event/Condition handshake. Main-thread pthread_sigmask alone is
+            # insufficient when another thread receives a process signal and
+            # Python later runs the pending handler here.
+            with cancellation_cleanup():
+                with _stream_cancel_lock:
+                    if owner.start_claimed:
+                        return worker
+                    owner.start_claimed = True
+                worker.start()
+        except BaseException:
+            # Reconcile definite pre-launch failures, while retaining an owner
+            # whose target entered or whose underlying thread became observable.
+            launched = owner.entered.is_set()
             if not launched:
                 try:
                     launched = worker.ident is not None or worker.is_alive()
@@ -732,9 +757,7 @@ def capture_interrupt_signals() -> Iterator[None]:
     watched = (signal.SIGINT, signal.SIGTERM)
     previous = {signum: signal.getsignal(signum) for signum in watched}
     state = _CaptureSignalState()
-    with _capture_state_lock:
-        previous_state = _capture_signal_state
-        _capture_signal_state = state
+    previous_state: _CaptureSignalState | None = None
 
     def _interrupt(signum: int, _frame: object) -> None:
         wake_reason = state.consume_wake_signal(signum)
@@ -749,9 +772,11 @@ def capture_interrupt_signals() -> Iterator[None]:
         first = state.request(signum)
         cancel_active_capture(signum)
         if state.cleaning_up():
-            # Finish teardown, then surface a first cancellation that the
-            # signal handler could not safely raise in-place.
-            state.defer_interruption()
+            # Finish teardown, then surface only a first cancellation that the
+            # signal handler could not safely raise in-place. A repeat merely
+            # reinforces an already-published programmatic cancellation.
+            if first:
+                state.defer_interruption()
             return
         if not first:
             # Repeated signals reinforce stream abort but never replace cause.
@@ -761,8 +786,15 @@ def capture_interrupt_signals() -> Iterator[None]:
         raise interruption
 
     primary: BaseException | None = None
-    parent_guard = _ParentLifetimeGuard(state)
+    parent_guard: _ParentLifetimeGuard | None = None
+    cleanup_errors: list[BaseException] = []
     try:
+        # Publication and ancestry construction can themselves be interrupted;
+        # keep both inside the ownership-restoring try/finally.
+        with _capture_state_lock:
+            previous_state = _capture_signal_state
+            _capture_signal_state = state
+        parent_guard = _ParentLifetimeGuard(state)
         for signum in watched:
             signal.signal(signum, _interrupt)
         parent_guard.start()
@@ -771,19 +803,26 @@ def capture_interrupt_signals() -> Iterator[None]:
         primary = exc
         raise
     finally:
-        parent_guard.stop()
         with cancellation_cleanup(state, primary=primary):
-            with _capture_state_lock:
-                if _capture_signal_state is state:
-                    _capture_signal_state = previous_state
+            if parent_guard is not None:
+                try:
+                    parent_guard.stop()
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
+            try:
+                with _capture_state_lock:
+                    if _capture_signal_state is state:
+                        _capture_signal_state = previous_state
+            except BaseException as exc:
+                cleanup_errors.append(exc)
             try:
                 _restore_signal_handlers(previous)
-            except BaseException:
-                # Handler cleanup must not replace the interruption that caused
-                # the scope to unwind. With no primary, restoration failure is
-                # itself the interruption translated by the CLI boundary.
-                if primary is None:
-                    raise
+            except BaseException as exc:
+                cleanup_errors.append(exc)
+        # Cleanup failures never replace the primary interruption, but with no
+        # primary they remain visible after every restoration step was tried.
+        if primary is None and cleanup_errors:
+            raise cleanup_errors[0]
 
 
 class MicLease:

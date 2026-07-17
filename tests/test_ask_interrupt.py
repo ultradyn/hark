@@ -205,6 +205,101 @@ def test_real_signal_scope_structures_install_and_restore_interrupts(
     assert len(calls) == expected_calls
 
 
+def test_signal_after_capture_state_publication_restores_global(monkeypatch):
+    real_lock = capture_mod._capture_state_lock
+
+    class SignalOnPublicationExit:
+        def __init__(self) -> None:
+            self.exits = 0
+
+        def __enter__(self):
+            real_lock.acquire()
+            return self
+
+        def __exit__(self, *_args):
+            real_lock.release()
+            self.exits += 1
+            if self.exits == 2:
+                os.kill(os.getpid(), signal.SIGINT)
+
+    old_sigint = signal.getsignal(signal.SIGINT)
+    old_sigterm = signal.getsignal(signal.SIGTERM)
+    monkeypatch.setattr(
+        capture_mod,
+        "_capture_state_lock",
+        SignalOnPublicationExit(),
+    )
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            with capture_mod.capture_interrupt_signals():
+                pytest.fail("signal after capture-state publication reached body")
+        assert capture_mod._capture_signal_state is None
+        assert signal.getsignal(signal.SIGINT) is old_sigint
+        assert signal.getsignal(signal.SIGTERM) is old_sigterm
+    finally:
+        # Keep this RED regression isolated on implementations that leak state.
+        capture_mod._capture_signal_state = None
+
+
+def test_parent_guard_construction_interrupt_restores_capture_state(monkeypatch):
+    primary = capture_mod.CaptureInterrupted(signal.SIGINT)
+
+    def interrupt_construction(_state):
+        raise primary
+
+    monkeypatch.setattr(capture_mod, "_ParentLifetimeGuard", interrupt_construction)
+    try:
+        with pytest.raises(capture_mod.CaptureInterrupted) as caught:
+            with capture_mod.capture_interrupt_signals():
+                pytest.fail("interrupted parent-guard construction reached body")
+        assert caught.value is primary
+        assert capture_mod._capture_signal_state is None
+    finally:
+        # Keep this RED regression isolated on implementations that leak state.
+        capture_mod._capture_signal_state = None
+
+
+def test_parent_guard_stop_failure_still_restores_state_and_handlers(monkeypatch):
+    primary = capture_mod.CaptureInterrupted(signal.SIGINT)
+    previous = {
+        signal.SIGINT: object(),
+        signal.SIGTERM: object(),
+    }
+    installed = dict(previous)
+
+    class StopFailureGuard:
+        def __init__(self, _state):
+            pass
+
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            raise RuntimeError("parent guard stop failed")
+
+    monkeypatch.setattr(capture_mod, "_ParentLifetimeGuard", StopFailureGuard)
+    monkeypatch.setattr(
+        capture_mod.signal,
+        "getsignal",
+        lambda signum: installed[signum],
+    )
+    monkeypatch.setattr(
+        capture_mod.signal,
+        "signal",
+        lambda signum, handler: installed.__setitem__(signum, handler),
+    )
+    try:
+        with pytest.raises(capture_mod.CaptureInterrupted) as caught:
+            with capture_mod.capture_interrupt_signals():
+                raise primary
+        assert caught.value is primary
+        assert capture_mod._capture_signal_state is None
+        assert installed == previous
+    finally:
+        # Keep this RED regression isolated on implementations that leak state.
+        capture_mod._capture_signal_state = None
+
+
 def test_sigterm_without_active_capture_is_structured_during_scope(monkeypatch):
     installed: dict[int, object] = {}
 
@@ -782,6 +877,14 @@ def test_pending_signal_is_delivered_only_after_cleanup_worker_start(monkeypatch
     )
     monkeypatch.setattr(capture_mod.threading, "Thread", SignalDuringStart)
     monkeypatch.setattr(capture_mod, "_perform_stream_cleanup", gated_perform)
+    # A process-directed signal may be received by another unblocked thread;
+    # Python then runs its pending handler on the main thread even though the
+    # main thread's pthread mask is set. Model that deterministically.
+    monkeypatch.setattr(
+        capture_mod.signal,
+        "pthread_sigmask",
+        lambda *_args, **_kwargs: set(),
+    )
 
     with pytest.raises(capture_mod.CaptureInterrupted):
         with capture_mod.capture_interrupt_signals():
@@ -800,6 +903,131 @@ def test_pending_signal_is_delivered_only_after_cleanup_worker_start(monkeypatch
     while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
         time.sleep(0.01)
     assert calls == {"abort": 1, "stop": 0, "close": 1}
+    assert capture_mod.capture_in_progress() is False
+
+
+def test_signal_after_start_claim_cannot_leave_unstarted_cleanup_owner(monkeypatch):
+    calls = {"abort": 0, "close": 0}
+    real_lock = capture_mod._stream_cancel_lock
+    fired = False
+
+    class Stream:
+        def abort(self) -> None:
+            calls["abort"] += 1
+
+        def close(self) -> None:
+            calls["close"] += 1
+
+    class SignalAfterClaimRLock:
+        def __enter__(self):
+            real_lock.acquire()
+            return self
+
+        def __exit__(self, *_args):
+            nonlocal fired
+            real_lock.release()
+            if not fired:
+                fired = True
+                os.kill(os.getpid(), signal.SIGINT)
+
+    stream = Stream()
+    owner = capture_mod._reserve_stream_cleanup(stream, cancel=True)
+    monkeypatch.setattr(capture_mod, "_stream_cancel_lock", SignalAfterClaimRLock())
+    monkeypatch.setattr(
+        capture_mod.signal,
+        "pthread_sigmask",
+        lambda *_args, **_kwargs: set(),
+    )
+
+    with pytest.raises(capture_mod.CaptureInterrupted):
+        with capture_mod.capture_interrupt_signals():
+            capture_mod._start_stream_cleanup(owner)
+
+    deadline = time.monotonic() + 1.0
+    while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert calls == {"abort": 1, "close": 1}
+    assert capture_mod._stream_cancel_workers == {}
+    assert capture_mod.capture_in_progress() is False
+
+
+def test_signal_while_blocking_cleanup_signals_restores_original_mask(monkeypatch):
+    calls = {"abort": 0, "close": 0}
+    current_mask: set[signal.Signals] = set()
+    inject = True
+
+    class Stream:
+        def abort(self) -> None:
+            calls["abort"] += 1
+
+        def close(self) -> None:
+            calls["close"] += 1
+
+    def interrupting_sigmask(how, mask):
+        nonlocal inject
+        requested = set(mask)
+        previous = set(current_mask)
+        if how == signal.SIG_BLOCK:
+            current_mask.update(requested)
+        elif how == signal.SIG_SETMASK:
+            current_mask.clear()
+            current_mask.update(requested)
+        if inject and how == signal.SIG_BLOCK and requested:
+            inject = False
+            handler = signal.getsignal(signal.SIGINT)
+            assert callable(handler)
+            handler(signal.SIGINT, None)
+        return previous
+
+    stream = Stream()
+    owner = capture_mod._reserve_stream_cleanup(stream, cancel=True)
+    monkeypatch.setattr(
+        capture_mod.signal,
+        "pthread_sigmask",
+        interrupting_sigmask,
+    )
+
+    with pytest.raises(capture_mod.CaptureInterrupted):
+        with capture_mod.capture_interrupt_signals():
+            capture_mod._start_stream_cleanup(owner)
+
+    deadline = time.monotonic() + 1.0
+    while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert current_mask == set()
+    assert calls == {"abort": 1, "close": 1}
+    assert capture_mod._stream_cancel_workers == {}
+
+
+def test_signal_during_parent_watch_start_remains_structured(monkeypatch):
+    real_thread = threading.Thread
+
+    class SignalDuringParentStart:
+        def __init__(self, *, target, name, daemon):
+            assert name == "hark-ask-parent-watch"
+            self._inner = real_thread(target=target, name=name, daemon=daemon)
+
+        @property
+        def ident(self):
+            return self._inner.ident
+
+        def start(self) -> None:
+            os.kill(os.getpid(), signal.SIGINT)
+            self._inner.start()
+
+        def join(self, timeout=None) -> None:
+            self._inner.join(timeout=timeout)
+
+        def is_alive(self) -> bool:
+            return self._inner.is_alive()
+
+    monkeypatch.setattr(capture_mod, "_ParentWatchThread", SignalDuringParentStart)
+
+    with pytest.raises(capture_mod.CaptureInterrupted) as caught:
+        with capture_mod.capture_interrupt_signals():
+            pytest.fail("signal during parent-watch start reached ask body")
+
+    assert caught.value.signal_name == "SIGINT"
     assert capture_mod.capture_in_progress() is False
 
 
@@ -1868,7 +2096,8 @@ try:
 except Exception:
     mic_available = False
 
-result_path.write_text(
+result_tmp = result_path.with_suffix(".tmp")
+result_tmp.write_text(
     json.dumps(
         {
             "exit_code": exit_code,
@@ -1885,6 +2114,7 @@ result_path.write_text(
     ),
     encoding="utf-8",
 )
+os.replace(result_tmp, result_path)
 '''
     env = os.environ.copy()
     src_dir = Path(__file__).resolve().parents[1] / "src"

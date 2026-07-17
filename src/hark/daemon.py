@@ -35,6 +35,7 @@ from hark.worker_process import (
     WorkerSignalError,
     WorkerSignalResult,
     WorkerSpawnClaim,
+    WorkerStateUnavailableError,
     capture_worker_identity,
     collect_worker_records,
     create_worker_spawn_claim,
@@ -671,7 +672,16 @@ def spawn_mode_a_workers(
     root = root or state_dir()
     pid_path = mode_a_pids_path(root)
     with worker_pidfile_lock(pid_path):
-        existing = collect_worker_records(pid_path, rewrite=False)
+        try:
+            # Discover marker-scoped owners while the transaction lock is held:
+            # direct callers do not necessarily perform the outer discovery.
+            # Keep rewrite disabled so a failed/contended startup never alters
+            # the raw ownership evidence it is evaluating.
+            existing = collect_worker_records(
+                pid_path, discover=True, rewrite=False
+            )
+        except WorkerStateUnavailableError as exc:
+            raise WorkerSpawnError("pidfile", exc) from exc
         if existing:
             pids = ", ".join(str(record.pid) for record in existing)
             raise WorkerSpawnError(

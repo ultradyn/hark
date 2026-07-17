@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import dis
+from contextlib import contextmanager
 import os
 import signal
 import subprocess
@@ -917,12 +918,33 @@ def test_persistent_success_close_failure_rolls_back_committed_workers(
     assert not (state / "mode-a.pids").exists()
 
 
-def test_spawn_workers_rechecks_existing_ownership_inside_transaction(
+def test_spawn_directly_discovers_marker_scoped_orphan_inside_transaction(
     state: Path, monkeypatch: pytest.MonkeyPatch
 ):
     child = spawn_hark_worker("watch", state)
     pidfile = state / "mode-a.pids"
-    write_live_worker_record(child, state)
+    original_lock = daemon.worker_pidfile_lock
+    original_collect = daemon.collect_worker_records
+    lock_held = False
+    calls: list[dict[str, object]] = []
+
+    @contextmanager
+    def observed_lock(*args, **kwargs):
+        nonlocal lock_held
+        with original_lock(*args, **kwargs):
+            lock_held = True
+            try:
+                yield
+            finally:
+                lock_held = False
+
+    def observed_collect(path: Path, **kwargs):
+        assert lock_held
+        calls.append(kwargs)
+        return original_collect(path, **kwargs)
+
+    monkeypatch.setattr(daemon, "worker_pidfile_lock", observed_lock)
+    monkeypatch.setattr(daemon, "collect_worker_records", observed_collect)
     monkeypatch.setattr(
         daemon.subprocess,
         "Popen",
@@ -931,17 +953,51 @@ def test_spawn_workers_rechecks_existing_ownership_inside_transaction(
         ),
     )
     try:
+        assert not pidfile.exists()
+
         with pytest.raises(
             daemon.WorkerSpawnError,
             match=rf"pidfile startup failed.*already running.*{child.pid}",
         ):
             daemon.spawn_mode_a_workers(root=state, do_ambient=False)
+
+        assert calls == [{"discover": True, "rewrite": False}]
         assert child.poll() is None
-        assert [
-            record.pid for record in worker_process.read_worker_records(pidfile)
-        ] == [child.pid]
     finally:
         kill_child(child)
+
+
+def test_spawn_translates_in_lock_discovery_unavailable_error(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    pidfile = state / "mode-a.pids"
+    pidfile.write_text("retained raw ownership\n", encoding="utf-8")
+    original_pidfile = pidfile.read_bytes()
+    unavailable = worker_process.WorkerStateUnavailableError(
+        "cannot inspect retained ownership", pids=[321]
+    )
+    calls: list[dict[str, object]] = []
+
+    def unavailable_collect(_path: Path, **kwargs):
+        calls.append(kwargs)
+        raise unavailable
+
+    monkeypatch.setattr(daemon, "collect_worker_records", unavailable_collect)
+    monkeypatch.setattr(
+        daemon.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("spawned after unavailable ownership discovery")
+        ),
+    )
+
+    with pytest.raises(daemon.WorkerSpawnError, match="pidfile startup failed") as caught:
+        daemon.spawn_mode_a_workers(root=state, do_ambient=False)
+
+    assert isinstance(caught.value, OSError)
+    assert caught.value.cause is unavailable
+    assert calls == [{"discover": True, "rewrite": False}]
+    assert pidfile.read_bytes() == original_pidfile
 
 
 def test_refresh_owned_worker_records_preserves_real_spawn_identity(

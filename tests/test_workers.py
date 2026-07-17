@@ -169,6 +169,56 @@ def test_start_when_already_running(state: Path):
         kill_child(child)
 
 
+def test_start_recovers_compatible_marker_scoped_orphan_without_duplicate(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    child = spawn_hark_worker("ambient", state)
+    spawned: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        workers,
+        "spawn_mode_a_workers",
+        lambda **kwargs: spawned.append(kwargs) or [],
+    )
+    try:
+        assert not (state / "mode-a.pids").exists()
+
+        result = workers.start_workers(state, do_watch=False, settle_s=0)
+
+        assert result["ok"] is True
+        assert result["already_running"] is True
+        assert result["pids"] == [child.pid]
+        assert spawned == []
+        assert child.poll() is None
+    finally:
+        kill_child(child)
+
+
+def test_start_refuses_incompatible_marker_scoped_orphan_without_duplicate(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    child = spawn_hark_worker("ambient", state)
+    spawned: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        workers,
+        "spawn_mode_a_workers",
+        lambda **kwargs: spawned.append(kwargs) or [],
+    )
+    try:
+        assert not (state / "mode-a.pids").exists()
+
+        result = workers.start_workers(
+            state, do_watch=True, do_ambient=False, settle_s=0
+        )
+
+        assert result["ok"] is False
+        assert "existing workers do not exactly match" in result["error"]
+        assert result["pids"] == [child.pid]
+        assert spawned == []
+        assert child.poll() is None
+    finally:
+        kill_child(child)
+
+
 def test_concurrent_compatible_start_reclassifies_lock_winner_as_already_running(
     state: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -184,7 +234,7 @@ def test_concurrent_compatible_start_reclassifies_lock_winner_as_already_running
     )
     collections = iter([[], [record]])
     monkeypatch.setattr(
-        workers, "collect_worker_records", lambda _path: next(collections)
+        workers, "collect_worker_records", lambda _path, **_kwargs: next(collections)
     )
     monkeypatch.setattr(
         workers,
@@ -244,7 +294,7 @@ def test_start_clears_stale_harkd_pid(state: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(
         workers,
         "collect_worker_records",
-        lambda _path: [record] if spawned else [],
+        lambda _path, **_kwargs: [record] if spawned else [],
     )
     monkeypatch.setattr(workers, "worker_records_match_request", lambda *_a, **_k: True)
     result = workers.start_workers(state, do_watch=False, settle_s=0)
@@ -288,9 +338,9 @@ def test_start_fails_and_cleans_up_partial_post_settle_role_set(
         pidfile=str((state / "mode-a.pids").resolve()),
     )
     calls = 0
-    signalled: list[tuple[list[worker_process.WorkerRecord], int]] = []
+    terminated: list[tuple[list[object], dict[str, object]]] = []
 
-    def collect(_path):
+    def collect(_path, **_kwargs):
         nonlocal calls
         calls += 1
         return [] if calls == 1 else [watch]
@@ -305,47 +355,83 @@ def test_start_fails_and_cleans_up_partial_post_settle_role_set(
         ),
     )
 
-    def signal_records(records, sig):
-        materialized = list(records)
-        signalled.append((materialized, sig))
-        return worker_process.WorkerSignalResult(
-            sig,
-            tuple(
-                worker_process.WorkerSignalOutcome(record, sent=True)
-                for record in materialized
-            ),
-        )
+    def terminate(children, **kwargs):
+        terminated.append((list(children), kwargs))
 
-    monkeypatch.setattr(workers, "signal_worker_records", signal_records)
-    monkeypatch.setattr(workers, "_still_same_workers", lambda _records: [])
+    monkeypatch.setattr(workers, "terminate_children", terminate)
 
     result = workers.start_workers(state, settle_s=0)
 
     assert result["ok"] is False
     assert "exact requested role set" in result["error"]
-    assert signalled == [([watch], signal.SIGTERM)]
+    assert terminated == [
+        (
+            [("watch", spawned[0]), ("ambient", spawned[1])],
+            {"root": state, "timeout_s": 2.0},
+        )
+    ]
+
+
+def test_start_post_settle_rollback_terminates_returned_child_without_pidfile(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    path = state / "mode-a.pids"
+    spawned: list[subprocess.Popen[bytes]] = []
+
+    def fake_spawn(**_kwargs):
+        child = spawn_hark_worker("ambient", state)
+        spawned.append(child)
+        write_live_worker_record(child, state)
+        path.unlink()
+        return [child]
+
+    monkeypatch.setattr(workers, "spawn_mode_a_workers", fake_spawn)
+    monkeypatch.setattr(
+        workers, "worker_records_match_request", lambda *_args, **_kwargs: False
+    )
+    try:
+        result = workers.start_workers(
+            state, do_watch=False, do_ambient=True, settle_s=0
+        )
+
+        assert len(spawned) == 1
+        child = spawned[0]
+        deadline = time.monotonic() + 2.0
+        while child.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert child.poll() is not None, (
+            f"child {child.pid} remains alive; result pids={result.get('pids', [])}, "
+            f"pidfile exists={path.exists()}"
+        )
+        assert result["ok"] is False
+        assert "exact requested role set" in result["error"]
+        assert result["pids"] == []
+        assert not path.exists()
+    finally:
+        for child in spawned:
+            kill_child(child)
 
 
 def test_start_post_settle_cleanup_reports_term_and_kill_signal_failures(
     state: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    child = spawn_hark_worker("watch", state)
     path = state / "mode-a.pids"
-    record = worker_process.inspect_worker(
-        child.pid, expected_role="watch", expected_pidfile=path
-    )
-    assert record is not None
+    spawned: list[tuple[subprocess.Popen[bytes], worker_process.WorkerRecord]] = []
 
     def fake_spawn(**_kwargs):
+        child = spawn_hark_worker("watch", state)
+        record = worker_process.inspect_worker(
+            child.pid, expected_role="watch", expected_pidfile=path
+        )
+        assert record is not None
+        spawned.append((child, record))
         worker_process.write_worker_records(path, [record])
         return [child]
 
-    clock = iter([0.0, 3.0])
     monkeypatch.setattr(workers, "spawn_mode_a_workers", fake_spawn)
     monkeypatch.setattr(
         workers, "worker_records_match_request", lambda *_args, **_kwargs: False
     )
-    monkeypatch.setattr(workers.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(
         worker_process.os,
         "pidfd_open",
@@ -361,12 +447,33 @@ def test_start_post_settle_cleanup_reports_term_and_kill_signal_failures(
     try:
         result = workers.start_workers(state, settle_s=0)
 
+        assert len(spawned) == 1
+        child, record = spawned[0]
         assert result["ok"] is False
         assert "SIGTERM" in result["error"]
         assert "SIGKILL" in result["error"]
         assert result["pids"] == [child.pid]
         assert child.poll() is None
         assert worker_process.read_worker_records(path) == [record]
+    finally:
+        for child, _record in spawned:
+            kill_child(child)
+
+
+def test_stop_discovers_and_gracefully_terminates_marker_scoped_orphan(
+    state: Path,
+):
+    child = spawn_hark_worker("ambient", state)
+    path = state / "mode-a.pids"
+    try:
+        assert not path.exists()
+
+        result = workers.stop_workers(state, timeout_s=2.0)
+
+        assert result["ok"] is True, result
+        assert result["stopped"] == [child.pid]
+        child.wait(timeout=2.0)
+        assert not path.exists()
     finally:
         kill_child(child)
 

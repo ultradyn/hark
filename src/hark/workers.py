@@ -26,6 +26,7 @@ from hark.daemon import (
     probe_harkd,
     probe_mode_a,
     spawn_mode_a_workers,
+    terminate_children,
 )
 from hark.exitcodes import ERROR, OK, USAGE
 from hark.lifecycle import set_shutdown_reason
@@ -128,7 +129,7 @@ def stop_workers(
 
     path = mode_a_pids_path(root)
     try:
-        records = collect_worker_records(path)
+        records = collect_worker_records(path, discover=True)
     except WorkerStateUnavailableError as exc:
         return {
             "ok": False,
@@ -259,7 +260,7 @@ def start_workers(
 
     path = mode_a_pids_path(root)
     try:
-        existing_records = collect_worker_records(path)
+        existing_records = collect_worker_records(path, discover=True)
     except WorkerStateUnavailableError as exc:
         return {"ok": False, "error": str(exc), "pids": list(exc.pids)}
     existing = [record.pid for record in existing_records]
@@ -302,7 +303,7 @@ def start_workers(
         # the same pidfile transaction lock. Reclassify that lock winner as the
         # idempotent already-running outcome, never a spurious start failure.
         try:
-            winner = collect_worker_records(path)
+            winner = collect_worker_records(path, discover=True)
         except WorkerStateUnavailableError:
             winner = []
         if winner and worker_records_match_request(
@@ -329,7 +330,7 @@ def start_workers(
 
     # Revalidate the exact requested ready roles after the settle window.  A
     # nonempty partial set is failure, never a successful start.
-    live_records = collect_worker_records(path)
+    live_records = collect_worker_records(path, discover=True)
     live = [record.pid for record in live_records]
     if not worker_records_match_request(
         live_records,
@@ -337,31 +338,36 @@ def start_workers(
         ambient=do_ambient,
         session=session,
     ):
-        attempt_pids = set(started)
-        attempt_records = [
-            record for record in live_records if record.pid in attempt_pids
+        requested_roles = [
+            role
+            for role, requested in (("watch", do_watch), ("ambient", do_ambient))
+            if requested
         ]
-        signal_results = [signal_worker_records(attempt_records, signal.SIGTERM)]
-        cleanup_deadline = time.monotonic() + 2.0
-        remaining = _still_same_workers(attempt_records)
-        while remaining and time.monotonic() < cleanup_deadline:
-            time.sleep(0.02)
-            remaining = _still_same_workers(remaining)
-        if remaining:
-            signal_results.append(signal_worker_records(remaining, signal.SIGKILL))
-        survivors = _still_same_workers(remaining)
-        collect_worker_records(path)
+        owned_children: list[Any] = list(zip(requested_roles, children))
+        owned_children.extend(children[len(requested_roles) :])
         errors = [
             "workers did not settle into the exact requested role set "
             "(check ambient.jsonl / watch.jsonl)"
         ]
-        signal_failures = [result for result in signal_results if result.errors]
-        if signal_failures:
-            errors.append(str(WorkerSignalError(signal_failures)))
+        try:
+            terminate_children(owned_children, root=root, timeout_s=2.0)
+        except WorkerSignalError as exc:
+            errors.append(str(exc))
+        survivors: list[int] = []
+        for child in children:
+            pid = getattr(child, "pid", None)
+            if not isinstance(pid, int) or pid <= 0:
+                continue
+            try:
+                running = child.poll() is None
+            except Exception:
+                running = True
+            if running:
+                survivors.append(pid)
         return {
             "ok": False,
             "error": "; ".join(errors),
-            "pids": [record.pid for record in survivors],
+            "pids": survivors,
             "started": started,
         }
 

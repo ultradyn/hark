@@ -1073,6 +1073,11 @@ def _collect_worker_records_unlocked(
     rewrite: bool,
 ) -> list[WorkerRecord]:
     records: dict[int, WorkerRecord] = {}
+    # A PID rejected from this ownership snapshot must not be rediscovered as a
+    # fresh orphan in the same transaction. In particular, a reused PID may
+    # now contain another marker-scoped Hark worker, but it is not the recorded
+    # lifetime and therefore is not authority for this stop operation.
+    recorded_pids: set[int] = set()
     expected_config_path = _config_path_from_environ(dict(os.environ))
     if expected_config_path is None:
         return []
@@ -1088,6 +1093,7 @@ def _collect_worker_records_unlocked(
             continue
         stored = _parse_stored_record(line)
         if stored is not None:
+            recorded_pids.add(stored.pid)
             stored_scope = (
                 str(Path(stored.pidfile).resolve(strict=False))
                 if stored.pidfile is not None
@@ -1147,6 +1153,7 @@ def _collect_worker_records_unlocked(
             continue
         legacy_pid = _parse_legacy_pid(line)
         if legacy_pid is not None:
+            recorded_pids.add(legacy_pid)
             try:
                 migrated = inspect_worker(
                     legacy_pid,
@@ -1170,7 +1177,8 @@ def _collect_worker_records_unlocked(
 
     if discover:
         for record in _discover_workers(path, expected_config_path):
-            records[record.pid] = record
+            if record.pid not in recorded_pids:
+                records[record.pid] = record
 
     result = sorted(records.values(), key=lambda record: record.pid)
     canonical = "".join(f"{record.to_json()}\n" for record in result)

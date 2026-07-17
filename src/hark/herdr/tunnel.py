@@ -16,6 +16,45 @@ from hark.paths import cache_dir
 
 
 _DEFAULT_REMOTE_SOCKET = "~/.config/herdr/herdr.sock"
+# Darwin's sockaddr_un.sun_path is smaller than Linux's. Keep a conservative
+# byte budget including room for the terminating NUL used by the kernel.
+_MAX_UNIX_SOCKET_PATH_BYTES = 100
+_SHORT_SOCKET_BASES = (Path("/tmp"), Path("/var/tmp"))
+
+
+def _path_fits_unix_socket(path: Path) -> bool:
+    return len(os.fsencode(path)) <= _MAX_UNIX_SOCKET_PATH_BYTES
+
+
+def _tunnel_socket_name(session_id: str, ssh: str, remote: str) -> str:
+    safe_id = "".join(
+        c if c.isascii() and (c.isalnum() or c in "-_") else "_"
+        for c in session_id
+    )
+    prefix = (safe_id or "session")[:16]
+    identity = hashlib.sha256(
+        f"{session_id}\0{ssh}\0{remote}".encode()
+    ).hexdigest()[:16]
+    return f"{prefix}-{os.getpid()}-{identity}.sock"
+
+
+def _short_tunnel_socket_path(
+    preferred_root: Path,
+    filename: str,
+    *,
+    session_id: str,
+) -> Path:
+    uid = os.getuid() if hasattr(os, "getuid") else "user"
+    namespace = hashlib.sha256(os.fsencode(preferred_root)).hexdigest()[:8]
+    for base in _SHORT_SOCKET_BASES:
+        if not base.is_dir() or not os.access(base, os.W_OK | os.X_OK):
+            continue
+        candidate = base / f"hark-{uid}-{namespace}" / filename
+        if _path_fits_unix_socket(candidate):
+            return candidate
+    raise RuntimeError(
+        f"no AF_UNIX-safe tunnel path for Herdr session {session_id!r}"
+    )
 
 
 def tunnel_socket_path(
@@ -24,13 +63,31 @@ def tunnel_socket_path(
     *,
     remote_socket: str | None = None,
 ) -> Path:
-    """Return the deterministic local socket for one exact remote transport."""
+    """Return a deterministic, process-scoped, AF_UNIX-safe tunnel path."""
     remote = remote_socket or _DEFAULT_REMOTE_SOCKET
-    digest = hashlib.sha256(f"{ssh}\0{remote}".encode()).hexdigest()[:12]
-    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id)
-    # A process owns and cleans only its own path. This prevents one Hark
-    # process from unlinking another process's active forwarding socket.
-    return cache_dir() / "tunnels" / f"{safe_id}-{os.getpid()}-{digest}.sock"
+    filename = _tunnel_socket_name(session_id, ssh, remote)
+    preferred_root = cache_dir()
+    preferred = preferred_root / "tunnels" / filename
+    if _path_fits_unix_socket(preferred):
+        return preferred
+    return _short_tunnel_socket_path(
+        preferred_root,
+        filename,
+        session_id=session_id,
+    )
+
+
+def _ensure_private_socket_parent(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if path.is_symlink():
+        raise RuntimeError(f"refusing symlink tunnel directory: {path}")
+    info = path.stat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"tunnel socket parent is not a directory: {path}")
+    if hasattr(os, "getuid") and info.st_uid != os.getuid():
+        raise RuntimeError(f"tunnel socket directory is not owned by this user: {path}")
+    if info.st_mode & 0o077:
+        path.chmod(0o700)
 
 
 def _socket_is_live(path: Path) -> bool:
@@ -55,7 +112,7 @@ class Tunnel:
     owns_socket: bool = True
 
     def start(self) -> Path:
-        self.local_socket.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_private_socket_parent(self.local_socket.parent)
         if os.path.lexists(self.local_socket):
             mode = self.local_socket.lstat().st_mode
             if not stat.S_ISSOCK(mode):

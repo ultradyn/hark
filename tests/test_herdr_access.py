@@ -304,6 +304,46 @@ def test_resolved_remote_socket_matches_shared_tunnel_adapter(monkeypatch, tmp_p
     )
 
 
+def test_managed_tunnel_path_stays_bindable_with_long_cache_and_session(
+    monkeypatch, tmp_path
+):
+    from hark.herdr import tunnel as tunnel_mod
+
+    long_cache = tmp_path / ("context-mode-cache-segment-" * 5)
+    monkeypatch.setattr(tunnel_mod, "cache_dir", lambda: long_cache)
+
+    path = tunnel_mod.tunnel_socket_path(
+        "workbox-with-an-intentionally-very-long-configured-session-identity",
+        "dev@workbox",
+        remote_socket="/run/user/1000/herdr.sock",
+    )
+
+    assert len(os.fsencode(path)) <= 100
+    assert not path.is_relative_to(long_cache)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        listener.bind(str(path))
+    finally:
+        listener.close()
+        path.unlink(missing_ok=True)
+
+
+def test_unavailable_short_tunnel_root_names_session_in_failure(
+    monkeypatch, tmp_path
+):
+    from hark.herdr import tunnel as tunnel_mod
+
+    long_cache = tmp_path / ("configured-cache-" * 8)
+    long_fallback = tmp_path / ("fallback-root-" * 8)
+    long_fallback.mkdir()
+    monkeypatch.setattr(tunnel_mod, "cache_dir", lambda: long_cache)
+    monkeypatch.setattr(tunnel_mod, "_SHORT_SOCKET_BASES", (long_fallback,))
+
+    with pytest.raises(RuntimeError, match="Herdr session 'workbox'"):
+        tunnel_mod.tunnel_socket_path("workbox", "dev@workbox")
+
+
 class FakeSshProcess:
     def __init__(self):
         self.dead = False

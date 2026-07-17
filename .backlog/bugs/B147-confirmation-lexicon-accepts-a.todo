@@ -1,17 +1,18 @@
 ---
 claimed_at: "2026-07-16T00:03:33Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-17T05:41:35Z"
 complexity: low
 created_at: "2026-07-16T00:03:01Z"
 depends_on: []
+duration_minutes: 1778.0408569788667
 estimate_hours: 1
 id: B147
 priority: high
 started_at: "2026-07-16T00:03:33Z"
-status: in_progress
+status: done
 tags: []
 title: Confirmation lexicon accepts apostrophe-less spoken negations as approval
-updated_at: "2026-07-16T00:03:33Z"
+updated_at: "2026-07-17T05:41:35Z"
 ---
 Evidence\nOn current master and B142, classify_confirm_reply returns "yes" for STT-style replies such as "yes I cant approve this", "yes I wont approve this", and "yes I dont approve this". The affirmative-prefix rule wins because NEGATE contains can't, won't, and don't but not the common apostrophe-less transcripts. This can turn an explicit refusal into approval during a destructive confirmation.\n\nExpected\nApostrophe-less contraction variants from speech transcription are normalized or recognized as negations, and any such refusal wins over an affirmative token. Focused tests cover the classifier and run_ask cancellation path.\n\nActual\nThe replies are classified as yes and run_ask proceeds successfully.

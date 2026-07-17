@@ -40,6 +40,29 @@ def test_negative_phrase_wins_over_affirmative(reply):
 @pytest.mark.parametrize(
     "reply",
     [
+        "yes I cant approve this",
+        "yes I wont approve this",
+        "yes I dont approve this",
+    ],
+)
+def test_apostropheless_negative_contractions_win_over_affirmative(reply):
+    assert classify_confirm_reply(reply) == "no"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "yes the cantilever design is approved",
+        "yes I want wonton soup",
+    ],
+)
+def test_apostropheless_negative_contractions_match_whole_words(reply):
+    assert classify_confirm_reply(reply) == "yes"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
         "Yes, but wait.",
         "Okay, wait a second.",
         "Yes, if the tests pass.",

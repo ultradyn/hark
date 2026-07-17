@@ -173,7 +173,16 @@ def test_run_ask_confirm_profile_readback_silence_lexicon(monkeypatch):
     assert any(c[0] == "listen" and c[1].get("profile") == "confirm" for c in calls)
 
 
-def test_run_ask_confirm_cancel_on_no(monkeypatch):
+@pytest.mark.parametrize(
+    "confirm_reply",
+    [
+        "cancel",
+        "yes I cant approve this",
+        "yes I wont approve this",
+        "yes I dont approve this",
+    ],
+)
+def test_run_ask_confirm_cancel_on_no(monkeypatch, confirm_reply):
     cfg = HarkConfig()
     cfg.confirm.mode = "always"
 
@@ -194,7 +203,7 @@ def test_run_ask_confirm_cancel_on_no(monkeypatch):
     monkeypatch.setattr(
         "hark.speech.run_listen",
         lambda *a, **k: ListenResult(
-            text="cancel",
+            text=confirm_reply,
             provider="mock",
             duration_ms=10,
             end_mode="silence",
@@ -205,7 +214,7 @@ def test_run_ask_confirm_cancel_on_no(monkeypatch):
     out = run_ask(cfg, "Deploy now?", risk_hint="R2")
     assert out["ok"] is False
     assert out.get("cancelled") is True
-    assert out.get("confirm_reply") == "cancel"
+    assert out.get("confirm_reply") == confirm_reply
 
 
 def test_run_ask_confirmation_cancel_precedes_affirmative_text(monkeypatch):

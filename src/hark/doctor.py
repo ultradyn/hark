@@ -10,7 +10,9 @@ from typing import Any, TextIO
 from hark import __version__
 from hark.config import HarkConfig, load_config
 from hark.exitcodes import HERDR, OK
+from hark.herdr.access import HerdrSessionAccess
 from hark.herdr.client import HerdrClient
+from hark.herdr.tunnel import ensure_tunnel
 from hark.paths import (
     cache_dir,
     codex_auth_path,
@@ -164,22 +166,38 @@ def run_doctor(
         "herdr_ok": True,
     }
 
-    for session in cfg.sessions:
-        client = HerdrClient(session)
-        health = client.health()
-        entry = {
-            "session_id": health.session_id,
-            "ok": health.ok,
-            "version": health.version,
-            "protocol": health.protocol,
-            "socket": health.socket,
-            "agent_count": health.agent_count,
-            "error": health.error,
-        }
-        report["sessions"].append(entry)
-        if not health.ok:
-            report["herdr_ok"] = False
-            report["ok"] = False
+    with HerdrSessionAccess(
+        cfg,
+        client_factory=HerdrClient,
+        tunnel_factory=ensure_tunnel,
+    ) as access:
+        for session in cfg.sessions:
+            try:
+                health = access.client(session.id).health()
+            except Exception as exc:
+                entry = {
+                    "session_id": session.id,
+                    "ok": False,
+                    "version": None,
+                    "protocol": None,
+                    "socket": None,
+                    "agent_count": 0,
+                    "error": str(exc)[:400],
+                }
+            else:
+                entry = {
+                    "session_id": health.session_id,
+                    "ok": health.ok,
+                    "version": health.version,
+                    "protocol": health.protocol,
+                    "socket": health.socket,
+                    "agent_count": health.agent_count,
+                    "error": health.error,
+                }
+            report["sessions"].append(entry)
+            if not entry["ok"]:
+                report["herdr_ok"] = False
+                report["ok"] = False
 
     for auth in all_provider_status():
         report["providers"].append(

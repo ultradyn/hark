@@ -69,7 +69,10 @@ class HerdrClient:
         herdr_bin: str | None = None,
     ) -> None:
         self.session = session
-        self.herdr_bin = herdr_bin or session.herdr_bin or shutil.which("herdr") or "herdr"
+        # ``herdr_bin`` on an SSH session names the remote binary. Tunnel-backed
+        # operations still need a local client against HERDR_SOCKET_PATH.
+        configured_bin = None if session.ssh else session.herdr_bin
+        self.herdr_bin = herdr_bin or configured_bin or shutil.which("herdr") or "herdr"
         self.socket_path = resolve_session_socket(session)
 
     def _env(self) -> dict[str, str]:

@@ -8,6 +8,7 @@ serialization, not logic.
 
 from __future__ import annotations
 
+import functools
 import io
 import json
 from pathlib import Path
@@ -17,17 +18,29 @@ from hark.answering import answer_bound_event
 from hark.config import HarkConfig, config_to_dict
 from hark.delivery import DeliveryStore
 from hark.events import new_event_id, utc_now_iso
+from hark.herdr.access import HerdrSessionAccess, active_client
 from hark.herdr.client import HerdrClient, HerdrError
+from hark.herdr.tunnel import ensure_tunnel
 from hark.paths import state_dir
 
 SCHEMA = "hark.dashboard.v1"
 
 
+def _with_herdr_access(func):
+    @functools.wraps(func)
+    def wrapped(cfg: HarkConfig, *args, **kwargs):
+        with HerdrSessionAccess(
+            cfg,
+            client_factory=HerdrClient,
+            tunnel_factory=ensure_tunnel,
+        ):
+            return func(cfg, *args, **kwargs)
+
+    return wrapped
+
+
 def _client_for(cfg: HarkConfig, session_id: str) -> HerdrClient:
-    session = cfg.session_by_id(session_id)
-    if session is None:
-        raise HerdrError(f"unknown session {session_id!r}")
-    return HerdrClient(session)
+    return active_client(cfg, session_id)
 
 
 def health_snapshot(cfg: HarkConfig, server_meta: dict[str, Any]) -> dict[str, Any]:
@@ -89,6 +102,7 @@ def config_snapshot(cfg: HarkConfig) -> dict[str, Any]:
     }
 
 
+@_with_herdr_access
 def herdr_sessions_snapshot(cfg: HarkConfig) -> dict[str, Any]:
     store = DeliveryStore()
     pending_by_pane: dict[tuple[str, str], str] = {}
@@ -99,8 +113,26 @@ def herdr_sessions_snapshot(cfg: HarkConfig) -> dict[str, Any]:
     sessions: list[dict[str, Any]] = []
     all_ok = True
     for session in cfg.sessions:
-        client = HerdrClient(session)
-        health = client.health()
+        try:
+            client = _client_for(cfg, session.id)
+            health = client.health()
+        except HerdrError as exc:
+            sessions.append(
+                {
+                    "session_id": session.id,
+                    "ok": False,
+                    "label": session.label,
+                    "version": None,
+                    "protocol": None,
+                    "socket": None,
+                    "ssh": session.ssh,
+                    "agent_count": 0,
+                    "error": str(exc)[:400],
+                    "agents": [],
+                }
+            )
+            all_ok = False
+            continue
         agents: list[dict[str, Any]] = []
         if health.ok:
             try:
@@ -146,6 +178,7 @@ def herdr_sessions_snapshot(cfg: HarkConfig) -> dict[str, Any]:
     return {"schema": SCHEMA, "ok": all_ok, "sessions": sessions}
 
 
+@_with_herdr_access
 def context_snapshot(
     cfg: HarkConfig, session_id: str, pane_id: str, *, lines: int = 60
 ) -> dict[str, Any]:
@@ -259,6 +292,7 @@ def find_hep_event(event_id: str, *, state: Path | None = None) -> dict[str, Any
     return found
 
 
+@_with_herdr_access
 def answer_action(cfg: HarkConfig, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     event_id = str(body.get("event_id") or "")
     text = body.get("text")

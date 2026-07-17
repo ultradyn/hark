@@ -1205,7 +1205,9 @@ def load_config(path: Path | None = None) -> HarkConfig:
     env_sock = os.environ.get("HERDR_SOCKET_PATH")
     if env_sock:
         for s in sessions:
-            if s.id == "local" or s.socket is None:
+            # The ambient socket describes the caller's local Herdr. It must
+            # not suppress tunnelling for an explicitly configured SSH session.
+            if not s.ssh and (s.id == "local" or s.socket is None):
                 s.socket = env_sock
                 break
 
@@ -1585,10 +1587,13 @@ def resolve_session_socket(session: SessionConfig) -> Path:
     if session.socket:
         return Path(os.path.expanduser(session.socket))
     if session.ssh:
-        # tunnel local path (created by ensure_tunnel)
-        from hark.paths import cache_dir
+        from hark.herdr.tunnel import tunnel_socket_path
 
-        return cache_dir() / "tunnels" / f"{session.id}.sock"
+        return tunnel_socket_path(
+            session.id,
+            session.ssh,
+            remote_socket=session.remote_socket,
+        )
     # Herdr "default" session uses the main config dir sock (not sessions/default/)
     if session.id in ("local", "default"):
         return default_herdr_socket()

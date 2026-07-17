@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Any, Callable, TextIO
 
-from hark.config import HarkConfig, SessionConfig
+from hark.config import HarkConfig
 from hark.delivery import DeliveryStore
 from hark.events import (
     DEFAULT_PANE_CAPTURE_LINES,
@@ -19,9 +19,11 @@ from hark.events import (
     make_target_invalidated,
     monitor_profile,
 )
+from hark.exitcodes import HERDR
+from hark.herdr.access import HerdrSessionAccess
 from hark.herdr.client import AgentInfo, HerdrClient, HerdrError
 from hark.herdr.socket_client import is_expected_disconnect
-from hark.herdr.tunnel import Tunnel, ensure_tunnel
+from hark.herdr.tunnel import ensure_tunnel
 from hark.pane_understanding.classify import EdgeTracker, PaneClassifier
 from hark.pane_understanding.types import ClassifyPolicy, PaneObservation
 from hark.self_detect import SelfIdentity, detect_self
@@ -139,37 +141,57 @@ def run_watch(
     read_questions: bool = True,
     register_events: bool = True,
 ) -> int:
+    with HerdrSessionAccess(
+        cfg,
+        client_factory=HerdrClient,
+        tunnel_factory=ensure_tunnel,
+    ) as access:
+        return _run_watch_scoped(
+            cfg,
+            access=access,
+            session_ids=session_ids,
+            statuses=statuses,
+            for_monitor=for_monitor,
+            transport=transport,
+            once=once,
+            out=out,
+            read_questions=read_questions,
+            register_events=register_events,
+        )
+
+
+def _run_watch_scoped(
+    cfg: HarkConfig,
+    *,
+    access: HerdrSessionAccess,
+    session_ids: list[str] | None = None,
+    statuses: list[str] | None = None,
+    for_monitor: bool = False,
+    transport: str | None = None,
+    once: bool = False,
+    out: TextIO | None = None,
+    read_questions: bool = True,
+    register_events: bool = True,
+) -> int:
     out = out or sys.stdout
     transport = (transport or cfg.watch.transport or "auto").lower()
     interest = set(statuses or cfg.watch.statuses)
-    sessions = cfg.sessions
-    if session_ids:
-        want = set(session_ids)
-        sessions = [s for s in cfg.sessions if s.id in want]
-        if not sessions:
-            sessions = [SessionConfig(id=sid) for sid in session_ids]
+    selected_ids = list(session_ids or [session.id for session in cfg.sessions])
+    if not selected_ids and not session_ids:
+        selected_ids = ["local"]
 
-    tunnels: list[Tunnel] = []
     clients: list[HerdrClient] = []
-    for s in sessions:
-        if s.ssh:
-            try:
-                t = ensure_tunnel(s.id, s.ssh, remote_socket=s.remote_socket)
-                tunnels.append(t)
-                s = SessionConfig(
-                    id=s.id,
-                    socket=str(t.local_socket),
-                    ssh=s.ssh,
-                    label=s.label,
-                )
-            except Exception as exc:
-                _emit(
-                    make_watch_error(s.id, f"tunnel: {exc}"),
-                    for_monitor=for_monitor,
-                    out=out,
-                )
-                continue
-        clients.append(HerdrClient(s))
+    for session_id in selected_ids:
+        try:
+            clients.append(access.client(session_id))
+        except HerdrError as exc:
+            _emit(
+                make_watch_error(session_id, str(exc)),
+                for_monitor=for_monitor,
+                out=out,
+            )
+    if not clients:
+        return HERDR
 
     pane_capture = bool(getattr(cfg.watch, "pane_capture", True))
     pane_capture_lines = int(
@@ -300,9 +322,6 @@ def run_watch(
             time.sleep(poll_s)
     except KeyboardInterrupt:
         return 0
-    finally:
-        for t in tunnels:
-            t.stop()
 
 
 def _emit(event: dict[str, Any], *, for_monitor: bool, out: TextIO) -> None:

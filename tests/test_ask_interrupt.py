@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import hark.worker_process as worker_process
 from hark.answer_window import AnswerWindowDeps, AnswerWindowPolicy, open_answer_window
 from hark.answer_window.result import ListenResult
 from hark.audio import capture as capture_mod
@@ -1971,11 +1972,50 @@ def test_orchestrator_disappearance_without_signal_cancels_and_preserves_workers
     """A vanished launcher must not orphan Pa_ReadStream or stop Mode A workers."""
     state_root = tmp_path / "state" / "hark"
     state_root.mkdir(parents=True)
-    worker = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(60)"],
-        start_new_session=True,
+    pidfile = state_root / "mode-a.pids"
+    env = os.environ.copy()
+    src_dir = Path(__file__).resolve().parents[1] / "src"
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(src_dir), env.get("PYTHONPATH", "")))
     )
-    (state_root / "mode-a.pids").write_text(f"{worker.pid}\n", encoding="utf-8")
+    env["XDG_STATE_HOME"] = str(tmp_path / "state")
+
+    worker_launcher = tmp_path / "hark"
+    worker_launcher.write_text(
+        "#!/usr/bin/env python3\n"
+        "import signal\n"
+        "import time\n"
+        "signal.signal(signal.SIGTERM, lambda *_args: exit(0))\n"
+        "while True: time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    worker_launcher.chmod(0o755)
+    worker_env = {
+        **env,
+        worker_process.WORKER_PIDFILE_ENV: str(pidfile.resolve()),
+        worker_process.WORKER_ROLE_ENV: "ambient",
+        worker_process.WORKER_SPAWN_TOKEN_ENV: "ask-interrupt-worker",
+    }
+    worker = subprocess.Popen(
+        [str(worker_launcher), "ambient"],
+        start_new_session=True,
+        env=worker_env,
+    )
+    worker_record = None
+    worker_deadline = time.monotonic() + 2.0
+    while worker_record is None and time.monotonic() < worker_deadline:
+        worker_record = worker_process.inspect_worker(
+            worker.pid,
+            expected_role="ambient",
+            expected_pidfile=pidfile,
+        )
+        if worker_record is None:
+            time.sleep(0.01)
+    if worker_record is None:
+        os.killpg(worker.pid, signal.SIGKILL)
+        worker.wait(timeout=2.0)
+        pytest.fail("marker-scoped worker did not become ready")
+    pidfile.write_text(worker_record.to_json() + "\n", encoding="utf-8")
 
     ready = tmp_path / "orphan-ready"
     child_pid_path = tmp_path / "orphan-child.pid"
@@ -2116,12 +2156,6 @@ result_tmp.write_text(
 )
 os.replace(result_tmp, result_path)
 '''
-    env = os.environ.copy()
-    src_dir = Path(__file__).resolve().parents[1] / "src"
-    env["PYTHONPATH"] = os.pathsep.join(
-        filter(None, (str(src_dir), env.get("PYTHONPATH", "")))
-    )
-    env["XDG_STATE_HOME"] = str(tmp_path / "state")
     launcher = subprocess.Popen(
         [
             sys.executable,

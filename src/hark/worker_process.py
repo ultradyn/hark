@@ -145,24 +145,37 @@ class WorkerSpawnClaim:
     token: str
 
 
-def _current_boot_id() -> str | None:
+def _current_boot_id() -> str:
     try:
         value = (
             Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
         )
-    except OSError:
-        return None
-    return value or None
+    except OSError as exc:
+        raise _ProcfsUnavailableError(
+            exc.errno or errno.EIO, "cannot read system boot identity"
+        ) from exc
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError) as exc:
+        raise _ProcfsUnavailableError(
+            errno.EIO, "system boot identity is empty or invalid"
+        ) from exc
+    return value
 
 
 def create_worker_spawn_claim(*, role: str, pidfile: Path) -> WorkerSpawnClaim:
     """Preclaim one future child without depending on ``Popen.pid`` publication."""
     if role not in WORKER_ROLES:
         raise ValueError(f"invalid worker role: {role}")
-    boot_id = _current_boot_id()
+    try:
+        boot_id = _current_boot_id()
+    except _ProcfsUnavailableError as exc:
+        raise WorkerStateUnavailableError(
+            "cannot establish worker spawn provenance: boot identity unavailable"
+        ) from exc
     parent_stat = _proc_stat(os.getpid())
     config = _config_path_from_environ(dict(os.environ))
-    if boot_id is None or parent_stat is None or config is None:
+    if parent_stat is None or config is None:
         raise WorkerStateUnavailableError("cannot establish worker spawn provenance")
     return WorkerSpawnClaim(
         role=role,
@@ -541,9 +554,12 @@ def capture_worker_identity(
         return None
     scope = str(pidfile.resolve(strict=False)) if pidfile is not None else None
     config_path = _config_path_from_environ(dict(os.environ))
-    boot_id = _current_boot_id()
-    if boot_id is None:
-        return None
+    try:
+        boot_id = _current_boot_id()
+    except _ProcfsUnavailableError as exc:
+        raise WorkerStateUnavailableError(
+            "cannot capture worker identity: boot identity unavailable"
+        ) from exc
     record = WorkerRecord(
         pid=pid,
         start_time=stat[1],
@@ -629,7 +645,13 @@ def recover_worker_spawn_claim(
     closes the Python bytecode gap between ``_fork_exec`` returning a PID and
     ``Popen`` publishing it on the object.
     """
-    if _current_boot_id() != claim.boot_id:
+    try:
+        current_boot_id = _current_boot_id()
+    except _ProcfsUnavailableError as exc:
+        raise WorkerStateUnavailableError(
+            "cannot recover worker spawn claim: boot identity unavailable"
+        ) from exc
+    if current_boot_id != claim.boot_id:
         return None
     parent_stat = _proc_stat(claim.parent_pid)
     if parent_stat is None or parent_stat[1] != claim.parent_start_time:
@@ -969,6 +991,12 @@ def replace_owned_worker_records(
 
 def _discover_workers(path: Path, config_path: Path) -> list[WorkerRecord]:
     records: list[WorkerRecord] = []
+    try:
+        _current_boot_id()
+    except _ProcfsUnavailableError as exc:
+        raise WorkerStateUnavailableError(
+            "cannot discover workers: boot provenance unavailable"
+        ) from exc
     try:
         proc_entries = Path("/proc").iterdir()
     except OSError:

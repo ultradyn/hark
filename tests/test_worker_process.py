@@ -318,7 +318,11 @@ def test_live_provisional_record_is_retained_but_never_healthy(
 
 
 def spawn_process(
-    directory: Path, *, role: str | None = None, legacy: bool = False
+    directory: Path,
+    *,
+    role: str | None = None,
+    legacy: bool = False,
+    spawn_token: str | None = None,
 ) -> subprocess.Popen[bytes]:
     if role:
         launcher = directory / "hark"
@@ -343,6 +347,8 @@ def spawn_process(
                     worker_process.WORKER_ROLE_ENV: role,
                 }
             )
+        if spawn_token is not None:
+            env[worker_process.WORKER_SPAWN_TOKEN_ENV] = spawn_token
         child = subprocess.Popen(
             [str(launcher), role],
             start_new_session=True,
@@ -502,6 +508,163 @@ def test_procfs_unknown_retains_pidfile_and_fails_closed(
     with pytest.raises(worker_process.WorkerStateUnavailableError):
         worker_process.collect_worker_records(path)
     assert path.read_text(encoding="utf-8") == original
+
+
+def _deny_boot_id_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    boot_id_path = Path("/proc/sys/kernel/random/boot_id")
+    real_read_text = Path.read_text
+
+    def deny_boot_id(candidate: Path, *args, **kwargs):
+        if candidate == boot_id_path:
+            raise PermissionError("boot identity unavailable")
+        return real_read_text(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", deny_boot_id)
+
+
+def test_boot_id_unavailable_retains_valid_structured_record_exactly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    child = spawn_process(tmp_path, role="ambient")
+    path = tmp_path / "mode-a.pids"
+    try:
+        record = worker_process.inspect_worker(
+            child.pid, expected_role="ambient", expected_pidfile=path
+        )
+        assert record is not None
+        original = record.to_json().encode() + b"\n# retain this exact body\n"
+        path.write_bytes(original)
+        sent: list[int] = []
+        monkeypatch.setattr(
+            worker_process,
+            "_send_pidfd_signal",
+            lambda _fd, sig: sent.append(sig),
+        )
+        _deny_boot_id_read(monkeypatch)
+
+        with pytest.raises(
+            worker_process.WorkerStateUnavailableError,
+            match="retaining ownership state",
+        ) as caught:
+            worker_process.collect_worker_records(path)
+
+        assert caught.value.pids == (child.pid,)
+        assert path.read_bytes() == original
+        assert sent == []
+        assert child.poll() is None
+    finally:
+        kill_child(child)
+
+
+def test_boot_id_unavailable_retains_valid_provisional_record_exactly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    spawn_token = "boot-unavailable-provisional"
+    child = spawn_process(tmp_path, role="watch", spawn_token=spawn_token)
+    path = tmp_path / "mode-a.pids"
+    try:
+        actual = worker_process.inspect_worker(
+            child.pid, expected_role="watch", expected_pidfile=path
+        )
+        assert actual is not None
+        provisional = worker_process.WorkerRecord(
+            pid=actual.pid,
+            start_time=actual.start_time,
+            role=actual.role,
+            pidfile=actual.pidfile,
+            config=actual.config,
+            provisional=True,
+            boot_id=actual.boot_id,
+            spawn_token=spawn_token,
+        )
+        original = b"# provisional authority\n" + provisional.to_json().encode() + b"\n"
+        path.write_bytes(original)
+        sent: list[int] = []
+        monkeypatch.setattr(
+            worker_process,
+            "_send_pidfd_signal",
+            lambda _fd, sig: sent.append(sig),
+        )
+        _deny_boot_id_read(monkeypatch)
+
+        with pytest.raises(
+            worker_process.WorkerStateUnavailableError,
+            match="retaining ownership state",
+        ) as caught:
+            worker_process.collect_worker_records(path)
+
+        assert caught.value.pids == (child.pid,)
+        assert path.read_bytes() == original
+        assert sent == []
+        assert child.poll() is None
+    finally:
+        kill_child(child)
+
+
+def test_discovery_fails_closed_when_boot_provenance_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    child = spawn_process(tmp_path, role="ambient")
+    path = tmp_path / "mode-a.pids"
+    try:
+        _deny_boot_id_read(monkeypatch)
+
+        with pytest.raises(
+            worker_process.WorkerStateUnavailableError,
+            match="boot provenance",
+        ):
+            worker_process.collect_worker_records(path, discover=True)
+
+        assert not path.exists()
+        assert child.poll() is None
+    finally:
+        kill_child(child)
+
+
+@pytest.mark.parametrize("operation", ["create", "capture", "recover"])
+def test_new_identity_authority_reports_boot_id_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+):
+    unavailable = worker_process._ProcfsUnavailableError(
+        13, "boot identity unavailable"
+    )
+    monkeypatch.setattr(
+        worker_process,
+        "_current_boot_id",
+        lambda: (_ for _ in ()).throw(unavailable),
+    )
+    path = tmp_path / "mode-a.pids"
+
+    if operation == "create":
+        invoke = lambda: worker_process.create_worker_spawn_claim(
+            role="ambient", pidfile=path
+        )
+    elif operation == "capture":
+        monkeypatch.setattr(
+            worker_process, "_proc_stat", lambda _pid: ("S", "captured")
+        )
+        invoke = lambda: worker_process.capture_worker_identity(
+            4321, role="ambient", pidfile=path
+        )
+    else:
+        claim = worker_process.WorkerSpawnClaim(
+            role="ambient",
+            pidfile=str(path.resolve()),
+            config=str(tmp_path / "config.toml"),
+            boot_id="known-boot",
+            parent_pid=os.getpid(),
+            parent_start_time="known-parent",
+            token="known-token",
+        )
+        invoke = lambda: worker_process.recover_worker_spawn_claim(claim)
+
+    with pytest.raises(
+        worker_process.WorkerStateUnavailableError,
+        match="boot identity unavailable",
+    ):
+        invoke()
+
+    assert not path.exists()
 
 
 def test_other_config_record_is_preserved_and_verified_against_its_scope(

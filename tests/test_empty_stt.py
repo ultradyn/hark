@@ -59,6 +59,7 @@ def _patch_listen_infra(monkeypatch, stt: _FakeStt, caps: list[CaptureResult]):
     monkeypatch.setattr("hark.speech.pause_ambient_for_mic", lambda **k: _NullCtx())
     monkeypatch.setattr("hark.speech.MicLease", lambda *a, **k: _NullCtx())
     monkeypatch.setattr("hark.speech.BusySection", lambda *a, **k: _NullCtx())
+    monkeypatch.setattr("hark.speech.duck_media", lambda *a, **k: _NullCtx())
     monkeypatch.setattr("hark.speech.register_active_listen", lambda *a, **k: None)
     monkeypatch.setattr("hark.speech.clear_active_listen", lambda *a, **k: None)
     monkeypatch.setattr("hark.speech.consume_listen_action", lambda *a, **k: None)

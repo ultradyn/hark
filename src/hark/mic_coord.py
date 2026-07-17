@@ -39,7 +39,13 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from hark.audio.capture import MicBusyError, MicLease
+from hark.audio.capture import (
+    MicBusyError,
+    MicLease,
+    cancellation_cleanup,
+    capture_attempt,
+    raise_if_capture_cancelled,
+)
 from hark.paths import state_dir
 from hark.syslog import log as syslog
 
@@ -393,33 +399,49 @@ def request_ambient_pause(
         "process_start": process.start_time,
         "boot_id": boot_id,
     }
-    with _pause_lock():
-        try:
-            owners, _dirty = _read_live_owners_unlocked(now=time.time())
-        except _UnsupportedPauseSchema as exc:
-            raise RuntimeError(str(exc)) from exc
-        attempted = [*owners, owner]
-        try:
-            _write_owners_unlocked(attempted)
-        except BaseException:  # rollback must include cancellation/interrupts
-            # os.replace may have succeeded before directory fsync failed. Roll
-            # back this exact token while still holding the registry lock. A
-            # second fsync failure is suppressed only after the on-disk content
-            # has been restored (replace/unlink happens before parent fsync).
+    published = False
+    try:
+        with _pause_lock():
             try:
-                _write_owners_unlocked(owners)
-            except BaseException:
-                pass
-            raise
-    syslog(
-        "ambient.pause_request",
-        component="mic",
-        level="info",
-        reason=reason,
-        pid=owner_pid,
-        token=token,
-    )
-    return token
+                owners, _dirty = _read_live_owners_unlocked(now=time.time())
+            except _UnsupportedPauseSchema as exc:
+                raise RuntimeError(str(exc)) from exc
+            attempted = [*owners, owner]
+            try:
+                _write_owners_unlocked(attempted)
+                published = True
+            except BaseException:  # rollback includes cancellation/interrupts
+                # os.replace may have succeeded before directory fsync failed.
+                try:
+                    _write_owners_unlocked(owners)
+                except BaseException:
+                    pass
+                raise
+        syslog(
+            "ambient.pause_request",
+            component="mic",
+            level="info",
+            reason=reason,
+            pid=owner_pid,
+            token=token,
+        )
+        return token
+    except BaseException as exc:
+        if published:
+            # Publication succeeded but the caller never received ownership.
+            # Remove only our exact token, preserving concurrent owners.
+            with cancellation_cleanup(primary=exc):
+                try:
+                    with _pause_lock():
+                        current, _dirty = _read_live_owners_unlocked(now=time.time())
+                        retained = [
+                            item for item in current if item.get("token") != token
+                        ]
+                        if len(retained) != len(current):
+                            _write_owners_unlocked(retained)
+                except BaseException:
+                    pass
+        raise
 
 
 def clear_ambient_pause(token: str | None = None) -> None:
@@ -461,13 +483,16 @@ def wait_for_mic_free(*, timeout_s: float = DEFAULT_YIELD_TIMEOUT_S) -> None:
     deadline = time.monotonic() + max(0.1, timeout_s)
     last_err: Exception | None = None
     while time.monotonic() < deadline:
+        raise_if_capture_cancelled()
         try:
             # Probe: acquire and immediately release
             with MicLease("mic-probe"):
+                raise_if_capture_cancelled()
                 return
         except MicBusyError as exc:
             last_err = exc
             time.sleep(_POLL_S)
+    raise_if_capture_cancelled()
     raise MicBusyError(
         f"mic still busy after {timeout_s:.1f}s waiting for ambient to yield"
         + (f" ({last_err})" if last_err else "")
@@ -484,12 +509,22 @@ def pause_ambient_for_mic(
 
     Use around bound listen/ask so ambient wake scanning does not raise mic busy.
     """
-    token = request_ambient_pause(reason=reason)
-    try:
-        wait_for_mic_free(timeout_s=timeout_s)
-        yield
-    finally:
-        clear_ambient_pause(token)
+    with capture_attempt():
+        token = request_ambient_pause(reason=reason)
+        primary: BaseException | None = None
+        try:
+            wait_for_mic_free(timeout_s=timeout_s)
+            yield
+        except BaseException as exc:
+            primary = exc
+            raise
+        finally:
+            with cancellation_cleanup(primary=primary):
+                try:
+                    clear_ambient_pause(token)
+                except BaseException:
+                    if primary is None:
+                        raise
 
 
 def _pid_alive(pid: int | None) -> bool:

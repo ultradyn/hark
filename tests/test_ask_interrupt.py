@@ -1063,7 +1063,12 @@ def test_parent_guard_rejects_reused_ancestor_pid(monkeypatch):
         "_ancestor_identities",
         lambda: ((424242, "original-start"),),
     )
-    monkeypatch.setattr(capture_mod.os, "pidfd_open", lambda _pid, _flags: read_fd)
+    monkeypatch.setattr(
+        capture_mod.os,
+        "pidfd_open",
+        lambda _pid, _flags: read_fd,
+        raising=False,
+    )
     monkeypatch.setattr(
         capture_mod,
         "_proc_parent_and_start",
@@ -1090,6 +1095,50 @@ def test_parent_guard_rejects_reused_ancestor_pid(monkeypatch):
         guard._watch()
     finally:
         os.close(write_fd)
+
+    interruption = state.interruption()
+    assert isinstance(interruption, capture_mod.CaptureCancelled)
+    assert interruption.reason == "orchestrator_disappeared"
+    assert cancels == ["orchestrator_disappeared"]
+    assert kills == [(os.getpid(), signal.SIGTERM)]
+
+
+def test_parent_guard_without_pidfd_uses_procfs_fallback(monkeypatch):
+    state = capture_mod._CaptureSignalState()
+    cancels: list[str | None] = []
+    kills: list[tuple[int, int]] = []
+
+    monkeypatch.delattr(capture_mod.os, "pidfd_open", raising=False)
+    monkeypatch.setattr(
+        capture_mod,
+        "_ancestor_identities",
+        lambda: ((424242, "original-start"),),
+    )
+    monkeypatch.setattr(
+        capture_mod,
+        "_proc_parent_and_start",
+        lambda _pid: (1, "reused-start"),
+    )
+    monkeypatch.setattr(
+        capture_mod.select,
+        "select",
+        lambda *_args, **_kwargs: pytest.fail(
+            "pidfd-free fallback unexpectedly called select"
+        ),
+    )
+    monkeypatch.setattr(
+        capture_mod,
+        "cancel_active_capture",
+        lambda *_args, reason=None, **_kwargs: cancels.append(reason) or True,
+    )
+    monkeypatch.setattr(
+        capture_mod.os,
+        "kill",
+        lambda pid, signum: kills.append((pid, signum)),
+    )
+
+    guard = capture_mod._ParentLifetimeGuard(state)
+    guard._watch()
 
     interruption = state.interruption()
     assert isinstance(interruption, capture_mod.CaptureCancelled)

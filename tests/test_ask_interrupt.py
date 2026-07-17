@@ -1593,6 +1593,240 @@ raise SystemExit(cli.main(["ask", "--confirm", "never", "--json", "Still there?"
     assert "KeyboardInterrupt" not in stderr
 
 
+@pytest.mark.parametrize(
+    ("deliver_internal_wake", "native_abort_returns"),
+    [(True, True), (False, True), (True, False)],
+)
+def test_orchestrator_disappearance_without_signal_cancels_and_preserves_workers(
+    tmp_path,
+    deliver_internal_wake,
+    native_abort_returns,
+):
+    """A vanished launcher must not orphan Pa_ReadStream or stop Mode A workers."""
+    state_root = tmp_path / "state" / "hark"
+    state_root.mkdir(parents=True)
+    worker = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        start_new_session=True,
+    )
+    (state_root / "mode-a.pids").write_text(f"{worker.pid}\n", encoding="utf-8")
+
+    ready = tmp_path / "orphan-ready"
+    child_pid_path = tmp_path / "orphan-child.pid"
+    intermediary_pid_path = tmp_path / "orphan-intermediary.pid"
+    result_path = tmp_path / "orphan-result.json"
+    cleaned = tmp_path / "orphan-cleaned"
+    script = r'''\
+import contextlib
+import io
+import json
+import os
+import pathlib
+import sys
+import time
+from types import SimpleNamespace
+
+ready = pathlib.Path(sys.argv[1])
+child_pid_path = pathlib.Path(sys.argv[2])
+intermediary_pid_path = pathlib.Path(sys.argv[3])
+result_path = pathlib.Path(sys.argv[4])
+cleaned = pathlib.Path(sys.argv[5])
+deliver_internal_wake = sys.argv[6] == "1"
+native_abort_returns = sys.argv[7] == "1"
+
+intermediary = os.fork()
+if intermediary:
+    deadline = time.monotonic() + 5.0
+    while not ready.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    os._exit(0)  # Simulate Codex/orchestrator disappearance: no signal to ask.
+
+# Model a surviving shell/uv wrapper between Codex and the ask process.
+intermediary_pid_path.write_text(str(os.getpid()), encoding="utf-8")
+pid = os.fork()
+if pid:
+    while True:
+        time.sleep(1.0)
+
+child_pid_path.write_text(str(os.getpid()), encoding="utf-8")
+
+import hark.audio.capture as capture
+import hark.cli as cli
+import hark.listen_control as listen_control
+import hark.mic_coord as mic_coord
+import hark.speech as speech
+import hark.workers as workers
+from hark.config import HarkConfig
+
+if not deliver_internal_wake:
+    real_kill = os.kill
+
+    def suppress_internal_wake(pid, signum):
+        if pid == os.getpid() and signum == signal.SIGTERM:
+            raise OSError("internal wake unavailable")
+        return real_kill(pid, signum)
+
+    import signal
+    os.kill = suppress_internal_wake
+
+class BlockingStream:
+    def __init__(self):
+        self.aborted = False
+
+    def start(self):
+        return None
+
+    def read(self, _block):
+        ready.write_text("reading", encoding="utf-8")
+        while not self.aborted:
+            time.sleep(0.01)
+        raise RuntimeError("aborted blocking read")
+
+    def abort(self):
+        with cleaned.open("a", encoding="utf-8") as handle:
+            handle.write("abort\n")
+        if not native_abort_returns:
+            while True:
+                time.sleep(1.0)
+        self.aborted = True
+
+    def close(self):
+        with cleaned.open("a", encoding="utf-8") as handle:
+            handle.write("close\n")
+
+stream = BlockingStream()
+capture._require_sd = lambda: None
+capture.sd = SimpleNamespace(InputStream=lambda **_kwargs: stream)
+
+cfg = HarkConfig()
+cfg.audio.overlap_prearm = False
+cfg.audio.listen_pre_arm_ms = 0
+cfg.audio.duck_media_during_stt = False
+cfg.audio.pause_media_during_stt = False
+cfg.audio.answer_arm_cue = False
+cfg.listen.empty_stt_retry = False
+cfg.listen.empty_stt_nudge = False
+cli.load_config = lambda *_args, **_kwargs: cfg
+speech.run_tts = lambda *_args, **_kwargs: {"ok": True, "provider": "mock"}
+speech.resolve_stt = lambda *_args, **_kwargs: SimpleNamespace(name="mock")
+speech.configure_cues_from_config = lambda *_args, **_kwargs: None
+speech.play_record_start = lambda: None
+speech.play_record_stop = lambda: None
+speech.duck_media = lambda *_args, **_kwargs: contextlib.nullcontext()
+
+stdout = io.StringIO()
+stderr = io.StringIO()
+with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+    exit_code = cli.main(["ask", "--confirm", "never", "--json", "Still there?"])
+
+# Native cleanup is asynchronous but bounded; wait briefly for its registry.
+deadline = time.monotonic() + 1.0
+while capture.capture_in_progress() and time.monotonic() < deadline:
+    time.sleep(0.01)
+
+try:
+    with capture.MicLease("post-interrupt-probe"):
+        mic_available = True
+except Exception:
+    mic_available = False
+
+result_path.write_text(
+    json.dumps(
+        {
+            "exit_code": exit_code,
+            "ask": json.loads(stdout.getvalue()),
+            "stderr": stderr.getvalue(),
+            "capture_in_progress": capture.capture_in_progress(),
+            "mic_available": mic_available,
+            "mic_holder": capture.MicLease._holder,
+            "ambient_pause": mic_coord.read_ambient_pause(),
+            "active_listen": listen_control.read_active(),
+            "workers_running": workers.workers_status()["workers"]["running"],
+            "worker_pids": workers.workers_status()["workers"]["pids"],
+        }
+    ),
+    encoding="utf-8",
+)
+'''
+    env = os.environ.copy()
+    src_dir = Path(__file__).resolve().parents[1] / "src"
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(src_dir), env.get("PYTHONPATH", "")))
+    )
+    env["XDG_STATE_HOME"] = str(tmp_path / "state")
+    launcher = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(ready),
+            str(child_pid_path),
+            str(intermediary_pid_path),
+            str(result_path),
+            str(cleaned),
+            "1" if deliver_internal_wake else "0",
+            "1" if native_abort_returns else "0",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+    )
+    child_pid: int | None = None
+    intermediary_pid: int | None = None
+    try:
+        launcher.wait(timeout=5.0)
+        deadline = time.monotonic() + 5.0
+        while not result_path.exists() and time.monotonic() < deadline:
+            if child_pid is None and child_pid_path.exists():
+                child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+            time.sleep(0.01)
+        assert result_path.exists(), "orphan ask did not cancel after launcher exit"
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    finally:
+        if child_pid is None and child_pid_path.exists():
+            child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        if intermediary_pid_path.exists():
+            intermediary_pid = int(
+                intermediary_pid_path.read_text(encoding="utf-8")
+            )
+        for pid in (child_pid, intermediary_pid):
+            if pid is None:
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if launcher.poll() is None:
+            launcher.kill()
+            launcher.wait(timeout=2.0)
+        if worker.poll() is None:
+            try:
+                os.killpg(worker.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            worker.wait(timeout=2.0)
+
+    ask = result["ask"]
+    assert result["exit_code"] == ABORT
+    assert ask["ok"] is False
+    assert ask["cancelled"] is True
+    assert ask["error"] == "interrupted"
+    assert ask["reason"] == "orchestrator_disappeared"
+    assert ask["end_phrase"] == "orchestrator_disappeared"
+    assert ask["signal"] is None
+    assert "Traceback" not in result["stderr"]
+    assert "KeyboardInterrupt" not in result["stderr"]
+    assert result["capture_in_progress"] is (not native_abort_returns)
+    assert result["mic_available"] is True
+    assert result["mic_holder"] is None
+    assert result["ambient_pause"] is None
+    assert result["active_listen"] is None
+    assert result["workers_running"] is True
+    assert worker.pid in result["worker_pids"]
+    expected_cleanup = ["abort", "close"] if native_abort_returns else ["abort"]
+    assert cleaned.read_text(encoding="utf-8").splitlines() == expected_cleanup
+
+
 @pytest.mark.skipif(shutil.which("script") is None, reason="util-linux script missing")
 def test_ctrl_c_from_real_pty_returns_structured_abort(tmp_path):
     ready = tmp_path / "pty-ready"

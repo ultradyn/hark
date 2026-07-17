@@ -757,9 +757,7 @@ def capture_interrupt_signals() -> Iterator[None]:
     watched = (signal.SIGINT, signal.SIGTERM)
     previous = {signum: signal.getsignal(signum) for signum in watched}
     state = _CaptureSignalState()
-    with _capture_state_lock:
-        previous_state = _capture_signal_state
-        _capture_signal_state = state
+    previous_state: _CaptureSignalState | None = None
 
     def _interrupt(signum: int, _frame: object) -> None:
         wake_reason = state.consume_wake_signal(signum)
@@ -791,8 +789,11 @@ def capture_interrupt_signals() -> Iterator[None]:
     parent_guard: _ParentLifetimeGuard | None = None
     cleanup_errors: list[BaseException] = []
     try:
-        # Construction reads the process ancestry and can itself be interrupted;
-        # keep it inside the ownership-restoring try/finally.
+        # Publication and ancestry construction can themselves be interrupted;
+        # keep both inside the ownership-restoring try/finally.
+        with _capture_state_lock:
+            previous_state = _capture_signal_state
+            _capture_signal_state = state
         parent_guard = _ParentLifetimeGuard(state)
         for signum in watched:
             signal.signal(signum, _interrupt)

@@ -205,6 +205,42 @@ def test_real_signal_scope_structures_install_and_restore_interrupts(
     assert len(calls) == expected_calls
 
 
+def test_signal_after_capture_state_publication_restores_global(monkeypatch):
+    real_lock = capture_mod._capture_state_lock
+
+    class SignalOnPublicationExit:
+        def __init__(self) -> None:
+            self.exits = 0
+
+        def __enter__(self):
+            real_lock.acquire()
+            return self
+
+        def __exit__(self, *_args):
+            real_lock.release()
+            self.exits += 1
+            if self.exits == 2:
+                os.kill(os.getpid(), signal.SIGINT)
+
+    old_sigint = signal.getsignal(signal.SIGINT)
+    old_sigterm = signal.getsignal(signal.SIGTERM)
+    monkeypatch.setattr(
+        capture_mod,
+        "_capture_state_lock",
+        SignalOnPublicationExit(),
+    )
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            with capture_mod.capture_interrupt_signals():
+                pytest.fail("signal after capture-state publication reached body")
+        assert capture_mod._capture_signal_state is None
+        assert signal.getsignal(signal.SIGINT) is old_sigint
+        assert signal.getsignal(signal.SIGTERM) is old_sigterm
+    finally:
+        # Keep this RED regression isolated on implementations that leak state.
+        capture_mod._capture_signal_state = None
+
+
 def test_parent_guard_construction_interrupt_restores_capture_state(monkeypatch):
     primary = capture_mod.CaptureInterrupted(signal.SIGINT)
 

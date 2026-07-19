@@ -168,6 +168,9 @@ def _run_ask(
                 "exit": ABORT,
                 "tts": tts_info,
             }
+        # Security invariant: the silence Answer Window transcript reaches this
+        # seam before Unicode compatibility normalization. Keep it in that form so
+        # confirmation classification can inspect source-glyph provenance.
         decision = classify_confirm_reply(conf.text)
         if decision != "yes":
             return {

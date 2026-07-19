@@ -27,6 +27,15 @@ _SUPPORTED_APOSTROPHE_SEPARATORS = frozenset(
         "\uff40",  # fullwidth grave accent
     }
 )
+# U+02BB and underscore are deliberately malformed contraction separators, but
+# Unicode classifies them as Lm/Pc word bases.  Keep these pinned controls in the
+# malformed-separator path instead of treating them as ordinary multilingual text.
+_DECLARED_MALFORMED_WORD_BASE_SEPARATORS = frozenset({"_", "\u02bb"})
+# These separator-shaped controls remain fail-closed when combined with raw
+# whitespace even though that whitespace is not candidate-owned.  They are a
+# separate malformed-apostrophe policy, not permission for the direct matcher
+# to reconnect arbitrary evidence across a later prose boundary.
+_DECLARED_MALFORMED_APOSTROPHE_SEPARATORS = frozenset({"\u2033"})
 _CONFIRM_APOSTROPHE_TRANSLATION = str.maketrans(
     {variant: "'" for variant in _SUPPORTED_APOSTROPHE_SEPARATORS}
 )
@@ -134,52 +143,38 @@ class _NormalizedBridgeCandidate:
 
     left: tuple[int, int] | None = None
     last_raw_whitespace: int | None = None
-    preserve_internal_compatibility_whitespace: bool = False
-    evidence_seen: bool = False
-    alpha_before_evidence: bool = False
-    alpha_after_evidence: bool = False
+    alpha_seen: bool = False
 
     def start(
         self,
         left: tuple[int, int] | None,
         *,
         raw_whitespace: int | None = None,
-        preserve_internal_compatibility_whitespace: bool = False,
     ) -> None:
         self.left = left
         self.last_raw_whitespace = raw_whitespace
-        self.preserve_internal_compatibility_whitespace = (
-            preserve_internal_compatibility_whitespace
-        )
-        self.evidence_seen = False
-        self.alpha_before_evidence = False
-        self.alpha_after_evidence = False
+        self.alpha_seen = False
 
     def observe_previous(self, text: str, index: int) -> None:
         if self.left is None or index <= self.left[1]:
             return
         previous = text[index - 1]
-        previous_is_evidence = _is_boundary_transparent(previous) or (
-            not previous.isalpha() and not previous.isspace()
-        )
-        if previous_is_evidence:
-            self.evidence_seen = True
-            self.alpha_after_evidence = False
-        elif previous.isalpha():
-            if self.evidence_seen:
-                self.alpha_after_evidence = True
-            else:
-                self.alpha_before_evidence = True
+        if previous.isalpha():
+            self.alpha_seen = True
 
-    def cross_raw_whitespace(self, index: int) -> None:
+    def cross_raw_whitespace(
+        self,
+        index: int,
+        *,
+        belongs_to_initial_boundary: bool,
+    ) -> None:
         if self.left is None:
             return
-        true_prose_boundary = (
-            not self.preserve_internal_compatibility_whitespace
-            and index != self.last_raw_whitespace
-            and (not self.evidence_seen or self.alpha_before_evidence)
-        )
-        if true_prose_boundary:
+        # The first raw space can begin the externally normalized fallback.
+        # Every later raw-space source ends ownership. Spaces projected inside
+        # U+FDFA/U+FDFB never enter this method because their attributed raw
+        # source is the same non-whitespace code point validated at start().
+        if not belongs_to_initial_boundary:
             self.start(None)
         else:
             self.last_raw_whitespace = index
@@ -338,9 +333,13 @@ def _build_projection_facts(raw: str, projection: _RawProjection) -> _Projection
         raw_compatibility_prefix.append(
             raw_compatibility_prefix[-1] + is_compatibility_source
         )
+    # Preserve the raw code point's whitespace identity independently of its
+    # compatibility provenance.  A compatibility space such as NBSP is still a
+    # real prose boundary when it is a later, distinct raw source.  Conversely,
+    # spaces merely emitted inside the declared U+FDFA/U+FDFB expansion inherit
+    # a non-whitespace raw source and remain internal to that exact source span.
     raw_source_is_whitespace = tuple(
-        raw[raw_index].isspace() and not projection.compatibility_sources[raw_index]
-        for raw_index in projection.raw_indices
+        raw[raw_index].isspace() for raw_index in projection.raw_indices
     )
     whitespace_prefix = [0]
     significant_prefix = [0]
@@ -375,12 +374,23 @@ def _ascii_literal_at(text: str, start: int, literal: str) -> bool:
     return end <= len(text) and text[start:end].lower() == literal
 
 
-def _normalized_compatibility_whitespace_at(text: str, start: int) -> bool:
-    """Recognize the two alphabetic-first compatibility whitespace expansions."""
-    return any(
-        text.startswith(expansion, start)
-        for expansion in _NORMALIZED_ALPHABETIC_COMPATIBILITY_WHITESPACE
-    )
+def _normalized_compatibility_whitespace_source_at(
+    projection: _RawProjection, start: int
+) -> int | None:
+    """Raw-source index owning one complete declared expansion, if any."""
+    for expansion in _NORMALIZED_ALPHABETIC_COMPATIBILITY_WHITESPACE:
+        end = start + len(expansion)
+        if not projection.text.startswith(expansion, start) or end > len(
+            projection.text
+        ):
+            continue
+        raw_index = projection.raw_indices[start]
+        if (
+            projection.raw_indices[end - 1] == raw_index
+            and projection.compatibility_sources[raw_index]
+        ):
+            return raw_index
+    return None
 
 
 def _raw_material_for_projection_span(
@@ -392,6 +402,31 @@ def _raw_material_for_projection_span(
     raw_start = projection.raw_indices[start]
     raw_end = projection.raw_indices[end - 1] + 1
     return raw_start, raw_end, raw[raw_start:raw_end]
+
+
+def _is_supported_apostrophe_material(raw_material: str) -> bool:
+    """Whether raw separator material is one declared apostrophe equivalent."""
+    return raw_material == _DECOMPOSED_SPACING_ACUTE or (
+        len(raw_material) == 1 and raw_material in _SUPPORTED_APOSTROPHE_SEPARATORS
+    )
+
+
+def _projection_span_is_supported_apostrophe_material(
+    raw: str,
+    projection: _RawProjection,
+    start: int,
+    end: int,
+) -> bool:
+    """Check declared separator ownership without slicing an unbounded bridge."""
+    raw_start = projection.raw_indices[start]
+    raw_end = projection.raw_indices[end - 1] + 1
+    raw_length = raw_end - raw_start
+    if raw_length == 1:
+        return raw[raw_start] in _SUPPORTED_APOSTROPHE_SEPARATORS
+    return raw_length == len(_DECOMPOSED_SPACING_ACUTE) and all(
+        raw[raw_start + offset] == expected
+        for offset, expected in enumerate(_DECOMPOSED_SPACING_ACUTE)
+    )
 
 
 def _has_observable_normalized_bridge_evidence(
@@ -444,8 +479,106 @@ def _projection_span_owns_raw_source_edges(
     return starts_at_raw_source and ends_at_raw_source
 
 
+def _raw_whitespace_belongs_to_initial_boundary(
+    projection: _RawProjection,
+    facts: _ProjectionFacts,
+    initial_index: int | None,
+    current_index: int,
+) -> bool:
+    """Whether two projected spaces belong to one initial raw source.
+
+    A separator may start at one raw whitespace source.  Any distinct later
+    whitespace source is a prose boundary and expires the candidate.  Spaces
+    merely projected from a non-whitespace compatibility source (for example
+    the internal spaces of U+FDFA/U+FDFB) inherit that non-whitespace raw
+    identity and therefore never reach this ownership check as raw whitespace.
+    """
+    return bool(
+        initial_index is not None
+        and facts.raw_source_is_whitespace[initial_index]
+        and facts.raw_source_is_whitespace[current_index]
+        and projection.raw_indices[initial_index]
+        == projection.raw_indices[current_index]
+    )
+
+
+def _assess_direct_separator_span(
+    projection: _RawProjection,
+    facts: _ProjectionFacts,
+    start: int,
+    end: int,
+) -> tuple[bool, bool]:
+    """Return ``(accepted, expired_at_later_whitespace)`` for a direct span.
+
+    The regular expression is deliberately ASCII-shaped so it can expose
+    compatibility-expanded skeletons, but that also means Unicode word bases
+    appear to be separator characters.  Let the provenance-aware bridge scan
+    decide those cases, including whether a later raw whitespace ends the
+    candidate.  The declared malformed Lm/Pc controls must remain separator
+    evidence rather than becoming ordinary prose.
+    """
+    # A raw whitespace source belongs to this candidate only when it begins the
+    # separator.  Do not retroactively claim the first whitespace encountered
+    # after other evidence: the scanner expires its candidate at that boundary.
+    initial_raw_whitespace = start if facts.raw_source_is_whitespace[start] else None
+    for index in range(start, end):
+        if facts.raw_source_is_whitespace[index]:
+            if initial_raw_whitespace is None or not (
+                _raw_whitespace_belongs_to_initial_boundary(
+                    projection,
+                    facts,
+                    initial_raw_whitespace,
+                    index,
+                )
+            ):
+                return False, True
+        projected_character = projection.text[index]
+        if (
+            _is_confirmation_word_base(projected_character)
+            and projected_character not in _DECLARED_MALFORMED_WORD_BASE_SEPARATORS
+        ):
+            return False, False
+    return True, False
+
+
+def _direct_separator_span_respects_boundaries(
+    projection: _RawProjection,
+    facts: _ProjectionFacts,
+    start: int,
+    end: int,
+) -> bool:
+    """Keep the ASCII-shaped regex inside the scanner's boundary policy."""
+    accepted, _ = _assess_direct_separator_span(projection, facts, start, end)
+    return accepted
+
+
+def _projection_span_contains_declared_apostrophe_material(
+    raw: str,
+    projection: _RawProjection,
+    start: int,
+    end: int,
+) -> bool:
+    """Recognize explicit apostrophe-shaped material without bridge slicing.
+
+    Composite apostrophe separators remain fail-closed independently of raw
+    whitespace ownership.  Keeping that policy separate prevents the direct
+    matcher from treating an arbitrary later whitespace as an initial boundary.
+    """
+    raw_start = projection.raw_indices[start]
+    raw_end = projection.raw_indices[end - 1] + 1
+    for raw_index in range(raw_start, raw_end):
+        char = raw[raw_index]
+        if (
+            char in _SUPPORTED_APOSTROPHE_SEPARATORS
+            or char in _DECLARED_MALFORMED_WORD_BASE_SEPARATORS
+            or char in _DECLARED_MALFORMED_APOSTROPHE_SEPARATORS
+        ):
+            return True
+    return False
+
+
 def _iter_compatibility_bridge_spans(
-    projection: _RawProjection, facts: _ProjectionFacts
+    raw: str, projection: _RawProjection, facts: _ProjectionFacts
 ) -> Iterator[tuple[int, int]]:
     """Yield compatibility-origin bridges attached within one raw prose token.
 
@@ -462,9 +595,22 @@ def _iter_compatibility_bridge_spans(
         for index in range(len(text)):
             normalized.observe_previous(text, index)
             if facts.raw_source_is_whitespace[index]:
-                earliest_left = None
-                latest_left = None
-                normalized.cross_raw_whitespace(index)
+                is_initial_normalized_boundary = (
+                    normalized.left is not None
+                    and _raw_whitespace_belongs_to_initial_boundary(
+                        projection,
+                        facts,
+                        normalized.last_raw_whitespace,
+                        index,
+                    )
+                )
+                if not is_initial_normalized_boundary:
+                    earliest_left = None
+                    latest_left = None
+                normalized.cross_raw_whitespace(
+                    index,
+                    belongs_to_initial_boundary=is_initial_normalized_boundary,
+                )
             left_end = index + len(left)
             is_left_start = (
                 _ascii_literal_at(text, index, left)
@@ -475,6 +621,14 @@ def _iter_compatibility_bridge_spans(
                 # This is not an ordinary in-token candidate. Retain it only
                 # for the normalized compatibility-whitespace fallback below.
                 normalized.start((index, left_end), raw_whitespace=left_end)
+                raw_source = projection.raw_indices[left_end]
+                if projection.compatibility_sources[raw_source]:
+                    # A compatibility-space code point at the first separator
+                    # boundary is still observable raw provenance. Keep the
+                    # ordinary candidate until a later raw-space source ends it.
+                    latest_left = (index, left_end)
+                    if earliest_left is None:
+                        earliest_left = latest_left
             elif is_left_start:
                 latest_left = (index, left_end)
                 if earliest_left is None:
@@ -483,14 +637,13 @@ def _iter_compatibility_bridge_spans(
                 # with alphabetic material before their internal spaces. Keep
                 # those normalization-equivalent strings fail-closed without
                 # treating every ordinary non-ASCII word as provenance.
-                has_normalized_compatibility_whitespace = (
-                    _normalized_compatibility_whitespace_at(text, left_end)
+                compatibility_whitespace_raw_source = (
+                    _normalized_compatibility_whitespace_source_at(projection, left_end)
                 )
                 normalized.start(
-                    latest_left if has_normalized_compatibility_whitespace else None,
-                    preserve_internal_compatibility_whitespace=(
-                        has_normalized_compatibility_whitespace
-                    ),
+                    latest_left
+                    if compatibility_whitespace_raw_source is not None
+                    else None,
                 )
             active_left = normalized.left or latest_left
             if index <= (active_left[1] if active_left is not None else -1):
@@ -519,20 +672,34 @@ def _iter_compatibility_bridge_spans(
                     index - 1
                 ] and _is_complete_confirmation_span(facts, latest_left[0], right_end):
                     earliest_separator_span = (earliest_left[1], index)
-                    if _projection_span_has_compatibility_source(
-                        projection, facts, *earliest_separator_span
-                    ):
-                        yield earliest_separator_span
-                        continue
-                    latest_separator_span = (latest_left[1], index)
-                    if _has_observable_normalized_bridge_evidence(
-                        facts, *earliest_separator_span
-                    ) or (
-                        latest_separator_span != earliest_separator_span
-                        and _has_observable_normalized_bridge_evidence(
-                            facts, *latest_separator_span
+                    earliest_is_supported_apostrophe = (
+                        _projection_span_is_supported_apostrophe_material(
+                            raw, projection, *earliest_separator_span
                         )
-                    ):
+                    )
+                    if not earliest_is_supported_apostrophe:
+                        if _projection_span_has_compatibility_source(
+                            projection, facts, *earliest_separator_span
+                        ):
+                            yield earliest_separator_span
+                            continue
+                    latest_separator_span = (latest_left[1], index)
+                    latest_is_unsupported_evidence = False
+                    if latest_separator_span != earliest_separator_span:
+                        latest_is_unsupported_evidence = (
+                            not _projection_span_is_supported_apostrophe_material(
+                                raw, projection, *latest_separator_span
+                            )
+                            and _has_observable_normalized_bridge_evidence(
+                                facts, *latest_separator_span
+                            )
+                        )
+                    if (
+                        not earliest_is_supported_apostrophe
+                        and _has_observable_normalized_bridge_evidence(
+                            facts, *earliest_separator_span
+                        )
+                    ) or latest_is_unsupported_evidence:
                         yield earliest_separator_span
                         continue
             # Compatibility whitespace becomes indistinguishable from literal
@@ -547,7 +714,7 @@ def _iter_compatibility_bridge_spans(
                 and normalized.last_raw_whitespace is not None
                 and index > normalized.last_raw_whitespace + 1
                 and not facts.raw_source_is_whitespace[index - 1]
-                and normalized.alpha_after_evidence
+                and normalized.alpha_seen
                 and _is_complete_confirmation_span(facts, normalized.left[0], right_end)
                 and _has_observable_normalized_bridge_evidence(
                     facts, normalized.left[1], index
@@ -580,16 +747,39 @@ def _analyze_contraction_provenance(text: str) -> _ContractionProvenance:
         if raw_material == _DECOMPOSED_SPACING_ACUTE:
             replacements[raw_start] = raw_end
             return
-        if len(raw_material) == 1 and raw_material in _SUPPORTED_APOSTROPHE_SEPARATORS:
+        if _is_supported_apostrophe_material(raw_material):
             return
         has_unsupported_separator = True
 
     for pattern in _CONTRACTION_SEPARATOR_PATTERNS:
         for match in pattern.finditer(projection.text):
-            if _is_complete_confirmation_span(facts, match.start(), match.end()):
-                validate_material(*match.span("separator"))
+            separator_start, separator_end = match.span("separator")
+            if not _is_complete_confirmation_span(facts, match.start(), match.end()):
+                continue
+            direct_accepted, expired_at_later_whitespace = (
+                _assess_direct_separator_span(
+                    projection,
+                    facts,
+                    separator_start,
+                    separator_end,
+                )
+            )
+            if direct_accepted:
+                validate_material(separator_start, separator_end)
+            elif expired_at_later_whitespace and (
+                _projection_span_contains_declared_apostrophe_material(
+                    text,
+                    projection,
+                    separator_start,
+                    separator_end,
+                )
+            ):
+                # Composite apostrophe-like separators remain a dedicated
+                # fail-closed policy even when a later prose boundary means the
+                # ordinary bridge candidate itself has expired.
+                has_unsupported_separator = True
 
-    for _ in _iter_compatibility_bridge_spans(projection, facts):
+    for _ in _iter_compatibility_bridge_spans(text, projection, facts):
         has_unsupported_separator = True
         break
     canonical_input = _canonical_input_with_replacements(text, replacements)

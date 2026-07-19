@@ -214,6 +214,11 @@ def test_multisource_compatibility_bridge_uses_observable_provenance(
     result = classify_confirm_reply(f"yes I {left}{material}{right} approve this")
     if normalization in PROVENANCE_PRESERVING_NORMALIZATION_FORMS:
         assert result != "yes"
+    elif bridge == "\u00a8\u00a8":
+        # Compatibility normalization turns these into two independent
+        # SPACE+MARK sources. The second raw space is a prose boundary, so the
+        # earlier ``can`` candidate must not reconnect to the later ``t``.
+        assert result == "yes"
     elif is_fully_collapsed_alphabetic_material(material):
         assert result == "yes"
     else:
@@ -244,7 +249,7 @@ def test_alphabetic_triple_compatibility_bridge_uses_observable_provenance(
 @pytest.mark.parametrize("bridge", COMPATIBILITY_WHITESPACE_ALPHA_REPRODUCTIONS)
 @pytest.mark.parametrize("normalization", PROVENANCE_PRESERVING_NORMALIZATION_FORMS)
 @pytest.mark.parametrize("parts", CONTRACTION_PARTS)
-def test_compatibility_whitespace_with_alphabetic_material_fails_closed(
+def test_compatibility_whitespace_with_alphabetic_material_applies_boundary_policy(
     bridge, normalization, parts
 ):
     left, right = parts
@@ -254,26 +259,32 @@ def test_compatibility_whitespace_with_alphabetic_material_fails_closed(
         else unicodedata.normalize(normalization, bridge)
     )
 
-    assert (
-        classify_confirm_reply(f"yes I {left}{material}{right} approve this") != "yes"
-    )
+    result = classify_confirm_reply(f"yes I {left}{material}{right} approve this")
+    if bridge == "a\u2002":
+        assert result == "yes"
+    else:
+        assert result != "yes"
 
 
-def test_all_compatibility_whitespace_sources_remain_attached_to_literal_alpha():
+def test_all_compatibility_whitespace_sources_apply_raw_boundary_policy():
     leading_sources = leading_compatibility_whitespace_sources()
     trailing_sources = trailing_compatibility_whitespace_sources()
-    failures = []
+    mismatches = []
     audited = 0
 
     source_bridges = (
-        *(source + suffix for source in leading_sources for suffix in ("a", "\u200ba")),
         *(
-            prefix + source
+            (source + suffix, False)
+            for source in leading_sources
+            for suffix in ("a", "\u200ba")
+        ),
+        *(
+            (prefix + source, source.isspace())
             for source in trailing_sources
             for prefix in ("a", "a\u200b")
         ),
     )
-    for bridge in source_bridges:
+    for bridge, should_approve in source_bridges:
         for normalization in PROVENANCE_PRESERVING_NORMALIZATION_FORMS:
             material = (
                 bridge
@@ -283,21 +294,28 @@ def test_all_compatibility_whitespace_sources_remain_attached_to_literal_alpha()
             for left, right in CONTRACTION_PARTS:
                 audited += 1
                 reply = f"yes I {left}{material}{right} approve this"
-                if classify_confirm_reply(reply) == "yes":
-                    failures.append(
-                        (tuple(map(ord, bridge)), normalization, left, right)
+                approved = classify_confirm_reply(reply) == "yes"
+                if approved is not should_approve:
+                    mismatches.append(
+                        (
+                            tuple(map(ord, bridge)),
+                            normalization,
+                            left,
+                            right,
+                            approved,
+                        )
                     )
-                    if len(failures) == 20:
+                    if len(mismatches) == 20:
                         break
-            if len(failures) == 20:
+            if len(mismatches) == 20:
                 break
-        if len(failures) == 20:
+        if len(mismatches) == 20:
             break
 
     assert len(leading_sources) >= 65
     assert len(trailing_sources) >= 15
     assert audited >= 1_400
-    assert failures == []
+    assert mismatches == []
 
 
 def test_normalized_compatibility_whitespace_keeps_all_transparent_evidence():
@@ -334,10 +352,10 @@ def test_normalized_compatibility_whitespace_keeps_all_transparent_evidence():
     assert failures == []
 
 
-def test_all_normalized_compatibility_whitespace_sources_keep_format_evidence():
+def test_all_normalized_compatibility_whitespace_sources_respect_later_boundaries():
     sources = compatibility_whitespace_sources()
     normalizations = ("NFKC", "NFKD")
-    failures = []
+    approvals = []
     audited = 0
 
     for source in sources:
@@ -348,7 +366,7 @@ def test_all_normalized_compatibility_whitespace_sources_keep_format_evidence():
                 audited += 1
                 reply = f"yes I {left}{material}{right} approve this"
                 if classify_confirm_reply(reply) == "yes":
-                    failures.append(
+                    approvals.append(
                         (f"U+{ord(source):04X}", normalization, left, right)
                     )
 
@@ -361,7 +379,13 @@ def test_all_normalized_compatibility_whitespace_sources_keep_format_evidence():
     )
     assert {"\u00a0", "\u00a8", "\u2002"} <= set(sources)
     assert audited == len(sources) * len(normalizations) * len(NORMATIVE_CONTRACTIONS)
-    assert failures == []
+    expected_approvals = [
+        (f"U+{ord(source):04X}", normalization, left, right)
+        for source in ALPHABETIC_COMPATIBILITY_WHITESPACE_SOURCES
+        for normalization in normalizations
+        for left, right in CONTRACTION_PARTS
+    ]
+    assert approvals == expected_approvals
 
 
 @pytest.mark.parametrize(
@@ -387,7 +411,7 @@ def test_normalized_whitespace_with_surviving_bridge_evidence_fails_closed(
 @pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
 @pytest.mark.parametrize("parts", CONTRACTION_PARTS)
 @pytest.mark.parametrize(("category", "bridge"), SHADOWED_NORMALIZED_BRIDGE_EVIDENCE)
-def test_later_normalized_whitespace_keeps_prior_observable_bridge_evidence(
+def test_later_literal_whitespace_terminates_collapsed_shadowed_evidence(
     category, bridge, parts, normalization
 ):
     left, right = parts
@@ -399,7 +423,243 @@ def test_later_normalized_whitespace_keeps_prior_observable_bridge_evidence(
     )
     reply = f"yes I {left}{material}{right} approve this"
 
+    assert classify_confirm_reply(reply) == "yes"
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("parts", CONTRACTION_PARTS)
+@pytest.mark.parametrize("evidence", ("\u200b", "\u0301", "/", "©", "1"))
+@pytest.mark.parametrize(
+    "bridge_template",
+    (
+        "\u00a0{evidence}\u1d43",
+        "\u00a0\u1d43{evidence}",
+        "\u00a0{evidence}\u1d43{evidence}",
+    ),
+    ids=("evidence-before-alpha", "evidence-after-alpha", "evidence-both-sides"),
+)
+def test_observable_bridge_evidence_is_order_independent(
+    bridge_template, evidence, parts, normalization
+):
+    left, right = parts
+    bridge = bridge_template.format(evidence=evidence)
+    reply = f"yes I {left}{bridge}{right} approve this"
+    if normalization is not None:
+        reply = unicodedata.normalize(normalization, reply)
+
     assert classify_confirm_reply(reply) == "unclear"
+
+
+@pytest.mark.parametrize("evidence", ("\u200b", "\ufe0f", "\u0301", "/", "©"))
+@pytest.mark.parametrize("boundary", (" ", "\t", "\n", "\u2028"))
+def test_later_literal_prose_boundary_terminates_bridge_candidate(evidence, boundary):
+    assert classify_confirm_reply(f"yes I can {evidence}do{boundary}it") == "yes"
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("initial_boundary", (" ", "\u00a0"))
+@pytest.mark.parametrize("later_boundary", (" ", "\t", "\u00a0", "\u2002"))
+@pytest.mark.parametrize(
+    ("category", "evidence"),
+    (("Cf", "\u200b"), ("Mn", "\u0301"), ("Po", "/"), ("So", "©")),
+)
+def test_direct_separator_respects_later_raw_whitespace_expiry(
+    category, evidence, later_boundary, initial_boundary, normalization
+):
+    assert unicodedata.category(evidence) == category
+    raw_reply = f"yes I can{initial_boundary}{evidence}{later_boundary}t approve this"
+    reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    assert classify_confirm_reply(reply) == "yes"
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("boundary", (" ", "\t", "\u00a0", "\u2002"))
+@pytest.mark.parametrize(
+    ("category", "evidence"),
+    (("Cf", "\u200b"), ("Mn", "\u0301"), ("Po", "/"), ("So", "©")),
+)
+def test_direct_separator_cannot_claim_first_later_raw_whitespace(
+    category, evidence, boundary, normalization
+):
+    assert unicodedata.category(evidence) == category
+    raw_reply = f"yes I can{evidence}{boundary}t approve this"
+    reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    assert classify_confirm_reply(reply) == "yes"
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("boundary", (" ", "\t", "\u00a0", "\u2002"))
+@pytest.mark.parametrize(
+    ("category", "evidence"),
+    (("Cf", "\u200b"), ("Mn", "\u0301"), ("Po", "/"), ("So", "©")),
+)
+def test_direct_and_scanner_share_later_whitespace_ownership(
+    category, evidence, boundary, normalization
+):
+    assert unicodedata.category(evidence) == category
+    raw_reply = f"yes I can{evidence}{boundary}t approve this"
+    reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+    projection = confirm_lexicon._build_raw_projection(reply)
+    assert projection is not None
+    facts = confirm_lexicon._build_projection_facts(reply, projection)
+
+    direct_candidates = [
+        match
+        for pattern in confirm_lexicon._CONTRACTION_SEPARATOR_PATTERNS
+        for match in pattern.finditer(projection.text)
+        if confirm_lexicon._is_complete_confirmation_span(
+            facts, match.start(), match.end()
+        )
+        and confirm_lexicon._direct_separator_span_respects_boundaries(
+            projection,
+            facts,
+            *match.span("separator"),
+        )
+    ]
+    scanner_candidates = list(
+        confirm_lexicon._iter_compatibility_bridge_spans(reply, projection, facts)
+    )
+
+    assert direct_candidates == scanner_candidates == []
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("boundary", (" ", "\t", "\u00a0", "\u2002"))
+@pytest.mark.parametrize("evidence", ("\u200b", "\u0301", "/", "©"))
+def test_direct_separator_preserves_candidate_owned_initial_boundary(
+    evidence, boundary, normalization
+):
+    raw_reply = f"yes I can{boundary}{evidence}t approve this"
+    reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    assert classify_confirm_reply(reply) != "yes"
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize(
+    "boundary",
+    tuple(source for source in compatibility_whitespace_sources() if source.isspace()),
+    ids=lambda source: f"U+{ord(source):04X}",
+)
+def test_later_independent_compatibility_space_terminates_bridge_candidate(
+    boundary, normalization
+):
+    raw_reply = f"yes I can \u200bdo{boundary}it"
+    reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    if normalization in ("NFKC", "NFKD"):
+        assert reply == "yes I can \u200bdo it"
+    assert classify_confirm_reply(reply) == "yes"
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("source", ALPHABETIC_COMPATIBILITY_WHITESPACE_SOURCES)
+@pytest.mark.parametrize(
+    "boundary",
+    tuple(source for source in compatibility_whitespace_sources() if source.isspace()),
+    ids=lambda source: f"U+{ord(source):04X}",
+)
+def test_later_independent_compatibility_space_expires_declared_source_span(
+    boundary, source, normalization
+):
+    raw_reply = f"yes I can{source}\u200bᵃ{boundary}t approve this"
+    reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    if normalization in ("NFKC", "NFKD"):
+        expected = (
+            "yes I can"
+            + unicodedata.normalize(normalization, source)
+            + "\u200ba t approve this"
+        )
+        assert reply == expected
+        assert source not in reply
+    assert classify_confirm_reply(reply) == "yes"
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("boundary", (" ", "\t", "\u00a0", "\u2002"))
+@pytest.mark.parametrize(
+    "word_base",
+    ("\u03bb", "\u0661", "\u203f"),
+    ids=("unicode-letter", "unicode-number", "connector-punctuation"),
+)
+@pytest.mark.parametrize("initial_boundary", ("", " "))
+def test_unicode_word_base_ends_direct_separator_candidate_before_later_space(
+    initial_boundary, word_base, boundary, normalization
+):
+    raw_reply = f"yes I can{initial_boundary}{word_base}{boundary}t approve this"
+    reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    assert classify_confirm_reply(reply) == "yes"
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("boundary", (" ", "\t", "\u00a0", "\u2002"))
+@pytest.mark.parametrize("source", ALPHABETIC_COMPATIBILITY_WHITESPACE_SOURCES)
+def test_declared_compatibility_source_span_expires_before_unrelated_right_fragment(
+    source, boundary, normalization
+):
+    raw_reply = f"yes I can{source}{boundary}t approve this"
+    reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    assert classify_confirm_reply(reply) == "yes"
+
+
+@pytest.mark.parametrize("evidence", ("\u200b", "\ufe0f", "\u0301", "/", "©"))
+def test_observable_bridge_without_later_prose_boundary_remains_fail_closed(evidence):
+    assert classify_confirm_reply(f"yes I can {evidence}dot") == "unclear"
+
+
+@pytest.mark.parametrize("apostrophe", ("'", "`", "\u2019", *APOSTROPHE_VARIANTS))
+@pytest.mark.parametrize(
+    ("opening_quote", "closing_quote"),
+    (("'", "'"), ("\u2018", "\u2019")),
+)
+def test_quoted_supported_contractions_remain_outside_b151_scope(
+    opening_quote, closing_quote, apostrophe
+):
+    reply = f"yes {opening_quote}can{apostrophe}t{closing_quote} approve this"
+    assert classify_confirm_reply(reply) == "yes"
+
+
+@pytest.mark.parametrize("apostrophe", ("'", "`", "\u2019", *APOSTROPHE_VARIANTS))
+def test_unquoted_supported_contractions_remain_negative(apostrophe):
+    reply = f"yes can{apostrophe}t approve this"
+    assert classify_confirm_reply(reply) == "no"
 
 
 @pytest.mark.parametrize("normalization", ("NFKC", "NFKD"))
@@ -502,14 +762,66 @@ def test_nonascii_prose_reset_does_not_hide_later_standalone_candidate(word_base
 @pytest.mark.parametrize("normalization", ("NFKC", "NFKD"))
 @pytest.mark.parametrize("parts", CONTRACTION_PARTS)
 @pytest.mark.parametrize("source", ALPHABETIC_COMPATIBILITY_WHITESPACE_SOURCES)
-def test_alphabetic_compatibility_whitespace_expansion_remains_fail_closed(
+def test_collapsed_alphabetic_compatibility_whitespace_equals_literal_prose(
     source, parts, normalization
 ):
     left, right = parts
     material = unicodedata.normalize(normalization, source + "\u200b\u1d43")
-    reply = f"yes I {left}{material}{right} approve this"
+    source_reply = unicodedata.normalize(
+        normalization, f"yes I {left}{source}\u200b\u1d43{right} approve this"
+    )
+    literal_reply = f"yes I {left}{material}{right} approve this"
+
+    assert source_reply == literal_reply
+    assert (
+        classify_confirm_reply(source_reply)
+        == classify_confirm_reply(literal_reply)
+        == "yes"
+    )
+
+
+@pytest.mark.parametrize("normalization", PROVENANCE_PRESERVING_NORMALIZATION_FORMS)
+@pytest.mark.parametrize("parts", CONTRACTION_PARTS)
+@pytest.mark.parametrize("source", ALPHABETIC_COMPATIBILITY_WHITESPACE_SOURCES)
+def test_raw_alphabetic_compatibility_whitespace_source_remains_fail_closed(
+    source, parts, normalization
+):
+    left, right = parts
+    reply = f"yes I {left}{source}\u200b\u1d43{right} approve this"
+    if normalization is not None:
+        reply = unicodedata.normalize(normalization, reply)
 
     assert classify_confirm_reply(reply) == "unclear"
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("boundary", (" ", "\t", "\n", "\u2028"))
+@pytest.mark.parametrize(
+    "evidence_and_alpha",
+    ("\u200b\u1d43", "\u1d43\u200b", "\u200b\u1d43\u200b"),
+    ids=("evidence-before-alpha", "evidence-after-alpha", "evidence-both-sides"),
+)
+@pytest.mark.parametrize("source", ALPHABETIC_COMPATIBILITY_WHITESPACE_SOURCES)
+def test_later_literal_boundary_expires_single_source_compatibility_exception(
+    source, evidence_and_alpha, boundary, normalization
+):
+    raw_reply = f"yes I can{source}{evidence_and_alpha}{boundary}do it"
+    reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    if normalization in ("NFKC", "NFKD"):
+        literal_reply = (
+            "yes I can"
+            + unicodedata.normalize(normalization, source + evidence_and_alpha)
+            + boundary
+            + "do it"
+        )
+        assert reply == literal_reply
+        assert classify_confirm_reply(literal_reply) == "yes"
+    assert classify_confirm_reply(reply) == "yes"
 
 
 @pytest.mark.parametrize(
@@ -998,6 +1310,35 @@ def test_transparent_boundary_scan_has_linear_operation_count(monkeypatch):
         nonlocal operation_count
         operation_count = 0
         reply = "yes " + "\u200b" * size + "can" + "t" * size
+
+        assert classify_confirm_reply(reply) == "yes"
+        return operation_count
+
+    small_work = measure(2048)
+    large_work = measure(4096)
+
+    assert large_work <= 2 * small_work + 32
+
+
+def test_direct_separator_unicode_boundary_scan_has_linear_operation_count(
+    monkeypatch,
+):
+    real_is_word_base = confirm_lexicon._is_confirmation_word_base
+    operation_count = 0
+
+    def counted_is_word_base(char):
+        nonlocal operation_count
+        operation_count += 1
+        return real_is_word_base(char)
+
+    monkeypatch.setattr(
+        confirm_lexicon, "_is_confirmation_word_base", counted_is_word_base
+    )
+
+    def measure(size):
+        nonlocal operation_count
+        operation_count = 0
+        reply = "yes can" + "\u200b" * size + "\u03bb t approve this"
 
         assert classify_confirm_reply(reply) == "yes"
         return operation_count

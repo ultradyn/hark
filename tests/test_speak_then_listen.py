@@ -248,9 +248,9 @@ def test_run_ask_confirm_cancel_on_no(monkeypatch, confirm_reply):
     assert out.get("confirm_reply") == confirm_reply
 
 
-def _run_ask_with_confirmation(monkeypatch, confirm_reply):
+def _run_ask_with_confirmation(monkeypatch, confirm_reply, *, configured_mode="always"):
     cfg = HarkConfig()
-    cfg.confirm.mode = "always"
+    cfg.confirm.mode = configured_mode
 
     monkeypatch.setattr(
         "hark.speech.speak_and_listen",
@@ -374,9 +374,8 @@ def test_run_ask_applies_observable_multisource_compatibility_policy(
 
     out = _run_ask_with_confirmation(monkeypatch, confirm_reply)
 
-    expected_ok = (
-        normalization not in PROVENANCE_PRESERVING_NORMALIZATION_FORMS
-        and is_fully_collapsed_alphabetic_material(material)
+    expected_ok = normalization not in PROVENANCE_PRESERVING_NORMALIZATION_FORMS and (
+        bridge == "\u00a8\u00a8" or is_fully_collapsed_alphabetic_material(material)
     )
     assert out["ok"] is expected_ok
     if expected_ok:
@@ -418,7 +417,7 @@ def test_run_ask_applies_observable_alphabetic_triple_policy(
 @pytest.mark.parametrize("bridge", COMPATIBILITY_WHITESPACE_ALPHA_REPRODUCTIONS)
 @pytest.mark.parametrize("normalization", PROVENANCE_PRESERVING_NORMALIZATION_FORMS)
 @pytest.mark.parametrize("parts", CONTRACTION_PARTS)
-def test_run_ask_rejects_compatibility_whitespace_with_alphabetic_material(
+def test_run_ask_applies_compatibility_whitespace_raw_boundary_policy(
     monkeypatch, bridge, normalization, parts
 ):
     left, right = parts
@@ -431,9 +430,13 @@ def test_run_ask_rejects_compatibility_whitespace_with_alphabetic_material(
 
     out = _run_ask_with_confirmation(monkeypatch, confirm_reply)
 
-    assert out["ok"] is False
-    assert out["cancelled"] is True
-    assert out["confirm_reply"] == confirm_reply
+    expected_ok = bridge == "a\u2002"
+    assert out["ok"] is expected_ok
+    if expected_ok:
+        assert out.get("cancelled") is not True
+    else:
+        assert out["cancelled"] is True
+        assert out["confirm_reply"] == confirm_reply
 
 
 @pytest.mark.parametrize("normalization", ("NFKC", "NFKD"))
@@ -456,7 +459,7 @@ def test_run_ask_rejects_normalized_whitespace_with_surviving_format_evidence(
 @pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
 @pytest.mark.parametrize("parts", CONTRACTION_PARTS)
 @pytest.mark.parametrize(("category", "bridge"), SHADOWED_NORMALIZED_BRIDGE_EVIDENCE)
-def test_run_ask_rejects_shadowed_normalized_bridge_evidence(
+def test_run_ask_applies_collapsed_shadowed_bridge_boundary_policy(
     monkeypatch, category, bridge, normalization, parts
 ):
     left, right = parts
@@ -470,9 +473,317 @@ def test_run_ask_rejects_shadowed_normalized_bridge_evidence(
 
     out = _run_ask_with_confirmation(monkeypatch, confirm_reply)
 
+    expected_ok = True
+    assert out["ok"] is expected_ok
+    if expected_ok:
+        assert out.get("cancelled") is not True
+    else:
+        assert out["cancelled"] is True
+        assert out["confirm_reply"] == confirm_reply
+
+
+@pytest.mark.parametrize("normalization", ("NFKC", "NFKD"))
+@pytest.mark.parametrize(
+    "bridge",
+    (
+        "\u00a0\u200b\u1d43",
+        "\u00a0\u1d43\u200b",
+        "\u00a0\u200b\u1d43\u200b",
+    ),
+    ids=("evidence-before-alpha", "evidence-after-alpha", "evidence-both-sides"),
+)
+def test_configured_r2_rejects_order_independent_observable_bridge_evidence(
+    monkeypatch, bridge, normalization
+):
+    material = unicodedata.normalize(normalization, bridge)
+    confirm_reply = f"yes I can{material}t approve this"
+
+    out = _run_ask_with_confirmation(monkeypatch, confirm_reply, configured_mode="auto")
+
     assert out["ok"] is False
     assert out["cancelled"] is True
     assert out["confirm_reply"] == confirm_reply
+
+
+@pytest.mark.parametrize("evidence", ("\u200b", "\ufe0f", "\u0301", "/", "©"))
+def test_configured_r2_accepts_after_later_literal_prose_boundary(
+    monkeypatch, evidence
+):
+    confirm_reply = f"yes I can {evidence}do it"
+
+    out = _run_ask_with_confirmation(monkeypatch, confirm_reply, configured_mode="auto")
+
+    assert out["ok"] is True
+    assert out.get("cancelled") is not True
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("initial_boundary", (" ", "\u00a0"))
+@pytest.mark.parametrize("later_boundary", (" ", "\t", "\u00a0", "\u2002"))
+@pytest.mark.parametrize(
+    ("category", "evidence"),
+    (("Cf", "\u200b"), ("Mn", "\u0301"), ("Po", "/"), ("So", "©")),
+)
+def test_configured_r2_direct_separator_respects_later_raw_whitespace_expiry(
+    monkeypatch,
+    category,
+    evidence,
+    later_boundary,
+    initial_boundary,
+    normalization,
+):
+    assert unicodedata.category(evidence) == category
+    raw_reply = f"yes I can{initial_boundary}{evidence}{later_boundary}t approve this"
+    confirm_reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    out = _run_ask_with_confirmation(
+        monkeypatch,
+        confirm_reply,
+        configured_mode="auto",
+    )
+
+    assert out["ok"] is True
+    assert out.get("cancelled") is not True
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("boundary", (" ", "\t", "\u00a0", "\u2002"))
+@pytest.mark.parametrize(
+    ("category", "evidence"),
+    (("Cf", "\u200b"), ("Mn", "\u0301"), ("Po", "/"), ("So", "©")),
+)
+def test_configured_r2_direct_separator_cannot_claim_first_later_whitespace(
+    monkeypatch,
+    category,
+    evidence,
+    boundary,
+    normalization,
+):
+    assert unicodedata.category(evidence) == category
+    raw_reply = f"yes I can{evidence}{boundary}t approve this"
+    confirm_reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    out = _run_ask_with_confirmation(
+        monkeypatch,
+        confirm_reply,
+        configured_mode="auto",
+    )
+
+    assert out["ok"] is True
+    assert out.get("cancelled") is not True
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("boundary", (" ", "\t", "\u00a0", "\u2002"))
+@pytest.mark.parametrize(
+    ("category", "evidence"),
+    (("Cf", "\u200b"), ("Mn", "\u0301"), ("Po", "/"), ("So", "©")),
+)
+def test_configured_r2_preserves_candidate_owned_initial_boundary(
+    monkeypatch,
+    category,
+    evidence,
+    boundary,
+    normalization,
+):
+    assert unicodedata.category(evidence) == category
+    raw_reply = f"yes I can{boundary}{evidence}t approve this"
+    confirm_reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    out = _run_ask_with_confirmation(
+        monkeypatch,
+        confirm_reply,
+        configured_mode="auto",
+    )
+
+    assert out["ok"] is False
+    assert out["cancelled"] is True
+    assert out["confirm_reply"] == confirm_reply
+
+
+@pytest.mark.parametrize(
+    "confirm_reply",
+    (
+        "yes 'can't' approve this",
+        "yes ‘can’t’ approve this",
+    ),
+)
+def test_configured_r2_leaves_quoted_contractions_for_separate_policy(
+    monkeypatch, confirm_reply
+):
+    out = _run_ask_with_confirmation(
+        monkeypatch,
+        confirm_reply,
+        configured_mode="auto",
+    )
+
+    assert out["ok"] is True
+    assert out.get("cancelled") is not True
+
+
+@pytest.mark.parametrize(
+    "confirm_reply",
+    (
+        "yes can't approve this",
+        "yes can’t approve this",
+    ),
+)
+def test_configured_r2_still_rejects_unquoted_supported_contractions(
+    monkeypatch, confirm_reply
+):
+    out = _run_ask_with_confirmation(
+        monkeypatch,
+        confirm_reply,
+        configured_mode="auto",
+    )
+
+    assert out["ok"] is False
+    assert out["cancelled"] is True
+    assert out["confirm_reply"] == confirm_reply
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("boundary", ("\u00a0", "\u2002", "\u202f", "\u3000"))
+def test_configured_r2_accepts_after_independent_compatibility_space_boundary(
+    monkeypatch, boundary, normalization
+):
+    raw_reply = f"yes I can \u200bdo{boundary}it"
+    confirm_reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    out = _run_ask_with_confirmation(
+        monkeypatch,
+        confirm_reply,
+        configured_mode="auto",
+    )
+
+    assert out["ok"] is True
+    assert out.get("cancelled") is not True
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("source", ALPHABETIC_COMPATIBILITY_WHITESPACE_SOURCES)
+@pytest.mark.parametrize("boundary", ("\u00a0", "\u2002", "\u202f", "\u3000"))
+def test_configured_r2_compatibility_space_expires_declared_source_span(
+    monkeypatch, boundary, source, normalization
+):
+    raw_reply = f"yes I can{source}\u200bᵃ{boundary}t approve this"
+    confirm_reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    out = _run_ask_with_confirmation(
+        monkeypatch,
+        confirm_reply,
+        configured_mode="auto",
+    )
+
+    assert out["ok"] is True
+    assert out.get("cancelled") is not True
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("boundary", (" ", "\t", "\u00a0", "\u2002"))
+@pytest.mark.parametrize(
+    "word_base",
+    ("\u03bb", "\u0661", "\u203f"),
+    ids=("unicode-letter", "unicode-number", "connector-punctuation"),
+)
+@pytest.mark.parametrize("initial_boundary", ("", " "))
+def test_configured_r2_unicode_word_base_ends_candidate_before_later_space(
+    monkeypatch, initial_boundary, word_base, boundary, normalization
+):
+    raw_reply = f"yes I can{initial_boundary}{word_base}{boundary}t approve this"
+    confirm_reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    out = _run_ask_with_confirmation(
+        monkeypatch,
+        confirm_reply,
+        configured_mode="auto",
+    )
+
+    assert out["ok"] is True
+    assert out.get("cancelled") is not True
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("boundary", (" ", "\t", "\u00a0", "\u2002"))
+@pytest.mark.parametrize("source", ALPHABETIC_COMPATIBILITY_WHITESPACE_SOURCES)
+def test_configured_r2_declared_source_expires_before_unrelated_right_fragment(
+    monkeypatch, source, boundary, normalization
+):
+    raw_reply = f"yes I can{source}{boundary}t approve this"
+    confirm_reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    out = _run_ask_with_confirmation(
+        monkeypatch,
+        confirm_reply,
+        configured_mode="auto",
+    )
+
+    assert out["ok"] is True
+    assert out.get("cancelled") is not True
+
+
+@pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)
+@pytest.mark.parametrize("boundary", (" ", "\t", "\n", "\u2028"))
+@pytest.mark.parametrize(
+    "evidence_and_alpha",
+    ("\u200b\u1d43", "\u1d43\u200b", "\u200b\u1d43\u200b"),
+    ids=("evidence-before-alpha", "evidence-after-alpha", "evidence-both-sides"),
+)
+@pytest.mark.parametrize("source", ALPHABETIC_COMPATIBILITY_WHITESPACE_SOURCES)
+def test_configured_r2_later_boundary_expires_single_source_exception(
+    monkeypatch, source, evidence_and_alpha, boundary, normalization
+):
+    raw_reply = f"yes I can{source}{evidence_and_alpha}{boundary}do it"
+    confirm_reply = (
+        raw_reply
+        if normalization is None
+        else unicodedata.normalize(normalization, raw_reply)
+    )
+
+    if normalization in ("NFKC", "NFKD"):
+        literal_reply = (
+            "yes I can"
+            + unicodedata.normalize(normalization, source + evidence_and_alpha)
+            + boundary
+            + "do it"
+        )
+        assert confirm_reply == literal_reply
+    out = _run_ask_with_confirmation(
+        monkeypatch,
+        confirm_reply,
+        configured_mode="auto",
+    )
+
+    assert out["ok"] is True
+    assert out.get("cancelled") is not True
 
 
 @pytest.mark.parametrize("normalization", PROVENANCE_PRESERVING_NORMALIZATION_FORMS)
@@ -546,7 +857,7 @@ def test_run_ask_nonascii_prose_reset_keeps_later_standalone_candidate(
 @pytest.mark.parametrize("normalization", ("NFKC", "NFKD"))
 @pytest.mark.parametrize("parts", CONTRACTION_PARTS)
 @pytest.mark.parametrize("source", ALPHABETIC_COMPATIBILITY_WHITESPACE_SOURCES)
-def test_run_ask_rejects_alphabetic_compatibility_whitespace_expansion(
+def test_run_ask_accepts_collapsed_alphabetic_compatibility_whitespace_prose(
     monkeypatch, source, parts, normalization
 ):
     left, right = parts
@@ -555,9 +866,8 @@ def test_run_ask_rejects_alphabetic_compatibility_whitespace_expansion(
 
     out = _run_ask_with_confirmation(monkeypatch, confirm_reply)
 
-    assert out["ok"] is False
-    assert out["cancelled"] is True
-    assert out["confirm_reply"] == confirm_reply
+    assert out["ok"] is True
+    assert out.get("cancelled") is not True
 
 
 @pytest.mark.parametrize("normalization", NORMALIZATION_FORMS)

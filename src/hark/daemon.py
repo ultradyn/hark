@@ -667,10 +667,22 @@ def spawn_mode_a_workers(
     do_ambient: bool = True,
     root: Path | None = None,
     log_dir: Path | None = None,
+    preserve_records: Sequence[WorkerRecord] = (),
 ) -> list[subprocess.Popen[Any]]:
-    """Transactionally start workers under the shared ownership lock."""
+    """Transactionally start workers under the shared ownership lock.
+
+    ``preserve_records`` keeps already-healthy roles in the pidfile while this
+    call spawns only the missing ones (B128). Live workers for a role being
+    spawned still refuse so we never double-start the same role.
+    """
     root = root or state_dir()
     pid_path = mode_a_pids_path(root)
+    preserve = list(preserve_records)
+    spawn_roles = {
+        role
+        for role, enabled in (("watch", do_watch), ("ambient", do_ambient))
+        if enabled
+    }
     with worker_pidfile_lock(pid_path):
         try:
             # Discover marker-scoped owners while the transaction lock is held:
@@ -683,17 +695,46 @@ def spawn_mode_a_workers(
         except WorkerStateUnavailableError as exc:
             raise WorkerSpawnError("pidfile", exc) from exc
         if existing:
-            pids = ", ".join(str(record.pid) for record in existing)
-            raise WorkerSpawnError(
-                "pidfile",
-                DaemonConflict(f"Hark workers are already running (pids: {pids})"),
-            )
+            existing_roles = {record.role for record in existing}
+            overlap = existing_roles & spawn_roles
+            if overlap:
+                pids = ", ".join(
+                    str(record.pid)
+                    for record in existing
+                    if record.role in overlap
+                )
+                raise WorkerSpawnError(
+                    "pidfile",
+                    DaemonConflict(
+                        f"Hark workers are already running (pids: {pids})"
+                    ),
+                )
+            # Unexpected live roles that the caller did not ask to preserve.
+            preserve_keys = {
+                (record.pid, record.start_time, record.role) for record in preserve
+            }
+            unexpected = [
+                record
+                for record in existing
+                if (record.pid, record.start_time, record.role) not in preserve_keys
+            ]
+            if unexpected:
+                pids = ", ".join(str(record.pid) for record in unexpected)
+                raise WorkerSpawnError(
+                    "pidfile",
+                    DaemonConflict(
+                        f"Hark workers are already running (pids: {pids})"
+                    ),
+                )
+            # Prefer the live discovered identities for durable rewrite.
+            preserve = list(existing)
         return _spawn_mode_a_workers_locked(
             session=session,
             do_watch=do_watch,
             do_ambient=do_ambient,
             root=root,
             log_dir=log_dir,
+            preserve_records=preserve,
         )
 
 
@@ -704,6 +745,7 @@ def _spawn_mode_a_workers_locked(
     do_ambient: bool = True,
     root: Path | None = None,
     log_dir: Path | None = None,
+    preserve_records: Sequence[WorkerRecord] = (),
 ) -> list[subprocess.Popen[Any]]:
     """Start workers while the caller holds the pidfile transaction lock."""
     root = root or state_dir()
@@ -858,7 +900,14 @@ def _spawn_mode_a_workers_locked(
         pidfile_touched = True
         write_worker_records(
             pid_path,
-            [candidate.record for candidate in owned if candidate.record is not None],
+            [
+                *preserve_records,
+                *[
+                    candidate.record
+                    for candidate in owned
+                    if candidate.record is not None
+                ],
+            ],
         )
         failed_role = role
         if not wait_for_worker_role(record, timeout_s=5.0):
@@ -897,7 +946,14 @@ def _spawn_mode_a_workers_locked(
         pidfile_touched = True
         write_worker_records(
             pid_path,
-            [candidate.record for candidate in owned if candidate.record is not None],
+            [
+                *preserve_records,
+                *[
+                    candidate.record
+                    for candidate in owned
+                    if candidate.record is not None
+                ],
+            ],
         )
 
         recorded = {record.pid: record for record in read_worker_records(pid_path)}

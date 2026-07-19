@@ -1323,13 +1323,17 @@ def test_spawn_mode_a_workers_persists_role_and_identity(
             return self.returncode
 
     monkeypatch.setattr(daemon.subprocess, "Popen", FakeProcess)
-    children = daemon.spawn_mode_a_workers(root=state, log_dir=state)
+    prior = WorkerRecord(pid=40000, start_time="start-40000", role="watch")
+    children = daemon.spawn_mode_a_workers(
+        root=state, log_dir=state, preserve_records=[prior]
+    )
     assert [child.pid for child in children] == [41001, 41002]
     stored = [
         json.loads(line)
         for line in (state / "mode-a.pids").read_text(encoding="utf-8").splitlines()
     ]
     assert [(record["pid"], record["role"]) for record in stored] == [
+        (40000, "watch"),
         (41001, "watch"),
         (41002, "ambient"),
     ]

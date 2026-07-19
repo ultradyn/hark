@@ -406,6 +406,37 @@ def test_live_changed_prefix_rewrite_restarts_for_shorter_equal_and_longer(tmp_p
         assert records[0].incarnation != old_incarnation
 
 
+
+@pytest.mark.parametrize("replacement_count", [3, 4], ids=["equal", "larger"])
+def test_multitailer_live_replays_same_prefix_in_place_rewrite(
+    tmp_path, replacement_count
+):
+    path = tmp_path / "watch.jsonl"
+    original = [
+        {"kind": "same", "n": 0},
+        {"kind": "old", "n": 1},
+        {"kind": "old", "n": 2},
+    ]
+    _write(path, *original)
+    inode = path.stat().st_ino
+    tailer = MultiTailer(tmp_path)
+    tailer.start_live()
+
+    replacement = [{"kind": "same", "n": 0}] + [
+        {"kind": "new", "n": index} for index in range(1, replacement_count)
+    ]
+    path.write_text("", encoding="utf-8")
+    _write(path, *replacement)
+    assert path.stat().st_ino == inode
+
+    records = [record for record in tailer.poll() if record.source == "watch"]
+
+    assert [record.payload for record in records] == replacement
+    assert [record.seq for record in records] == list(range(1, replacement_count + 1))
+    assert parse_cursor(tailer.composite_cursor())["watch"] == replacement_count
+
+
+
 def test_read_page_stale_incarnation_replays_first_new_record(tmp_path):
     path = tmp_path / "watch.jsonl"
     _write(path, {"n": "new-1"}, {"n": "new-2"})

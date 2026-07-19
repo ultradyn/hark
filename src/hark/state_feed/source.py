@@ -137,18 +137,122 @@ class SourceFollower:
             while len(_trusted_checkpoints) > _TRUSTED_CHECKPOINT_LIMIT:
                 _trusted_checkpoints.popitem(last=False)
 
+    @classmethod
+    def _checkpoint_from_fd(
+        cls, fd: int, end: int
+    ) -> tuple[int, bytes] | None:
+        """Rebuild the complete-line proof ending at byte offset ``end``."""
+        checkpoint = _CHECKPOINT_SEED
+        pending = b""
+        offset = 0
+        seq = 0
+        while offset < end:
+            chunk = os.pread(fd, min(65536, end - offset), offset)
+            if not chunk:
+                return None
+            offset += len(chunk)
+            pending += chunk
+            while True:
+                newline = pending.find(b"\n")
+                if newline < 0:
+                    break
+                checkpoint = cls._next_checkpoint(checkpoint, pending[:newline])
+                seq += 1
+                pending = pending[newline + 1 :]
+        if pending:
+            # A consumed position must always be a complete-line boundary.
+            return None
+        return seq, checkpoint
+
+    def _consumed_prefix_matches(
+        self,
+        fd: int,
+        size: int,
+        *,
+        byte_offset: int | None = None,
+        buffer: bytes | None = None,
+    ) -> bool:
+        """Authenticate this follower's consumed prefix and staged buffer."""
+        if self._fh is None:
+            return True
+        consumed_end = self._byte_offset if byte_offset is None else byte_offset
+        staged = self._buf if buffer is None else buffer
+        if consumed_end < 0 or size < consumed_end + len(staged):
+            return False
+        proof = self._checkpoint_from_fd(fd, consumed_end)
+        if proof != (self.seq, self._checkpoint):
+            return False
+        if not staged:
+            return True
+        return os.pread(fd, len(staged), consumed_end) == staged
+
     def _path_snapshot(
         self,
-    ) -> tuple[tuple[int, int], int, int, int, str] | None:
+        *,
+        byte_offset: int | None = None,
+        buffer: bytes | None = None,
+    ) -> tuple[tuple[int, int], int, int, int, str, bool] | None:
+        """Observe path identity and whether our consumed prefix is still current.
+
+        Returns ``None`` when the path is missing or the observation raced a
+        concurrent rewrite (caller should retry on a later poll).
+        """
         try:
             with self.path.open("rb") as handle:
-                stat = os.fstat(handle.fileno())
+                before = os.fstat(handle.fileno())
+                ident = (before.st_dev, before.st_ino)
+                prefix_identity = self._prefix_identity_from_fd(handle.fileno())
+                consumed_current = self._consumed_prefix_matches(
+                    handle.fileno(),
+                    before.st_size,
+                    byte_offset=byte_offset,
+                    buffer=buffer,
+                )
+                after = os.fstat(handle.fileno())
+                path_stat = self.path.stat()
+                if (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_size,
+                    before.st_mtime_ns,
+                    before.st_ctime_ns,
+                ) != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                ):
+                    # Defer an unstable observation until a later poll instead
+                    # of replaying an ordinary append that raced this audit.
+                    return None
+                path_ident = (path_stat.st_dev, path_stat.st_ino)
+                if path_ident != ident:
+                    return (
+                        path_ident,
+                        path_stat.st_size,
+                        path_stat.st_mtime_ns,
+                        path_stat.st_ctime_ns,
+                        "",
+                        False,
+                    )
+                if (
+                    path_stat.st_size,
+                    path_stat.st_mtime_ns,
+                    path_stat.st_ctime_ns,
+                ) != (
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                ):
+                    return None
                 return (
-                    (stat.st_dev, stat.st_ino),
-                    stat.st_size,
-                    stat.st_mtime_ns,
-                    stat.st_ctime_ns,
-                    self._prefix_identity_from_fd(handle.fileno()),
+                    ident,
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                    prefix_identity,
+                    consumed_current,
                 )
         except OSError:
             return None
@@ -393,57 +497,113 @@ class SourceFollower:
             if record is not None:
                 yield record
 
-    def _drain_handle(self) -> Iterator[FeedRecord]:
-        """Read remaining bytes from the open descriptor and emit complete lines."""
+    def _drain_handle(self, *, authenticate: bool = False) -> Iterator[FeedRecord]:
+        """Read remaining bytes from the open descriptor and emit complete lines.
+
+        When ``authenticate`` is true, each staged read is checked against the
+        path so an in-place rewrite between the entry snapshot and the read
+        cannot leak a suffix from a replacement. Generator return value is
+        ``True`` when the caller must reopen-from-start and retry.
+        """
         if self._fh is None:
-            return
+            return False
         while True:
             yield from self._emit_complete_lines()
-            # Prefer buffered complete-line reads for parity with seek paths.
-            raw_line = self._read_complete_line()
+            try:
+                raw_line = self._read_complete_line()
+                fd_stat = os.fstat(self._fh.fileno())
+            except (OSError, ValueError):
+                self.close()
+                return False
+
+            if authenticate:
+                staged = (
+                    raw_line + b"\n" if raw_line is not None else self._buf
+                )
+                staged_snapshot = self._path_snapshot(
+                    byte_offset=self._byte_offset,
+                    buffer=staged,
+                )
+                if staged_snapshot is None:
+                    # Observation raced a rewrite. A complete line already left
+                    # the buffer — prefer replay. A partial/EOF can retry later.
+                    if raw_line is not None:
+                        return True
+                    return False
+
+                fd_ident = (fd_stat.st_dev, fd_stat.st_ino)
+                if (
+                    fd_ident != self._ident
+                    or staged_snapshot[0] != fd_ident
+                    or staged_snapshot[4] != self._prefix_identity
+                    or not staged_snapshot[5]
+                ):
+                    return True
+
+                self._size_seen = staged_snapshot[1]
+                self._mtime_ns = staged_snapshot[2]
+                self._ctime_ns = staged_snapshot[3]
+
             if raw_line is None:
-                return
+                return False
             record = self._record_from_raw(raw_line)
             if record is not None:
                 yield record
 
     def poll(self) -> Iterator[FeedRecord]:
         """Yield complete new records since the last poll."""
-        snapshot = self._path_snapshot()
-        if self._fh is None:
-            if snapshot is None:
-                return
-            self._reopen(from_start=True)
+        while True:
+            snapshot = self._path_snapshot()
             if self._fh is None:
-                return
-        elif snapshot is not None and snapshot[0] != self._ident:
-            # True rotation: drain unread bytes on the subscribed descriptor
-            # so a pre-rotation append is not lost (B144), then reopen.
-            yield from self._drain_handle()
-            self._reopen(from_start=True)
-            if self._fh is None:
-                return
-        elif snapshot is not None and snapshot[4] != self._prefix_identity:
-            # Same inode but bounded prefix identity changed. Restart from the
-            # new top without draining the old offset view (B131).
-            self._reopen(from_start=True)
-            if self._fh is None:
-                return
-        else:
-            if snapshot is None:
-                # Path disappeared; open descriptor still durable for prior writes.
-                yield from self._drain_handle()
-                return
-            size = snapshot[1]
-            if size < self._size_seen:
+                if snapshot is None:
+                    return
                 self._reopen(from_start=True)
                 if self._fh is None:
                     return
-            self._size_seen = size
-            self._mtime_ns = snapshot[2]
-            self._ctime_ns = snapshot[3]
+                authenticate = True
+            elif snapshot is not None and snapshot[0] != self._ident:
+                # True rotation: drain unread bytes on the subscribed descriptor
+                # so a pre-rotation append is not lost (B144), then reopen.
+                yield from self._drain_handle(authenticate=False)
+                self._reopen(from_start=True)
+                if self._fh is None:
+                    return
+                authenticate = True
+            elif snapshot is not None and (
+                snapshot[4] != self._prefix_identity or not snapshot[5]
+            ):
+                # Same inode rewrite: first-record identity changed, or the
+                # already-consumed prefix no longer matches (equal/larger
+                # same-prefix replacement). Prefer replay over silent loss.
+                self._reopen(from_start=True)
+                if self._fh is None:
+                    return
+                authenticate = True
+            else:
+                if snapshot is None:
+                    # Path disappeared; open descriptor still durable for prior writes.
+                    yield from self._drain_handle(authenticate=False)
+                    return
+                size = snapshot[1]
+                if size < self._size_seen:
+                    self._reopen(from_start=True)
+                    if self._fh is None:
+                        return
+                    authenticate = True
+                else:
+                    self._size_seen = size
+                    self._mtime_ns = snapshot[2]
+                    self._ctime_ns = snapshot[3]
+                    authenticate = True
 
-        yield from self._drain_handle()
+            restart = yield from self._drain_handle(authenticate=authenticate)
+            if restart:
+                self._reopen(from_start=True)
+                if self._fh is None:
+                    return
+                continue
+            return
+
 
     def close(self) -> None:
         if self._fh is not None:

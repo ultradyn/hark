@@ -11,6 +11,7 @@ from __future__ import annotations
 from hark.state_feed.cursor import (
     CursorPosition,
     InvalidCursorPosition,
+    canonicalize_cursor,
     format_cursor,
     parse_cursor,
     parse_cursor_positions,
@@ -26,6 +27,7 @@ __all__ = [
     "InvalidCursorPosition",
     "SourceFollower",
     "StateFeedFollower",
+    "canonicalize_cursor",
     "format_cursor",
     "line_count",
     "parse_cursor",

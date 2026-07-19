@@ -58,7 +58,7 @@ Every SSE `data:` line is one envelope (`stream.schema.json`):
   "schema": "hark.dashboard.v1",
   "type": "event",
   "source": "watch",
-  "cursor": "watch:184@0123456789abcdef0123456789abcdef~fedcba9876543210fedcba9876543210",
+  "cursor": "watch:184,ambient:42,system:9051,usage:77,delivery:12",
   "payload": { "schema": "hark.event.v1", "kind": "agent.blocked", "…": "…" }
 }
 ```
@@ -68,36 +68,26 @@ Every SSE `data:` line is one envelope (`stream.schema.json`):
 - `payload` is **source-shaped** (discriminated union, see below). Consumers
   MUST ignore unknown fields and unknown `source`/`kind` values.
 - `cursor` is the **composite cursor**: the full per-source position *after*
-  this event, with positions joined by commas. File-backed sources use
-  `source:seq@incarnation~checkpoint`; synthetic sources such as `serve` use
-  `source:seq`. It is also set as the SSE `id:` field, so `Last-Event-ID` on
-  reconnect restores every source, not just the one that happened to emit
-  last.
+  this event, joined by commas. It is also set as the SSE
+  `id:` field, so `Last-Event-ID` on reconnect restores every source, not just
+  the one that happened to emit last.
 
 ### Cursor semantics
 
 - `seq` is the 1-based record index within the current incarnation of the
   backing source (line number for JSONL-backed sources). Monotonic per source
-  while the backing file is not rotated. Its wire grammar is one to nineteen
-  ASCII digits (`0`–`9`); malformed or oversized known-source positions replay
-  that source conservatively from sequence zero.
-- `incarnation` is an opaque hash of internal backing-file identity; raw device
-  and inode values are never exposed. `checkpoint` is a rolling hash over the
-  raw bytes of every complete line through `seq`. Resume skips those lines only
-  when both proofs match. Ordinary appends preserve the checkpoint; shorter,
-  equal, and longer replacements that change any consumed record replay from
-  the first complete record. A replacement preserving all consumed records may
-  resume after them, which is safe because no unseen prefix was skipped.
-- Legacy `source:seq` positions remain accepted, but cannot prove file
-  identity. The server conservatively replays that source from the beginning;
-  clients may see duplicates, but unseen replacement records are not skipped.
-- Incarnation-only preview tokens are also accepted as unproven legacy tokens
-  and replay conservatively.
+  while the backing file is not rotated.
 - Cursors are **opaque to clients** beyond equality/passthrough. Clients MUST
   NOT construct cursors except from `hello`, event envelopes, or page results.
-- If a server cannot prove that a cursor belongs to the current incarnation,
-  it MUST replay conservatively rather than apply the old line count to a new
-  file. Dashboards tolerate duplicates; silent loss is not recoverable.
+- Servers accept legacy `key:seq` positions and emit proved positions as
+  `key:seq@incarnation~checkpoint[~byte_offset]`. The proof fields are opaque
+  lowercase hexadecimal values; the optional offset is unsigned decimal. Keys
+  match `[a-z][a-z0-9_-]*` and are unique. Invalid cursor input is rejected
+  with `400 bad_cursor` before any SSE frame is emitted.
+- The checkpoint proves the complete raw-line prefix through `seq`. It permits
+  bounded forward pagination when the source is unchanged. If the file was
+  rotated or acknowledged bytes were rewritten, the server safely replays the
+  new incarnation from its first record instead of seeking to the old offset.
 
 ### `hello`
 
@@ -108,7 +98,7 @@ First message on every stream connect:
   "schema": "hark.dashboard.v1",
   "type": "hello",
   "source": "serve",
-  "cursor": "watch:184@0123456789abcdef0123456789abcdef~fedcba9876543210fedcba9876543210",
+  "cursor": "watch:184,ambient:42,system:9051,usage:77,delivery:12",
   "payload": {
     "kind": "serve.hello",
     "server": "hark-serve-py",
@@ -117,6 +107,12 @@ First message on every stream connect:
   }
 }
 ```
+
+On a resumed stream, `hello.cursor` MUST repeat the requested cursor (from
+`Last-Event-ID` or `since`) because the handshake has not delivered any replay
+record yet.  On a fresh live-only stream it establishes the server's current
+cursor as the starting baseline.  Clients MUST NOT adopt a hello cursor as a
+new event acknowledgement.
 
 ### Payloads by source
 
@@ -186,6 +182,13 @@ appropriate HTTP status (`error.schema` in `actions.schema.json`).
 - `limit`: max events (server clamps; default 500).
 - Response: `{ok, events: [envelope…], cursor: "<composite after last>",
   complete: <bool — false if more available before now>}`.
+- With `since`, pages move forward from the cursor: when `complete` is false,
+  the response contains the earliest `limit` unseen events and its cursor is
+  after only those returned events.  Clients can pass it to the next request
+  without skipping omitted records.
+- Without `since`, the endpoint is a recent-tail snapshot.  Records older than
+  the configured history/limit window are intentionally outside that snapshot;
+  the page cursor establishes the current high-water mark for the live stream.
 
 ### `POST /api/v1/answer` — safe delivery (normative)
 

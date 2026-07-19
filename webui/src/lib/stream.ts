@@ -7,6 +7,7 @@
 import { computed, signal } from "@preact/signals";
 import { api, ApiRequestError } from "./api";
 import { applySpectrumPayload } from "./spectrum";
+import { cursorAfterEnvelope } from "./stream_cursor";
 import type { Envelope, HepPayload, LogPayload } from "./types";
 
 export type ConnState = "connecting" | "live" | "retrying" | "fixtures" | "auth";
@@ -34,7 +35,7 @@ export function onEnvelope(fn: Listener): () => void {
 }
 
 function ingest(envelope: Envelope): void {
-  lastCursor.value = envelope.cursor;
+  lastCursor.value = cursorAfterEnvelope(lastCursor.value, envelope);
   if (envelope.type === "hello") {
     const p = envelope.payload as { server?: string; version?: string };
     if (p.server) serverInfo.value = { server: p.server, version: p.version ?? "" };

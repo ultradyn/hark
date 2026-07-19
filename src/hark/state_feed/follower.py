@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterator
 
 from hark.state_feed.cursor import (
+    CursorPosition,
     InvalidCursorPosition,
     format_cursor,
     parse_cursor_positions,
@@ -40,7 +41,9 @@ class StateFeedFollower:
         return self.sources
 
     def composite_cursor(self) -> str:
-        return format_cursor((s.cursor_key, s.cursor_position) for s in self.sources)
+        return format_cursor(
+            (source.cursor_key, source.cursor_position) for source in self.sources
+        )
 
     def start_live(self) -> None:
         for s in self.sources:
@@ -66,18 +69,19 @@ class StateFeedFollower:
             if s.cursor_key in positions:
                 position = positions[s.cursor_key]
                 if isinstance(position, InvalidCursorPosition):
-                    s.seek_to(0, conservative_legacy=True)
+                    # Invalid known keys must not skip; replay from zero.
+                    s.seek_to(CursorPosition(seq=0), conservative_legacy=True)
                     continue
                 s.seek_to(
-                    position.seq,
-                    incarnation=position.incarnation,
-                    checkpoint=position.checkpoint,
+                    position,
                     conservative_legacy=(
                         position.incarnation is None or position.checkpoint is None
                     ),
                 )
             elif default_tail > 0:
-                s.seek_to(max(0, line_count(s.path) - default_tail))
+                s.seek_to(
+                    CursorPosition(seq=max(0, line_count(s.path) - default_tail))
+                )
             else:
                 s.start_at_end()
 

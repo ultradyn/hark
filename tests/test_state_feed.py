@@ -393,6 +393,20 @@ def test_legacy_cursor_replays_replacement_instead_of_skipping_it(tmp_path: Path
     ]
 
 
+def test_proved_cursor_format_roundtrip_is_opaque_and_backward_compatible():
+    position = CursorPosition(
+        seq=12,
+        incarnation="a" * 32,
+        checkpoint="b" * 32,
+        byte_offset=345,
+    )
+    cursor = format_cursor({"watch": position, "ambient": 3})
+
+    assert cursor == f"watch:12@{'a' * 32}~{'b' * 32}~345,ambient:3"
+    assert parse_cursor(cursor) == {"watch": 12, "ambient": 3}
+    assert parse_cursor_positions(cursor)["watch"] == position
+
+
 def test_state_feed_follower_multi_source(tmp_path: Path):
     _write(tmp_path / "watch.jsonl", {"kind": "agent.blocked", "n": 1})
     _write(tmp_path / "ambient.jsonl", {"kind": "ambient.prompt", "text": "x"})

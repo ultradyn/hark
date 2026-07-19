@@ -146,12 +146,12 @@ Producers append state JSONL; consumers share one deep follower
 | Layer | Owns |
 |-------|------|
 | **External interface** | `StateFeedFollower` (poll, composite cursor), `SourceFollower`, `parse_cursor` / `format_cursor`, `present_for_monitor` |
-| **Implementation** | Partial-line buffer, inode/dev rotation, truncation reopen, per-source seq |
+| **Implementation** | Partial-line buffer, rotation/truncation reopen, per-source seq, opaque rolling-prefix checkpoints and byte offsets |
 | **Monitor adapter** | `MODE_A_WAKE_KINDS`, `MonitorFeedLock` (B102), replay, NDJSON emit |
 | **Dashboard adapter** | Source map (`watch`/`ambient`/…/`bound`+`delivery`), envelope transforms, SSE resume |
 | **Presentation** | **Once** at the consumer edge that needs compact lines (`present_for_monitor`); `compact_mode_a_event` is an alias |
 
-**Cursor token** (dashboard SSE compatible): file-backed positions use `key:seq@incarnation~checkpoint`, where both proof values are opaque hashes; synthetic positions use `key:seq`. Line-only and incarnation-only legacy file positions remain accepted and replay conservatively. Design note: [plans/P1-M5-state-feed-follower.md](plans/P1-M5-state-feed-follower.md).
+**Cursor token** (dashboard SSE compatible): legacy `key:seq` remains accepted; emitted positions use `key:seq@incarnation~checkpoint~byte_offset`. Design note: [plans/P1-M5-state-feed-follower.md](plans/P1-M5-state-feed-follower.md).
 
 ## Monitor / harness compatibility
 

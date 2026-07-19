@@ -12,22 +12,26 @@ from typing import Any
 from hark.audio.playback import TtsPlayTimeout
 from hark.config import HarkConfig
 from hark.confirm_lexicon import classify_confirm_reply
-from hark.exitcodes import ABORT, OK, PROVIDER, TIMEOUT, normalize_failure_exit
-from hark.providers.base import ProviderError
+from hark.exitcodes import ABORT, OK, TIMEOUT
+from hark.providers.base import ProviderError, safe_provider_failure
 from hark.risk import classify_question, confirm_required
+
+
+_EXCEPTION_TTS = object()
 
 
 def _provider_failure_result(
     exc: ProviderError,
     *,
-    tts_info: Any,
+    tts_info: Any = _EXCEPTION_TTS,
     text: str | None = None,
 ) -> dict[str, Any]:
+    failure = safe_provider_failure(exc)
     result = {
         "ok": False,
-        "error": str(exc),
-        "exit": normalize_failure_exit(getattr(exc, "code", None), fallback=PROVIDER),
-        "tts": tts_info,
+        "error": failure.detail,
+        "exit": failure.code,
+        "tts": failure.tts_info if tts_info is _EXCEPTION_TTS else tts_info,
     }
     if text is not None:
         result["text"] = text
@@ -81,13 +85,12 @@ def _run_ask(
             provider=provider,
             end_mode=end_mode,
         )
+    except ProviderError as exc:
+        # ProviderError must win for hybrid ProviderError/TimeoutError classes:
+        # its surfaces are snapshotted before any timeout handling.
+        return _provider_failure_result(exc)
     except TimeoutError as exc:
         return _timeout_failure_result(
-            exc,
-            tts_info=getattr(exc, "tts_info", None),
-        )
-    except ProviderError as exc:
-        return _provider_failure_result(
             exc,
             tts_info=getattr(exc, "tts_info", None),
         )
@@ -135,16 +138,16 @@ def _run_ask(
                 end_mode="silence",
                 last_tts=readback,
             )
+        except ProviderError as exc:
+            return _provider_failure_result(
+                exc,
+                text=listened.text,
+                tts_info=tts_info,
+            )
         except TimeoutError as exc:
             return _timeout_failure_result(
                 exc,
                 error=None if isinstance(exc, TtsPlayTimeout) else "confirm timeout",
-                text=listened.text,
-                tts_info=tts_info,
-            )
-        except ProviderError as exc:
-            return _provider_failure_result(
-                exc,
                 text=listened.text,
                 tts_info=tts_info,
             )

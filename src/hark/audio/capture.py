@@ -7,7 +7,6 @@ import fcntl
 import os
 import select
 import signal
-import struct
 import threading
 import time
 import wave
@@ -64,20 +63,23 @@ class _CaptureSignalState:
         self._wake_signal_reason: str | None = None
         self._interruption_surfaced = False
         self._interruption_deferred = False
-        self._attempts = 0
+        self._attempts: set[object] = set()
         self._cleanup_depth = 0
 
-    def begin_attempt(self) -> None:
+    def begin_attempt(self) -> object:
+        token = object()
         with self._lock:
-            self._attempts += 1
+            self._attempts.add(token)
+        return token
 
-    def finish_attempt(self) -> None:
+    def finish_attempt(self, token: object) -> None:
+        """Release one registration idempotently, even after interruption."""
         with self._lock:
-            self._attempts = max(0, self._attempts - 1)
+            self._attempts.discard(token)
 
     def has_attempt(self) -> bool:
         with self._lock:
-            return self._attempts > 0
+            return bool(self._attempts)
 
     def request(
         self,
@@ -164,6 +166,17 @@ class _CaptureSignalState:
     def cleaning_up(self) -> bool:
         with self._lock:
             return self._cleanup_depth > 0
+
+
+@dataclass(frozen=True)
+class _CaptureAttemptLease:
+    """Idempotent token for one early capture-attempt registration."""
+
+    state: _CaptureSignalState
+    token: object
+
+    def release(self) -> None:
+        self.state.finish_attempt(self.token)
 
 
 _capture_state_lock = threading.RLock()
@@ -555,28 +568,34 @@ def request_capture_cancel(
         state.request(signum, reason=reason)
 
 
+def _lease_state(
+    owner: _CaptureSignalState | _CaptureAttemptLease | None,
+) -> _CaptureSignalState | None:
+    return owner.state if isinstance(owner, _CaptureAttemptLease) else owner
+
+
 def raise_if_capture_cancelled(
-    state: _CaptureSignalState | None = None,
+    state: _CaptureSignalState | _CaptureAttemptLease | None = None,
 ) -> None:
     """Raise cancellation from an explicit attempt or the current scope."""
-    owner = state if state is not None else _current_capture_state()
+    owner = _lease_state(state) if state is not None else _current_capture_state()
     interruption = owner.take_interruption() if owner is not None else None
     if interruption is not None:
         raise interruption
 
 
-def register_capture_attempt() -> _CaptureSignalState | None:
-    """Register capture ownership and return the state that owns the lease."""
+def register_capture_attempt() -> _CaptureAttemptLease | None:
+    """Register capture ownership and return its idempotent lease token."""
     state = _current_capture_state()
-    if state is not None:
-        state.begin_attempt()
-    return state
+    if state is None:
+        return None
+    return _CaptureAttemptLease(state=state, token=state.begin_attempt())
 
 
-def release_capture_attempt(state: _CaptureSignalState | None) -> None:
-    """Release a lease returned by :func:`register_capture_attempt`."""
-    if state is not None:
-        state.finish_attempt()
+def release_capture_attempt(lease: _CaptureAttemptLease | None) -> None:
+    """Idempotently release a lease returned by ``register_capture_attempt``."""
+    if lease is not None:
+        lease.release()
 
 
 @contextmanager
@@ -591,11 +610,14 @@ def capture_attempt() -> Iterator[None]:
 
 
 @contextmanager
-def bind_capture_state(state: _CaptureSignalState | None) -> Iterator[None]:
+def bind_capture_state(
+    state: _CaptureSignalState | _CaptureAttemptLease | None,
+) -> Iterator[None]:
     """Keep an explicit turn token discoverable throughout a worker stack."""
     previous = getattr(_capture_thread_state, "state", None)
-    if state is not None:
-        _capture_thread_state.state = state
+    bound = _lease_state(state)
+    if bound is not None:
+        _capture_thread_state.state = bound
     try:
         yield
     finally:

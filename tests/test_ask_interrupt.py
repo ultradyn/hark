@@ -328,6 +328,20 @@ def test_repeated_cancel_preserves_first_signal_identity():
     assert caught.value.signal_name == "SIGINT"
 
 
+def test_capture_attempt_lease_release_is_idempotent():
+    with capture_mod.capture_interrupt_signals():
+        first = capture_mod.register_capture_attempt()
+        second = capture_mod.register_capture_attempt()
+        assert capture_mod.capture_in_progress() is True
+
+        capture_mod.release_capture_attempt(first)
+        capture_mod.release_capture_attempt(first)
+        assert capture_mod.capture_in_progress() is True
+
+        capture_mod.release_capture_attempt(second)
+        assert capture_mod.capture_in_progress() is False
+
+
 def test_sigterm_during_pre_stream_guard_is_structured_and_releases_attempt(
     monkeypatch,
 ):
@@ -1482,44 +1496,40 @@ def test_overlap_join_interrupt_aborts_worker_capture(monkeypatch):
     cfg = HarkConfig()
     cfg.audio.overlap_prearm = True
     cfg.audio.listen_pre_arm_ms = 50
-    joins: list[float | None] = []
-    cancels: list[bool] = []
-    interrupted = KeyboardInterrupt()
+    worker_started = threading.Event()
+    worker_released = threading.Event()
 
-    class FakeThread:
-        def __init__(self, *, target, name, daemon):
-            assert callable(target)
-            assert name == "hark-overlap-listen"
-            assert daemon is True
-
-        def start(self) -> None:
-            return None
-
-        def join(self, timeout=None) -> None:
-            joins.append(timeout)
-            if len(joins) == 1:
-                raise interrupted
+    def cancellable_listen(*_args, **_kwargs):
+        worker_started.set()
+        try:
+            while True:
+                capture_mod.raise_if_capture_cancelled()
+                time.sleep(0.01)
+        finally:
+            worker_released.set()
 
     def fake_tts(_cfg, _text, **kwargs):
         kwargs["on_near_end"]()
+        assert worker_started.wait(timeout=2.0)
         return {"ok": True, "provider": "mock"}
 
-    monkeypatch.setattr("hark.speak_then_listen.handoff.threading.Thread", FakeThread)
+    def interrupt_wait() -> None:
+        assert worker_started.wait(timeout=2.0)
+        time.sleep(0.02)
+        os.kill(os.getpid(), signal.SIGINT)
+
     monkeypatch.setattr("hark.speech.maybe_print_tts_question", lambda *_a, **_k: None)
+    monkeypatch.setattr("hark.speech.run_listen", cancellable_listen)
     monkeypatch.setattr("hark.speech.run_tts", fake_tts)
-    monkeypatch.setattr(
-        "hark.audio.capture.cancel_active_capture",
-        lambda: cancels.append(True) or True,
-    )
+    interrupter = threading.Thread(target=interrupt_wait, daemon=True)
+    interrupter.start()
 
-    with pytest.raises(KeyboardInterrupt) as caught:
+    with pytest.raises(capture_mod.CaptureInterrupted) as caught:
         speak_and_listen(cfg, "Still there?")
+    interrupter.join(timeout=1.0)
 
-    assert caught.value is interrupted
-    assert cancels == [True]
-    assert joins[0] is None
-    assert joins[1] is not None
-    assert 0 < joins[1] <= 2.0
+    assert caught.value.signal_name == "SIGINT"
+    assert worker_released.is_set()
 
 
 def test_overlap_interrupt_during_thread_start_waits_for_publication(monkeypatch):
@@ -1529,7 +1539,7 @@ def test_overlap_interrupt_during_thread_start_waits_for_publication(monkeypatch
     start_entered = threading.Event()
     allow_start = threading.Event()
     callback_done = threading.Event()
-    joined: list[float | None] = []
+    late_capture = threading.Event()
     primary = capture_mod.CaptureInterrupted(signal.SIGINT)
     real_thread = threading.Thread
 
@@ -1538,16 +1548,12 @@ def test_overlap_interrupt_during_thread_start_waits_for_publication(monkeypatch
             assert callable(target)
             assert name == "hark-overlap-listen"
             assert daemon is True
+            self._target = target
 
         def start(self) -> None:
             start_entered.set()
             assert allow_start.wait(timeout=2.0)
-
-        def join(self, timeout=None) -> None:
-            joined.append(timeout)
-
-        def is_alive(self) -> bool:
-            return False
+            self._target()
 
     def release_start() -> None:
         assert start_entered.wait(timeout=2.0)
@@ -1561,8 +1567,7 @@ def test_overlap_interrupt_during_thread_start_waits_for_publication(monkeypatch
             finally:
                 callback_done.set()
 
-        callback = real_thread(target=invoke_callback, daemon=True)
-        callback.start()
+        real_thread(target=invoke_callback, daemon=True).start()
         assert start_entered.wait(timeout=2.0)
         raise primary
 
@@ -1570,8 +1575,8 @@ def test_overlap_interrupt_during_thread_start_waits_for_publication(monkeypatch
         "hark.speak_then_listen.handoff.threading.Thread", StartingThread
     )
     monkeypatch.setattr("hark.speech.maybe_print_tts_question", lambda *_a, **_k: None)
+    monkeypatch.setattr("hark.speech.run_listen", lambda *_a, **_k: late_capture.set())
     monkeypatch.setattr("hark.speech.run_tts", fake_tts)
-    monkeypatch.setattr("hark.audio.capture.cancel_active_capture", lambda *_a: True)
     releaser = real_thread(target=release_start, daemon=True)
     releaser.start()
 
@@ -1581,8 +1586,7 @@ def test_overlap_interrupt_during_thread_start_waits_for_publication(monkeypatch
 
     assert caught.value is primary
     assert callback_done.wait(timeout=1.0)
-    assert len(joined) == 1
-    assert joined[0] is not None
+    assert not late_capture.is_set()
 
 
 def test_overlap_start_exception_after_launch_keeps_handle_for_cleanup(monkeypatch):
@@ -1590,7 +1594,9 @@ def test_overlap_start_exception_after_launch_keeps_handle_for_cleanup(monkeypat
     cfg.audio.overlap_prearm = True
     cfg.audio.listen_pre_arm_ms = 50
     primary = capture_mod.CaptureInterrupted(signal.SIGINT)
-    ran_worker: list[bool] = []
+    allow_bootstrap = threading.Event()
+    worker_done = threading.Event()
+    late_capture = threading.Event()
     real_thread = threading.Thread
 
     class LaunchedThenInterrupted:
@@ -1598,94 +1604,82 @@ def test_overlap_start_exception_after_launch_keeps_handle_for_cleanup(monkeypat
             assert name == "hark-overlap-listen"
             assert daemon is True
             self._target = target
-            self.ident = None
-            self._gate = threading.Event()
-            self._thread = None
 
         def start(self) -> None:
             def delayed_bootstrap() -> None:
-                assert self._gate.wait(timeout=2.0)
-                ran_worker.append(True)
+                assert allow_bootstrap.wait(timeout=2.0)
                 self._target()
+                worker_done.set()
 
-            self._thread = real_thread(target=delayed_bootstrap, daemon=True)
-            self._thread.start()
+            real_thread(target=delayed_bootstrap, daemon=True).start()
             raise primary
-
-        def join(self, timeout=None) -> None:
-            self._gate.set()
-            assert self._thread is not None
-            self._thread.join(timeout=timeout)
-
-        def is_alive(self) -> bool:
-            return bool(self._thread and self._thread.is_alive())
 
     def fake_tts(_cfg, _text, **kwargs):
         kwargs["on_near_end"]()
-        raise AssertionError("interrupted start unexpectedly returned")
+        return {"ok": True, "provider": "mock"}
 
     monkeypatch.setattr(
         "hark.speak_then_listen.handoff.threading.Thread",
         LaunchedThenInterrupted,
     )
     monkeypatch.setattr("hark.speech.maybe_print_tts_question", lambda *_a, **_k: None)
+    monkeypatch.setattr("hark.speech.run_listen", lambda *_a, **_k: late_capture.set())
     monkeypatch.setattr("hark.speech.run_tts", fake_tts)
 
     with pytest.raises(capture_mod.CaptureInterrupted) as caught:
         speak_and_listen(cfg, "Still there?")
 
     assert caught.value is primary
-    assert ran_worker == [True]
+    allow_bootstrap.set()
+    assert worker_done.wait(timeout=1.0)
+    assert not late_capture.is_set()
 
 
 def test_overlap_cancel_cleanup_has_fixed_deadline(monkeypatch):
+    import hark.speak_then_listen.handoff as handoff_mod
+
     cfg = HarkConfig()
     cfg.audio.overlap_prearm = True
     cfg.audio.listen_pre_arm_ms = 50
     primary = capture_mod.CaptureInterrupted(signal.SIGINT)
-    timeouts: list[float | None] = []
-    events: list[str] = []
+    worker_started = threading.Event()
+    allow_terminal = threading.Event()
+    worker_terminal = threading.Event()
 
-    class StuckDaemon:
-        def __init__(self, *, target, name, daemon):
-            assert callable(target)
-            assert name == "hark-overlap-listen"
-            assert daemon is True
-
-        def start(self) -> None:
-            return None
-
-        def join(self, timeout=None) -> None:
-            timeouts.append(timeout)
-            if timeout is None:
-                raise primary
-
-        def is_alive(self) -> bool:
-            return True
+    def stuck_listen(*_args, **_kwargs):
+        worker_started.set()
+        assert allow_terminal.wait(timeout=2.0)
+        worker_terminal.set()
+        return ListenResult(
+            text="owned",
+            provider="mock",
+            duration_ms=0,
+            end_mode="silence",
+            stream_id="deadline-owned",
+        )
 
     def fake_tts(_cfg, _text, **kwargs):
         kwargs["on_near_end"]()
-        return {"ok": True, "provider": "mock"}
+        assert worker_started.wait(timeout=2.0)
+        raise primary
 
-    monkeypatch.setattr("hark.speak_then_listen.handoff.threading.Thread", StuckDaemon)
-    monkeypatch.setattr("hark.speak_then_listen.handoff._OVERLAP_CANCEL_JOIN_S", 0.02)
-    monkeypatch.setattr(
-        "hark.speak_then_listen.handoff.syslog",
-        lambda event, **_k: events.append(event),
-    )
+    monkeypatch.setattr(handoff_mod, "_OVERLAP_CANCEL_JOIN_S", 0.02)
     monkeypatch.setattr("hark.speech.maybe_print_tts_question", lambda *_a, **_k: None)
+    monkeypatch.setattr("hark.speech.run_listen", stuck_listen)
     monkeypatch.setattr("hark.speech.run_tts", fake_tts)
-    monkeypatch.setattr("hark.audio.capture.cancel_active_capture", lambda *_a: True)
 
+    quarantine_before = len(handoff_mod._QUARANTINED_ATTEMPTS)
     started = time.monotonic()
-    with pytest.raises(capture_mod.CaptureInterrupted) as caught:
-        speak_and_listen(cfg, "Still there?")
+    try:
+        with pytest.raises(capture_mod.CaptureInterrupted) as caught:
+            speak_and_listen(cfg, "Still there?")
+        assert caught.value is primary
+        assert time.monotonic() - started < 0.5
+        assert len(handoff_mod._QUARANTINED_ATTEMPTS) == quarantine_before + 1
+    finally:
+        allow_terminal.set()
 
-    assert caught.value is primary
-    assert time.monotonic() - started < 0.5
-    assert timeouts[0] is None
-    assert all(timeout is not None for timeout in timeouts[1:])
-    assert events[-1] == "listen.cancel_cleanup_timeout"
+    assert worker_terminal.wait(timeout=1.0)
 
 
 def test_delayed_overlap_worker_retains_cancel_token_after_parent_returns(
@@ -1982,7 +1976,7 @@ def test_orchestrator_disappearance_without_signal_cancels_and_preserves_workers
     intermediary_pid_path = tmp_path / "orphan-intermediary.pid"
     result_path = tmp_path / "orphan-result.json"
     cleaned = tmp_path / "orphan-cleaned"
-    script = r'''\
+    script = r"""\
 import contextlib
 import io
 import json
@@ -2115,7 +2109,7 @@ result_tmp.write_text(
     encoding="utf-8",
 )
 os.replace(result_tmp, result_path)
-'''
+"""
     env = os.environ.copy()
     src_dir = Path(__file__).resolve().parents[1] / "src"
     env["PYTHONPATH"] = os.pathsep.join(
@@ -2154,9 +2148,7 @@ os.replace(result_tmp, result_path)
         if child_pid is None and child_pid_path.exists():
             child_pid = int(child_pid_path.read_text(encoding="utf-8"))
         if intermediary_pid_path.exists():
-            intermediary_pid = int(
-                intermediary_pid_path.read_text(encoding="utf-8")
-            )
+            intermediary_pid = int(intermediary_pid_path.read_text(encoding="utf-8"))
         for pid in (child_pid, intermediary_pid):
             if pid is None:
                 continue

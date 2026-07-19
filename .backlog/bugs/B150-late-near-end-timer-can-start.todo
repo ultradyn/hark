@@ -1,17 +1,18 @@
 ---
 claimed_at: "2026-07-16T01:12:50Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-19T09:43:24Z"
 complexity: medium
 created_at: "2026-07-16T01:12:18Z"
 depends_on: []
+duration_minutes: 4830.57725289295
 estimate_hours: 2
 id: B150
 priority: high
 started_at: "2026-07-16T01:12:50Z"
-status: in_progress
+status: done
 tags: []
 title: Late near-end timer can start overlap capture after handoff returns
-updated_at: "2026-07-16T01:12:50Z"
+updated_at: "2026-07-19T09:43:24Z"
 ---
 Evidence: playback invokes the speak-and-listen near-end callback from a daemon timer. Cancelling that timer does not join a callback that is already running. A deterministic scheduler probe let run_tts return while the callback was paused before assigning listen_thread; speak_and_listen observed no overlap worker, completed the sequential listen, returned, and then the released callback started a second overlap listener. Observed: returned_before_callback_finished=True, late_overlap_started_after_return=True, sequential_listens=1. Expected: the TTS-to-listen handoff owns a single settled worker decision before choosing sequential versus overlap; no callback may create a capture after the handoff returns. Add deterministic callback-in-flight coverage and an ownership/acknowledgement handshake that cancels or joins the callback/worker without deadlock.

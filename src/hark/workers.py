@@ -15,24 +15,32 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from hark.daemon import (
     DaemonConflict,
     busy_lock_path,
     clear_pid_file,
     harkd_pid_path,
-    live_pids_from_file,
     mode_a_pids_path,
-    pid_alive,
     probe_harkd,
     probe_mode_a,
     spawn_mode_a_workers,
-    write_pid_file,
+    terminate_children,
 )
 from hark.exitcodes import ERROR, OK, USAGE
 from hark.lifecycle import set_shutdown_reason
 from hark.paths import state_dir
+from hark.worker_process import (
+    WorkerRecord,
+    WorkerSignalError,
+    WorkerStateUnavailableError,
+    collect_worker_records,
+    record_matches_lifetime,
+    record_matches_process,
+    signal_worker_records,
+    worker_records_match_request,
+)
 
 # Default grace after SIGTERM before SIGKILL (seconds). Matches run-mode-a.sh;
 # overridable via HARK_STOP_GRACE_S or --timeout.
@@ -66,9 +74,9 @@ def parse_pids_text(text: str) -> list[int]:
 
 
 def collect_worker_pids(root: Path | None = None) -> list[int]:
-    """Live PIDs recorded in mode-a.pids (dead entries ignored)."""
+    """Validated worker PIDs (unsafe legacy entries are migrated or removed)."""
     root = root or state_dir()
-    return live_pids_from_file(mode_a_pids_path(root))
+    return [record.pid for record in collect_worker_records(mode_a_pids_path(root))]
 
 
 def assert_no_live_harkd(root: Path | None = None) -> None:
@@ -89,23 +97,16 @@ def assert_no_live_harkd(root: Path | None = None) -> None:
         clear_pid_file(path)
 
 
-def signal_pids(pids: Sequence[int], sig: int) -> list[int]:
-    """Send *sig* to each pid; return those we successfully signalled (or already gone)."""
-    sent: list[int] = []
-    for pid in pids:
-        if not pid_alive(pid):
-            continue
-        try:
-            os.kill(pid, sig)
-            sent.append(pid)
-        except ProcessLookupError:
-            continue
-        except PermissionError:
-            # Record attempt; caller may surface via still-running list.
-            sent.append(pid)
-        except OSError:
-            continue
-    return sent
+def _still_same_workers(records: list[WorkerRecord]) -> list[WorkerRecord]:
+    return [
+        record
+        for record in records
+        if (
+            record_matches_lifetime(record)
+            if record.provisional
+            else record_matches_process(record)
+        )
+    ]
 
 
 def stop_workers(
@@ -127,9 +128,17 @@ def stop_workers(
         timeout_s = min(float(timeout_s), 0.5)
 
     path = mode_a_pids_path(root)
-    live = collect_worker_pids(root)
-    if not live:
-        clear_pid_file(path)
+    try:
+        records = collect_worker_records(path, discover=True)
+    except WorkerStateUnavailableError as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "pids": list(exc.pids),
+            "message": "worker identity unavailable; retaining ownership state",
+        }
+    live = [record.pid for record in records]
+    if not records:
         return {
             "ok": True,
             "stopped": [],
@@ -139,18 +148,27 @@ def stop_workers(
         }
 
     set_shutdown_reason(reason)
-    signal_pids(live, signal.SIGTERM)
+    signal_results = [signal_worker_records(records, signal.SIGTERM)]
 
     deadline = time.monotonic() + max(0.0, float(timeout_s))
     while time.monotonic() < deadline:
-        still = [p for p in live if pid_alive(p)]
-        if not still:
-            clear_pid_file(path)
+        still_records = _still_same_workers(records)
+        still = [record.pid for record in still_records]
+        if not still_records:
+            collect_worker_records(path)
             busy = busy_lock_path(root)
             try:
                 busy.unlink(missing_ok=True)
             except OSError:
                 pass
+            if signal_results[0].errors:
+                return {
+                    "ok": False,
+                    "stopped": live,
+                    "killed": [],
+                    "error": str(WorkerSignalError(signal_results)),
+                    "pids": [],
+                }
             return {
                 "ok": True,
                 "stopped": live,
@@ -158,38 +176,49 @@ def stop_workers(
                 "message": "workers stopped",
                 "pids": [],
             }
-        # Keep pidfile honest while waiting
-        write_pid_file(path, still)
+        # Canonicalize the current file transactionally without replacing it
+        # from this older stop snapshot; a concurrent fresh owner must survive.
+        collect_worker_records(path)
         # Prefer waiting out an active recording when busy.lock is present
         # (same intent as run-mode-a.sh --stop).
         time.sleep(0.1 if busy_lock_path(root).is_file() else 0.05)
 
-    still = [p for p in live if pid_alive(p)]
+    still_records = _still_same_workers(records)
+    still = [record.pid for record in still_records]
     killed: list[int] = []
-    if still:
-        signal_pids(still, signal.SIGKILL)
-        killed = list(still)
+    if still_records:
+        kill_result = signal_worker_records(still_records, signal.SIGKILL)
+        signal_results.append(kill_result)
+        killed = [record.pid for record in kill_result.sent_records]
         # brief wait for reaping
         kill_deadline = time.monotonic() + 2.0
         while time.monotonic() < kill_deadline:
-            still = [p for p in killed if pid_alive(p)]
-            if not still:
+            still_records = _still_same_workers(still_records)
+            still = [record.pid for record in still_records]
+            if not still_records:
                 break
             time.sleep(0.05)
-        still = [p for p in killed if pid_alive(p)]
+        still_records = _still_same_workers(still_records)
+        still = [record.pid for record in still_records]
 
-    if still:
-        write_pid_file(path, still)
+    signal_failures = [result for result in signal_results if result.errors]
+    if still or signal_failures:
+        collect_worker_records(path)
+        errors: list[str] = []
+        if signal_failures:
+            errors.append(str(WorkerSignalError(signal_failures)))
+        if still:
+            errors.append(f"still running after SIGKILL: {still}")
         return {
             "ok": False,
             "stopped": [p for p in live if p not in still],
             "killed": killed,
             "still_running": still,
-            "error": f"still running after SIGKILL: {still}",
+            "error": "; ".join(errors),
             "pids": still,
         }
 
-    clear_pid_file(path)
+    collect_worker_records(path)
     try:
         busy_lock_path(root).unlink(missing_ok=True)
     except OSError:
@@ -229,14 +258,34 @@ def start_workers(
     except DaemonConflict as exc:
         return {"ok": False, "error": str(exc), "pids": collect_worker_pids(root)}
 
-    existing = collect_worker_pids(root)
-    if existing:
+    path = mode_a_pids_path(root)
+    try:
+        existing_records = collect_worker_records(path, discover=True)
+    except WorkerStateUnavailableError as exc:
+        return {"ok": False, "error": str(exc), "pids": list(exc.pids)}
+    existing = [record.pid for record in existing_records]
+    if existing_records and worker_records_match_request(
+        existing_records,
+        watch=do_watch,
+        ambient=do_ambient,
+        session=session,
+    ):
         return {
             "ok": True,
             "already_running": True,
             "pids": existing,
             "message": (
                 f"workers already running (pids {', '.join(str(p) for p in existing)})"
+            ),
+        }
+    if existing_records:
+        return {
+            "ok": False,
+            "already_running": False,
+            "pids": existing,
+            "error": (
+                "existing workers do not exactly match requested roles, session, "
+                "and state scope; stop them before starting"
             ),
         }
 
@@ -250,25 +299,75 @@ def start_workers(
             log_dir=root,
         )
     except OSError as exc:
+        # Another compatible starter may have won while this caller waited for
+        # the same pidfile transaction lock. Reclassify that lock winner as the
+        # idempotent already-running outcome, never a spurious start failure.
+        try:
+            winner = collect_worker_records(path, discover=True)
+        except WorkerStateUnavailableError:
+            winner = []
+        if winner and worker_records_match_request(
+            winner,
+            watch=do_watch,
+            ambient=do_ambient,
+            session=session,
+        ):
+            pids = [record.pid for record in winner]
+            return {
+                "ok": True,
+                "already_running": True,
+                "pids": pids,
+                "message": (
+                    "workers already running "
+                    f"(pids {', '.join(str(pid) for pid in pids)})"
+                ),
+            }
         return {"ok": False, "error": f"failed to spawn workers: {exc}", "pids": []}
 
     started = [c.pid for c in children if c.pid]
     if settle_s > 0:
         time.sleep(settle_s)
 
-    # Prefer live scan of what we wrote; drop children that died immediately.
-    live = collect_worker_pids(root)
-    if not live and started:
-        # spawn wrote pids that may have exited; re-filter
-        live = [p for p in started if pid_alive(p)]
-        write_pid_file(mode_a_pids_path(root), live)
-
-    if not live:
-        clear_pid_file(mode_a_pids_path(root))
+    # Revalidate the exact requested ready roles after the settle window.  A
+    # nonempty partial set is failure, never a successful start.
+    live_records = collect_worker_records(path, discover=True)
+    live = [record.pid for record in live_records]
+    if not worker_records_match_request(
+        live_records,
+        watch=do_watch,
+        ambient=do_ambient,
+        session=session,
+    ):
+        requested_roles = [
+            role
+            for role, requested in (("watch", do_watch), ("ambient", do_ambient))
+            if requested
+        ]
+        owned_children: list[Any] = list(zip(requested_roles, children))
+        owned_children.extend(children[len(requested_roles) :])
+        errors = [
+            "workers did not settle into the exact requested role set "
+            "(check ambient.jsonl / watch.jsonl)"
+        ]
+        try:
+            terminate_children(owned_children, root=root, timeout_s=2.0)
+        except WorkerSignalError as exc:
+            errors.append(str(exc))
+        survivors: list[int] = []
+        for child in children:
+            pid = getattr(child, "pid", None)
+            if not isinstance(pid, int) or pid <= 0:
+                continue
+            try:
+                running = child.poll() is None
+            except Exception:
+                running = True
+            if running:
+                survivors.append(pid)
         return {
             "ok": False,
-            "error": "workers exited immediately after start (check ambient.jsonl / watch.jsonl)",
-            "pids": [],
+            "error": "; ".join(errors),
+            "pids": survivors,
             "started": started,
         }
 
@@ -296,9 +395,7 @@ def restart_workers(
 ) -> dict[str, Any]:
     """Stop then start workers (reason=restart for ambient TTS cue)."""
     root = root or state_dir()
-    stop_result = stop_workers(
-        root, timeout_s=timeout_s, force=force, reason="restart"
-    )
+    stop_result = stop_workers(root, timeout_s=timeout_s, force=force, reason="restart")
     if not stop_result.get("ok"):
         return {
             "ok": False,
@@ -423,7 +520,10 @@ def cmd_start(args: Any) -> int:
             do_watch = True
     do_ambient = not bool(getattr(args, "no_ambient", False))
     if not do_watch and not do_ambient:
-        print("hark start: nothing to start (--no-watch and --no-ambient)", file=sys.stderr)
+        print(
+            "hark start: nothing to start (--no-watch and --no-ambient)",
+            file=sys.stderr,
+        )
         return USAGE
     result = start_workers(
         session=str(getattr(args, "session", None) or "default"),
@@ -435,9 +535,7 @@ def cmd_start(args: Any) -> int:
             **result,
             "watch_skipped": True,
             "watch_skip_reason": (
-                "session_profile.scope=session_local"
-                if not no_watch
-                else "--no-watch"
+                "session_profile.scope=session_local" if not no_watch else "--no-watch"
             ),
         }
     return _print_result(result, as_json=bool(getattr(args, "json", False)))

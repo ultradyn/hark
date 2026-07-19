@@ -38,6 +38,29 @@ FORCE=0
 SESSION="${HARK_SESSION:-default}"
 # Max wait for an in-flight recording (seconds)
 STOP_GRACE="${HARK_STOP_GRACE_S:-120}"
+START_LOCK_FD=""
+START_LOCK_CONTENDED=0
+
+# Serializes shell start lifecycles without forcing graceful-stop waits to hold
+# the pidfile lock needed by independently launched status/stop commands.
+acquire_start_lock() {
+  exec {START_LOCK_FD}>"${PIDFILE}.start.lock" || return $?
+  if flock -xn "$START_LOCK_FD"; then
+    START_LOCK_CONTENDED=0
+    return 0
+  fi
+  START_LOCK_CONTENDED=1
+  flock -x "$START_LOCK_FD"
+}
+
+release_start_lock() {
+  [[ -n "$START_LOCK_FD" ]] || return 0
+  local status=0
+  flock -u "$START_LOCK_FD" || status=$?
+  exec {START_LOCK_FD}>&-
+  START_LOCK_FD=""
+  return "$status"
+}
 
 # reason: stop | restart — written so ambient can TTS the right line
 stage_shutdown_reason() {
@@ -46,102 +69,43 @@ stage_shutdown_reason() {
   export HARK_SHUTDOWN_REASON="$reason"
 }
 
-pid_alive() {
-  local pid="${1:-}"
-  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+# Python owns the structured process identity format and pidfd-safe signalling.
+# Keeping the shell as an adapter prevents its stop path from drifting from
+# `hark stop` while preserving orphan discovery.
+worker_identity() {
+  (cd "$ROOT" && uv run python -m hark.worker_process "$@")
 }
 
-# True if /proc/PID is a Hark worker: `hark ambient` or `hark watch`
-# (uv wrapper or python entrypoint). Avoids pgrep -f self-match and does not
-# match this script, shells that only mention ambient logs, or pgrep/pkill.
-is_mode_a_worker() {
-  local pid="${1:-}"
-  local role="${2:-}" # optional: ambient | watch
-  local cmdfile="/proc/${pid}/cmdline"
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  [[ -r "$cmdfile" ]] || return 1
-
-  local -a args=()
-  mapfile -d '' -t args <"$cmdfile" || true
-  ((${#args[@]} > 0)) || return 1
-
-  local exe base a has_hark=0 role_found=""
-  exe="${args[0]}"
-  base="${exe##*/}"
-  case "$base" in
-    pgrep | pkill | pidof | kill | killall) return 1 ;;
-  esac
-
-  for a in "${args[@]}"; do
-    case "$a" in
-      *run-mode-a*) return 1 ;;
-    esac
-    if [[ "$a" == "hark" || "$a" == */hark ]]; then
-      has_hark=1
-    fi
-    if [[ "$a" == "ambient" || "$a" == "watch" ]]; then
-      role_found="$a"
-    fi
-  done
-
-  [[ $has_hark -eq 1 && -n "$role_found" ]] || return 1
-  if [[ -n "$role" && "$role_found" != "$role" ]]; then
-    return 1
-  fi
-  return 0
-}
-
-# Unique live PIDs: pidfile entries that still exist + /proc scan for workers.
-# Does not use pgrep -f (self-match / loose substring pitfalls).
+# Unique identity-verified workers from the pidfile plus /proc orphan scan.
 collect_mode_a_pids() {
-  {
-    local line pid cmdfile
-    if [[ -f "$PIDFILE" ]]; then
-      while IFS= read -r line || [[ -n "$line" ]]; do
-        # trim whitespace
-        line="${line#"${line%%[![:space:]]*}"}"
-        line="${line%"${line##*[![:space:]]}"}"
-        [[ -z "$line" ]] && continue
-        if pid_alive "$line"; then
-          printf '%s\n' "$line"
-        fi
-      done <"$PIDFILE"
-    fi
-    for cmdfile in /proc/[0-9]*/cmdline; do
-      [[ -e "$cmdfile" ]] || continue
-      pid="${cmdfile%/cmdline}"
-      pid="${pid#/proc/}"
-      [[ "$pid" == "$$" ]] && continue
-      if is_mode_a_worker "$pid"; then
-        printf '%s\n' "$pid"
-      fi
-    done
-  } | sort -n -u
+  worker_identity collect "$PIDFILE" --discover
 }
 
-# Rewrite pidfile from scratch with only live PIDs; remove when empty.
-write_pidfile() {
-  local -a live=()
-  local p
-  for p in "$@"; do
-    if pid_alive "$p"; then
-      live+=("$p")
-    fi
-  done
-  if ((${#live[@]} == 0)); then
-    rm -f "$PIDFILE"
-    return 0
+# Capture producer status explicitly. Bash process substitution reports only
+# mapfile's status, which could otherwise turn an identity-tool failure into an
+# empty successful collection.
+collect_mode_a_pids_into() {
+  local destination="$1"
+  local output
+  local -a parsed=()
+  output="$(collect_mode_a_pids)" || return $?
+  if [[ -n "$output" ]]; then
+    mapfile -t parsed <<<"$output"
   fi
-  printf '%s\n' "${live[@]}" >"$PIDFILE"
+  local -n result="$destination"
+  result=("${parsed[@]}")
 }
 
-signal_pids() {
+workers_match_request() {
+  local -a request=(compatible "$PIDFILE" --discover --session "$SESSION")
+  [[ "$DO_WATCH" -eq 0 ]] || request+=(--watch)
+  [[ "$DO_AMBIENT" -eq 0 ]] || request+=(--ambient)
+  worker_identity "${request[@]}" >/dev/null
+}
+
+signal_verified_workers() {
   local sig="$1"
-  shift
-  local p
-  for p in "$@"; do
-    kill "-${sig}" "$p" 2>/dev/null || true
-  done
+  worker_identity signal "$PIDFILE" "$sig" --discover >/dev/null
 }
 
 graceful_stop() {
@@ -150,39 +114,37 @@ graceful_stop() {
   stage_shutdown_reason "$reason"
 
   local -a pids=()
-  mapfile -t pids < <(collect_mode_a_pids) || true
-  # Drop empty line if collect printed nothing
-  if ((${#pids[@]} == 1)) && [[ -z "${pids[0]}" ]]; then
-    pids=()
+  if ! collect_mode_a_pids_into pids; then
+    echo "error: failed to collect Hark worker identities; refusing to stop" >&2
+    return 1
   fi
 
   if ((${#pids[@]} == 0)); then
     echo "no Hark workers running"
-    rm -f "$PIDFILE"
     return 0
   fi
 
   echo "sending SIGTERM (graceful, reason=$reason) to: ${pids[*]}"
-  signal_pids TERM "${pids[@]}"
+  if ! signal_verified_workers TERM; then
+    echo "error: failed to signal verified Hark workers; retaining pidfile" >&2
+    return 1
+  fi
 
   # If recording, wait until busy.lock clears (or processes exit).
   # Re-scan each tick so orphaned python children of a dead uv parent are tracked.
   local waited=0
   local -a still=()
   while [[ $waited -lt $STOP_GRACE ]]; do
-    mapfile -t still < <(collect_mode_a_pids) || true
-    if ((${#still[@]} == 1)) && [[ -z "${still[0]:-}" ]]; then
-      still=()
+    if ! collect_mode_a_pids_into still; then
+      echo "error: failed to refresh Hark worker identities; retaining pidfile" >&2
+      return 1
     fi
 
     if ((${#still[@]} == 0)); then
       echo "all Hark workers exited cleanly (${waited}s)"
-      rm -f "$PIDFILE" "$BUSY"
+      rm -f "$BUSY"
       return 0
     fi
-
-    # Keep pidfile honest while waiting (no stale dead entries)
-    write_pidfile "${still[@]}"
 
     if [[ -f "$BUSY" ]] && [[ $((waited % 5)) -eq 0 ]]; then
       echo "waiting for active recording to finish… (${waited}s / ${STOP_GRACE}s)"
@@ -192,26 +154,33 @@ graceful_stop() {
     waited=$((waited + 1))
   done
 
-  mapfile -t still < <(collect_mode_a_pids) || true
-  if ((${#still[@]} == 1)) && [[ -z "${still[0]:-}" ]]; then
-    still=()
+  if ! collect_mode_a_pids_into still; then
+    echo "error: failed to refresh Hark worker identities; retaining pidfile" >&2
+    return 1
   fi
 
   if [[ "$force" -eq 1 ]]; then
     if ((${#still[@]} > 0)); then
       echo "force-killing remaining processes: ${still[*]}"
-      signal_pids KILL "${still[@]}"
+      if ! signal_verified_workers KILL; then
+        echo "error: failed to signal verified Hark workers; retaining pidfile" >&2
+        return 1
+      fi
     else
       echo "force-killing remaining processes: none"
     fi
-    rm -f "$PIDFILE" "$BUSY"
+    rm -f "$BUSY"
     return 0
   fi
 
   echo "warning: still running after ${STOP_GRACE}s; use --force to SIGKILL" >&2
-  write_pidfile "${still[@]}"
   return 1
 }
+
+# Test/support hook: load the adapters without executing lifecycle actions.
+if [[ "${HARK_RUN_MODE_A_SOURCE_ONLY:-0}" -eq 1 ]]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -273,72 +242,92 @@ fi
 HARK=(uv run hark)
 
 # Always replace previous workers (pidfile and/or orphan ambient/watch)
-# so partial restarts cannot leave duplicate ambients.
-prev_count=0
-if [[ -f "$PIDFILE" ]]; then
-  prev_count=1
+# for an ordinary invocation. Concurrent shell starts serialize here; a waiter
+# accepts the completed predecessor instead of immediately restarting it.
+if ! acquire_start_lock; then
+  echo "error: failed to acquire Hark worker start lock" >&2
+  exit 1
 fi
-mapfile -t _prev < <(collect_mode_a_pids) || true
-if ((${#_prev[@]} == 1)) && [[ -z "${_prev[0]}" ]]; then
-  _prev=()
+
+_prev=()
+if ! collect_mode_a_pids_into _prev; then
+  echo "error: failed to collect existing Hark worker identities; refusing to start" >&2
+  release_start_lock || true
+  exit 1
 fi
-if ((${#_prev[@]} > 0)); then
-  prev_count=${#_prev[@]}
-fi
+prev_count=${#_prev[@]}
+skip_start=0
+live=()
 
 if [[ $prev_count -gt 0 ]]; then
-  echo "restarting previous workers (graceful, ${#_prev[@]} pid(s))…"
-  graceful_stop 0 "restart" || graceful_stop 1 "restart"
-  # Allow ambient to finish shutdown TTS after recording
-  sleep 0.5
+  if [[ "$START_LOCK_CONTENDED" -eq 1 ]] && workers_match_request; then
+    echo "workers already started by concurrent invocation: ${_prev[*]}"
+    live=("${_prev[@]}")
+    skip_start=1
+  else
+    echo "restarting previous workers (graceful, ${#_prev[@]} pid(s))…"
+    graceful_stop 0 "restart" || graceful_stop 1 "restart"
+    # Allow ambient to finish shutdown TTS after recording
+    sleep 0.5
+  fi
 fi
 
-# Fresh pidfile: only live processes from this start will be recorded
-rm -f "$PIDFILE"
-
-started=()
-
-if [[ "$DO_WATCH" -eq 1 ]]; then
-  echo "starting watch → $WATCH_LOG (session=$SESSION)"
-  nohup "${HARK[@]}" watch --session "$SESSION" --for-monitor --statuses blocked,done \
-    >>"$WATCH_LOG" 2>&1 &
-  started+=("$!")
+if [[ "$skip_start" -eq 0 ]]; then
+  # Python owns the full Popen -> pidfd -> identity -> exact-role transaction.
+  # The shell never treats a background wrapper PID as worker authority.
+  _current=()
+  if ! collect_mode_a_pids_into _current; then
+    echo "error: failed to recheck Hark worker identities; refusing to start" >&2
+    release_start_lock || true
+    exit 1
+  fi
+  if ((${#_current[@]} > 0)); then
+    if workers_match_request; then
+      echo "compatible workers appeared while preparing start: ${_current[*]}"
+      live=("${_current[@]}")
+      skip_start=1
+    else
+      echo "error: workers appeared with incompatible roles, session, or state scope" >&2
+      release_start_lock || true
+      exit 1
+    fi
+  fi
 fi
 
-if [[ "$DO_AMBIENT" -eq 1 ]]; then
-  echo "starting ambient loop → $AMBIENT_LOG"
-  # List configured wake/trigger phrases (custom via config [ambient])
-  PHRASE_LINE="$(
-    cd "$ROOT" && python3 -c '
-from hark.config import load_config
-ps = load_config().ambient.activation_phrases
-print("  say: " + " / ".join(ps[:10]) + (" …" if len(ps) > 10 else ""))
-' 2>/dev/null || echo "  say: hey hark / hey herald (or custom trigger_phrases)"
-  )"
-  echo "$PHRASE_LINE"
-  nohup "${HARK[@]}" ambient \
-    >>"$AMBIENT_LOG" 2>&1 &
-  started+=("$!")
+if [[ "$skip_start" -eq 0 ]]; then
+  start_args=(start --json --session "$SESSION")
+  if [[ "$DO_WATCH" -eq 1 ]]; then
+    start_args+=(--force-watch)
+  else
+    start_args+=(--no-watch)
+  fi
+  [[ "$DO_AMBIENT" -eq 1 ]] || start_args+=(--no-ambient)
+  start_output="$(
+    exec {START_LOCK_FD}>&-
+    "${HARK[@]}" "${start_args[@]}"
+  )" || {
+    echo "error: trusted Python worker start failed" >&2
+    [[ -z "$start_output" ]] || echo "$start_output" >&2
+    release_start_lock || true
+    exit 1
+  }
+
+  if ! collect_mode_a_pids_into live; then
+    echo "error: failed to discover started Hark workers" >&2
+    release_start_lock || true
+    exit 1
+  fi
+  if ! workers_match_request; then
+    echo "error: workers did not settle into the exact requested role set" >&2
+    release_start_lock || true
+    exit 1
+  fi
 fi
 
-sleep 1
-
-# Prefer full discovery (uv + python children) so the pidfile is complete;
-# fall back to $! list if scan is empty (race before exec).
-mapfile -t live < <(collect_mode_a_pids) || true
-if ((${#live[@]} == 1)) && [[ -z "${live[0]}" ]]; then
-  live=()
-fi
-if ((${#live[@]} > 0)); then
-  write_pidfile "${live[@]}"
-elif ((${#started[@]} > 0)); then
-  write_pidfile "${started[@]}"
-else
-  rm -f "$PIDFILE"
-fi
+release_start_lock || true
 
 if [[ -f "$PIDFILE" ]]; then
-  echo "PIDs: $(tr '\n' ' ' <"$PIDFILE")"
+  echo "PIDs: ${live[*]}"
 else
   echo "PIDs: (none — nothing started or already exited)"
 fi

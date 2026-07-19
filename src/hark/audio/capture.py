@@ -204,6 +204,153 @@ _PARENT_WATCH_POLL_S = 0.05
 # Keep parent-lifetime monitoring independent of tests that replace the native
 # cleanup thread factory to exercise Thread.start publication races.
 _ParentWatchThread = threading.Thread
+# Same for the capture deadline watchdog: B143 tests replace threading.Thread
+# to inject signals at cleanup-worker start and must not trip on this helper.
+_CaptureDeadlineThread = threading.Thread
+# Wall-clock abort for Pa_ReadStream hangs that never advance block counters
+# (B145). Poll granularity bounds worst-case overrun on short test deadlines.
+_CAPTURE_DEADLINE_POLL_S = 0.02
+
+
+class _CaptureReadDeadline:
+    """Abort a blocked PortAudio read when a wall-clock capture budget elapses.
+
+    Gate / discard timeouts normally count completed 20 ms frames. When
+    ``stream.read`` never returns (hung ``Pa_ReadStream``), those counters
+    stall forever and ``hark ask`` never produces a structured result. This
+    watchdog arms an absolute deadline, asynchronously aborts the active
+    stream (same native path as B143 cancellation), and converts the resulting
+    read failure into ``TimeoutError`` — without sticky KeyboardInterrupt, so
+    ask still maps the failure to exit code TIMEOUT.
+    """
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+        self._lock = threading.Lock()
+        self._deadline_mono: float | None = None
+        self._message: str | None = None
+        self._fired_message: str | None = None
+        self._paused_remaining: float | None = None
+        self._stop = threading.Event()
+        self._thread = _CaptureDeadlineThread(
+            target=self._run,
+            name="hark-capture-deadline",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def arm(self, timeout_s: float, message: str) -> None:
+        """Start or replace the active wall-clock budget."""
+        with self._lock:
+            self._deadline_mono = time.monotonic() + max(0.0, float(timeout_s))
+            self._message = message
+            self._fired_message = None
+            self._paused_remaining = None
+
+    def disarm(self) -> None:
+        """Cancel the active budget without firing (e.g. after speech opens)."""
+        with self._lock:
+            self._deadline_mono = None
+            self._message = None
+            self._paused_remaining = None
+
+    def pause(self) -> None:
+        """Freeze remaining budget (TTS mute hold; B084 clock freeze)."""
+        with self._lock:
+            if self._deadline_mono is None or self._fired_message is not None:
+                return
+            if self._paused_remaining is not None:
+                return
+            self._paused_remaining = max(0.0, self._deadline_mono - time.monotonic())
+            self._deadline_mono = None
+
+    def resume(self) -> None:
+        """Resume a budget previously frozen by :meth:`pause`."""
+        with self._lock:
+            if self._paused_remaining is None or self._fired_message is not None:
+                return
+            self._deadline_mono = time.monotonic() + self._paused_remaining
+            self._paused_remaining = None
+
+    def close(self) -> None:
+        """Stop the watchdog thread; safe to call more than once."""
+        self._stop.set()
+        thread = self._thread
+        if thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+
+    def fired_message(self) -> str | None:
+        with self._lock:
+            return self._fired_message
+
+    def check(self) -> None:
+        """Raise ``TimeoutError`` if the wall-clock budget already fired."""
+        message = self.fired_message()
+        if message is not None:
+            raise TimeoutError(message)
+
+    def map_error(self, exc: BaseException) -> BaseException:
+        """Prefer deadline timeout over native abort noise after fire."""
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            return exc
+        message = self.fired_message()
+        if message is not None:
+            return TimeoutError(message)
+        return exc
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            with self._lock:
+                deadline = self._deadline_mono
+                message = self._message
+                already = self._fired_message is not None
+                paused = self._paused_remaining is not None
+            if already or deadline is None or paused:
+                if self._stop.wait(_CAPTURE_DEADLINE_POLL_S):
+                    return
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                if self._stop.wait(min(remaining, _CAPTURE_DEADLINE_POLL_S)):
+                    return
+                continue
+            with self._lock:
+                # A re-arm/pause between the wait and this claim cancels the fire.
+                if (
+                    self._deadline_mono != deadline
+                    or self._fired_message is not None
+                    or self._paused_remaining is not None
+                ):
+                    continue
+                self._fired_message = message or "capture deadline exceeded"
+                self._deadline_mono = None
+            try:
+                # Abort only — do not sticky-cancel the ask signal scope, or
+                # TimeoutError would be rewritten into KeyboardInterrupt.
+                _request_stream_cancel(self._stream)
+            except BaseException:
+                pass
+
+
+def _read_input_block(
+    stream: Any,
+    block_size: int,
+    deadline: _CaptureReadDeadline | None,
+) -> tuple[Any, Any]:
+    """Read one capture frame, surfacing wall-clock gate/discard timeouts."""
+    if deadline is not None:
+        deadline.check()
+    try:
+        data, overflowed = stream.read(block_size)
+    except BaseException as exc:
+        if deadline is not None:
+            mapped = deadline.map_error(exc)
+            if mapped is not exc:
+                raise mapped from exc
+        raise
+    if deadline is not None:
+        deadline.check()
+    return data, overflowed
 
 
 def _proc_parent_and_start(pid: int) -> tuple[int, str]:
@@ -385,7 +532,15 @@ def _perform_stream_cleanup(owner: _StreamCleanupOwner) -> None:
         fallback_now = owner.fallback_exit
     if cancel_now:
         _abort_input_stream(owner.stream)
-        _close_input_stream(owner.stream)
+        closed = _close_input_stream(owner.stream)
+        # Legacy context-manager streams expose neither stop nor close; still
+        # run __exit__ so leases and test doubles release deterministically
+        # after a deadline/interrupt abort (B145).
+        if not closed and fallback_now is not None:
+            try:
+                fallback_now()
+            except BaseException:
+                pass
         return
     stopped = _stop_input_stream(owner.stream)
     closed = _close_input_stream(owner.stream)
@@ -1496,6 +1651,7 @@ def capture_utterance(
         )
         stream = stream_owner
         fallback_exit: Callable[[], Any] | None = None
+        read_deadline: _CaptureReadDeadline | None = None
         try:
             start = getattr(stream_owner, "start", None)
             if callable(start):
@@ -1515,268 +1671,335 @@ def capture_utterance(
             _request_stream_cancel(stream_owner)
             raise
 
-        with _registered_input_stream(stream):
-            open_mono = time.monotonic()
-            # Phase 0: drop leading audio (overlap pre-arm / fixed discard window)
-            if discard_leading_ms > 0 or audio_ok_after is not None:
-                while _still_discarding(
-                    open_mono=open_mono,
-                    discard_leading_ms=discard_leading_ms,
-                    audio_ok_after=audio_ok_after,
-                ):
-                    if time.monotonic() - open_mono > discard_max_s:
-                        raise TimeoutError(
-                            "overlap discard window exceeded before audio became usable"
-                        )
-                    data, overflowed = stream.read(block)
-                    del overflowed, data
-
-            # Gate clock starts only after discard so TTS tail does not burn timeout
-            start = time.monotonic()
-            wait_blocks = 0  # only counts when not muted (B084)
-            blocks_used = 0  # non-mute blocks against max_s (B084 freezes max too)
-            mute_pad_blocks = 0
-            was_tts_muted = False
-            edge_pad_blocks = max(0, int(float(mute_edge_pad_ms) / 20.0))
-            last_voice_cb = 0.0  # monotonic; throttle on_voice (B105)
-
-            def _emit_voice() -> None:
-                nonlocal last_voice_cb
-                if on_voice is None:
-                    return
-                t = time.monotonic()
-                if t - last_voice_cb < 0.1:
-                    return
-                last_voice_cb = t
-                try:
-                    on_voice()
-                except Exception:
-                    pass
-
-            def _tts_muted() -> bool:
-                try:
-                    from hark.audio.mic_mute import tts_mute_depth
-
-                    return tts_mute_depth() > 0
-                except Exception:
-                    return False
-
-            # While-loop so TTS mute / edge-pad do not burn max_s or initial_timeout
-            speech_during_mute = False
-            speech_during_mute_peak_db = -120.0
-
-            def _block_energy(samples_block: np.ndarray) -> tuple[float, float]:
-                r = float(np.sqrt(np.mean(samples_block**2)) + 1e-12)
-                d = 20.0 * np.log10(r)
-                return r, d
-
-            def _note_speech_during_hold(db_val: float, *, phase: str) -> None:
-                """Operator energy while TTS mute / edge-pad is held (B112).
-
-                OS-level mute often zeros PCM (undetectable). When residual path
-                still carries energy, log once per hold and force silence
-                progress reset so we do not finalize as if the operator stayed
-                quiet.
-                """
-                nonlocal speech_during_mute, speech_during_mute_peak_db
-                thresh = open_thresh if open_thresh is not None else abs_open_db
-                if db_val < thresh - 2.0:
-                    return
-                first = not speech_during_mute
-                speech_during_mute = True
-                if db_val > speech_during_mute_peak_db:
-                    speech_during_mute_peak_db = db_val
-                if not first:
-                    return
-                try:
-                    from hark.syslog import log as _syslog
-
-                    _syslog(
-                        "listen.speech_during_mute",
-                        component="stt",
-                        level="warn",
-                        phase=phase,
-                        peak_db=round(db_val, 1),
-                        open_thresh=round(float(thresh), 1),
-                        message=(
-                            "operator energy while mic muted/padded for TTS — "
-                            "half-duplex may drop speech; silence endpoint reset"
-                        ),
-                    )
-                except Exception:
-                    pass
-
-            while blocks_used < max_blocks:
-                data, overflowed = stream.read(block)
-                del overflowed
-                samples = data.reshape(-1)
-                _publish_spec(samples)
-
-                # B084 / B112: while Hark holds TTS mute, *freeze* open/silence/max
-                # clocks (do not advance). Do **not** unconditionally reset the
-                # silence counter — streaming TTS acks mid-listen used to wipe
-                # silence progress and delay ambient.prompt until max/agent end.
-                # Only reset when operator energy is observed during the hold.
-                muted_now = _tts_muted()
-                if muted_now:
-                    was_tts_muted = True
-                    _rms_m, db_m = _block_energy(samples)
-                    if opened:
-                        _note_speech_during_hold(db_m, phase="mute")
-                    elif not opened and preroll_blocks > 0:
-                        # Keep preroll warm if OS mute does not zero the stream
-                        if db_m > (open_thresh if open_thresh is not None else abs_open_db) - 6:
-                            preroll.append(samples.copy())
-                    continue
-                if was_tts_muted:
-                    was_tts_muted = False
-                    mute_pad_blocks = edge_pad_blocks
-                    if opened and speech_during_mute:
-                        silent_blocks = 0
-                        if endpointer is not None:
-                            endpointer.on_speech()
-                if mute_pad_blocks > 0:
-                    mute_pad_blocks -= 1
-                    _rms_p, db_p = _block_energy(samples)
-                    if opened:
-                        _note_speech_during_hold(db_p, phase="mute_edge_pad")
-                        if speech_during_mute:
-                            silent_blocks = 0
-                    # Still seed preroll while waiting so post-pad open has history
-                    if not opened and preroll_blocks > 0:
-                        preroll.append(samples.copy())
-                    continue
-                # Hold ended cleanly: keep prior silent_blocks (true freeze).
-                # speech_during_mute already forced a reset above when needed.
-                if speech_during_mute and opened:
-                    # Fresh speech after hold — treat as active talk turn
-                    silent_blocks = 0
-                    speech_during_mute = False
-
-                blocks_used += 1
-                rms, db = _block_energy(samples)
-                if db > peak_db:
-                    peak_db = db
-                    peak_rms = rms
-
-                if not opened:
-                    if preroll_blocks > 0:
-                        preroll.append(samples.copy())
-                    # adapt noise floor while closed (slow attack)
-                    noise_floor = 0.98 * noise_floor + 0.02 * rms
-                    rel_thresh = 20.0 * np.log10(noise_floor + 1e-12) + open_margin_db
-                    open_thresh = max(rel_thresh, abs_open_db)
-                    if db >= open_thresh:
-                        speech_blocks += 1
-                        if speech_blocks >= open_confirm_blocks:
-                            opened = True
-                            silent_blocks = 0
-                            # Seed buffer with short pre-roll only (not full leading silence)
-                            if preroll_blocks > 0:
-                                chunks.extend(preroll)
-                                preroll.clear()
-                            wait_speech_ms = int(1000 * (time.monotonic() - start))
-                            _emit_voice()
-                            if on_opened is not None:
-                                try:
-                                    on_opened()
-                                except Exception:
-                                    pass
-                    else:
-                        speech_blocks = max(0, speech_blocks - 1)
-                    wait_blocks += 1
-                    if wait_blocks >= timeout_blocks and not opened:
-                        raise TimeoutError(
-                            f"no speech detected "
-                            f"(peak_db={peak_db:.1f} peak_rms={peak_rms:.5f} "
-                            f"open_thresh≈{open_thresh:.1f}dB — try speaking louder "
-                            f"or set a different input device)"
-                        )
-                else:
-                    chunks.append(samples.copy())
-                    # Classic hysteresis hang floor (open_thresh freezes at open).
-                    hang_floor = (
-                        float(open_thresh) - float(hang_margin_db)
-                        if open_thresh is not None
-                        else float("-inf")
-                    )
-                    # B108: when peak is far above open_thresh, also require a
-                    # relative drop from peak — high mic gain can leave room noise
-                    # forever above a low frozen abs_open hang floor.
-                    if (
-                        open_thresh is not None
-                        and peak_db > float(open_thresh) + float(peak_gate_slack_db)
-                    ):
-                        hang_floor = max(
-                            hang_floor, float(peak_db) - float(speech_drop_db)
-                        )
-                    still_speech = open_thresh is not None and db >= hang_floor
-                    if still_speech:
-                        silent_blocks = 0
-                        speech_blocks += 1
-                        _emit_voice()
-                        if endpointer is not None:
-                            endpointer.on_speech()
-                    else:
-                        silent_blocks += 1
-                        if endpointer is None:
-                            if (
-                                silent_blocks >= end_silence_blocks
-                                and speech_blocks >= min_speech_blocks
-                            ):
-                                break
-                        else:
-                            def _endpoint_frame() -> EndpointFrame:
-                                pcm = pcm16_mono_bytes(np.concatenate(chunks)) if chunks else b""
-                                return EndpointFrame(
-                                    pcm16=pcm,
-                                    sample_rate=sample_rate,
-                                    trailing_silence_s=silent_blocks * 0.02,
-                                    speech_s=speech_blocks * 0.02,
-                                )
-
-                            if endpointer.should_end(
-                                silent_blocks=silent_blocks,
-                                speech_blocks=speech_blocks,
-                                audio_fn=_endpoint_frame,
-                            ):
-                                break
-
-                if should_stop is not None:
-                    pcm = pcm16_mono_bytes(np.concatenate(chunks)) if chunks else b""
-                    if should_stop(pcm, time.monotonic() - start):
-                        break
-
-            # Publish normal teardown ownership before the registered stream is
-            # detached. A signal at this boundary sees either the active stream
-            # or this exact owner and upgrades it to cancellation; never neither.
-            normal_cleanup_owner = _reserve_stream_cleanup(
-                stream,
-                cancel=False,
-                fallback_exit=fallback_exit,
-            )
-
-        cleanup_worker = _start_stream_cleanup(normal_cleanup_owner)
-        _wait_stream_cleanup(cleanup_worker)
-
-        if not chunks:
-            raise TimeoutError(
-                f"no speech captured (peak_db={peak_db:.1f} peak_rms={peak_rms:.5f})"
-            )
-
-        all_s = np.concatenate(chunks)
-        pcm = pcm16_mono_bytes(all_s)
-        dur_ms = int(1000 * len(all_s) / sample_rate)
-        speech_ms = int(1000 * speech_blocks * 0.02)
-        return CaptureResult(
-            pcm16=pcm,
-            sample_rate=sample_rate,
-            duration_ms=dur_ms,
-            speech_ms=speech_ms,
-            wait_speech_ms=wait_speech_ms,
-            peak_rms=float(peak_rms),
-            peak_db=float(peak_db),
+        read_deadline = _CaptureReadDeadline(stream)
+        discard_timeout_msg = (
+            "overlap discard window exceeded before audio became usable"
         )
+        # Wall-clock fire message is fixed at arm time (peaks may still be
+        # updating). Block-count timeout below includes live peak diagnostics.
+        gate_deadline_msg = (
+            f"no speech detected within initial_timeout_s={initial_timeout_s:g}"
+        )
+        # Set when the wall-clock watchdog (not an external signal) ends capture,
+        # so legacy context-manager streams still run __exit__ (B145 lifecycle).
+        deadline_forced_exit = False
+
+        try:
+            with _registered_input_stream(stream):
+                open_mono = time.monotonic()
+                # Phase 0: drop leading audio (overlap pre-arm / fixed discard window)
+                if discard_leading_ms > 0 or audio_ok_after is not None:
+                    read_deadline.arm(discard_max_s, discard_timeout_msg)
+                    while _still_discarding(
+                        open_mono=open_mono,
+                        discard_leading_ms=discard_leading_ms,
+                        audio_ok_after=audio_ok_after,
+                    ):
+                        if time.monotonic() - open_mono > discard_max_s:
+                            raise TimeoutError(discard_timeout_msg)
+                        data, overflowed = _read_input_block(
+                            stream, block, read_deadline
+                        )
+                        del overflowed, data
+
+                # Gate clock starts only after discard so TTS tail does not burn timeout
+                start = time.monotonic()
+                read_deadline.arm(initial_timeout_s, gate_deadline_msg)
+                wait_blocks = 0  # only counts when not muted (B084)
+                blocks_used = 0  # non-mute blocks against max_s (B084 freezes max too)
+                mute_pad_blocks = 0
+                was_tts_muted = False
+                edge_pad_blocks = max(0, int(float(mute_edge_pad_ms) / 20.0))
+                last_voice_cb = 0.0  # monotonic; throttle on_voice (B105)
+
+                def _emit_voice() -> None:
+                    nonlocal last_voice_cb
+                    if on_voice is None:
+                        return
+                    t = time.monotonic()
+                    if t - last_voice_cb < 0.1:
+                        return
+                    last_voice_cb = t
+                    try:
+                        on_voice()
+                    except Exception:
+                        pass
+
+                def _tts_muted() -> bool:
+                    try:
+                        from hark.audio.mic_mute import tts_mute_depth
+
+                        return tts_mute_depth() > 0
+                    except Exception:
+                        return False
+
+                # While-loop so TTS mute / edge-pad do not burn max_s or initial_timeout
+                speech_during_mute = False
+                speech_during_mute_peak_db = -120.0
+
+                def _block_energy(samples_block: np.ndarray) -> tuple[float, float]:
+                    r = float(np.sqrt(np.mean(samples_block**2)) + 1e-12)
+                    d = 20.0 * np.log10(r)
+                    return r, d
+
+                def _note_speech_during_hold(db_val: float, *, phase: str) -> None:
+                    """Operator energy while TTS mute / edge-pad is held (B112).
+
+                    OS-level mute often zeros PCM (undetectable). When residual path
+                    still carries energy, log once per hold and force silence
+                    progress reset so we do not finalize as if the operator stayed
+                    quiet.
+                    """
+                    nonlocal speech_during_mute, speech_during_mute_peak_db
+                    thresh = open_thresh if open_thresh is not None else abs_open_db
+                    if db_val < thresh - 2.0:
+                        return
+                    first = not speech_during_mute
+                    speech_during_mute = True
+                    if db_val > speech_during_mute_peak_db:
+                        speech_during_mute_peak_db = db_val
+                    if not first:
+                        return
+                    try:
+                        from hark.syslog import log as _syslog
+
+                        _syslog(
+                            "listen.speech_during_mute",
+                            component="stt",
+                            level="warn",
+                            phase=phase,
+                            peak_db=round(db_val, 1),
+                            open_thresh=round(float(thresh), 1),
+                            message=(
+                                "operator energy while mic muted/padded for TTS — "
+                                "half-duplex may drop speech; silence endpoint reset"
+                            ),
+                        )
+                    except Exception:
+                        pass
+
+                def _gate_timeout_message() -> str:
+                    thresh = (
+                        float(open_thresh)
+                        if open_thresh is not None
+                        else float(abs_open_db)
+                    )
+                    return (
+                        f"no speech detected within "
+                        f"initial_timeout_s={initial_timeout_s:g} "
+                        f"(peak_db={peak_db:.1f} peak_rms={peak_rms:.5f} "
+                        f"open_thresh≈{thresh:.1f}dB — try speaking louder "
+                        f"or set a different input device)"
+                    )
+
+                while blocks_used < max_blocks:
+                    data, overflowed = _read_input_block(
+                        stream, block, read_deadline
+                    )
+                    del overflowed
+                    samples = data.reshape(-1)
+                    _publish_spec(samples)
+
+                    # B084 / B112: while Hark holds TTS mute, *freeze* open/silence/max
+                    # clocks (do not advance). Do **not** unconditionally reset the
+                    # silence counter — streaming TTS acks mid-listen used to wipe
+                    # silence progress and delay ambient.prompt until max/agent end.
+                    # Only reset when operator energy is observed during the hold.
+                    muted_now = _tts_muted()
+                    if muted_now:
+                        was_tts_muted = True
+                        # B084: freeze wall-clock gate budget while TTS mute holds.
+                        read_deadline.pause()
+                        _rms_m, db_m = _block_energy(samples)
+                        if opened:
+                            _note_speech_during_hold(db_m, phase="mute")
+                        elif not opened and preroll_blocks > 0:
+                            # Keep preroll warm if OS mute does not zero the stream
+                            if db_m > (
+                                open_thresh if open_thresh is not None else abs_open_db
+                            ) - 6:
+                                preroll.append(samples.copy())
+                        continue
+                    if was_tts_muted:
+                        was_tts_muted = False
+                        mute_pad_blocks = edge_pad_blocks
+                        if opened and speech_during_mute:
+                            silent_blocks = 0
+                            if endpointer is not None:
+                                endpointer.on_speech()
+                    if mute_pad_blocks > 0:
+                        # Edge pad is part of the mute hold freeze (B084).
+                        read_deadline.pause()
+                        mute_pad_blocks -= 1
+                        _rms_p, db_p = _block_energy(samples)
+                        if opened:
+                            _note_speech_during_hold(db_p, phase="mute_edge_pad")
+                            if speech_during_mute:
+                                silent_blocks = 0
+                        # Still seed preroll while waiting so post-pad open has history
+                        if not opened and preroll_blocks > 0:
+                            preroll.append(samples.copy())
+                        continue
+                    # Hold ended cleanly: keep prior silent_blocks (true freeze).
+                    # speech_during_mute already forced a reset above when needed.
+                    read_deadline.resume()
+                    if speech_during_mute and opened:
+                        # Fresh speech after hold — treat as active talk turn
+                        silent_blocks = 0
+                        speech_during_mute = False
+
+                    blocks_used += 1
+                    rms, db = _block_energy(samples)
+                    if db > peak_db:
+                        peak_db = db
+                        peak_rms = rms
+
+                    if not opened:
+                        if preroll_blocks > 0:
+                            preroll.append(samples.copy())
+                        # adapt noise floor while closed (slow attack)
+                        noise_floor = 0.98 * noise_floor + 0.02 * rms
+                        rel_thresh = (
+                            20.0 * np.log10(noise_floor + 1e-12) + open_margin_db
+                        )
+                        open_thresh = max(rel_thresh, abs_open_db)
+                        if db >= open_thresh:
+                            speech_blocks += 1
+                            if speech_blocks >= open_confirm_blocks:
+                                opened = True
+                                silent_blocks = 0
+                                # Gate satisfied — stop the no-speech wall clock.
+                                # max_s is still enforced by blocks_used below.
+                                read_deadline.disarm()
+                                # Seed buffer with short pre-roll only (not full leading silence)
+                                if preroll_blocks > 0:
+                                    chunks.extend(preroll)
+                                    preroll.clear()
+                                wait_speech_ms = int(
+                                    1000 * (time.monotonic() - start)
+                                )
+                                _emit_voice()
+                                if on_opened is not None:
+                                    try:
+                                        on_opened()
+                                    except Exception:
+                                        pass
+                        else:
+                            speech_blocks = max(0, speech_blocks - 1)
+                        wait_blocks += 1
+                        if wait_blocks >= timeout_blocks and not opened:
+                            raise TimeoutError(_gate_timeout_message())
+                    else:
+                        chunks.append(samples.copy())
+                        # Classic hysteresis hang floor (open_thresh freezes at open).
+                        hang_floor = (
+                            float(open_thresh) - float(hang_margin_db)
+                            if open_thresh is not None
+                            else float("-inf")
+                        )
+                        # B108: when peak is far above open_thresh, also require a
+                        # relative drop from peak — high mic gain can leave room noise
+                        # forever above a low frozen abs_open hang floor.
+                        if (
+                            open_thresh is not None
+                            and peak_db
+                            > float(open_thresh) + float(peak_gate_slack_db)
+                        ):
+                            hang_floor = max(
+                                hang_floor, float(peak_db) - float(speech_drop_db)
+                            )
+                        still_speech = open_thresh is not None and db >= hang_floor
+                        if still_speech:
+                            silent_blocks = 0
+                            speech_blocks += 1
+                            _emit_voice()
+                            if endpointer is not None:
+                                endpointer.on_speech()
+                        else:
+                            silent_blocks += 1
+                            if endpointer is None:
+                                if (
+                                    silent_blocks >= end_silence_blocks
+                                    and speech_blocks >= min_speech_blocks
+                                ):
+                                    break
+                            else:
+                                def _endpoint_frame() -> EndpointFrame:
+                                    pcm = (
+                                        pcm16_mono_bytes(np.concatenate(chunks))
+                                        if chunks
+                                        else b""
+                                    )
+                                    return EndpointFrame(
+                                        pcm16=pcm,
+                                        sample_rate=sample_rate,
+                                        trailing_silence_s=silent_blocks * 0.02,
+                                        speech_s=speech_blocks * 0.02,
+                                    )
+
+                                if endpointer.should_end(
+                                    silent_blocks=silent_blocks,
+                                    speech_blocks=speech_blocks,
+                                    audio_fn=_endpoint_frame,
+                                ):
+                                    break
+
+                    if should_stop is not None:
+                        pcm = (
+                            pcm16_mono_bytes(np.concatenate(chunks)) if chunks else b""
+                        )
+                        if should_stop(pcm, time.monotonic() - start):
+                            break
+
+                # Publish normal teardown ownership before the registered stream is
+                # detached. A signal at this boundary sees either the active stream
+                # or this exact owner and upgrades it to cancellation; never neither.
+                normal_cleanup_owner = _reserve_stream_cleanup(
+                    stream,
+                    cancel=False,
+                    fallback_exit=fallback_exit,
+                )
+
+            cleanup_worker = _start_stream_cleanup(normal_cleanup_owner)
+            _wait_stream_cleanup(cleanup_worker)
+
+            if not chunks:
+                raise TimeoutError(
+                    f"no speech captured (peak_db={peak_db:.1f} peak_rms={peak_rms:.5f})"
+                )
+
+            all_s = np.concatenate(chunks)
+            pcm = pcm16_mono_bytes(all_s)
+            dur_ms = int(1000 * len(all_s) / sample_rate)
+            speech_ms = int(1000 * speech_blocks * 0.02)
+            return CaptureResult(
+                pcm16=pcm,
+                sample_rate=sample_rate,
+                duration_ms=dur_ms,
+                speech_ms=speech_ms,
+                wait_speech_ms=wait_speech_ms,
+                peak_rms=float(peak_rms),
+                peak_db=float(peak_db),
+            )
+        except BaseException:
+            if read_deadline is not None and read_deadline.fired_message() is not None:
+                deadline_forced_exit = True
+            raise
+        finally:
+            if read_deadline is not None:
+                if read_deadline.fired_message() is not None:
+                    deadline_forced_exit = True
+                read_deadline.close()
+            # Cancel teardown aborts/closes native streams but skips legacy
+            # context-manager __exit__ unless fallback was published on the
+            # cleanup owner. Deadline timeouts never publish that owner before
+            # raising, so run fallback here without affecting signal cancel
+            # ownership races covered by B143.
+            if deadline_forced_exit and fallback_exit is not None:
+                try:
+                    fallback_exit()
+                except BaseException:
+                    pass
     finally:
         try:
             from hark.audio.spectrum import clear_spectrum

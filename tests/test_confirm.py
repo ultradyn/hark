@@ -1491,3 +1491,57 @@ def test_deferred_conditional_hedged_not_immediate_yes(reply):
 )
 def test_unambiguous_immediate_approval_still_yes(reply):
     assert classify_confirm_reply(reply) == "yes"
+
+
+# B159: Format (Cf) / Mark (M*) material inside multi-letter NEGATE tokens must
+# not break whole-token matching into spaces that let a leading affirmative win.
+_ZWSP = "\u200b"  # ZERO WIDTH SPACE (Cf)
+_ZWNJ = "\u200c"  # ZERO WIDTH NON-JOINER (Cf)
+_COMBINING_ACUTE = "\u0301"  # COMBINING ACUTE ACCENT (Mn)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        f"yes I ca{_ZWSP}n’t approve this",
+        f"yes c{_ZWSP}ancel",
+        f"yes n{_ZWSP}ot",
+        f"yes a{_ZWSP}bort",
+        f"yes re{_ZWSP}ject",
+        f"yes de{_ZWSP}cline",
+        f"yes can{_ZWSP}cel it",
+        f"yes I wo{_ZWSP}n’t approve this",
+        f"yes do{_ZWSP}n’t",
+        f"yes n{_ZWNJ}ot",
+        f"yes c{_COMBINING_ACUTE}ancel",
+        f"yes{_ZWSP} c{_ZWSP}ancel{_ZWSP}",
+    ],
+)
+def test_format_or_mark_inside_negative_token_fails_closed(reply):
+    """B159: interior Format/Mark must not authorize R2 via broken NEGATE tokens."""
+    assert classify_confirm_reply(reply) == "no"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # Whole-word controls: strip must not create substring NEGATE hits.
+        f"yes the c{_ZWSP}antilever design is approved",
+        f"yes I want wo{_ZWSP}nton soup",
+        f"yes n{_ZWSP}ote that it looks good",
+        f"yes the ab{_ZWSP}out page is fine",
+        # Benign prose / edge Format outside negative tokens still approves.
+        f"yes{_ZWSP}",
+        f"{_ZWSP}yes",
+        f"yes go{_ZWSP} ahead",
+    ],
+)
+def test_format_strip_preserves_whole_word_boundaries_and_benign_yes(reply):
+    assert classify_confirm_reply(reply) == "yes"
+
+
+def test_format_strip_scales_linearly_on_long_zwsp_runs():
+    """Bounded scaling: long Cf runs must not change classification or explode."""
+    poison = "c" + (_ZWSP * 10_000) + "ancel"
+    assert classify_confirm_reply(f"yes {poison}") == "no"
+    assert classify_confirm_reply("yes" + (_ZWSP * 10_000)) == "yes"

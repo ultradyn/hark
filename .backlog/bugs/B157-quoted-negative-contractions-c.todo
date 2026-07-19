@@ -1,17 +1,18 @@
 ---
 claimed_at: "2026-07-16T15:59:45Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-19T10:23:30Z"
 complexity: medium
 created_at: "2026-07-16T15:59:16Z"
 depends_on: []
+duration_minutes: 3983.7610954844167
 estimate_hours: 1
 id: B157
 priority: high
 started_at: "2026-07-16T15:59:45Z"
-status: in_progress
+status: done
 tags: []
 title: Quoted negative contractions can be approved as confirmation
-updated_at: "2026-07-16T15:59:45Z"
+updated_at: "2026-07-19T10:23:30Z"
 ---
 Evidence: classify_confirm_reply returns yes for explicit refusal-shaped replies whose contraction is surrounded by apostrophe-family quotation marks, including "yes 'can't'", "yes ‘can’t’", and "yes ‘can’t’ approve this". Parentheses and double quotes correctly yield no because generic punctuation is removed, but ASCII/apostrophe-family quote marks are intentionally preserved for contractions and therefore prevent the padded whole-token NEGATE match. This behavior predates the current B151 malformed-separator fix and is a separate policy gap. Expected: at the destructive confirmation boundary, a complete negative contraction surrounded by balanced quote/apostrophe-family punctuation must fail closed without weakening whole-token boundaries or the affirmative idiom/B142 punctuation policies. Add direct classifier and real R2 run_ask regressions for ASCII and supported Unicode quote forms.

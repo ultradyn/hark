@@ -211,6 +211,14 @@ def test_run_ask_confirm_profile_readback_silence_lexicon(monkeypatch):
         "yes I cant approve this",
         "yes I wont approve this",
         "yes I dont approve this",
+        # B148: deferred / conditional / hedged confirm replies cancel.
+        "yes but wait",
+        "yes hold on",
+        "okay wait a second",
+        "sure after I review it",
+        "yes if the tests pass",
+        "yes unless the tests fail",
+        "yes maybe",
     ],
 )
 def test_run_ask_confirm_cancel_on_no(monkeypatch, confirm_reply):

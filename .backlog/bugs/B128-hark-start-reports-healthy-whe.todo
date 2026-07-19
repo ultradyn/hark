@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-15T21:27:07Z"
 claimed_by: codex-urban-morn-b847
-completed_at: null
+completed_at: "2026-07-19T09:54:39Z"
 complexity: medium
 created_at: "2026-07-15T20:57:34Z"
 depends_on: []
+duration_minutes: 5067.542174337784
 estimate_hours: 1
 id: B128
 priority: high
 started_at: "2026-07-15T21:27:07Z"
-status: in_progress
+status: done
 tags: []
 title: hark start reports healthy when only one requested worker remains
-updated_at: "2026-07-15T21:27:07Z"
+updated_at: "2026-07-19T09:54:39Z"
 ---
 ## Evidence
 start_workers treats any non-empty collect_worker_pids result as complete success and returns already_running before checking which roles were requested. mode-a.pids stores only integer PIDs, and workers_status exposes one aggregate running boolean, so neither path can distinguish watch from ambient. If watch exits while ambient remains, hark start and hark start --status report workers running and do not restore watch; blocked Herdr events can then be missed. The inverse leaves wake capture unavailable. The existing test_start_when_already_running confirms that one arbitrary live PID short-circuits startup.

@@ -8,9 +8,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 _PUNCTUATION = re.compile(r"[^\w\s']+", re.UNICODE)
-_ADJOINING_PUNCTUATION_SEPARATOR = re.compile(r"^[^\w\s']+", re.UNICODE)
 _CONFIRM_WHITESPACE = re.compile(r"\s+")
-_PUNCTUATED_DEFER_CUES = ("but", "wait", "if", "unless")
 _AFFIRMATIVE_IDIOMS = frozenset({"yes why not"})
 _SUPPORTED_APOSTROPHE_SEPARATORS = frozenset(
     {
@@ -47,6 +45,26 @@ _NORMALIZED_ALPHABETIC_COMPATIBILITY_WHITESPACE = tuple(
 # Human speech text should never need hundreds of marks on one starter; bounding
 # the segment avoids the quadratic worst case in CPython's Unicode normalizer.
 _MAX_NORMALIZATION_SEGMENT_CHARS = 256
+
+# Defer / condition / hedge markers. Whole-word (or multi-word phrase) match
+# after punctuation strip. Any hit blocks immediate approval so multi-clause
+# spoken replies like "yes but wait" / "yes if tests pass" cannot authorize R2/R3
+# (B142 punctuated + B148 unpunctuated).
+_DEFER_CONDITION_HEDGE = frozenset(
+    {
+        "but",
+        "wait",
+        "hold on",
+        "hang on",
+        "if",
+        "unless",
+        "after",
+        "until",
+        "maybe",
+        "perhaps",
+        "later",
+    }
+)
 
 AFFIRM = frozenset(
     {
@@ -793,6 +811,11 @@ def _normalize_confirmation_for_match(text: str) -> str:
     return _CONFIRM_WHITESPACE.sub(" ", text.lower().strip())
 
 
+def _contains_whole_phrase(padded: str, phrase: str) -> bool:
+    """True if ``phrase`` appears as whole words inside space-padded text."""
+    return f" {phrase} " in padded
+
+
 def classify_confirm_reply(text: str) -> str:
     """Classify a raw STT transcript as ``yes``, ``no``, or ``unclear``.
 
@@ -800,6 +823,9 @@ def classify_confirm_reply(text: str) -> str:
     normalization. Once NFKC/NFKD collapses compatibility characters to literal
     alphabetic text, source provenance is unrecoverable and the two inputs must
     classify identically unless observable marks/Format/separators remain.
+
+    Only unambiguous immediate approval is ``yes``. Negations win over
+    affirmatives; defer/condition/hedge markers fail closed to ``unclear``.
     """
     # Capture raw structure before compatibility normalization can erase it.
     raw = text or ""
@@ -807,22 +833,6 @@ def classify_confirm_reply(text: str) -> str:
     if provenance.normalization_rejected:
         return "unclear"
     t = _normalize_confirmation_for_match(provenance.canonical_input)
-    # Preserve the parent classifier's fail-closed behavior for punctuated
-    # deferrals/conditions. Broad unpunctuated language belongs to B148.
-    for affirm in sorted(AFFIRM, key=len, reverse=True):
-        if not t.startswith(affirm):
-            continue
-        tail = t[len(affirm) :]
-        separator = _ADJOINING_PUNCTUATION_SEPARATOR.match(tail)
-        if separator is None:
-            continue
-        remainder = tail[separator.end() :].strip()
-        normalized_remainder = " ".join(_PUNCTUATION.sub(" ", remainder).split())
-        if any(
-            normalized_remainder == cue or normalized_remainder.startswith(cue + " ")
-            for cue in _PUNCTUATED_DEFER_CUES
-        ):
-            return "unclear"
     # STT commonly preserves sentence-final punctuation. Confirmation is a
     # small spoken lexicon, so punctuation is non-semantic while apostrophes
     # remain meaningful for negatives such as ``don't``.
@@ -840,10 +850,15 @@ def classify_confirm_reply(text: str) -> str:
     # destructive confirmations.
     padded = f" {t} "
     for n in sorted(NEGATE, key=len, reverse=True):
-        if f" {n} " in padded:
+        if _contains_whole_phrase(padded, n):
             return "no"
     if provenance.has_unsupported_separator:
         return "unclear"
+    # Defer, condition, and hedge markers block approval even when an
+    # affirmative token is present at the start or end (B142 punctuated + B148).
+    for cue in sorted(_DEFER_CONDITION_HEDGE, key=len, reverse=True):
+        if _contains_whole_phrase(padded, cue):
+            return "unclear"
     for a in sorted(AFFIRM, key=len, reverse=True):
         if t == a or t.startswith(a + " ") or t.endswith(" " + a):
             return "yes"

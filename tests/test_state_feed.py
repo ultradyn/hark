@@ -316,6 +316,100 @@ def test_fresh_follower_replays_same_prefix_in_place_rewrite_of_any_length(
         assert resumed.cursor_position.checkpoint != stale_position.checkpoint
 
 
+
+@pytest.mark.parametrize("replacement_count", [3, 4], ids=["equal", "larger"])
+def test_open_live_follower_replays_same_prefix_rewrite_without_unsafe_cursor(
+    tmp_path: Path, replacement_count: int
+):
+    path = tmp_path / "watch.jsonl"
+    original = [{"n": "same"}, {"n": "old-1"}, {"n": "old-2"}]
+    _write(path, *original)
+    inode = path.stat().st_ino
+    source = SourceFollower(path, source="watch")
+    source.start_at_end()
+    assert source.cursor_position.seq == len(original)
+    assert list(source.poll()) == []
+
+    replacement = [{"n": "same"}] + [
+        {"n": f"new-{index}"} for index in range(1, replacement_count)
+    ]
+    path.write_text("", encoding="utf-8")
+    _write(path, *replacement)
+    assert path.stat().st_ino == inode
+
+    delivery = source.poll()
+    first = next(delivery)
+    assert (first.seq, first.payload) == (1, replacement[0])
+    # The proof-bearing cursor may acknowledge the record just delivered, but
+    # never any replacement bytes which the caller has not observed yet.
+    assert source.cursor_position.seq == 1
+    seen_position = source.cursor_position
+    resumed_after_first = SourceFollower(path, source="watch")
+    resumed_after_first.seek_to(
+        seen_position.seq,
+        incarnation=seen_position.incarnation,
+        checkpoint=seen_position.checkpoint,
+    )
+    assert [record.payload for record in resumed_after_first.poll()] == replacement[1:]
+
+    remaining = list(delivery)
+    records = [first, *remaining]
+    assert [record.payload for record in records] == replacement
+    assert [record.seq for record in records] == list(range(1, replacement_count + 1))
+    assert source.cursor_position.seq == replacement_count
+
+    resumed = SourceFollower(path, source="watch")
+    position = source.cursor_position
+    resumed.seek_to(
+        position.seq,
+        incarnation=position.incarnation,
+        checkpoint=position.checkpoint,
+    )
+    assert list(resumed.poll()) == []
+
+
+def test_rewrite_after_path_snapshot_discards_suffix_and_replays_from_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    path = tmp_path / "watch.jsonl"
+    original = [{"n": "same"}, {"n": "old-1"}, {"n": "old-2"}]
+    replacement = [
+        {"n": "same"},
+        {"n": "new-1"},
+        {"n": "new-2"},
+        {"n": "new-3"},
+    ]
+    _write(path, *original)
+    original_size = path.stat().st_size
+    inode = path.stat().st_ino
+    source = SourceFollower(path, source="watch")
+    source.start_at_end()
+
+    real_path_snapshot = source._path_snapshot
+    rewritten = False
+
+    def snapshot_then_rewrite(*args, **kwargs):
+        nonlocal rewritten
+        snapshot = real_path_snapshot(*args, **kwargs)
+        if not rewritten:
+            path.write_text("", encoding="utf-8")
+            _write(path, *replacement)
+            assert path.stat().st_ino == inode
+            assert path.stat().st_size > original_size
+            rewritten = True
+        return snapshot
+
+    monkeypatch.setattr(source, "_path_snapshot", snapshot_then_rewrite)
+
+    records = list(source.poll())
+
+    # The old EOF offset lands exactly at replacement record 4. That suffix
+    # must not be emitted as seq 4 or included in a mixed old/new checkpoint.
+    assert source.cursor_position.seq == len(records)
+    assert [record.payload for record in records] == replacement
+    assert [record.seq for record in records] == [1, 2, 3, 4]
+
+
 def test_valid_same_incarnation_resumes_at_sequence_plus_one(tmp_path: Path):
     path = tmp_path / "watch.jsonl"
     _write(path, *({"n": n} for n in range(2)))

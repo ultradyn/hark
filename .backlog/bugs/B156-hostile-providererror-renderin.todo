@@ -1,17 +1,18 @@
 ---
 claimed_at: "2026-07-16T14:25:39Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-19T09:54:47Z"
 complexity: medium
 created_at: "2026-07-16T14:25:03Z"
 depends_on: []
+duration_minutes: 4049.13617872355
 estimate_hours: 1
 id: B156
 priority: medium
 started_at: "2026-07-16T14:25:39Z"
-status: in_progress
+status: done
 tags: []
 title: Hostile ProviderError rendering can escape structured ask failure
-updated_at: "2026-07-16T14:25:39Z"
+updated_at: "2026-07-19T09:54:47Z"
 ---
 ## Evidence\nProviderError catch paths assume exception rendering and metadata access are non-throwing. _provider_failure_result directly calls str(exc) and getattr(exc, "code"); the initial ask boundary also reads tts_info directly. A ProviderError subclass whose __str__, code descriptor, or tts_info descriptor raises propagates that secondary exception at initial speak/listen, confirmation readback TTS, and confirmation listen, losing the promised structured ok:false result and preserved text/TTS context. The top-level CLI formats the exception before returning provider exit 4, so hostile rendering also escapes main.\n\nFound while reviewing B154; B154's exact built-in exit-code normalization itself is correct and this robustness gap is separately scoped.\n\n## Expected\nEvery caught ProviderError boundary uses nonthrowing bounded detail rendering and guarded attribute reads. Structured ask failures retain available original answer/TTS metadata and a canonical nonzero provider exit even when exception formatting or descriptors are hostile. Top-level CLI returns 4 without a secondary crash.\n\n## Actual\nSecondary exceptions from __str__ or metadata descriptors replace the provider failure and can escape the command.\n\n## Acceptance criteria\n- Cover initial speak/listen, confirmation readback, confirmation listen, and top-level main.\n- Guard exception detail, code, and tts_info access independently.\n- Preserve first-primary ProviderError semantics and any safely obtainable text/TTS metadata.\n- Always emit/return canonical provider exit 4 when metadata is unavailable or hostile.\n- Bound and sanitize rendered error detail.\n- Add hostile __str__, code descriptor, and tts_info descriptor regressions.

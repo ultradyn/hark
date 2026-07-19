@@ -14,8 +14,9 @@ import os
 import signal
 import sys
 import time
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from hark.daemon import (
     DaemonConflict,
@@ -24,9 +25,7 @@ from hark.daemon import (
     harkd_pid_path,
     mode_a_pids_path,
     probe_harkd,
-    probe_mode_a,
     spawn_mode_a_workers,
-    terminate_children,
 )
 from hark.exitcodes import ERROR, OK, USAGE
 from hark.lifecycle import set_shutdown_reason
@@ -36,15 +35,65 @@ from hark.worker_process import (
     WorkerSignalError,
     WorkerStateUnavailableError,
     collect_worker_records,
+    read_worker_records,
     record_matches_lifetime,
     record_matches_process,
     signal_worker_records,
-    worker_records_match_request,
 )
 
 # Default grace after SIGTERM before SIGKILL (seconds). Matches run-mode-a.sh;
 # overridable via HARK_STOP_GRACE_S or --timeout.
 DEFAULT_STOP_TIMEOUT_S = 120.0
+WORKER_ROLE_ORDER = ("watch", "ambient")
+
+
+def _role_report(
+    records: Sequence[WorkerRecord], requested: set[str] | None = None
+) -> dict[str, dict[str, Any]]:
+    report: dict[str, dict[str, Any]] = {}
+    for role in WORKER_ROLE_ORDER:
+        role_records = [record for record in records if record.role == role]
+        item: dict[str, Any] = {
+            "running": bool(role_records),
+            "pids": [record.pid for record in role_records],
+            "processes": [asdict(record) for record in role_records],
+        }
+        if requested is not None:
+            item["requested"] = role in requested
+        report[role] = item
+    return report
+
+
+def _spawned_records(
+    path: Path,
+    children: Sequence[Any],
+    roles: Sequence[str],
+) -> list[WorkerRecord]:
+    """Return identities recorded for this transactional spawn attempt."""
+    records_by_pid = {record.pid: record for record in read_worker_records(path)}
+    expected = [
+        (int(getattr(child, "pid", 0) or 0), role)
+        for child, role in zip(children, roles, strict=False)
+    ]
+    spawned = [records_by_pid.get(pid) for pid, _role in expected]
+    if (
+        len(children) != len(roles)
+        or any(record is None for record in spawned)
+        or any(
+            record is not None and record.role != role
+            for record, (_pid, role) in zip(spawned, expected, strict=True)
+        )
+    ):
+        actual = sorted(
+            (record.pid, record.role)
+            for record in records_by_pid.values()
+            if record.pid in {pid for pid, _role in expected}
+        )
+        raise OSError(
+            "spawned worker identities did not match requested roles: "
+            f"expected={sorted(expected)}, recorded={actual}"
+        )
+    return [record for record in spawned if record is not None]
 
 
 def stop_timeout_default() -> float:
@@ -240,11 +289,7 @@ def start_workers(
     do_ambient: bool = True,
     settle_s: float = 0.3,
 ) -> dict[str, Any]:
-    """Idempotent start of ambient + watch workers (detached).
-
-    If workers are already live in mode-a.pids, returns success without spawning.
-    Refuses when harkd is live.
-    """
+    """Reconcile the requested detached worker roles without duplicating them."""
     root = root or state_dir()
     if not do_watch and not do_ambient:
         return {
@@ -263,119 +308,123 @@ def start_workers(
         existing_records = collect_worker_records(path, discover=True)
     except WorkerStateUnavailableError as exc:
         return {"ok": False, "error": str(exc), "pids": list(exc.pids)}
-    existing = [record.pid for record in existing_records]
-    if existing_records and worker_records_match_request(
-        existing_records,
-        watch=do_watch,
-        ambient=do_ambient,
-        session=session,
-    ):
+
+    requested = {
+        role
+        for role, enabled in (("watch", do_watch), ("ambient", do_ambient))
+        if enabled
+    }
+    existing_roles = {
+        record.role for record in existing_records if not record.provisional
+    }
+    missing = requested - existing_roles
+    roles = _role_report(existing_records, requested)
+    if not missing:
+        existing = [record.pid for record in existing_records]
         return {
             "ok": True,
             "already_running": True,
             "pids": existing,
+            "roles": roles,
             "message": (
                 f"workers already running (pids {', '.join(str(p) for p in existing)})"
             ),
         }
-    if existing_records:
-        return {
-            "ok": False,
-            "already_running": False,
-            "pids": existing,
-            "error": (
-                "existing workers do not exactly match requested roles, session, "
-                "and state scope; stop them before starting"
-            ),
-        }
+
+    # Keep healthy roles; spawn only the missing requested ones (B128).
+    preserve_records = [
+        record
+        for record in existing_records
+        if record.role not in missing and not record.provisional
+    ]
 
     root.mkdir(parents=True, exist_ok=True)
+    spawn_roles = [role for role in WORKER_ROLE_ORDER if role in missing]
     try:
         children = spawn_mode_a_workers(
             session=session,
-            do_watch=do_watch,
-            do_ambient=do_ambient,
+            do_watch="watch" in missing,
+            do_ambient="ambient" in missing,
             root=root,
             log_dir=root,
+            preserve_records=preserve_records,
         )
+        created = _spawned_records(path, children, spawn_roles)
     except OSError as exc:
         # Another compatible starter may have won while this caller waited for
-        # the same pidfile transaction lock. Reclassify that lock winner as the
-        # idempotent already-running outcome, never a spurious start failure.
+        # the same pidfile transaction lock. Reclassify a complete winner as
+        # already-running; otherwise surface partial ownership.
         try:
-            winner = collect_worker_records(path, discover=True)
+            live_records = collect_worker_records(path, discover=True)
         except WorkerStateUnavailableError:
-            winner = []
-        if winner and worker_records_match_request(
-            winner,
-            watch=do_watch,
-            ambient=do_ambient,
-            session=session,
-        ):
-            pids = [record.pid for record in winner]
+            live_records = []
+        live_roles = {
+            record.role for record in live_records if not record.provisional
+        }
+        if live_records and not (requested - live_roles):
+            pids = [record.pid for record in live_records]
             return {
                 "ok": True,
                 "already_running": True,
                 "pids": pids,
+                "roles": _role_report(live_records, requested),
                 "message": (
                     "workers already running "
                     f"(pids {', '.join(str(pid) for pid in pids)})"
                 ),
             }
-        return {"ok": False, "error": f"failed to spawn workers: {exc}", "pids": []}
+        return {
+            "ok": False,
+            "partial": bool(requested & live_roles),
+            "error": f"failed to start missing workers: {exc}",
+            "pids": [record.pid for record in live_records],
+            "roles": _role_report(live_records, requested),
+        }
 
-    started = [c.pid for c in children if c.pid]
+    started = [record.pid for record in created]
     if settle_s > 0:
         time.sleep(settle_s)
 
-    # Revalidate the exact requested ready roles after the settle window.  A
-    # nonempty partial set is failure, never a successful start.
-    live_records = collect_worker_records(path, discover=True)
-    live = [record.pid for record in live_records]
-    if not worker_records_match_request(
-        live_records,
-        watch=do_watch,
-        ambient=do_ambient,
-        session=session,
-    ):
-        requested_roles = [
-            role
-            for role, requested in (("watch", do_watch), ("ambient", do_ambient))
-            if requested
-        ]
-        owned_children: list[Any] = list(zip(requested_roles, children))
-        owned_children.extend(children[len(requested_roles) :])
-        errors = [
-            "workers did not settle into the exact requested role set "
-            "(check ambient.jsonl / watch.jsonl)"
-        ]
-        try:
-            terminate_children(owned_children, root=root, timeout_s=2.0)
-        except WorkerSignalError as exc:
-            errors.append(str(exc))
-        survivors: list[int] = []
-        for child in children:
-            pid = getattr(child, "pid", None)
-            if not isinstance(pid, int) or pid <= 0:
-                continue
-            try:
-                running = child.poll() is None
-            except Exception:
-                running = True
-            if running:
-                survivors.append(pid)
+    try:
+        live_records = collect_worker_records(path, discover=True)
+    except WorkerStateUnavailableError as exc:
         return {
             "ok": False,
-            "error": "; ".join(errors),
-            "pids": survivors,
+            "partial": True,
+            "error": str(exc),
+            "pids": list(exc.pids),
             "started": started,
+        }
+    live_roles = {
+        record.role for record in live_records if not record.provisional
+    }
+    still_missing = requested - live_roles
+    live = [record.pid for record in live_records]
+    roles = _role_report(live_records, requested)
+    if still_missing:
+        return {
+            "ok": False,
+            "partial": bool(requested & live_roles),
+            "error": (
+                "requested worker roles are not healthy after start: "
+                + ", ".join(sorted(still_missing))
+                + " (check ambient.jsonl / watch.jsonl)"
+            ),
+            "pids": live,
+            "started": started,
+            "roles": roles,
         }
 
     return {
         "ok": True,
         "already_running": False,
         "pids": live,
-        "message": f"started workers (pids {', '.join(str(p) for p in live)})",
+        "started": started,
+        "roles": roles,
+        "message": (
+            "started missing workers "
+            + ", ".join(f"{record.role}={record.pid}" for record in created)
+        ),
         "logs": {
             "watch": str(root / "watch.jsonl"),
             "ambient": str(root / "ambient.jsonl"),
@@ -424,7 +473,9 @@ def restart_workers(
 
 def workers_status(root: Path | None = None) -> dict[str, Any]:
     root = root or state_dir()
-    mode_a = probe_mode_a(root)
+    path = mode_a_pids_path(root)
+    records = collect_worker_records(path)
+    roles = _role_report(records)
     harkd = probe_harkd(root)
     from hark.monitor_feed import probe_monitor_consumer
 
@@ -432,9 +483,10 @@ def workers_status(root: Path | None = None) -> dict[str, Any]:
     return {
         "state_dir": str(root),
         "workers": {
-            "running": mode_a.running,
-            "pids": mode_a.pids,
-            "pidfile": mode_a.pidfile,
+            "running": any(status["running"] for status in roles.values()),
+            "pids": [record.pid for record in records],
+            "pidfile": str(path) if path.exists() else None,
+            "roles": roles,
         },
         "harkd": {
             "running": harkd.running,
@@ -490,6 +542,15 @@ def cmd_start(args: Any) -> int:
                 print(f"workers: running (pids {', '.join(str(p) for p in w['pids'])})")
             else:
                 print("workers: not running")
+            for role in WORKER_ROLE_ORDER:
+                role_status = w["roles"][role]
+                if role_status["running"]:
+                    print(
+                        f"  {role}: running "
+                        f"(pids {', '.join(str(p) for p in role_status['pids'])})"
+                    )
+                else:
+                    print(f"  {role}: not running")
             h = st["harkd"]
             if h["running"]:
                 print(f"harkd: running (pids {', '.join(str(p) for p in h['pids'])})")

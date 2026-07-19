@@ -312,3 +312,160 @@ def test_cmd_ask_preserves_success_exit_zero(monkeypatch, capsys):
         "exit": 0,
         "for_event": "event-154-success",
     }
+
+
+class _FailureSurfaceEscape(BaseException):
+    """Secondary failure which must not replace the caught provider error."""
+
+
+class _HostileProviderError(ProviderError):
+    def __init__(self, hostile_surface: str | None, detail: str = "provider failed"):
+        RuntimeError.__init__(self, detail)
+        self._hostile_surface = hostile_surface
+        self._detail = detail
+
+    def __str__(self) -> str:
+        if self._hostile_surface == "detail":
+            raise _FailureSurfaceEscape("hostile __str__")
+        return self._detail
+
+    @property
+    def code(self) -> int:
+        if self._hostile_surface == "code":
+            raise _FailureSurfaceEscape("hostile code")
+        return 7
+
+    @property
+    def tts_info(self) -> dict[str, object]:
+        if self._hostile_surface == "tts_info":
+            raise _FailureSurfaceEscape("hostile tts_info")
+        return {"ok": True, "provider": "partial-tts"}
+
+
+def _ask_failure_at(monkeypatch, boundary: str, exc: ProviderError) -> HarkConfig:
+    if boundary == "initial-speak-listen":
+        cfg = HarkConfig()
+
+        def fail_initial(*args, **kwargs):
+            raise exc
+
+        monkeypatch.setattr("hark.speech.speak_and_listen", fail_initial)
+        return cfg
+
+    cfg = _initial_answer(monkeypatch)
+    if boundary == "confirmation-readback":
+
+        def fail_readback(*args, **kwargs):
+            raise exc
+
+        monkeypatch.setattr("hark.speech.run_tts", fail_readback)
+        monkeypatch.setattr(
+            "hark.speech.run_listen",
+            lambda *args, **kwargs: pytest.fail(
+                "confirmation listen ran after readback failure"
+            ),
+        )
+        return cfg
+
+    assert boundary == "confirmation-listen"
+    monkeypatch.setattr(
+        "hark.speech.run_tts", lambda *args, **kwargs: {"ok": True}
+    )
+
+    def fail_confirmation(*args, **kwargs):
+        raise exc
+
+    monkeypatch.setattr("hark.speech.run_listen", fail_confirmation)
+    return cfg
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    ["initial-speak-listen", "confirmation-readback", "confirmation-listen"],
+)
+@pytest.mark.parametrize("hostile_surface", ["detail", "code"])
+def test_ask_provider_boundaries_contain_hostile_baseexception_surfaces(
+    monkeypatch, boundary, hostile_surface
+):
+    cfg = _ask_failure_at(monkeypatch, boundary, _HostileProviderError(hostile_surface))
+
+    result = run_ask(cfg, "Deploy now?", risk_hint="R2")
+
+    assert result["ok"] is False
+    assert result["error"] == (
+        "provider failure" if hostile_surface == "detail" else "provider failed"
+    )
+    assert result["exit"] == (4 if hostile_surface == "code" else 7)
+    if boundary == "initial-speak-listen":
+        assert result["tts"] == {"ok": True, "provider": "partial-tts"}
+        assert "text" not in result
+    else:
+        assert result["text"] == "deploy the release"
+        assert result["tts"] == {"ok": True, "provider": "mock", "voice": "eve"}
+
+
+def test_initial_ask_contains_hostile_tts_info_baseexception(monkeypatch):
+    exc = _HostileProviderError("tts_info")
+    cfg = _ask_failure_at(monkeypatch, "initial-speak-listen", exc)
+
+    result = run_ask(cfg, "Deploy now?", risk_hint="R2")
+
+    assert result == {
+        "ok": False,
+        "error": "provider failed",
+        "exit": 7,
+        "tts": None,
+    }
+
+
+class _ProviderTimeoutError(_HostileProviderError, TimeoutError):
+    pass
+
+
+def test_initial_hybrid_provider_timeout_keeps_provider_semantics(monkeypatch):
+    exc = _ProviderTimeoutError("code")
+    cfg = _ask_failure_at(monkeypatch, "initial-speak-listen", exc)
+
+    result = run_ask(cfg, "Deploy now?", risk_hint="R2")
+
+    assert result == {
+        "ok": False,
+        "error": "provider failed",
+        "exit": 4,
+        "tts": {"ok": True, "provider": "partial-tts"},
+    }
+
+
+@pytest.mark.parametrize("hostile_surface", ["detail", "code"])
+def test_main_contains_hostile_provider_baseexception_surfaces(
+    monkeypatch, capsys, hostile_surface
+):
+    exc = _HostileProviderError(hostile_surface)
+    monkeypatch.setattr(cli, "load_config", lambda *args, **kwargs: HarkConfig())
+
+    def fail_dispatch(*args, **kwargs):
+        raise exc
+
+    monkeypatch.setattr(cli, "dispatch", fail_dispatch)
+
+    assert cli.main(["doctor", "--json"]) == (4 if hostile_surface == "code" else 7)
+    detail = capsys.readouterr().err.removeprefix("hark: provider: ").rstrip("\n")
+    assert detail == (
+        "provider failure" if hostile_surface == "detail" else "provider failed"
+    )
+
+
+def test_provider_detail_is_bounded_and_control_safe_at_ask_boundary(monkeypatch):
+    unsafe_detail = "\x1b[31mprovider\nfailed\x00" + ("x" * 1_000)
+    cfg = _ask_failure_at(
+        monkeypatch,
+        "initial-speak-listen",
+        _HostileProviderError(None, unsafe_detail),
+    )
+
+    result = run_ask(cfg, "Deploy now?", risk_hint="R2")
+
+    assert result["ok"] is False
+    assert len(result["error"]) <= 400
+    assert all(character.isprintable() for character in result["error"])
+    assert result["error"].endswith("...")

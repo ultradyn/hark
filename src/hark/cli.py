@@ -19,7 +19,6 @@ from hark.exitcodes import (
     ERROR,
     HERDR,
     OK,
-    PROVIDER,
     TIMEOUT,
     USAGE,
     normalize_failure_exit,
@@ -28,7 +27,7 @@ from hark.herdr.access import HerdrSessionAccess, active_client, active_named_cl
 from hark.herdr.client import HerdrClient, HerdrError, NamedSessionInfo
 from hark.herdr.tunnel import ensure_tunnel
 from hark.paths import default_config_path, state_dir
-from hark.providers.base import ProviderError
+from hark.providers.base import ProviderError, safe_provider_failure
 from hark.targets import parse_target
 from hark.watch import run_watch
 
@@ -773,8 +772,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         eprint(f"hark: herdr error: {exc}")
         return HERDR
     except ProviderError as exc:
-        eprint(f"hark: provider: {exc}")
-        return normalize_failure_exit(getattr(exc, "code", None), fallback=PROVIDER)
+        failure = safe_provider_failure(exc)
+        eprint(f"hark: provider: {failure.detail}")
+        return failure.code
     except TimeoutError as exc:
         eprint(f"hark: timeout: {exc}")
         return TIMEOUT

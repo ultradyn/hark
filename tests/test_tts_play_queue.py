@@ -15,6 +15,8 @@ import pytest
 
 from hark.audio import playback as pb
 from hark.config import HarkConfig
+from hark.exitcodes import TIMEOUT
+from hark.providers.base import ProviderError
 from hark.speech import run_tts
 
 
@@ -150,8 +152,71 @@ else:
         holder.wait(timeout=2.0)
 
 
+def test_abandon_lock_timeout_reports_owner_and_preserves_ticket(
+    tmp_path, monkeypatch
+):
+    """Abandonment is bounded and leaves a recoverable tracked ticket."""
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    holder = _flock_holder(lock, env=os.environ.copy())
+    try:
+        with pytest.raises(pb.TtsPlayLockTimeout) as caught:
+            pb.abandon_tts_play_ticket(ticket, lock_timeout_s=0.12)
+        assert caught.value.operation == "abandon"
+        assert caught.value.ticket == ticket
+        assert caught.value.lock_owner_pid == holder.pid
+        assert caught.value.queue_state["serving"] == ticket
+        assert ticket in pb._our_tickets
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+        pb.abandon_tts_play_ticket(ticket)
+
+
+def test_heal_lock_timeout_returns_structured_owner_and_queue_diagnostics(
+    tmp_path, monkeypatch
+):
+    """The non-raising healer still exposes typed lock-timeout details."""
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    holder = _flock_holder(lock, env=os.environ.copy())
+    monkeypatch.setattr(pb, "_PLAY_LOCK_ACQUIRE_TIMEOUT_S", 0.12)
+    try:
+        report = pb.heal_tts_play_queue()
+        assert report["ok"] is False
+        assert report["error_type"] == "tts_play_lock_timeout"
+        assert report["tts_play_lock"]["operation"] == "heal"
+        assert report["tts_play_lock"]["lock_owner_pid"] == holder.pid
+        assert report["tts_play_lock"]["queue"]["serving"] == ticket
+        assert report["tts_play_lock"]["queue"]["next"] == ticket + 1
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+        pb.abandon_tts_play_ticket(ticket)
+
+
+def test_process_cleanup_never_waits_a_full_lock_timeout(tmp_path, monkeypatch):
+    """Signal/atexit cleanup is best-effort and cannot itself look hung."""
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    holder = _flock_holder(lock, env=os.environ.copy())
+    monkeypatch.setattr(pb, "_PLAY_LOCK_ACQUIRE_TIMEOUT_S", 0.5)
+    try:
+        started = time.monotonic()
+        pb._abandon_our_tickets()
+        assert time.monotonic() - started < 0.1
+        assert ticket in pb._our_tickets
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+        pb.abandon_tts_play_ticket(ticket)
+
+
 def test_exclusive_lock_timeout_defers_ticket_abandonment(tmp_path, monkeypatch):
-    """Lock timeout returns promptly and cleanup completes after lock release."""
+    """Bounded wait lock timeout returns promptly; cleanup runs after release."""
     lock, _queue = _queue_paths(tmp_path, monkeypatch)
     ticket = pb.claim_tts_play_ticket()
     env = os.environ.copy()
@@ -160,7 +225,7 @@ def test_exclusive_lock_timeout_defers_ticket_abandonment(tmp_path, monkeypatch)
     try:
         started = time.monotonic()
         with pytest.raises(pb.TtsPlayLockTimeout) as caught:
-            with pb.exclusive_playback(ticket=ticket):
+            with pb.exclusive_playback(ticket=ticket, wait_timeout_s=0.12):
                 raise AssertionError("must not enter playback")
         assert time.monotonic() - started < 1.0
         assert caught.value.operation == "wait"
@@ -176,6 +241,74 @@ def test_exclusive_lock_timeout_defers_ticket_abandonment(tmp_path, monkeypatch)
         time.sleep(0.02)
     assert ticket not in pb._our_tickets
     assert pb.inspect_tts_play_queue()["serving"] == ticket + 1
+
+
+def test_unbounded_exclusive_wait_retries_lock_without_abandoning(
+    tmp_path, monkeypatch
+):
+    """Live players hold the flock for whole utterances; waiters must not bail."""
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    holder = _flock_holder(lock, env=os.environ.copy())
+    monkeypatch.setattr(pb, "_PLAY_LOCK_ACQUIRE_TIMEOUT_S", 0.08)
+    result: dict[str, object] = {}
+
+    def waiter() -> None:
+        with pb.exclusive_playback(ticket=ticket):
+            result["played"] = True
+
+    thread = threading.Thread(target=waiter, name="b146-unbounded-waiter")
+    thread.start()
+    try:
+        deadline = time.monotonic() + 0.25
+        while time.monotonic() < deadline:
+            if ticket in pb._deferred_abandons:
+                raise AssertionError("unbounded waiter abandoned during lock hold")
+            time.sleep(0.02)
+        assert thread.is_alive()
+        assert ticket in pb._our_tickets
+        assert "played" not in result
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+
+    thread.join(timeout=2.0)
+    assert not thread.is_alive()
+    assert result.get("played") is True
+    assert ticket not in pb._our_tickets
+    assert pb.inspect_tts_play_queue()["serving"] == ticket + 1
+
+
+def test_deferred_abandonment_uses_one_reaper_for_many_tickets(
+    tmp_path, monkeypatch
+):
+    """A permanent wedge must not leak one retrying daemon per ticket."""
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    tickets = [pb.claim_tts_play_ticket() for _ in range(2)]
+    holder = _flock_holder(lock, env=os.environ.copy())
+    real_start = threading.Thread.start
+    started_reapers = []
+
+    def record_start(thread):
+        if thread.name.startswith("hark-tts-abandon-"):
+            started_reapers.append(thread.name)
+        return real_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", record_start)
+    try:
+        assert pb.defer_tts_play_ticket_abandon(tickets[0]) is True
+        assert pb.defer_tts_play_ticket_abandon(tickets[1]) is True
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+
+    deadline = time.monotonic() + 2.0
+    while any(ticket in pb._our_tickets for ticket in tickets) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert all(ticket not in pb._our_tickets for ticket in tickets)
+    assert started_reapers == ["hark-tts-abandon-reaper"]
 
 
 def test_exclusive_lock_timeout_recovers_if_deferred_thread_start_fails_once(
@@ -200,7 +333,7 @@ def test_exclusive_lock_timeout_recovers_if_deferred_thread_start_fails_once(
     monkeypatch.setattr(threading.Thread, "start", fail_first_start)
     try:
         with pytest.raises(pb.TtsPlayLockTimeout):
-            with pb.exclusive_playback(ticket=ticket):
+            with pb.exclusive_playback(ticket=ticket, wait_timeout_s=0.12):
                 raise AssertionError("must not enter playback")
         assert starts == 2
     finally:
@@ -267,7 +400,9 @@ def test_run_tts_configured_wait_timeout_is_total_and_keeps_lock_details(
                 play_wait_timeout_s=0.12,
             )
         elapsed = time.monotonic() - started
-        assert 0.1 <= elapsed < 0.18
+        # One queue budget (~0.12s) plus synth/setup; must not restart a second
+        # full lock acquisition bound (0.5s) after the timeout.
+        assert 0.1 <= elapsed < 0.45
         assert caught.value.operation == "wait"
         assert caught.value.lock_owner_pid == holder.pid
         assert caught.value.queue_owner_pid == os.getpid()
@@ -281,6 +416,221 @@ def test_run_tts_configured_wait_timeout_is_total_and_keeps_lock_details(
     while ticket in pb._our_tickets and time.monotonic() < deadline:
         time.sleep(0.02)
     assert ticket not in pb._our_tickets
+
+
+def test_run_tts_lock_timeout_with_failed_reaper_does_not_restart_budget(
+    tmp_path, monkeypatch
+):
+    """Permanent reaper publication failure cannot add a second full wait."""
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    holder = _flock_holder(lock, env=os.environ.copy())
+    _patch_run_tts_dependencies(monkeypatch)
+    monkeypatch.setattr("hark.speech.claim_tts_play_ticket", lambda **_kwargs: ticket)
+    monkeypatch.setattr(pb, "_PLAY_LOCK_ACQUIRE_TIMEOUT_S", 0.5)
+    real_start = threading.Thread.start
+
+    def fail_reaper_start(thread):
+        if thread.name == "hark-tts-abandon-reaper":
+            raise RuntimeError("threads unavailable")
+        return real_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", fail_reaper_start)
+    started = time.monotonic()
+    try:
+        with pytest.raises(pb.TtsPlayLockTimeout) as caught:
+            run_tts(
+                _tts_config(),
+                "bounded even without reaper",
+                play=True,
+                mute_mic=False,
+                conference_policy="force",
+                use_cache=False,
+                play_wait_timeout_s=0.12,
+            )
+        assert caught.value.operation == "wait"
+        assert time.monotonic() - started < 0.45
+        assert ticket in pb._deferred_abandons
+        assert ticket in pb._our_tickets
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+
+    monkeypatch.undo()
+    monkeypatch.setattr(pb, "tts_play_lock_path", lambda: lock)
+    monkeypatch.setattr(pb, "tts_play_queue_path", lambda: _queue)
+    next_ticket = pb.claim_tts_play_ticket()
+    assert ticket not in pb._deferred_abandons
+    assert ticket not in pb._our_tickets
+    pb.abandon_tts_play_ticket(next_ticket)
+
+
+def test_run_tts_synth_failure_cleanup_respects_total_lock_budget(
+    tmp_path, monkeypatch
+):
+    """A synth failure cannot trigger a fresh full lock wait during cleanup."""
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    holder_box = {}
+    real_claim = pb.claim_tts_play_ticket
+
+    def claim_then_block(**kwargs):
+        ticket = real_claim(**kwargs)
+        holder_box["ticket"] = ticket
+        holder_box["holder"] = _flock_holder(lock, env=os.environ.copy())
+        return ticket
+
+    class FailedTts:
+        def synthesize(self, text, voice=None):
+            raise ProviderError("synth failed")
+
+    class FakeUsage:
+        def record_tts(self, **_kwargs):
+            return None
+
+    monkeypatch.setattr("hark.speech.claim_tts_play_ticket", claim_then_block)
+    monkeypatch.setattr("hark.speech.resolve_tts", lambda *a, **k: FailedTts())
+    monkeypatch.setattr("hark.speech.UsageStore", FakeUsage)
+    monkeypatch.setattr(
+        "hark.conference.apply_conference_hold",
+        lambda *a, **k: SimpleNamespace(skipped=False, as_meta=lambda: {"held": False}),
+    )
+    monkeypatch.setattr(pb, "_PLAY_LOCK_ACQUIRE_TIMEOUT_S", 0.5)
+    real_start = threading.Thread.start
+    reaper_starts = 0
+
+    def fail_first_reaper_start(thread):
+        nonlocal reaper_starts
+        if thread.name == "hark-tts-abandon-reaper":
+            reaper_starts += 1
+            if reaper_starts == 1:
+                raise RuntimeError("thread publication failed")
+        return real_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", fail_first_reaper_start)
+    cfg = _tts_config()
+    started = time.monotonic()
+    try:
+        with pytest.raises(ProviderError, match="synth failed"):
+            run_tts(
+                cfg,
+                "failed synthesis",
+                play=True,
+                mute_mic=False,
+                conference_policy="force",
+                use_cache=False,
+                play_wait_timeout_s=0.12,
+            )
+        assert time.monotonic() - started < 0.3
+        assert holder_box["ticket"] in pb._our_tickets
+        assert reaper_starts == 2
+    finally:
+        holder = holder_box["holder"]
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+
+    ticket = holder_box["ticket"]
+    deadline = time.monotonic() + 2.0
+    while ticket in pb._our_tickets and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert ticket not in pb._our_tickets
+
+
+def test_failed_reaper_publication_is_retained_for_next_lock_transaction(
+    tmp_path, monkeypatch
+):
+    """Repeated thread-start failure leaves recoverable in-process cleanup state."""
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    abandoned = pb.claim_tts_play_ticket()
+    holder = _flock_holder(lock, env=os.environ.copy())
+
+    def fail_start(_thread):
+        raise RuntimeError("threads unavailable")
+
+    monkeypatch.setattr(threading.Thread, "start", fail_start)
+    try:
+        assert pb.defer_tts_play_ticket_abandon(abandoned) is False
+        assert abandoned in pb._deferred_abandons
+        assert abandoned in pb._our_tickets
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+
+    monkeypatch.undo()
+    monkeypatch.setattr(pb, "tts_play_lock_path", lambda: lock)
+    monkeypatch.setattr(pb, "tts_play_queue_path", lambda: _queue)
+    next_ticket = pb.claim_tts_play_ticket()
+    state = pb.inspect_tts_play_queue()
+    assert abandoned not in pb._deferred_abandons
+    assert abandoned not in pb._our_tickets
+    assert state["serving"] == next_ticket
+    pb.abandon_tts_play_ticket(next_ticket)
+
+
+def test_recovered_cleanup_stays_pending_until_queue_write_commits(
+    tmp_path, monkeypatch
+):
+    """A failed recovery transaction must retain its cleanup ownership state."""
+    lock, queue = _queue_paths(tmp_path, monkeypatch)
+    abandoned = pb.claim_tts_play_ticket()
+    real_start = threading.Thread.start
+
+    def fail_start(_thread):
+        raise RuntimeError("threads unavailable")
+
+    monkeypatch.setattr(threading.Thread, "start", fail_start)
+    assert pb.defer_tts_play_ticket_abandon(abandoned) is False
+    monkeypatch.setattr(threading.Thread, "start", real_start)
+
+    real_write = pb._queue_write
+    writes = 0
+
+    def fail_first_write(path, state):
+        nonlocal writes
+        writes += 1
+        if writes == 1:
+            raise OSError("queue write failed")
+        return real_write(path, state)
+
+    monkeypatch.setattr(pb, "_queue_write", fail_first_write)
+    with pytest.raises(OSError, match="queue write failed"):
+        pb.claim_tts_play_ticket()
+    assert abandoned in pb._deferred_abandons
+    assert abandoned in pb._our_tickets
+    on_disk = json.loads(queue.read_text(encoding="utf-8"))
+    assert on_disk["serving"] == abandoned
+
+    next_ticket = pb.claim_tts_play_ticket()
+    assert abandoned not in pb._deferred_abandons
+    assert abandoned not in pb._our_tickets
+    assert pb.inspect_tts_play_queue()["serving"] == next_ticket
+    pb.abandon_tts_play_ticket(next_ticket)
+
+
+def test_deferred_reaper_retries_transient_cleanup_errors(tmp_path, monkeypatch):
+    """A transient queue I/O error cannot discard the only cleanup request."""
+    _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    real_abandon = pb._abandon_tts_play_ticket_now
+    attempts = 0
+
+    def fail_once(ticket_arg, *, lock_timeout_s=None):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("transient queue write failure")
+        return real_abandon(ticket_arg, lock_timeout_s=lock_timeout_s)
+
+    monkeypatch.setattr(pb, "_abandon_tts_play_ticket_now", fail_once)
+    assert pb.defer_tts_play_ticket_abandon(ticket) is True
+    deadline = time.monotonic() + 2.0
+    while ticket in pb._our_tickets and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert attempts >= 2
+    assert ticket not in pb._our_tickets
+    assert ticket not in pb._deferred_abandons
 
 
 def test_run_tts_configured_wait_timeout_bounds_initial_claim(tmp_path, monkeypatch):
@@ -345,6 +695,87 @@ def test_cli_configured_wait_timeout_prints_owner_diagnostics(
     while ticket in pb._our_tickets and time.monotonic() < deadline:
         time.sleep(0.02)
     assert ticket not in pb._our_tickets
+
+
+def test_cmd_ask_serializes_typed_play_lock_timeout(tmp_path, monkeypatch, capsys):
+    """A real held flock becomes actionable ask JSON and exit TIMEOUT."""
+    from hark import cli
+
+    lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    ticket = pb.claim_tts_play_ticket()
+    holder = _flock_holder(lock, env=os.environ.copy())
+    monkeypatch.setattr(pb, "_PLAY_LOCK_ACQUIRE_TIMEOUT_S", 0.12)
+
+    def blocked_speak_and_listen(*_args, **_kwargs):
+        with pb.exclusive_playback(ticket=ticket, wait_timeout_s=0.12):
+            raise AssertionError("must not enter playback")
+
+    monkeypatch.setattr("hark.speech.speak_and_listen", blocked_speak_and_listen)
+    args = SimpleNamespace(
+        text=["Will", "this", "return?"],
+        confirm="never",
+        end_mode=None,
+        provider=None,
+        json=True,
+        event_id="event-B146",
+    )
+    try:
+        assert cli.cmd_ask(args, _tts_config()) == TIMEOUT
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["ok"] is False
+        assert payload["exit"] == TIMEOUT
+        assert payload["error_type"] == "tts_play_lock_timeout"
+        assert payload["tts_play_lock"]["operation"] == "wait"
+        assert payload["tts_play_lock"]["ticket"] == ticket
+        assert payload["tts_play_lock"]["lock_owner_pid"] == holder.pid
+        assert payload["tts_play_lock"]["queue"]["serving"] == ticket
+        assert payload["tts_play_lock"]["queue"]["next"] == ticket + 1
+        assert payload["for_event"] == "event-B146"
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=2.0)
+
+    deadline = time.monotonic() + 2.0
+    while ticket in pb._our_tickets and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert ticket not in pb._our_tickets
+
+
+def test_cmd_ask_serializes_typed_queue_turn_timeout(
+    tmp_path, monkeypatch, capsys
+):
+    """Queue-head expiry retains typed head-owner diagnostics in ask JSON."""
+    from hark import cli
+
+    _lock, _queue = _queue_paths(tmp_path, monkeypatch)
+    head = pb.claim_tts_play_ticket()
+    waiter = pb.claim_tts_play_ticket()
+
+    def blocked_speak_and_listen(*_args, **_kwargs):
+        with pb.exclusive_playback(ticket=waiter, wait_timeout_s=0.12):
+            raise AssertionError("must not enter playback")
+
+    monkeypatch.setattr("hark.speech.speak_and_listen", blocked_speak_and_listen)
+    args = SimpleNamespace(
+        text=["Will", "the", "queue", "return?"],
+        confirm="never",
+        end_mode=None,
+        provider=None,
+        json=True,
+        event_id="event-B146-queue",
+    )
+    try:
+        assert cli.cmd_ask(args, _tts_config()) == TIMEOUT
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["error_type"] == "tts_play_queue_timeout"
+        assert payload["tts_play_lock"]["operation"] == "queue_wait"
+        assert payload["tts_play_lock"]["ticket"] == waiter
+        assert payload["tts_play_lock"]["queue_owner_pid"] == os.getpid()
+        assert payload["tts_play_lock"]["queue"]["serving"] == head
+        assert payload["tts_play_lock"]["queue"]["next"] == waiter + 1
+    finally:
+        pb.abandon_tts_play_ticket(head)
 
 
 def test_exclusive_playback_serializes_fifo(tmp_path, monkeypatch):

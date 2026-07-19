@@ -26,8 +26,11 @@ from hark.audio.cues import (
 from hark.audio.media import duck_media  # also open_answer_window late-bind
 from hark.audio.mic_mute import mic_muted_during_tts, repair_tts_mute_after_play
 from hark.audio.playback import (
+    TtsPlayLockTimeout,
+    TtsPlayTimeout,
     abandon_tts_play_ticket,
     claim_tts_play_ticket,
+    defer_tts_play_ticket_abandon,
     exclusive_playback,
     play_wav_bytes,
     write_wav,
@@ -625,10 +628,36 @@ def run_tts(
                                         )
                                     else:
                                         next_fut = None
-            except BaseException:
-                # Don't stall the FIFO if we never reached exclusive_playback
+            except BaseException as primary_exc:
+                # Don't stall the FIFO if we never reached exclusive_playback.
+                # Claim, queue wait, and cleanup share one acquisition budget;
+                # synthesis/listen deferral intentionally do not consume it.
+                queue_wait_elapsed = (
+                    max(0.0, float(primary_exc.elapsed_s))
+                    if isinstance(primary_exc, TtsPlayTimeout)
+                    else 0.0
+                )
+                cleanup_lock_timeout_s = (
+                    None
+                    if play_wait_timeout_s is None
+                    else max(
+                        0.0,
+                        float(play_wait_timeout_s)
+                        - claim_wait_elapsed
+                        - queue_wait_elapsed,
+                    )
+                )
                 try:
-                    abandon_tts_play_ticket(play_ticket)
+                    abandon_tts_play_ticket(
+                        play_ticket,
+                        lock_timeout_s=cleanup_lock_timeout_s,
+                    )
+                except TtsPlayLockTimeout:
+                    if not defer_tts_play_ticket_abandon(play_ticket):
+                        # One bounded retry mirrors exclusive_playback. If both
+                        # publications fail, the retained request is recovered
+                        # by the next successful same-process lock transaction.
+                        defer_tts_play_ticket_abandon(play_ticket)
                 except Exception:
                     pass
                 raise

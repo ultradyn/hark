@@ -1,17 +1,18 @@
 ---
 claimed_at: "2026-07-16T02:03:36Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-19T10:22:33Z"
 complexity: medium
 created_at: "2026-07-16T02:02:59Z"
 depends_on: []
+duration_minutes: 4818.951949844233
 estimate_hours: 1
 id: B153
 priority: high
 started_at: "2026-07-16T02:03:36Z"
-status: in_progress
+status: done
 tags: []
 title: Repeated SIGINT cannot stop a hung TTS provider cleanly
-updated_at: "2026-07-16T02:03:36Z"
+updated_at: "2026-07-19T10:22:33Z"
 ---
 When hark ask is blocked in the real run_tts ThreadPoolExecutor on a non-cooperative synth provider, the first and second SIGINT leave the process alive. A third interrupt exits only after concurrent.futures/threading shutdown emits a raw KeyboardInterrupt traceback. This reproduces on fixed base 5e636379 and is therefore separate from B143, though B143 exact ac939def improves the eventual surface to structured rc=7 JSON before the shutdown traceback. Expected: delivered Ctrl-C has a bounded, deterministic escalation path that does not wait forever for an uncooperative provider worker and never emits a raw shutdown traceback. Add an isolated subprocess regression with temporary XDG_STATE_HOME, a deliberately hung synthesize call, repeated SIGINT, bounded exit, and stderr traceback assertion. Consider cancellable provider isolation or a deliberate repeated-SIGINT hard-exit policy; preserve normal single-interrupt cleanup when cooperative.

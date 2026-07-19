@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import re
+import signal
 import sys
+import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -56,7 +60,17 @@ from hark.providers.resolve import (
     resolve_stt,  # noqa: F401 — open_answer_window / test monkeypatch seam
     resolve_tts,
 )
+from hark.signal_safety import SigintMaskGuard
 from hark.syslog import log as syslog
+from hark.tts_interrupt_policy import TtsSynthesisInterrupted, cli_process_exit_expected
+from hark.tts_isolation import (
+    InProcessSynthTransport,
+    SubprocessSynthTransport,
+    SynthProcessLifecycle,
+    SynthRequest,
+    SynthTransport,
+    synth_worker_command,
+)
 from hark.usage import UsageStore
 from hark.answer_window.policy import AnswerWindowProfile
 from hark.answer_window.result import ListenResult  # canonical; facade re-export
@@ -73,6 +87,371 @@ from hark.answer_window.text_join import (  # noqa: F401 — re-export for back-
     monotonic_partial_text,
     prefer_complete_transcript,
 )
+
+
+_SYNTH_INTERRUPT_CLEANUP_GRACE_S = 0.75
+_CURRENT_SYNTH_OWNER: ContextVar[_InterruptibleSynthPool | None] = ContextVar(
+    "hark_current_synth_owner",
+    default=None,
+)
+_synth_worker_command_factory = synth_worker_command
+
+
+def _subprocess_synth_transport_factory(owner: Any) -> SynthTransport:
+    return SubprocessSynthTransport(
+        owner,
+        command_factory=_synth_worker_command_factory,
+    )
+
+
+def _in_process_synth_transport_factory(owner: Any) -> SynthTransport:
+    del owner
+    return InProcessSynthTransport(resolve_tts)
+
+
+_synth_transport_factory = _subprocess_synth_transport_factory
+
+
+class _InterruptibleSynthPool:
+    """One-worker synth pool with a bounded repeated-SIGINT escape hatch.
+
+    ``ThreadPoolExecutor.shutdown(wait=False)`` does not make a stuck worker
+    disposable: ``concurrent.futures.thread`` registers every worker for an
+    interpreter-exit join.  If a provider ignores cancellation, ordinary
+    interpreter shutdown therefore hangs after the first Ctrl-C.
+
+    Keep the first SIGINT fully cooperative by delegating to the handler that
+    was active on entry.  If that interrupt unwinds past a still-running synth,
+    detach the executor without waiting and retain this handler long enough for
+    a repeated SIGINT to terminate the process without entering the executor's
+    traceback-producing shutdown path.  No escalation is armed when all
+    tracked work has completed, or when called outside the main thread where
+    Python does not permit signal-handler ownership.
+    """
+
+    def __init__(self) -> None:
+        self._pool = ThreadPoolExecutor(max_workers=1)
+        self._futures: list[Future[Any]] = []
+        self._previous_sigint: Any = None
+        self._handler: Any = None
+        self._sigint_count = 0
+        self._escalation_authorized = False
+        self._terminal_exit_armed = False
+        self._repeated_sigint_pending = False
+        self._signal_installed = False
+        self._submission_in_progress = False
+        self._submission_uncertain = False
+        self._cleanup_timer: threading.Timer | None = None
+        self._process_exit_expected = cli_process_exit_expected()
+        self._typed_interrupt_pending = False
+        self._process_lifecycle = SynthProcessLifecycle()
+
+    def __enter__(self) -> _InterruptibleSynthPool:
+        guard: SigintMaskGuard | None = None
+        expected_signal_error = False
+        try:
+            self._previous_sigint = signal.getsignal(signal.SIGINT)
+            self._handler = self._handle_sigint
+            guard = SigintMaskGuard.acquire()
+            try:
+                signal.signal(signal.SIGINT, self._handler)
+            finally:
+                # Publish the actual handler state before unblocking SIGINT. A
+                # pending signal must never enter _handle_sigint while the
+                # corresponding ownership flag still says false.
+                self._reconcile_handler_truth()
+        except (OSError, ValueError):
+            expected_signal_error = True
+            # Signal ownership is main-thread-only. Background TTS keeps the
+            # executor's existing cleanup behavior rather than broadening this
+            # process-level policy to an unsafe caller.
+        except BaseException as exc:
+            self._rollback_failed_handler_install(guard)
+            if type(exc) is KeyboardInterrupt and self._previous_sigint in (
+                None,
+                signal.SIG_DFL,
+                signal.default_int_handler,
+            ):
+                # SIGINT can arrive immediately before pthread_sigmask takes
+                # effect. Match the default-handler behavior the pool would
+                # have provided one instruction later, without publishing an
+                # unmasked intermediate handler.
+                raise TtsSynthesisInterrupted from None
+            raise
+        finally:
+            if expected_signal_error:
+                self._rollback_failed_handler_install(guard)
+            elif guard is not None:
+                try:
+                    guard.restore()
+                except BaseException:
+                    # A pending SIGINT delivered by the unmask is the primary.
+                    # Since __enter__ cannot complete, restore the previous
+                    # owner without replacing that typed interrupt.
+                    self._rollback_failed_handler_install(guard)
+                    raise
+        if expected_signal_error and not self._signal_installed:
+            self._handler = None
+        return self
+
+    def _reconcile_handler_truth(self) -> None:
+        """Make the publication flag agree with the process signal table."""
+        self._signal_installed = signal.getsignal(signal.SIGINT) is self._handler
+
+    def _rollback_failed_handler_install(
+        self,
+        guard: SigintMaskGuard | None,
+    ) -> None:
+        """Best-effort rollback that cannot replace an entering exception."""
+        primary = sys.exception()
+        try:
+            try:
+                if (
+                    self._handler is not None
+                    and signal.getsignal(signal.SIGINT) is self._handler
+                ):
+                    signal.signal(signal.SIGINT, self._previous_sigint)
+            finally:
+                self._reconcile_handler_truth()
+        except BaseException:
+            if primary is None:
+                raise
+        finally:
+            if guard is not None:
+                guard.restore_preserving_primary()
+
+    def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Future[Any]:
+        guard: SigintMaskGuard | None = None
+        try:
+            self._submission_in_progress = True
+            if self._signal_installed:
+                guard = SigintMaskGuard.acquire()
+            # Preclaim before the executor can publish work. Ownership remains
+            # uncertain until the returned Future is durably tracked.
+            self._submission_uncertain = True
+            future = self._pool.submit(self._run_owned, fn, args, kwargs)
+            self._futures.append(future)
+            self._submission_uncertain = False
+            return future
+        finally:
+            self._submission_in_progress = False
+            if guard is not None:
+                guard.restore_preserving_primary()
+
+    def _run_owned(self, fn: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+        token = _CURRENT_SYNTH_OWNER.set(self)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _CURRENT_SYNTH_OWNER.reset(token)
+
+    def register_synth_process(self, process: Any) -> None:
+        self._process_lifecycle.preclaim(process)
+
+    def spawn_synth_process(
+        self,
+        process: Any,
+        command: list[str],
+        **kwargs: Any,
+    ) -> None:
+        self._process_lifecycle.spawn(process, command, **kwargs)
+
+    def publish_synth_process_pidfd(self, process: Any, identity: Any) -> bool:
+        return self._process_lifecycle.publish(process, identity)
+
+    def unregister_synth_process(self, process: Any) -> None:
+        self._process_lifecycle.release(process)
+
+    def wait_and_unregister_synth_process(self, process: Any) -> int:
+        return self._process_lifecycle.wait_and_release(process)
+
+    def cancel_synth_process(self, process: Any) -> bool:
+        return self._process_lifecycle.cancel()
+
+    def close_synth_identity_if_unowned(self, process: Any, identity: Any) -> None:
+        self._process_lifecycle.close_identity_if_unowned(process, identity)
+
+    def _terminate_synth_process_for_exit(self) -> bool:
+        return self._process_lifecycle.cancel()
+
+    def _hard_exit(self) -> bool:
+        try:
+            reaped = self._terminate_synth_process_for_exit()
+        except BaseException:
+            # Keep the handler and lifecycle authority live. A nested/repeated
+            # signal can resume and strengthen the same cancellation.
+            return False
+        if not reaped:
+            return False
+        if self._process_exit_expected:
+            os._exit(TtsSynthesisInterrupted.exit_code)
+        return True
+
+    def _unfinished(self) -> bool:
+        return (
+            self._submission_in_progress
+            or self._submission_uncertain
+            or any(not future.done() for future in self._futures)
+        )
+
+    def _handle_sigint(self, signum: int, frame: Any) -> None:
+        self._sigint_count += 1
+        if self._sigint_count >= 2 and self._escalation_authorized:
+            if not self._process_exit_expected:
+                if not self._hard_exit():
+                    return
+                self._restore_handler()
+                self._delegate_previous(signum, frame)
+                return
+            if self._terminal_exit_armed and self._unfinished():
+                self._hard_exit()
+                return
+            if not self._terminal_exit_armed:
+                # Ticket abandonment and mute repair live outside the executor
+                # context. Give those ownership releases a bounded grace
+                # interval, then honor the repeat even if cleanup itself stalls.
+                self._repeated_sigint_pending = True
+                if self._sigint_count >= 3:
+                    self._hard_exit()
+                    return
+                self._start_cleanup_deadline()
+                return
+            # The provider completed between the first unwind and this signal.
+            self._restore_handler()
+            if not self._process_exit_expected:
+                self._delegate_previous(signum, frame)
+            return
+
+        previous = self._previous_sigint
+        if previous in (None, signal.SIG_DFL, signal.default_int_handler):
+            self._escalation_authorized = True
+            self._typed_interrupt_pending = True
+            raise TtsSynthesisInterrupted
+        if previous == signal.SIG_IGN:
+            return
+        try:
+            previous(signum, frame)
+        except BaseException:
+            # A custom owner (for example a structured CLI interrupt policy)
+            # authorizes escalation only by actually beginning an unwind.
+            self._escalation_authorized = True
+            if not self._unfinished():
+                self._restore_handler()
+            raise
+
+    def _delegate_previous(self, signum: int, frame: Any) -> None:
+        previous = self._previous_sigint
+        if previous in (None, signal.SIG_DFL, signal.default_int_handler):
+            signal.default_int_handler(signum, frame)
+            return
+        if previous == signal.SIG_IGN:
+            return
+        previous(signum, frame)
+
+    def _restore_handler(self) -> None:
+        if not self._signal_installed:
+            return
+        entry_primary = sys.exception()
+        guard: SigintMaskGuard | None = None
+        try:
+            guard = SigintMaskGuard.acquire()
+            try:
+                if signal.getsignal(signal.SIGINT) is self._handler:
+                    signal.signal(signal.SIGINT, self._previous_sigint)
+            finally:
+                # Reconcile while SIGINT is still masked. signal.signal may
+                # raise after taking effect, so success-by-return is not truth.
+                self._reconcile_handler_truth()
+        except (OSError, ValueError):
+            pass
+        except BaseException:
+            # Restoration called while another exception is unwinding must
+            # preserve that first primary. Actual-handler truth was reconciled
+            # in the inner finally, so a later cleanup attempt remains safe.
+            if entry_primary is None:
+                raise
+        finally:
+            try:
+                if guard is not None:
+                    guard.restore_preserving_primary()
+            finally:
+                if not self._signal_installed:
+                    self._cancel_cleanup_deadline()
+
+    def _start_cleanup_deadline(self) -> None:
+        if self._cleanup_timer is not None:
+            return
+        try:
+            timer = threading.Timer(
+                _SYNTH_INTERRUPT_CLEANUP_GRACE_S,
+                self._cleanup_deadline_expired,
+            )
+            timer.daemon = True
+            self._cleanup_timer = timer
+            timer.start()
+        except BaseException:
+            # The repeated interrupt is an explicit terminal request. If even
+            # the bounded grace watchdog cannot start, fail closed immediately.
+            self._hard_exit()
+
+    def _cancel_cleanup_deadline(self) -> None:
+        timer = self._cleanup_timer
+        self._cleanup_timer = None
+        if timer is not None:
+            try:
+                timer.cancel()
+            except BaseException:
+                # Deadline cancellation is idempotent bookkeeping. It must
+                # never replace the interrupt or cleanup exception that made
+                # the watchdog obsolete.
+                pass
+
+    def _cleanup_deadline_expired(self) -> None:
+        if self._escalation_authorized and self._repeated_sigint_pending:
+            self._hard_exit()
+
+    def arm_terminal_exit(self) -> None:
+        """Open the hard-exit gate after outer run_tts cleanup has completed."""
+        if not self._escalation_authorized:
+            return
+        self._terminal_exit_armed = True
+        if self._repeated_sigint_pending and self._unfinished():
+            self._hard_exit()
+            return
+        self._repeated_sigint_pending = False
+        self._cancel_cleanup_deadline()
+        if not self._unfinished() and not self._typed_interrupt_pending:
+            self._restore_handler()
+
+    def _detach_after_interrupt(self) -> None:
+        """Stop waiting without replacing the exception already unwinding."""
+        try:
+            self._pool.shutdown(wait=False, cancel_futures=True)
+        except BaseException:
+            # A repeated SIGINT remains the terminal fallback even if executor
+            # bookkeeping itself fails. Never replace the first primary here.
+            pass
+        if not self._unfinished() and not self._typed_interrupt_pending:
+            self._restore_handler()
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
+        if self._escalation_authorized:
+            self._detach_after_interrupt()
+            # If work is still running, intentionally retain the handler for
+            # the repeated-SIGINT terminal path during interpreter shutdown.
+            return False
+
+        try:
+            self._pool.shutdown(wait=True)
+        finally:
+            # SIGINT can begin while shutdown(wait=True) is joining a worker.
+            # Re-read the state here rather than restoring from the stale
+            # pre-wait snapshot that entered this branch.
+            if self._escalation_authorized:
+                self._detach_after_interrupt()
+            else:
+                self._restore_handler()
+        return False
 
 
 def soft_truncate_text(text: str, max_chars: int) -> str:
@@ -423,6 +802,7 @@ def run_tts(
     mute_was_muted: bool | None = None
     mute_skipped_capture = False
     mute_repair: dict[str, Any] | None = None
+    synth_pool: _InterruptibleSynthPool | None = None
     duck_meta: dict[str, Any] | None = None
     defer_meta: dict[str, Any] | None = None
     near = near_end_ms if near_end_ms is not None else int(cfg.audio.listen_pre_arm_ms)
@@ -433,12 +813,18 @@ def run_tts(
         cached = lookup_cached_tts(voice_id, piece) if use_cache else None
         if cached is not None:
             return cached, "cache", "audio/mpeg", voice_id, True
-        tts = resolve_tts(
-            provider or cfg.tts.provider,
-            voice=voice_id,
-            language=cfg.tts.language,
+        owner = _CURRENT_SYNTH_OWNER.get()
+        if owner is None:
+            raise RuntimeError("missing synth process owner")
+        transport = _synth_transport_factory(owner)
+        result = transport.synthesize(
+            SynthRequest(
+                provider=provider or cfg.tts.provider,
+                voice=voice_id,
+                language=cfg.tts.language,
+                text=piece,
+            )
         )
-        result = tts.synthesize(piece, voice=voice_id)
         if use_cache and len(piece) <= 120:
             try:
                 store_cached_tts(result.voice or voice_id, piece, result.audio)
@@ -494,7 +880,8 @@ def run_tts(
                 )
             claim_wait_elapsed = time.monotonic() - claim_wait_started
             try:
-                with ThreadPoolExecutor(max_workers=1) as pool:
+                synth_pool = _InterruptibleSynthPool()
+                with synth_pool as pool:
                     # Kick first synth outside the play hold (parallel with other jobs)
                     fut: Future[tuple[bytes, str, str, str, bool]] = pool.submit(
                         _synth_one, chunks[0]
@@ -658,11 +1045,14 @@ def run_tts(
                         # publications fail, the retained request is recovered
                         # by the next successful same-process lock transaction.
                         defer_tts_play_ticket_abandon(play_ticket)
-                except Exception:
+                except BaseException:
+                    # Swallow secondary cleanup faults (incl. KeyboardInterrupt)
+                    # so the primary exception remains the process exit cause.
                     pass
                 raise
         else:
-            with ThreadPoolExecutor(max_workers=1) as pool:
+            synth_pool = _InterruptibleSynthPool()
+            with synth_pool as pool:
                 futs = [pool.submit(_synth_one, piece) for piece in chunks]
                 for piece, f in zip(chunks, futs):
                     try:
@@ -672,16 +1062,31 @@ def run_tts(
                         raise
                     _apply_synth(ab, pn, ct, vu, fch)
     finally:
-        if play:
-            # B086 / B120 / B123: never leave depth>0 or Pulse stuck muted after TTS
-            try:
-                mute_repair = repair_tts_mute_after_play(
-                    mute_was_enabled=bool(do_mute),
-                    mute_applied=mute_applied,
-                    was_muted_before=mute_was_muted,
-                )
-            except Exception:
-                mute_repair = None
+        run_primary = sys.exception()
+        cleanup_primary: tuple[BaseException, Any] | None = None
+        try:
+            if play:
+                # B086 / B120 / B123: never leave depth>0 or Pulse stuck muted after TTS
+                try:
+                    mute_repair = repair_tts_mute_after_play(
+                        mute_was_enabled=bool(do_mute),
+                        mute_applied=mute_applied,
+                        was_muted_before=mute_was_muted,
+                    )
+                except BaseException as exc:
+                    mute_repair = None
+                    if run_primary is None:
+                        cleanup_primary = (exc, exc.__traceback__)
+        finally:
+            if synth_pool is not None:
+                try:
+                    synth_pool.arm_terminal_exit()
+                except BaseException as exc:
+                    if run_primary is None and cleanup_primary is None:
+                        cleanup_primary = (exc, exc.__traceback__)
+        if cleanup_primary is not None:
+            exc, traceback = cleanup_primary
+            raise exc.with_traceback(traceback)
 
     latency_ms = int(1000 * (time.monotonic() - t0))
     out_path = None

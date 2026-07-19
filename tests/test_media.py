@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hark.speech as speech_mod
 from hark.audio.media import (
     DuckState,
     MediaMatch,
@@ -826,6 +827,10 @@ def test_run_tts_wires_duck_and_meta(monkeypatch):
         lambda *a, **k: HoldResult(held=False, skipped=False),
     )
     monkeypatch.setattr("hark.speech.resolve_tts", lambda *a, **k: FakeTts())
+    monkeypatch.setattr(
+        "hark.speech._synth_transport_factory",
+        speech_mod._in_process_synth_transport_factory,
+    )
     monkeypatch.setattr("hark.speech.lookup_cached_tts", lambda *a, **k: None)
     monkeypatch.setattr("hark.speech.store_cached_tts", lambda *a, **k: None)
     monkeypatch.setattr(

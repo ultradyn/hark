@@ -767,7 +767,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception:
         pass
     try:
-        return dispatch(args, cfg)
+        from hark.tts_interrupt_policy import cli_tts_interrupt_scope
+
+        with cli_tts_interrupt_scope():
+            return dispatch(args, cfg)
     except HerdrError as exc:
         eprint(f"hark: herdr error: {exc}")
         return HERDR
@@ -790,6 +793,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         if "mic" in msg.lower() or "sounddevice" in msg.lower() or "audio" in msg.lower():
             return AUDIO
         return ERROR
+    except KeyboardInterrupt as exc:
+        # B153: the synthesis pool's typed first interrupt is handled here.
+        # Its executor may still own an uncooperative provider thread;
+        # returning 130 begins ordinary shutdown while the pool's retained
+        # handler gives a repeated Ctrl-C a traceback-free hard-exit path.
+        from hark.tts_interrupt_policy import TtsSynthesisInterrupted
+
+        if isinstance(exc, TtsSynthesisInterrupted):
+            return exc.exit_code
+        # B143: capture lifecycle interrupts may escape before cmd_ask can
+        # structure them (for example during outer CLI SIGINT-boundary install
+        # that shares the process signal table with capture_interrupt_signals).
+        # Prefer a traceback-free abort surface over a raw KeyboardInterrupt.
+        from hark.audio.capture import CaptureCancelled, CaptureInterrupted
+
+        if isinstance(exc, (CaptureInterrupted, CaptureCancelled)):
+            from hark.speak_then_listen.ask import interrupted_ask_result
+
+            if getattr(args, "cmd", None) == "ask":
+                result = interrupted_ask_result(exc)
+                result["exit"] = normalize_failure_exit(
+                    result.get("exit"), fallback=ERROR
+                )
+                result["for_event"] = getattr(args, "event_id", None)
+                print(
+                    json.dumps(
+                        result,
+                        indent=2 if getattr(args, "json", False) else None,
+                    )
+                )
+                return int(result.get("exit", ABORT))
+            return ABORT
+        raise
 
 
 def dispatch(args: argparse.Namespace, cfg) -> int:

@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import hark.speech as speech_mod
 from hark.audio import playback as pb
 from hark.config import HarkConfig
 from hark.exitcodes import TIMEOUT
@@ -67,6 +68,12 @@ def _patch_run_tts_dependencies(monkeypatch):
             return None
 
     monkeypatch.setattr("hark.speech.resolve_tts", lambda *a, **k: FakeTts())
+    # B153: default transport is subprocess isolation; unit tests patch
+    # resolve_tts in-process and need the injectable transport to honor it.
+    monkeypatch.setattr(
+        "hark.speech._synth_transport_factory",
+        speech_mod._in_process_synth_transport_factory,
+    )
     monkeypatch.setattr("hark.speech.UsageStore", FakeUsage)
     monkeypatch.setattr(
         "hark.speech.repair_tts_mute_after_play",
@@ -490,6 +497,10 @@ def test_run_tts_synth_failure_cleanup_respects_total_lock_budget(
 
     monkeypatch.setattr("hark.speech.claim_tts_play_ticket", claim_then_block)
     monkeypatch.setattr("hark.speech.resolve_tts", lambda *a, **k: FailedTts())
+    monkeypatch.setattr(
+        "hark.speech._synth_transport_factory",
+        speech_mod._in_process_synth_transport_factory,
+    )
     monkeypatch.setattr("hark.speech.UsageStore", FakeUsage)
     monkeypatch.setattr(
         "hark.conference.apply_conference_hold",
@@ -1005,6 +1016,10 @@ def test_run_tts_pipelines_next_chunk_synth(monkeypatch):
     monkeypatch.setattr("hark.speech.lookup_cached_tts", fake_lookup)
     monkeypatch.setattr("hark.speech.store_cached_tts", lambda *a, **k: None)
     monkeypatch.setattr("hark.speech.resolve_tts", fake_resolve)
+    monkeypatch.setattr(
+        "hark.speech._synth_transport_factory",
+        speech_mod._in_process_synth_transport_factory,
+    )
     monkeypatch.setattr("hark.speech.play_wav_bytes", fake_play)
     monkeypatch.setattr("hark.speech.duck_media", lambda *a, **k: FakeDuck())
     monkeypatch.setattr("hark.speech.mic_muted_during_tts", lambda **k: FakeMute())

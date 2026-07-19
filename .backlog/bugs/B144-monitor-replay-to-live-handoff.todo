@@ -1,17 +1,18 @@
 ---
 claimed_at: "2026-07-15T23:43:48Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-19T09:43:27Z"
 complexity: medium
 created_at: "2026-07-15T23:43:25Z"
 depends_on: []
+duration_minutes: 4919.663183305067
 estimate_hours: 1
 id: B144
 priority: high
 started_at: "2026-07-15T23:43:48Z"
-status: in_progress
+status: done
 tags: []
 title: Monitor replay-to-live handoff can drop a newly appended event
-updated_at: "2026-07-15T23:43:48Z"
+updated_at: "2026-07-19T09:43:27Z"
 ---
 hark monitor performs replay_matching() and follow_state_files() as separate phases. If a matching record is appended after replay_matching has read the files but before StateFeedFollower.start_live(), start_live seeks to the current EOF and the record is neither replayed nor emitted live. Deterministic review repro on B140 inserted an append at that boundary: the record remained durably present in ambient.jsonl but monitor output was empty for it. This behavior predates B140. Acceptance: subscribe/establish a durable cursor before replay or perform a lossless catch-up handoff; prove with a deterministic boundary append regression for replay>0 and preserve rotation/truncation handling.

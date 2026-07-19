@@ -188,6 +188,13 @@ def test_run_ask_confirm_profile_readback_silence_lexicon(monkeypatch):
         "yes if the tests pass",
         "yes unless the tests fail",
         "yes maybe",
+        # B159: Format/Mark inside multi-letter NEGATE must cancel R2.
+        "yes I ca\u200bn’t approve this",
+        "yes c\u200bancel",
+        "yes n\u200bot",
+        "yes a\u200bbort",
+        "yes re\u200bject",
+        "yes c\u0301ancel",
     ],
 )
 def test_run_ask_confirm_cancel_on_no(monkeypatch, confirm_reply):

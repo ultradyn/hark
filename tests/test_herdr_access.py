@@ -250,9 +250,7 @@ def test_remote_named_selection_tunnels_configured_destination_without_server_st
     ) as access:
         selected = access.named_client("workbox", "swarm")
 
-    assert tunnel_calls == [
-        ("workbox", "dev@workbox", "/run/user/1000/herdr.sock")
-    ]
+    assert tunnel_calls == [("workbox", "dev@workbox", "/run/user/1000/herdr.sock")]
     assert selected.session == replace(
         configured, id="swarm", socket=str(tunnel.local_socket)
     )
@@ -329,9 +327,7 @@ def test_managed_tunnel_path_stays_bindable_with_long_cache_and_session(
         path.unlink(missing_ok=True)
 
 
-def test_unavailable_short_tunnel_root_names_session_in_failure(
-    monkeypatch, tmp_path
-):
+def test_unavailable_short_tunnel_root_names_session_in_failure(monkeypatch, tmp_path):
     from hark.herdr import tunnel as tunnel_mod
 
     long_cache = tmp_path / ("configured-cache-" * 8)
@@ -344,91 +340,154 @@ def test_unavailable_short_tunnel_root_names_session_in_failure(
         tunnel_mod.tunnel_socket_path("workbox", "dev@workbox")
 
 
-class FakeSshProcess:
-    def __init__(self):
-        self.dead = False
+def _spawn_af_unix_child(path: Path):
+    """Spawn a harmless AF_UNIX listener (stand-in for ssh -N -L)."""
+    import subprocess
+    import sys
+    import textwrap
 
-    def poll(self):
-        return 0 if self.dead else None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    script = textwrap.dedent(
+        f"""
+        import socket, time
+        path = {str(path)!r}
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            srv.bind(path)
+            srv.listen(1)
+            while True:
+                time.sleep(0.05)
+        finally:
+            srv.close()
+        """
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    for _ in range(50):
+        if path.exists():
+            return proc
+        if proc.poll() is not None:
+            raise RuntimeError("AF_UNIX child exited before binding")
+        import time as _time
 
-    def terminate(self):
-        self.dead = True
-
-    def kill(self):
-        self.dead = True
-
-    def wait(self, timeout=None):
-        self.dead = True
-        return 0
+        _time.sleep(0.02)
+    proc.kill()
+    raise RuntimeError("AF_UNIX child failed to bind")
 
 
 def _patch_test_tunnel_start(monkeypatch, tunnel_mod):
+    """Start tunnels with real child identities so adoption/reap can verify."""
     starts = []
-    listeners = []
+    children = []
 
     def start(tunnel):
-        tunnel.local_socket.parent.mkdir(parents=True, exist_ok=True)
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        listener.bind(str(tunnel.local_socket))
-        listener.listen(1)
-        tunnel.proc = FakeSshProcess()
+        holder = tunnel.holder_identity or tunnel_mod.self_process_identity()
+        tunnel.holder_identity = holder
+        proc = _spawn_af_unix_child(tunnel.local_socket)
+        children.append(proc)
+        child = tunnel_mod.capture_process_identity(proc.pid)
+        if child is None:
+            proc.kill()
+            raise RuntimeError("failed to capture test child identity")
+        marker = tunnel_mod.OwnerMarker(
+            version=tunnel_mod._OWNER_MARKER_VERSION,
+            session_id=tunnel.session_id,
+            ssh=tunnel.ssh,
+            remote_socket=tunnel.remote_socket,
+            local_socket=str(tunnel.local_socket),
+            child=child,
+            cleanup_owner=holder,
+        )
+        tunnel_mod._write_owner_marker(
+            tunnel_mod._owner_marker_path(tunnel.local_socket), marker
+        )
+        tunnel.proc = proc
+        tunnel.child_identity = child
+        tunnel.cleanup_owner = holder
+        tunnel.owns_cleanup = True
         starts.append(tunnel)
-        listeners.append(listener)
         return tunnel.local_socket
 
     monkeypatch.setattr(tunnel_mod.Tunnel, "start", start)
-    return starts, listeners
+    return starts, children
+
+
+def _cleanup_children(children):
+    import time as _time
+
+    for proc in children:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1)
+            except Exception:
+                proc.kill()
+                try:
+                    proc.wait(timeout=1)
+                except Exception:
+                    pass
+        # Reap zombies promptly.
+        for _ in range(10):
+            if proc.poll() is not None:
+                break
+            _time.sleep(0.02)
 
 
 def test_tunnel_adapter_reuses_live_process_until_last_lease(monkeypatch, tmp_path):
     from hark.herdr import tunnel as tunnel_mod
 
     monkeypatch.setattr(tunnel_mod, "cache_dir", lambda: tmp_path)
-    starts, listeners = _patch_test_tunnel_start(monkeypatch, tunnel_mod)
+    starts, children = _patch_test_tunnel_start(monkeypatch, tunnel_mod)
     tunnel_mod._TUNNELS.clear()
 
-    first = tunnel_mod.ensure_tunnel(
-        "workbox", "dev@workbox", remote_socket="/run/herdr.sock"
-    )
-    second = tunnel_mod.ensure_tunnel(
-        "workbox", "dev@workbox", remote_socket="/run/herdr.sock"
-    )
+    try:
+        first = tunnel_mod.ensure_tunnel(
+            "workbox", "dev@workbox", remote_socket="/run/herdr.sock"
+        )
+        second = tunnel_mod.ensure_tunnel(
+            "workbox", "dev@workbox", remote_socket="/run/herdr.sock"
+        )
 
-    assert first.local_socket == second.local_socket
-    assert len(starts) == 1
-    first.stop()
-    assert starts[0].proc.poll() is None
-    second.stop()
-    assert starts[0].proc.poll() == 0
-    assert not os.path.lexists(first.local_socket)
-    assert tunnel_mod._TUNNELS == {}
-    for listener in listeners:
-        listener.close()
+        assert first.local_socket == second.local_socket
+        assert len(starts) == 1
+        child_proc = children[0]
+        first.stop()
+        assert child_proc.poll() is None
+        second.stop()
+        assert child_proc.poll() is not None
+        assert not os.path.lexists(first.local_socket)
+        assert tunnel_mod._TUNNELS == {}
+    finally:
+        _cleanup_children(children)
 
 
 def test_dead_cached_tunnel_is_replaced_before_reuse(monkeypatch, tmp_path):
     from hark.herdr import tunnel as tunnel_mod
 
     monkeypatch.setattr(tunnel_mod, "cache_dir", lambda: tmp_path)
-    starts, listeners = _patch_test_tunnel_start(monkeypatch, tunnel_mod)
+    starts, children = _patch_test_tunnel_start(monkeypatch, tunnel_mod)
     tunnel_mod._TUNNELS.clear()
 
-    stale = tunnel_mod.ensure_tunnel("workbox", "dev@workbox")
-    stale._record.tunnel.proc.dead = True
-    replacement = tunnel_mod.ensure_tunnel("workbox", "dev@workbox")
+    try:
+        stale = tunnel_mod.ensure_tunnel("workbox", "dev@workbox")
+        # Kill the child so the cached tunnel is no longer live.
+        children[0].terminate()
+        children[0].wait(timeout=2)
+        replacement = tunnel_mod.ensure_tunnel("workbox", "dev@workbox")
 
-    assert replacement._record is not stale._record
-    assert len(starts) == 2
-    replacement.stop()
-    stale.stop()
-    assert tunnel_mod._TUNNELS == {}
-    for listener in listeners:
-        listener.close()
+        assert replacement._record is not stale._record
+        assert len(starts) == 2
+        replacement.stop()
+        stale.stop()
+        assert tunnel_mod._TUNNELS == {}
+    finally:
+        _cleanup_children(children)
 
 
-def test_tunnel_paths_are_process_scoped_to_prevent_cross_process_unlink(
-    monkeypatch, tmp_path
-):
+def test_tunnel_paths_are_transport_stable_across_pids(monkeypatch, tmp_path):
     from hark.herdr import tunnel as tunnel_mod
 
     monkeypatch.setattr(tunnel_mod, "cache_dir", lambda: tmp_path)
@@ -437,9 +496,226 @@ def test_tunnel_paths_are_process_scoped_to_prevent_cross_process_unlink(
     monkeypatch.setattr(tunnel_mod.os, "getpid", lambda: 202)
     second = tunnel_mod.tunnel_socket_path("workbox", "dev@workbox")
 
-    assert first != second
-    assert "101" in first.name
-    assert "202" in second.name
+    assert first == second
+    assert "101" not in first.name
+    assert "202" not in second.name
+
+
+def test_crashed_owner_is_adopted_and_reaped_on_final_lease(monkeypatch, tmp_path):
+    """B152: dead cleanup owner + live child → adopt → reap on last lease."""
+    from hark.herdr import tunnel as tunnel_mod
+
+    monkeypatch.setattr(tunnel_mod, "cache_dir", lambda: tmp_path)
+    tunnel_mod._TUNNELS.clear()
+
+    local = tunnel_mod.tunnel_socket_path(
+        "workbox", "dev@workbox", remote_socket="/run/herdr.sock"
+    )
+    child_proc = _spawn_af_unix_child(local)
+    try:
+        child = tunnel_mod.capture_process_identity(child_proc.pid)
+        assert child is not None
+        # Dead prior owner (impossible pid + fabricated start time).
+        dead_owner = tunnel_mod.ProcessIdentity(
+            pid=2**22 - 3,
+            start_time="1",
+            boot_id=child.boot_id,
+        )
+        assert tunnel_mod.identity_state(dead_owner) is tunnel_mod._IdentityState.STALE
+        marker = tunnel_mod.OwnerMarker(
+            version=tunnel_mod._OWNER_MARKER_VERSION,
+            session_id="workbox",
+            ssh="dev@workbox",
+            remote_socket="/run/herdr.sock",
+            local_socket=str(local),
+            child=child,
+            cleanup_owner=dead_owner,
+        )
+        tunnel_mod._write_owner_marker(tunnel_mod._owner_marker_path(local), marker)
+
+        starts, children = _patch_test_tunnel_start(monkeypatch, tunnel_mod)
+        lease = tunnel_mod.ensure_tunnel(
+            "workbox", "dev@workbox", remote_socket="/run/herdr.sock"
+        )
+        try:
+            # Must reuse the orphaned child, not spawn a replacement.
+            assert len(starts) == 0
+            assert lease.local_socket == local
+            assert lease.owns_cleanup is True
+            assert child_proc.poll() is None
+
+            lease.stop()
+            assert child_proc.poll() is not None
+            assert not os.path.lexists(local)
+            assert not tunnel_mod._owner_marker_path(local).exists()
+            assert tunnel_mod._TUNNELS == {}
+        finally:
+            _cleanup_children(children)
+    finally:
+        _cleanup_children([child_proc])
+
+
+def test_borrower_does_not_reap_while_cleanup_owner_live(monkeypatch, tmp_path):
+    """B152: live cleanup owner retains reaping rights; pure borrowers leave child."""
+    from hark.herdr import tunnel as tunnel_mod
+
+    monkeypatch.setattr(tunnel_mod, "cache_dir", lambda: tmp_path)
+    tunnel_mod._TUNNELS.clear()
+    starts, children = _patch_test_tunnel_start(monkeypatch, tunnel_mod)
+
+    try:
+        owner_lease = tunnel_mod.ensure_tunnel(
+            "workbox", "dev@workbox", remote_socket="/run/herdr.sock"
+        )
+        assert owner_lease.owns_cleanup is True
+        local = owner_lease.local_socket
+        child = starts[0].child_identity
+        owner = starts[0].cleanup_owner
+        assert child is not None and owner is not None
+
+        # Distinct borrower identity that is treated as LIVE only for itself.
+        borrower_holder = tunnel_mod.ProcessIdentity(
+            pid=owner.pid,
+            start_time=f"borrow-{owner.start_time}",
+            boot_id=owner.boot_id,
+        )
+        real_identity_state = tunnel_mod.identity_state
+
+        def _state(identity):
+            if identity == borrower_holder:
+                return tunnel_mod._IdentityState.LIVE
+            return real_identity_state(identity)
+
+        monkeypatch.setattr(tunnel_mod, "identity_state", _state)
+
+        with tunnel_mod._transport_lock(local):
+            borrowed = tunnel_mod._attach_existing_tunnel(
+                session_id="workbox",
+                ssh="dev@workbox",
+                remote="/run/herdr.sock",
+                local_socket=local,
+                holder=borrower_holder,
+            )
+        assert borrowed is not None
+        assert borrowed.owns_cleanup is False
+
+        borrowed.stop(final_lease=True)
+        # Pure borrower release must not kill the verified child or drop the marker.
+        assert tunnel_mod.identity_state(child) is tunnel_mod._IdentityState.LIVE
+        assert tunnel_mod._owner_marker_path(local).exists()
+        assert os.path.lexists(local)
+
+        owner_lease.stop()
+        assert tunnel_mod.identity_state(child) is tunnel_mod._IdentityState.STALE
+        assert not os.path.lexists(local)
+    finally:
+        _cleanup_children(children)
+
+
+def test_cleanup_owner_transfers_to_live_borrower_before_exit(monkeypatch, tmp_path):
+    """B152: departing cleanup owner hands reaping rights to a live borrower."""
+    from hark.herdr import tunnel as tunnel_mod
+
+    monkeypatch.setattr(tunnel_mod, "cache_dir", lambda: tmp_path)
+    tunnel_mod._TUNNELS.clear()
+    starts, children = _patch_test_tunnel_start(monkeypatch, tunnel_mod)
+
+    try:
+        owner_lease = tunnel_mod.ensure_tunnel(
+            "workbox", "dev@workbox", remote_socket="/run/herdr.sock"
+        )
+        local = owner_lease.local_socket
+        child = starts[0].child_identity
+        owner = starts[0].cleanup_owner
+        assert child is not None and owner is not None
+
+        borrower_holder = tunnel_mod.ProcessIdentity(
+            pid=owner.pid,
+            start_time=f"borrow-{owner.start_time}",
+            boot_id=owner.boot_id,
+        )
+        real_identity_state = tunnel_mod.identity_state
+
+        def _state(identity):
+            if identity == borrower_holder:
+                return tunnel_mod._IdentityState.LIVE
+            return real_identity_state(identity)
+
+        monkeypatch.setattr(tunnel_mod, "identity_state", _state)
+
+        with tunnel_mod._transport_lock(local):
+            borrowed = tunnel_mod._attach_existing_tunnel(
+                session_id="workbox",
+                ssh="dev@workbox",
+                remote="/run/herdr.sock",
+                local_socket=local,
+                holder=borrower_holder,
+            )
+        assert borrowed is not None
+        assert borrowed.owns_cleanup is False
+
+        # Owner departs while borrower remains — must transfer, not reap.
+        owner_lease.stop()
+        assert tunnel_mod.identity_state(child) is tunnel_mod._IdentityState.LIVE
+        marker = tunnel_mod._read_owner_marker(tunnel_mod._owner_marker_path(local))
+        assert marker is not None
+        assert marker.cleanup_owner == borrower_holder
+
+        # Borrower adopts the transferred ownership and reaps on final lease.
+        assert borrowed.adopt_cleanup(borrower_holder) is True
+        borrowed.stop(final_lease=True)
+        assert tunnel_mod.identity_state(child) is tunnel_mod._IdentityState.STALE
+        assert not os.path.lexists(local)
+    finally:
+        _cleanup_children(children)
+
+
+def test_unverifiable_child_is_never_signalled(monkeypatch, tmp_path):
+    """B152: fail closed — never signal when child identity cannot be verified."""
+    from hark.herdr import tunnel as tunnel_mod
+
+    signals: list[tuple[int, int]] = []
+
+    def refuse_state(_identity):
+        return tunnel_mod._IdentityState.UNVERIFIABLE
+
+    monkeypatch.setattr(tunnel_mod, "identity_state", refuse_state)
+
+    def track_signal(identity, sig):
+        signals.append((identity.pid, sig))
+        return False
+
+    monkeypatch.setattr(tunnel_mod, "_signal_verified", track_signal)
+
+    child = tunnel_mod.ProcessIdentity(pid=12345, start_time="9", boot_id="boot")
+    tunnel_mod._reap_verified_child(child)
+    assert signals == []
+
+    # attach path also refuses
+    monkeypatch.setattr(tunnel_mod, "cache_dir", lambda: tmp_path)
+    local = tunnel_mod.tunnel_socket_path("workbox", "dev@workbox")
+    local.parent.mkdir(parents=True, exist_ok=True)
+    marker = tunnel_mod.OwnerMarker(
+        version=tunnel_mod._OWNER_MARKER_VERSION,
+        session_id="workbox",
+        ssh="dev@workbox",
+        remote_socket=tunnel_mod._DEFAULT_REMOTE_SOCKET,
+        local_socket=str(local),
+        child=child,
+        cleanup_owner=tunnel_mod.ProcessIdentity(pid=1, start_time="1", boot_id="boot"),
+    )
+    tunnel_mod._write_owner_marker(tunnel_mod._owner_marker_path(local), marker)
+    holder = tunnel_mod.ProcessIdentity(pid=42, start_time="2", boot_id="boot")
+    with tunnel_mod._transport_lock(local):
+        attached = tunnel_mod._attach_existing_tunnel(
+            session_id="workbox",
+            ssh="dev@workbox",
+            remote=tunnel_mod._DEFAULT_REMOTE_SOCKET,
+            local_socket=local,
+            holder=holder,
+        )
+    assert attached is None
+    assert signals == []
 
 
 def test_watch_uses_shared_access_and_reports_tunnel_failure(monkeypatch):
@@ -502,7 +778,9 @@ def test_herdr_client_retains_remote_binary_metadata_but_runs_local_binary(
     monkeypatch, tmp_path
 ):
     configured = remote_session(socket=str(tmp_path / "forward.sock"))
-    monkeypatch.setattr("hark.herdr.client.shutil.which", lambda _name: "/usr/bin/herdr")
+    monkeypatch.setattr(
+        "hark.herdr.client.shutil.which", lambda _name: "/usr/bin/herdr"
+    )
 
     client = HerdrClient(configured)
 
@@ -595,9 +873,7 @@ def test_bound_cli_answer_resolves_remote_client_inside_shared_scope(
     args = cli.build_parser().parse_args(["answer", "evt-1", "--text", "yes"])
 
     assert cli.dispatch(args, HarkConfig(sessions=[remote_session()])) == 0
-    assert SurfaceClient.instances[0].calls == [
-        ("send_text", "w1:p1", "yes", True)
-    ]
+    assert SurfaceClient.instances[0].calls == [("send_text", "w1:p1", "yes", True)]
     assert tunnel.stops == 1
 
 
@@ -668,9 +944,7 @@ def test_dashboard_context_and_bound_delivery_use_shared_remote_access(
 
     assert status == 200
     assert payload["ok"] is True
-    assert SurfaceClient.instances[0].calls == [
-        ("send_text", "w1:p1", "yes", True)
-    ]
+    assert SurfaceClient.instances[0].calls == [("send_text", "w1:p1", "yes", True)]
     assert second_tunnel.stops == 1
 
 

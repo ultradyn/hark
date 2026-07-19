@@ -1,17 +1,18 @@
 ---
 claimed_at: "2026-07-16T01:17:49Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-19T10:23:04Z"
 complexity: low
 created_at: "2026-07-16T01:16:57Z"
 depends_on: []
+duration_minutes: 4865.264068931133
 estimate_hours: 1
 id: B151
 priority: high
 started_at: "2026-07-16T01:17:49Z"
-status: in_progress
+status: done
 tags: []
 title: Confirmation accepts negations with apostrophe-like Unicode glyphs
-updated_at: "2026-07-16T01:17:49Z"
+updated_at: "2026-07-19T10:23:04Z"
 ---
 Evidence: shared confirmation normalization canonicalizes ASCII apostrophe, U+2019, and grave, but other common apostrophe-like glyphs are removed to whitespace before whole-token negative matching. On current code, classify_confirm_reply returns yes for explicit refusals including yes I can‘t approve this (U+2018), yes I canʼt approve this (U+02BC), and yes I can´t approve this (U+00B4). ASCII, U+2019, and backtick forms correctly return no. Expected: normalize supported apostrophe-like transcription/keyboard glyphs to one canonical apostrophe before confirmation classification so explicit contraction negations always fail closed. Add direct classifier and end-to-end run_ask regressions, while preserving whole-word boundaries and B142 punctuation policy.

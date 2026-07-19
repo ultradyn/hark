@@ -123,6 +123,47 @@ def state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+def _record(role: str, pid: int) -> worker_process.WorkerRecord:
+    return worker_process.WorkerRecord(pid=pid, start_time=f"start-{pid}", role=role)
+
+
+def _mock_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    before: list[worker_process.WorkerRecord],
+    after: list[worker_process.WorkerRecord],
+) -> list[dict]:
+    scans = iter((before, after))
+    spawned: list[dict] = []
+
+    monkeypatch.setattr(
+        workers, "collect_worker_records", lambda _path, **_kwargs: next(scans)
+    )
+
+    def spawn(**kwargs):
+        spawned.append(kwargs)
+        roles = [
+            role
+            for role, enabled in (
+                ("watch", kwargs["do_watch"]),
+                ("ambient", kwargs["do_ambient"]),
+            )
+            if enabled
+        ]
+        return [type("P", (), {"pid": 200 + idx})() for idx, _ in enumerate(roles)]
+
+    def recorded(_path, _children, roles):
+        return [
+            record
+            for record in after
+            if record.role in roles and record not in before
+        ]
+
+    monkeypatch.setattr(workers, "spawn_mode_a_workers", spawn)
+    monkeypatch.setattr(workers, "_spawned_records", recorded)
+    return spawned
+
+
 def test_parse_pids_text():
     text = """
 # comment
@@ -193,27 +234,45 @@ def test_start_recovers_compatible_marker_scoped_orphan_without_duplicate(
         kill_child(child)
 
 
-def test_start_refuses_incompatible_marker_scoped_orphan_without_duplicate(
+def test_start_reconciles_missing_watch_when_ambient_orphan_present(
     state: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    """B128: spawn only the missing requested role; keep the ambient orphan."""
     child = spawn_hark_worker("ambient", state)
+    watch = _record("watch", 101)
     spawned: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        workers,
-        "spawn_mode_a_workers",
-        lambda **kwargs: spawned.append(kwargs) or [],
-    )
-    try:
-        assert not (state / "mode-a.pids").exists()
 
+    def fake_spawn(**kwargs):
+        spawned.append(kwargs)
+        return [type("P", (), {"pid": watch.pid})()]
+
+    monkeypatch.setattr(workers, "spawn_mode_a_workers", fake_spawn)
+    # After spawn, both ambient (discovered) and new watch are healthy.
+    ambient_record = worker_process.inspect_worker(
+        child.pid, expected_role="ambient", expected_pidfile=state / "mode-a.pids"
+    )
+    assert ambient_record is not None
+    scans = iter(
+        (
+            [ambient_record],  # pre-start discovery
+            [ambient_record, watch],  # post-settle
+        )
+    )
+    monkeypatch.setattr(
+        workers, "collect_worker_records", lambda _path, **_kwargs: next(scans)
+    )
+    monkeypatch.setattr(workers, "_spawned_records", lambda *_a, **_k: [watch])
+    try:
         result = workers.start_workers(
             state, do_watch=True, do_ambient=False, settle_s=0
         )
 
-        assert result["ok"] is False
-        assert "existing workers do not exactly match" in result["error"]
-        assert result["pids"] == [child.pid]
-        assert spawned == []
+        assert result["ok"] is True
+        assert result["already_running"] is False
+        assert result["started"] == [watch.pid]
+        assert len(spawned) == 1
+        assert spawned[0]["do_watch"] is True
+        assert spawned[0]["do_ambient"] is False
         assert child.poll() is None
     finally:
         kill_child(child)
@@ -238,11 +297,6 @@ def test_concurrent_compatible_start_reclassifies_lock_winner_as_already_running
     )
     monkeypatch.setattr(
         workers,
-        "worker_records_match_request",
-        lambda records, **_kwargs: records == [record],
-    )
-    monkeypatch.setattr(
-        workers,
         "spawn_mode_a_workers",
         lambda **_kwargs: (_ for _ in ()).throw(
             daemon.WorkerSpawnError(
@@ -253,12 +307,11 @@ def test_concurrent_compatible_start_reclassifies_lock_winner_as_already_running
 
     result = workers.start_workers(state, do_watch=False, settle_s=0)
 
-    assert result == {
-        "ok": True,
-        "already_running": True,
-        "pids": [4321],
-        "message": "workers already running (pids 4321)",
-    }
+    assert result["ok"] is True
+    assert result["already_running"] is True
+    assert result["pids"] == [4321]
+    assert result["message"] == "workers already running (pids 4321)"
+    assert result["roles"]["ambient"]["running"] is True
 
 
 def test_start_refuses_live_harkd(state: Path):
@@ -270,38 +323,232 @@ def test_start_refuses_live_harkd(state: Path):
 
 def test_start_clears_stale_harkd_pid(state: Path, monkeypatch: pytest.MonkeyPatch):
     (state / "harkd.pid").write_text("999999999\n", encoding="utf-8")
-    spawned: list[dict] = []
-
-    def fake_spawn(**kwargs):
-        spawned.append(kwargs)
-        child_pid = os.getpid()
-
-        class P:
-            pid = child_pid
-
-            def poll(self):
-                return None
-
-        return [P()]
-
-    monkeypatch.setattr(workers, "spawn_mode_a_workers", fake_spawn)
-    record = worker_process.WorkerRecord(
-        pid=os.getpid(),
-        start_time="fake",
-        role="ambient",
-        pidfile=str((state / "mode-a.pids").resolve()),
+    watch = _record("watch", 101)
+    spawned = _mock_reconciliation(
+        monkeypatch, before=[], after=[watch]
     )
-    monkeypatch.setattr(
-        workers,
-        "collect_worker_records",
-        lambda _path, **_kwargs: [record] if spawned else [],
-    )
-    monkeypatch.setattr(workers, "worker_records_match_request", lambda *_a, **_k: True)
-    result = workers.start_workers(state, do_watch=False, settle_s=0)
+    result = workers.start_workers(state, do_ambient=False, settle_s=0)
     assert result["ok"] is True
     assert not result.get("already_running")
     assert spawned
     assert not (state / "harkd.pid").exists()
+
+
+def test_spawned_records_selects_only_new_requested_roles(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    prior = _record("watch", 101)
+    spawned = _record("ambient", 202)
+    monkeypatch.setattr(
+        workers, "read_worker_records", lambda _path: [prior, spawned]
+    )
+
+    created = workers._spawned_records(
+        state / "mode-a.pids",
+        [type("P", (), {"pid": spawned.pid})()],
+        ["ambient"],
+    )
+
+    assert created == [spawned]
+
+
+def test_start_reconciles_watch_only_survivor(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    watch = _record("watch", 101)
+    ambient = _record("ambient", 202)
+    spawned = _mock_reconciliation(
+        monkeypatch, before=[watch], after=[watch, ambient]
+    )
+
+    result = workers.start_workers(state, settle_s=0)
+
+    assert result["ok"] is True
+    assert result["already_running"] is False
+    assert result["started"] == [ambient.pid]
+    assert spawned[0]["do_watch"] is False
+    assert spawned[0]["do_ambient"] is True
+
+
+def test_start_reconciles_ambient_only_survivor(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    ambient = _record("ambient", 202)
+    watch = _record("watch", 101)
+    spawned = _mock_reconciliation(
+        monkeypatch, before=[ambient], after=[ambient, watch]
+    )
+
+    result = workers.start_workers(state, settle_s=0)
+
+    assert result["ok"] is True
+    assert result["started"] == [watch.pid]
+    assert spawned[0]["do_watch"] is True
+    assert spawned[0]["do_ambient"] is False
+
+
+def test_start_with_both_healthy_does_not_spawn(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    records = [_record("watch", 101), _record("ambient", 202)]
+    monkeypatch.setattr(workers, "collect_worker_records", lambda _path, **_kwargs: records)
+
+    def unexpected_spawn(**_kwargs):
+        pytest.fail("healthy workers must not be duplicated")
+
+    monkeypatch.setattr(workers, "spawn_mode_a_workers", unexpected_spawn)
+
+    result = workers.start_workers(state, settle_s=0)
+
+    assert result["ok"] is True
+    assert result["already_running"] is True
+    assert result["roles"]["watch"]["running"] is True
+    assert result["roles"]["ambient"]["running"] is True
+
+
+def test_start_with_both_absent_spawns_both(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    records = [_record("watch", 101), _record("ambient", 202)]
+    spawned = _mock_reconciliation(monkeypatch, before=[], after=records)
+
+    result = workers.start_workers(state, settle_s=0)
+
+    assert result["ok"] is True
+    assert set(result["started"]) == {101, 202}
+    assert spawned[0]["do_watch"] is True
+    assert spawned[0]["do_ambient"] is True
+
+
+def test_start_ignores_stale_pid_and_spawns_both(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    path = state / "mode-a.pids"
+    path.write_text("999999999\n", encoding="utf-8")
+    records = [_record("watch", 101), _record("ambient", 202)]
+    original_collect = workers.collect_worker_records
+    calls = 0
+
+    def collect(target: Path, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return original_collect(target) if calls == 1 else records
+
+    spawned: list[dict] = []
+    monkeypatch.setattr(workers, "collect_worker_records", collect)
+    monkeypatch.setattr(
+        workers,
+        "spawn_mode_a_workers",
+        lambda **kwargs: spawned.append(kwargs)
+        or [type("P", (), {"pid": record.pid})() for record in records],
+    )
+    monkeypatch.setattr(
+        workers, "_spawned_records", lambda *_args: records
+    )
+
+    result = workers.start_workers(state, settle_s=0)
+
+    assert result["ok"] is True
+    assert spawned[0]["do_watch"] is True
+    assert spawned[0]["do_ambient"] is True
+
+
+def test_role_mismatch_does_not_short_circuit_start(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # This live PID is pytest, not a Hark worker; B127's canonical reader
+    # rejects the legacy entry, and B128 must reconcile both requested roles.
+    path = state / "mode-a.pids"
+    path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    records = [_record("watch", 101), _record("ambient", 202)]
+    original_collect = workers.collect_worker_records
+    calls = 0
+
+    def collect(target: Path, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return original_collect(target) if calls == 1 else records
+
+    spawned: list[dict] = []
+    monkeypatch.setattr(workers, "collect_worker_records", collect)
+    monkeypatch.setattr(
+        workers,
+        "spawn_mode_a_workers",
+        lambda **kwargs: spawned.append(kwargs)
+        or [type("P", (), {"pid": record.pid})() for record in records],
+    )
+    monkeypatch.setattr(
+        workers, "_spawned_records", lambda *_args: records
+    )
+
+    result = workers.start_workers(state, settle_s=0)
+
+    assert result["ok"] is True
+    assert result["already_running"] is False
+    assert spawned[0]["do_watch"] is True
+    assert spawned[0]["do_ambient"] is True
+
+
+def test_failed_replacement_is_reported_partial_not_already_running(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    watch = _record("watch", 101)
+    scans = iter(([watch], [watch]))
+    monkeypatch.setattr(
+        workers, "collect_worker_records", lambda _path, **_kwargs: next(scans)
+    )
+
+    def fail_spawn(**_kwargs):
+        raise OSError("fork refused")
+
+    monkeypatch.setattr(workers, "spawn_mode_a_workers", fail_spawn)
+
+    result = workers.start_workers(state, settle_s=0)
+
+    assert result["ok"] is False
+    assert result["partial"] is True
+    assert "already_running" not in result
+    assert result["roles"]["watch"]["running"] is True
+    assert result["roles"]["ambient"]["running"] is False
+
+
+def test_replacement_that_exits_is_reported_partial(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    watch = _record("watch", 101)
+    ambient = _record("ambient", 202)
+    scans = iter(([watch], [watch]))
+    monkeypatch.setattr(
+        workers, "collect_worker_records", lambda _path, **_kwargs: next(scans)
+    )
+    monkeypatch.setattr(
+        workers,
+        "spawn_mode_a_workers",
+        lambda **_kwargs: [type("P", (), {"pid": ambient.pid})()],
+    )
+    monkeypatch.setattr(
+        workers, "_spawned_records", lambda *_args: [ambient]
+    )
+
+    result = workers.start_workers(state, settle_s=0)
+
+    assert result["ok"] is False
+    assert result["partial"] is True
+    assert result["started"] == [ambient.pid]
+    assert "ambient" in result["error"]
+
+
+def test_workers_status_reports_each_role(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+):
+    records = [_record("watch", 101)]
+    monkeypatch.setattr(workers, "collect_worker_records", lambda _path, **_kwargs: records)
+
+    status = workers.workers_status(state)
+
+    assert status["workers"]["roles"]["watch"]["running"] is True
+    assert status["workers"]["roles"]["watch"]["pids"] == [101]
+    assert status["workers"]["roles"]["ambient"]["running"] is False
 
 
 def test_start_reports_transactional_spawn_failure(
@@ -323,13 +570,15 @@ def test_start_reports_transactional_spawn_failure(
     result = workers.start_workers(state, settle_s=0)
     assert result["ok"] is False
     assert result["pids"] == []
+    assert "failed to start missing workers" in result["error"]
     assert "ambient startup failed" in result["error"]
     assert "rollback failures" in result["error"]
 
 
-def test_start_fails_and_cleans_up_partial_post_settle_role_set(
+def test_start_reports_partial_when_post_settle_role_set_incomplete(
     state: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    """B128: incomplete settle is partial failure; do not kill survivors."""
     spawned = [SimpleNamespace(pid=101), SimpleNamespace(pid=102)]
     watch = worker_process.WorkerRecord(
         101,
@@ -337,8 +586,13 @@ def test_start_fails_and_cleans_up_partial_post_settle_role_set(
         "watch",
         pidfile=str((state / "mode-a.pids").resolve()),
     )
+    ambient = worker_process.WorkerRecord(
+        102,
+        "ambient-start",
+        "ambient",
+        pidfile=str((state / "mode-a.pids").resolve()),
+    )
     calls = 0
-    terminated: list[tuple[list[object], dict[str, object]]] = []
 
     def collect(_path, **_kwargs):
         nonlocal calls
@@ -348,33 +602,24 @@ def test_start_fails_and_cleans_up_partial_post_settle_role_set(
     monkeypatch.setattr(workers, "spawn_mode_a_workers", lambda **_kwargs: spawned)
     monkeypatch.setattr(workers, "collect_worker_records", collect)
     monkeypatch.setattr(
-        workers,
-        "worker_records_match_request",
-        lambda records, **_kwargs: (
-            {record.role for record in records} == {"watch", "ambient"}
-        ),
+        workers, "_spawned_records", lambda *_a, **_k: [watch, ambient]
     )
-
-    def terminate(children, **kwargs):
-        terminated.append((list(children), kwargs))
-
-    monkeypatch.setattr(workers, "terminate_children", terminate)
 
     result = workers.start_workers(state, settle_s=0)
 
     assert result["ok"] is False
-    assert "exact requested role set" in result["error"]
-    assert terminated == [
-        (
-            [("watch", spawned[0]), ("ambient", spawned[1])],
-            {"root": state, "timeout_s": 2.0},
-        )
-    ]
+    assert result["partial"] is True
+    assert "ambient" in result["error"]
+    assert result["pids"] == [watch.pid]
+    assert result["started"] == [watch.pid, ambient.pid]
+    assert result["roles"]["watch"]["running"] is True
+    assert result["roles"]["ambient"]["running"] is False
 
 
-def test_start_post_settle_rollback_terminates_returned_child_without_pidfile(
+def test_start_post_settle_partial_leaves_surviving_child(
     state: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    """B128 reports partial role health without terminating preserved children."""
     path = state / "mode-a.pids"
     spawned: list[subprocess.Popen[bytes]] = []
 
@@ -382,37 +627,40 @@ def test_start_post_settle_rollback_terminates_returned_child_without_pidfile(
         child = spawn_hark_worker("ambient", state)
         spawned.append(child)
         write_live_worker_record(child, state)
-        path.unlink()
         return [child]
 
     monkeypatch.setattr(workers, "spawn_mode_a_workers", fake_spawn)
-    monkeypatch.setattr(
-        workers, "worker_records_match_request", lambda *_args, **_kwargs: False
-    )
+
+    def spawned_records(_path, children, roles):
+        assert "ambient" in roles
+        record = worker_process.inspect_worker(
+            children[0].pid,
+            expected_role="ambient",
+            expected_pidfile=path,
+        )
+        assert record is not None
+        return [record]
+
+    monkeypatch.setattr(workers, "_spawned_records", spawned_records)
     try:
+        # Request both roles; only ambient is spawned/healthy -> partial.
         result = workers.start_workers(
-            state, do_watch=False, do_ambient=True, settle_s=0
+            state, do_watch=True, do_ambient=True, settle_s=0
         )
 
         assert len(spawned) == 1
         child = spawned[0]
-        deadline = time.monotonic() + 2.0
-        while child.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert child.poll() is not None, (
-            f"child {child.pid} remains alive; result pids={result.get('pids', [])}, "
-            f"pidfile exists={path.exists()}"
-        )
+        assert child.poll() is None
         assert result["ok"] is False
-        assert "exact requested role set" in result["error"]
-        assert result["pids"] == []
-        assert not path.exists()
+        assert result["partial"] is True
+        assert "watch" in result["error"]
+        assert child.pid in result["pids"]
     finally:
         for child in spawned:
             kill_child(child)
 
 
-def test_start_post_settle_cleanup_reports_term_and_kill_signal_failures(
+def test_start_post_settle_partial_does_not_signal_healthy_roles(
     state: Path, monkeypatch: pytest.MonkeyPatch
 ):
     path = state / "mode-a.pids"
@@ -430,19 +678,9 @@ def test_start_post_settle_cleanup_reports_term_and_kill_signal_failures(
 
     monkeypatch.setattr(workers, "spawn_mode_a_workers", fake_spawn)
     monkeypatch.setattr(
-        workers, "worker_records_match_request", lambda *_args, **_kwargs: False
-    )
-    monkeypatch.setattr(
-        worker_process.os,
-        "pidfd_open",
-        lambda _pid: os.open("/dev/null", os.O_RDONLY),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        worker_process.signal,
-        "pidfd_send_signal",
-        lambda _fd, _sig: (_ for _ in ()).throw(PermissionError("denied")),
-        raising=False,
+        workers,
+        "_spawned_records",
+        lambda _path, children, roles: [spawned[0][1]],
     )
     try:
         result = workers.start_workers(state, settle_s=0)
@@ -450,8 +688,10 @@ def test_start_post_settle_cleanup_reports_term_and_kill_signal_failures(
         assert len(spawned) == 1
         child, record = spawned[0]
         assert result["ok"] is False
-        assert "SIGTERM" in result["error"]
-        assert "SIGKILL" in result["error"]
+        assert result["partial"] is True
+        assert "ambient" in result["error"]
+        assert "SIGTERM" not in result["error"]
+        assert "SIGKILL" not in result["error"]
         assert result["pids"] == [child.pid]
         assert child.poll() is None
         assert worker_process.read_worker_records(path) == [record]
@@ -690,6 +930,8 @@ def test_cmd_start_status(state: Path, capsys: pytest.CaptureFixture[str]):
     assert code == OK
     out = capsys.readouterr().out
     assert "workers: not running" in out
+    assert "watch: not running" in out
+    assert "ambient: not running" in out
 
 
 def test_cmd_start_empty_flags(capsys: pytest.CaptureFixture[str]):

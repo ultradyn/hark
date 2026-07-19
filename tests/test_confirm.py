@@ -94,3 +94,43 @@ def test_yes_why_not_is_affirmative_idiom():
 
 def test_unclear():
     assert classify_confirm_reply("maybe later purple") == "unclear"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "yes but wait",
+        "yes hold on",
+        "okay wait a second",
+        "sure after I review it",
+        "yes if the tests pass",
+        "yes unless the tests fail",
+        "yes maybe",
+        "yeah hang on",
+        "yes until the tests pass",
+        "sure later",
+        "ok perhaps",
+        "yes but go ahead",
+        "go ahead unless reviewed",
+    ],
+)
+def test_deferred_conditional_hedged_not_immediate_yes(reply):
+    """B148: unpunctuated defer/condition/hedge must not authorize immediately."""
+    assert classify_confirm_reply(reply) == "unclear"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "yes",
+        "OK send it",
+        "yes go ahead",
+        "sure send it",
+        "okay do it",
+        "yes please",
+        "yes send it now",
+        "yes why not",
+    ],
+)
+def test_unambiguous_immediate_approval_still_yes(reply):
+    assert classify_confirm_reply(reply) == "yes"

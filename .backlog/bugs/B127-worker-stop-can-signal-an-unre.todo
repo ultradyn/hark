@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-15T21:27:07Z"
 claimed_by: codex-urban-morn-b847
-completed_at: null
+completed_at: "2026-07-19T09:45:58Z"
 complexity: medium
 created_at: "2026-07-15T20:56:35Z"
 depends_on: []
+duration_minutes: 5058.855768020267
 estimate_hours: 1
 id: B127
 priority: high
 started_at: "2026-07-15T21:27:07Z"
-status: in_progress
+status: done
 tags: []
 title: Worker stop can signal an unrelated process from a stale reused PID
-updated_at: "2026-07-15T21:27:07Z"
+updated_at: "2026-07-19T09:45:58Z"
 ---
 ## Evidence
 workers.collect_worker_pids trusts every live integer in mode-a.pids via daemon.live_pids_from_file, which checks only os.kill(pid, 0) plus zombie state. stop_workers then sends SIGTERM and eventually SIGKILL to that list without verifying that a PID is a Hark ambient or watch worker or that it is the same process originally recorded. tests/test_workers.py::test_stop_signals_live_child writes the PID of a plain Python sleep process into mode-a.pids; the passing test confirms hark stop terminates that unrelated process.

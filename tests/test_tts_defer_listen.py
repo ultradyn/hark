@@ -7,6 +7,7 @@ import os
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+import hark.speech as speech_mod
 from hark.config import HarkConfig, load_config
 from hark.listen_control import clear_active_listen, register_active_listen
 from hark.mic_coord import (
@@ -365,6 +366,10 @@ def test_run_tts_defers_play_until_capture_clears(monkeypatch, tmp_path):
         "hark.speech.wait_until_tts_play_allowed", fake_wait
     )
     monkeypatch.setattr("hark.speech.resolve_tts", lambda *a, **k: FakeTts())
+    monkeypatch.setattr(
+        "hark.speech._synth_transport_factory",
+        speech_mod._in_process_synth_transport_factory,
+    )
     monkeypatch.setattr("hark.speech.lookup_cached_tts", lambda *a, **k: None)
     monkeypatch.setattr("hark.speech.store_cached_tts", lambda *a, **k: None)
     monkeypatch.setattr("hark.speech.play_wav_bytes", fake_play)
@@ -440,6 +445,10 @@ def test_run_tts_skips_defer_when_disabled(monkeypatch, tmp_path):
 
     monkeypatch.setattr("hark.speech.wait_until_tts_play_allowed", fake_wait)
     monkeypatch.setattr("hark.speech.resolve_tts", lambda *a, **k: FakeTts())
+    monkeypatch.setattr(
+        "hark.speech._synth_transport_factory",
+        speech_mod._in_process_synth_transport_factory,
+    )
     monkeypatch.setattr("hark.speech.lookup_cached_tts", lambda *a, **k: None)
     monkeypatch.setattr("hark.speech.store_cached_tts", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -564,6 +573,10 @@ def test_run_tts_skips_mute_while_capture_still_active(monkeypatch, tmp_path):
 
     monkeypatch.setattr("hark.speech.wait_until_tts_play_allowed", fake_wait)
     monkeypatch.setattr("hark.speech.resolve_tts", lambda *a, **k: FakeTts())
+    monkeypatch.setattr(
+        "hark.speech._synth_transport_factory",
+        speech_mod._in_process_synth_transport_factory,
+    )
     monkeypatch.setattr("hark.speech.lookup_cached_tts", lambda *a, **k: None)
     monkeypatch.setattr("hark.speech.store_cached_tts", lambda *a, **k: None)
     monkeypatch.setattr(

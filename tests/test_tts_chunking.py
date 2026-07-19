@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import hark.speech as speech_mod
 from hark.config import HarkConfig
 from hark.speech import pack_tts_chunks, run_tts
 
@@ -90,6 +91,10 @@ def test_run_tts_plays_all_chunks(monkeypatch):
     monkeypatch.setattr("hark.speech.lookup_cached_tts", fake_lookup)
     monkeypatch.setattr("hark.speech.store_cached_tts", lambda *a, **k: None)
     monkeypatch.setattr("hark.speech.resolve_tts", fake_resolve)
+    monkeypatch.setattr(
+        "hark.speech._synth_transport_factory",
+        speech_mod._in_process_synth_transport_factory,
+    )
     monkeypatch.setattr(
         "hark.speech.play_wav_bytes",
         lambda audio, **k: plays.append(len(audio))
@@ -184,6 +189,10 @@ def test_run_tts_truncates_when_max_chars_set(monkeypatch, tmp_path):
         return T()
 
     monkeypatch.setattr("hark.speech.resolve_tts", fake_resolve)
+    monkeypatch.setattr(
+        "hark.speech._synth_transport_factory",
+        speech_mod._in_process_synth_transport_factory,
+    )
     monkeypatch.setattr(
         "hark.speech.play_wav_bytes",
         lambda audio, **k: plays.append(1) or SimpleNamespace(duration_ms=50),

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 
@@ -36,7 +38,9 @@ class _FakeStt:
     def __post_init__(self) -> None:
         self.texts = list(self.texts or [])
 
-    def transcribe(self, wav_bytes: bytes, *, language: str | None = None) -> Transcript:
+    def transcribe(
+        self, wav_bytes: bytes, *, language: str | None = None
+    ) -> Transcript:
         del wav_bytes, language
         self.calls += 1
         text = self.texts.pop(0) if self.texts else ""
@@ -67,7 +71,13 @@ def _patch_listen_infra(monkeypatch, stt: _FakeStt, caps: list[CaptureResult]):
     monkeypatch.setattr("hark.speech.play_record_start", lambda: None)
     monkeypatch.setattr("hark.speech.play_record_stop", lambda: None)
     monkeypatch.setattr("hark.speech.configure_cues_from_config", lambda cfg: None)
-    monkeypatch.setattr("hark.speech.time.sleep", lambda s: None)
+    # Replace the speech facade's module reference, not the shared stdlib
+    # module attribute. Background subprocess waits also call ``time.sleep``;
+    # patching that global function makes this test observe unrelated backoff.
+    monkeypatch.setattr(
+        "hark.speech.time",
+        SimpleNamespace(monotonic=time.monotonic, sleep=lambda s: None),
+    )
 
 
 class _NullCtx:

@@ -177,7 +177,11 @@ def test_cli_ask_structures_interrupt_across_entire_signal_scope(
 
 @pytest.mark.parametrize(
     ("interrupt_call", "expected_calls"),
-    [(1, 3), (3, 4)],
+    # B153 installs an outer CLI SIGINT owner before capture_interrupt_signals.
+    # Indices below skip that first process-boundary install (call 1) and target
+    # capture-scope SIGINT install (2) and first restore (4). The CLI owner does
+    # not add an extra restore call when the mock never publishes a live handler.
+    [(2, 4), (4, 5)],
 )
 def test_real_signal_scope_structures_install_and_restore_interrupts(
     monkeypatch, capsys, interrupt_call, expected_calls

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import atexit
+import errno
 import io
 import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -46,9 +48,20 @@ _MISSING_HOLDER_GRACE_S = 8.0
 # PID is dead (redundant with pid check) — kept for documentation/tests.
 _STALE_HOLDER_AGE_S = 600.0
 
+# Metadata transactions normally hold this flock for milliseconds.  Playback
+# itself may hold it much longer, so every new acquisition must have a bound:
+# a wedged player must surface a useful error instead of making `hark ask` look
+# indistinguishable from a hung listen (B146).
+_PLAY_LOCK_ACQUIRE_TIMEOUT_S = 15.0
+_PLAY_LOCK_POLL_S = 0.03
+_DEFERRED_ABANDON_RETRY_S = 0.25
+
 _our_tickets: set[int] = set()
 _our_tickets_lock = threading.Lock()
 _cleanup_hooks_installed = False
+_deferred_abandons: set[int] = set()
+_deferred_abandons_lock = threading.Lock()
+_deferred_abandon_thread: threading.Thread | None = None
 
 
 def tts_play_lock_path() -> Path:
@@ -90,6 +103,180 @@ def _syslog_tts_queue(event: str, **fields: Any) -> None:
         syslog(event, component="tts", level=fields.pop("level", "warn"), **fields)
     except Exception:
         pass
+
+
+def _flock_owner_pid(fd: int) -> int | None:
+    """Best-effort Linux ``/proc/locks`` lookup for the flock owning *fd*."""
+    try:
+        st = os.fstat(fd)
+        wanted = (os.major(st.st_dev), os.minor(st.st_dev), st.st_ino)
+        with open("/proc/locks", encoding="utf-8") as locks:
+            for line in locks:
+                fields = line.split()
+                if len(fields) < 6 or fields[1] != "FLOCK":
+                    continue
+                dev_inode = fields[5].split(":", 2)
+                if len(dev_inode) != 3:
+                    continue
+                try:
+                    actual = (
+                        int(dev_inode[0], 16),
+                        int(dev_inode[1], 16),
+                        int(dev_inode[2]),
+                    )
+                    owner_pid = int(fields[4])
+                except ValueError:
+                    continue
+                if actual == wanted and owner_pid > 0:
+                    return owner_pid
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+class TtsPlayTimeout(TimeoutError):
+    """Base for JSON-safe playback lock and FIFO-turn timeout failures."""
+
+    description = "tts playback timed out"
+    error_type = "tts_play_timeout"
+
+    def __init__(
+        self,
+        *,
+        operation: str,
+        timeout_s: float,
+        elapsed_s: float,
+        ticket: int | None,
+        lock_owner_pid: int | None,
+        queue_state: dict[str, Any],
+    ) -> None:
+        self.operation = operation
+        self.timeout_s = timeout_s
+        self.elapsed_s = elapsed_s
+        self.ticket = ticket
+        self.lock_owner_pid = lock_owner_pid
+        self.queue_state = queue_state
+        serving = int(queue_state.get("serving", 0))
+        holders = _normalize_holders(queue_state.get("holders"))
+        queue_owner = holders.get(str(serving), {})
+        self.queue_owner_pid = int(queue_owner.get("pid", 0) or 0) or None
+        self.queue_owner_claimed_at = float(queue_owner.get("claimed_at", 0.0) or 0.0)
+        details = [
+            f"operation={operation}",
+            f"timeout={timeout_s:g}s",
+            f"serving={serving}",
+            f"next={int(queue_state.get('next', 0))}",
+        ]
+        if ticket is not None:
+            details.append(f"ticket={ticket}")
+        if lock_owner_pid is not None:
+            details.append(f"lock_owner_pid={lock_owner_pid}")
+        if self.queue_owner_pid is not None:
+            details.append(f"queue_owner_pid={self.queue_owner_pid}")
+        super().__init__(self.description + " (" + ", ".join(details) + ")")
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return stable, JSON-safe owner and queue diagnostics for callers."""
+        serving = int(self.queue_state.get("serving", 0))
+        next_ticket = int(self.queue_state.get("next", 0))
+        queue = {
+            "serving": serving,
+            "next": next_ticket,
+            "pending": max(0, next_ticket - serving),
+            "cancelled": [int(x) for x in self.queue_state.get("cancelled", [])],
+            "holders": _normalize_holders(self.queue_state.get("holders")),
+        }
+        return {
+            "operation": self.operation,
+            "timeout_s": self.timeout_s,
+            "elapsed_s": self.elapsed_s,
+            "ticket": self.ticket,
+            "lock_owner_pid": self.lock_owner_pid,
+            "queue_owner_pid": self.queue_owner_pid,
+            "queue_owner_claimed_at": self.queue_owner_claimed_at or None,
+            "queue": queue,
+        }
+
+
+class TtsPlayLockTimeout(TtsPlayTimeout):
+    """Bounded failure to acquire the cross-process playback flock."""
+
+    description = "tts playback lock acquisition timed out"
+    error_type = "tts_play_lock_timeout"
+
+
+class TtsPlayQueueTimeout(TtsPlayTimeout):
+    """Bounded failure to reach a claimed ticket's FIFO playback turn."""
+
+    description = "tts play queue wait timed out"
+    error_type = "tts_play_queue_timeout"
+
+
+def _acquire_play_lock(
+    fd: int,
+    *,
+    operation: str,
+    ticket: int | None = None,
+    timeout_s: float | None = None,
+) -> None:
+    """Acquire the playback flock without an unbounded kernel wait."""
+    import fcntl
+
+    timeout = _PLAY_LOCK_ACQUIRE_TIMEOUT_S if timeout_s is None else max(0.0, timeout_s)
+    started = time.monotonic()
+    deadline = started + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError as exc:
+            if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                raise
+        now = time.monotonic()
+        if now >= deadline:
+            queue_state = _queue_read(tts_play_queue_path())
+            lock_owner_pid = _flock_owner_pid(fd)
+            error = TtsPlayLockTimeout(
+                operation=operation,
+                timeout_s=timeout,
+                elapsed_s=now - started,
+                ticket=ticket,
+                lock_owner_pid=lock_owner_pid,
+                queue_state=queue_state,
+            )
+            _syslog_tts_queue(
+                "tts.play_lock_timeout",
+                operation=operation,
+                ticket=ticket,
+                lock_timeout_s=timeout,
+                lock_owner_pid=lock_owner_pid,
+                queue_owner_pid=error.queue_owner_pid,
+                serving=int(queue_state.get("serving", 0)),
+                next=int(queue_state.get("next", 0)),
+                level="warn",
+            )
+            raise error
+        time.sleep(min(_PLAY_LOCK_POLL_S, max(0.0, deadline - now)))
+
+
+def _close_play_lock_fd(fd: int, *, locked: bool) -> None:
+    """Release/close *fd* without replacing an exception already in flight."""
+    import fcntl
+
+    primary_active = sys.exc_info()[0] is not None
+    cleanup_error: BaseException | None = None
+    if locked:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except BaseException as exc:  # cleanup must preserve the primary failure
+            cleanup_error = exc
+    try:
+        os.close(fd)
+    except BaseException as exc:  # cleanup must preserve the primary failure
+        if cleanup_error is None:
+            cleanup_error = exc
+    if cleanup_error is not None and not primary_active:
+        raise cleanup_error
 
 
 def _empty_queue_state() -> dict[str, object]:
@@ -164,7 +351,9 @@ def _drop_holder(st: dict[str, object], ticket: int) -> None:
     st["holders"] = holders
 
 
-def _set_holder(st: dict[str, object], ticket: int, *, pid: int, claimed_at: float) -> None:
+def _set_holder(
+    st: dict[str, object], ticket: int, *, pid: int, claimed_at: float
+) -> None:
     holders = _normalize_holders(st.get("holders"))
     holders[str(int(ticket))] = {"pid": int(pid), "claimed_at": float(claimed_at)}
     st["holders"] = holders
@@ -188,6 +377,18 @@ def _advance_serving(st: dict[str, object]) -> dict[str, object]:
     serving = int(st["serving"])
     _drop_holder(st, serving)
     st["serving"] = serving + 1
+    return _skip_cancelled_heads(st)
+
+
+def _abandon_ticket_locked(st: dict[str, object], ticket: int) -> dict[str, object]:
+    """Mutate queue state to abandon *ticket*. Caller holds the flock."""
+    _drop_holder(st, ticket)
+    if int(st["serving"]) == ticket:
+        return _advance_serving(st)
+    cancelled = list(st.get("cancelled") or [])
+    if ticket not in cancelled:
+        cancelled.append(ticket)
+    st["cancelled"] = cancelled
     return _skip_cancelled_heads(st)
 
 
@@ -270,15 +471,124 @@ def _untrack_our_ticket(ticket: int) -> None:
         _our_tickets.discard(int(ticket))
 
 
+def _our_ticket_is_tracked(ticket: int) -> bool:
+    with _our_tickets_lock:
+        return int(ticket) in _our_tickets
+
+
+def _recover_deferred_abandons_locked(
+    st: dict[str, object],
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """Apply retained cleanup requests while the caller owns the file lock."""
+    with _deferred_abandons_lock:
+        if _deferred_abandon_thread is not None:
+            return st, []
+        tickets = list(_deferred_abandons)
+    recovered: list[dict[str, object]] = []
+    for ticket in tickets:
+        if _our_ticket_is_tracked(ticket):
+            st = _abandon_ticket_locked(st, ticket)
+            recovered.append(
+                {"ticket": ticket, "reason": "deferred_cleanup", "pid": os.getpid()}
+            )
+        else:
+            with _deferred_abandons_lock:
+                _deferred_abandons.discard(ticket)
+    return st, recovered
+
+
+def _finalize_deferred_abandons(recovered: list[dict[str, object]]) -> None:
+    """Drop in-memory ownership only after recovered queue state is durable."""
+    for entry in recovered:
+        ticket = int(entry["ticket"])
+        _untrack_our_ticket(ticket)
+        with _deferred_abandons_lock:
+            _deferred_abandons.discard(ticket)
+
+
 def _abandon_our_tickets() -> None:
     """Best-effort abandon of tickets still claimed by this process (B099)."""
     with _our_tickets_lock:
         tickets = list(_our_tickets)
     for ticket in tickets:
         try:
-            abandon_tts_play_ticket(ticket)
+            # atexit/SIGTERM cleanup must not spend the normal acquisition bound
+            # per ticket. A surviving queue record is safely healed by dead PID.
+            abandon_tts_play_ticket(ticket, lock_timeout_s=0.0)
         except Exception:
             pass
+
+
+def _deferred_abandon_reaper() -> None:
+    """Drain all delegated tickets with at most one retrying daemon thread."""
+    global _deferred_abandon_thread
+    try:
+        while True:
+            with _deferred_abandons_lock:
+                tickets = list(_deferred_abandons)
+                if not tickets:
+                    _deferred_abandon_thread = None
+                    return
+            retry_after_error = False
+            for ticket in tickets:
+                if not _our_ticket_is_tracked(ticket):
+                    with _deferred_abandons_lock:
+                        _deferred_abandons.discard(ticket)
+                    continue
+                try:
+                    _abandon_tts_play_ticket_now(ticket)
+                except TtsPlayLockTimeout:
+                    # The normal finite acquisition bound is the retry cadence.
+                    continue
+                except Exception as exc:
+                    # Retain ownership and cleanup intent across transient I/O
+                    # failures; one process-wide reaper retries with backoff.
+                    retry_after_error = True
+                    _syslog_tts_queue(
+                        "tts.play_ticket_deferred_abandon_failed",
+                        ticket=ticket,
+                        error=str(exc)[:200],
+                        level="warn",
+                    )
+                else:
+                    with _deferred_abandons_lock:
+                        _deferred_abandons.discard(ticket)
+            if retry_after_error:
+                time.sleep(_DEFERRED_ABANDON_RETRY_S)
+    finally:
+        with _deferred_abandons_lock:
+            if _deferred_abandon_thread is threading.current_thread():
+                _deferred_abandon_thread = None
+
+
+def defer_tts_play_ticket_abandon(ticket: int) -> bool:
+    """Delegate *ticket* to the process-wide bounded lock reaper."""
+    global _deferred_abandon_thread
+    ticket = int(ticket)
+    with _deferred_abandons_lock:
+        _deferred_abandons.add(ticket)
+        if _deferred_abandon_thread is not None:
+            return True
+        worker = threading.Thread(
+            target=_deferred_abandon_reaper,
+            name="hark-tts-abandon-reaper",
+            daemon=True,
+        )
+        _deferred_abandon_thread = worker
+        try:
+            worker.start()
+        except BaseException:
+            # Retain the request: a later publication attempt or successful
+            # playback-lock transaction can apply it under the same flock.
+            _deferred_abandon_thread = None
+            _syslog_tts_queue(
+                "tts.play_ticket_deferred_abandon_failed",
+                ticket=ticket,
+                error="could not start deferred abandonment worker",
+                level="warn",
+            )
+            return False
+    return True
 
 
 def _ensure_cleanup_hooks() -> None:
@@ -305,7 +615,7 @@ def _ensure_cleanup_hooks() -> None:
         pass
 
 
-def claim_tts_play_ticket() -> int:
+def claim_tts_play_ticket(*, lock_timeout_s: float | None = None) -> int:
     """Reserve FIFO place *before* synth so launch order is preserved (B092).
 
     Call once per outer utterance (not per multi-chunk). Then
@@ -315,65 +625,86 @@ def claim_tts_play_ticket() -> int:
     Records ``pid`` + ``claimed_at`` on the ticket (B099) so other waiters can
     advance past a dead holder.
     """
-    import fcntl
-
     lock_path = tts_play_lock_path()
     queue_path = tts_play_queue_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    locked = False
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _acquire_play_lock(fd, operation="claim", timeout_s=lock_timeout_s)
+        locked = True
         st = _queue_read(queue_path)
-        # Opportunistic heal of clearly dead heads before taking a new ticket
+        # Recover retained same-process cleanup first, then heal dead heads.
+        st, recovered = _recover_deferred_abandons_locked(st)
         st, healed = _heal_abandoned_locked(st, missing_as_abandoned=False)
-        if healed:
-            for h in healed:
-                _syslog_tts_queue(
-                    "tts.play_queue_healed",
-                    ticket=h.get("ticket"),
-                    reason=h.get("reason"),
-                    pid=h.get("pid"),
-                    where="claim",
-                )
+        healed = [*recovered, *healed]
         ticket = int(st["next"])
         st["next"] = ticket + 1
         if int(st["serving"]) > int(st["next"]):
             st["serving"] = ticket
         _set_holder(st, ticket, pid=os.getpid(), claimed_at=time.time())
         _queue_write(queue_path, st)
+        _finalize_deferred_abandons(recovered)
         _track_our_ticket(ticket)
+        for h in healed:
+            _syslog_tts_queue(
+                "tts.play_queue_healed",
+                ticket=h.get("ticket"),
+                reason=h.get("reason"),
+                pid=h.get("pid"),
+                where="claim",
+            )
         return ticket
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+        _close_play_lock_fd(fd, locked=locked)
 
 
-def abandon_tts_play_ticket(ticket: int) -> None:
+def abandon_tts_play_ticket(
+    ticket: int,
+    *,
+    lock_timeout_s: float | None = None,
+) -> None:
+    """Drop a locally claimed ticket, or join its delegated abandonment."""
+    ticket = int(ticket)
+    with _deferred_abandons_lock:
+        delegated = (
+            ticket in _deferred_abandons and _deferred_abandon_thread is not None
+        )
+    if delegated or not _our_ticket_is_tracked(ticket):
+        return
+    _abandon_tts_play_ticket_now(ticket, lock_timeout_s=lock_timeout_s)
+    with _deferred_abandons_lock:
+        _deferred_abandons.discard(ticket)
+
+
+def _abandon_tts_play_ticket_now(
+    ticket: int,
+    *,
+    lock_timeout_s: float | None = None,
+) -> None:
     """Drop a claimed ticket without playing (synth error / early return / exit)."""
-    import fcntl
-
     ticket = int(ticket)
     lock_path = tts_play_lock_path()
     queue_path = tts_play_queue_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    locked = False
+    abandoned = False
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _acquire_play_lock(
+            fd,
+            operation="abandon",
+            ticket=ticket,
+            timeout_s=lock_timeout_s,
+        )
+        locked = True
         st = _queue_read(queue_path)
-        _drop_holder(st, ticket)
-        if int(st["serving"]) == ticket:
-            _queue_write(queue_path, _advance_serving(st))
-        else:
-            cancelled = list(st.get("cancelled") or [])
-            if ticket not in cancelled:
-                cancelled.append(ticket)
-            st["cancelled"] = cancelled
-            # If cancelled ticket is somehow at head, skip it
-            _queue_write(queue_path, _skip_cancelled_heads(st))
+        _queue_write(queue_path, _abandon_ticket_locked(st, ticket))
+        abandoned = True
     finally:
-        _untrack_our_ticket(ticket)
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+        if abandoned:
+            _untrack_our_ticket(ticket)
+        _close_play_lock_fd(fd, locked=locked)
 
 
 def heal_tts_play_queue(*, missing_as_abandoned: bool = True) -> dict[str, Any]:
@@ -385,21 +716,24 @@ def heal_tts_play_queue(*, missing_as_abandoned: bool = True) -> dict[str, Any]:
 
     Returns a status dict suitable for doctor / syslog.
     """
-    import fcntl
-
     lock_path = tts_play_lock_path()
     queue_path = tts_play_queue_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     before = _queue_read(queue_path) if queue_path.is_file() else _empty_queue_state()
     fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    locked = False
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _acquire_play_lock(fd, operation="heal")
+        locked = True
         st = _queue_read(queue_path)
+        st, recovered = _recover_deferred_abandons_locked(st)
         st, healed = _heal_abandoned_locked(
             st, missing_as_abandoned=missing_as_abandoned
         )
+        healed = [*recovered, *healed]
         if healed or int(st["serving"]) != int(before.get("serving", 0)):
             _queue_write(queue_path, st)
+            _finalize_deferred_abandons(recovered)
         for h in healed:
             _syslog_tts_queue(
                 "tts.play_queue_healed",
@@ -422,6 +756,17 @@ def heal_tts_play_queue(*, missing_as_abandoned: bool = True) -> dict[str, Any]:
             "stuck": stuck and not healed,
             "ok": True,
         }
+    except TtsPlayLockTimeout as exc:
+        return {
+            "path": str(queue_path),
+            "ok": False,
+            "error": str(exc)[:200],
+            "error_type": "tts_play_lock_timeout",
+            "tts_play_lock": exc.as_dict(),
+            "healed": [],
+            "healed_count": 0,
+            "stuck": False,
+        }
     except Exception as exc:  # pragma: no cover - defensive
         return {
             "path": str(queue_path),
@@ -432,11 +777,7 @@ def heal_tts_play_queue(*, missing_as_abandoned: bool = True) -> dict[str, Any]:
             "stuck": False,
         }
     finally:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        except Exception:
-            pass
-        os.close(fd)
+        _close_play_lock_fd(fd, locked=locked)
 
 
 def inspect_tts_play_queue() -> dict[str, Any]:
@@ -474,9 +815,11 @@ def exclusive_playback(
     :data:`_MISSING_HOLDER_GRACE_S`, heads with no holder record are also
     skipped (legacy abandoned tickets).
 
-    *wait_timeout_s*: if set, raise ``TimeoutError`` after this many seconds
+    *wait_timeout_s*: if set, raise ``TtsPlayTimeout`` after this many seconds
     waiting for the speaker (ticket is abandoned so the queue does not stall).
     Use a short timeout for ambient boot TTS so wake arming is never blocked.
+    When unset, finite flock probes still surface owner diagnostics via syslog
+    but the waiter keeps its ticket until the live head releases the speaker.
     """
     depth = int(getattr(_play_tls, "depth", 0) or 0)
     if depth > 0:
@@ -489,81 +832,158 @@ def exclusive_playback(
 
     import fcntl
 
+    wait_start = time.monotonic()
     if ticket is None:
-        ticket = claim_tts_play_ticket()
+        claim_lock_timeout = None
+        if wait_timeout_s is not None:
+            claim_lock_timeout = min(_PLAY_LOCK_ACQUIRE_TIMEOUT_S, wait_timeout_s)
+        ticket = claim_tts_play_ticket(lock_timeout_s=claim_lock_timeout)
 
     lock_path = tts_play_lock_path()
     queue_path = tts_play_queue_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
     advanced = False
-    wait_start = time.monotonic()
+    abandon_deferred = False
+    locked = False
     try:
         # Wait until we are head of line, then hold lock through playback
         while True:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            elapsed = time.monotonic() - wait_start
+            lock_timeout_s = None
+            if wait_timeout_s is not None:
+                lock_timeout_s = min(
+                    _PLAY_LOCK_ACQUIRE_TIMEOUT_S,
+                    max(0.0, wait_timeout_s - elapsed),
+                )
+            try:
+                _acquire_play_lock(
+                    fd,
+                    operation="wait",
+                    ticket=ticket,
+                    timeout_s=lock_timeout_s,
+                )
+                locked = True
+            except TtsPlayLockTimeout as exc:
+                total_elapsed = time.monotonic() - wait_start
+                # Playback holds the flock for the full utterance. Unbounded
+                # waiters must retry those finite acquire probes without
+                # abandoning their FIFO ticket. Bounded waiters only fail once
+                # the overall wait budget is exhausted.
+                if wait_timeout_s is None or total_elapsed < wait_timeout_s:
+                    _syslog_tts_queue(
+                        "tts.play_lock_wait_retry",
+                        ticket=ticket,
+                        wait_timeout_s=wait_timeout_s,
+                        elapsed_s=total_elapsed,
+                        lock_timeout_s=exc.timeout_s,
+                        lock_owner_pid=exc.lock_owner_pid,
+                        queue_owner_pid=exc.queue_owner_pid,
+                        serving=int(exc.queue_state.get("serving", 0)),
+                        next=int(exc.queue_state.get("next", 0)),
+                        level="info",
+                    )
+                    continue
+                abandon_deferred = defer_tts_play_ticket_abandon(ticket)
+                _syslog_tts_queue(
+                    "tts.play_queue_wait_timeout",
+                    ticket=ticket,
+                    wait_timeout_s=wait_timeout_s,
+                    serving=int(exc.queue_state.get("serving", 0)),
+                    next=int(exc.queue_state.get("next", 0)),
+                    lock_owner_pid=exc.lock_owner_pid,
+                    level="warn",
+                )
+                raise
             elapsed = time.monotonic() - wait_start
             missing = elapsed >= _MISSING_HOLDER_GRACE_S
             st = _queue_read(queue_path)
-            st, healed = _heal_abandoned_locked(
-                st, missing_as_abandoned=missing
-            )
+            st, recovered = _recover_deferred_abandons_locked(st)
+            st, healed = _heal_abandoned_locked(st, missing_as_abandoned=missing)
             st = _skip_cancelled_heads(st)
-            if healed:
-                for h in healed:
-                    _syslog_tts_queue(
-                        "tts.play_queue_healed",
-                        ticket=h.get("ticket"),
-                        reason=h.get("reason"),
-                        pid=h.get("pid"),
-                        where="wait",
-                        waiter=ticket,
-                    )
+            healed = [*recovered, *healed]
             _queue_write(queue_path, st)
+            _finalize_deferred_abandons(recovered)
+            for h in healed:
+                _syslog_tts_queue(
+                    "tts.play_queue_healed",
+                    ticket=h.get("ticket"),
+                    reason=h.get("reason"),
+                    pid=h.get("pid"),
+                    where="wait",
+                    waiter=ticket,
+                )
             if int(st["serving"]) == ticket:
                 break
             if wait_timeout_s is not None and elapsed >= wait_timeout_s:
+                _queue_write(queue_path, _abandon_ticket_locked(st, ticket))
+                _untrack_our_ticket(ticket)
+                advanced = True
+                error = TtsPlayQueueTimeout(
+                    operation="queue_wait",
+                    timeout_s=wait_timeout_s,
+                    elapsed_s=elapsed,
+                    ticket=ticket,
+                    lock_owner_pid=None,
+                    queue_state=st,
+                )
                 fcntl.flock(fd, fcntl.LOCK_UN)
-                try:
-                    abandon_tts_play_ticket(ticket)
-                except Exception:
-                    pass
-                advanced = True  # abandon already advanced/cancelled
+                locked = False
                 _syslog_tts_queue(
                     "tts.play_queue_wait_timeout",
                     ticket=ticket,
                     wait_timeout_s=wait_timeout_s,
                     serving=int(st["serving"]),
                     next=int(st["next"]),
+                    queue_owner_pid=error.queue_owner_pid,
                     level="warn",
                 )
-                raise TimeoutError(
-                    f"tts play queue wait exceeded {wait_timeout_s}s "
-                    f"(ticket={ticket}, serving={st['serving']})"
-                )
+                raise error
             fcntl.flock(fd, fcntl.LOCK_UN)
+            locked = False
             time.sleep(0.03)
 
         _play_tls.depth = 1
         try:
             yield
         finally:
+            primary_active = sys.exc_info()[0] is not None
             _play_tls.depth = 0
-            st = _queue_read(queue_path)
-            if int(st["serving"]) == ticket:
-                _queue_write(queue_path, _advance_serving(st))
-                advanced = True
-            _untrack_our_ticket(ticket)
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    except BaseException:
-        if not advanced:
             try:
-                abandon_tts_play_ticket(ticket)
+                st = _queue_read(queue_path)
+                if int(st["serving"]) == ticket:
+                    _queue_write(queue_path, _advance_serving(st))
+                    advanced = True
+                _untrack_our_ticket(ticket)
+            except BaseException:
+                if not primary_active:
+                    raise
+            finally:
+                if locked:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                    except BaseException:
+                        if not primary_active:
+                            raise
+                    finally:
+                        locked = False
+    except BaseException:
+        if locked:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except BaseException:
+                pass
+            locked = False
+        if not advanced and not abandon_deferred:
+            try:
+                abandon_tts_play_ticket(ticket, lock_timeout_s=0.0)
+            except TtsPlayLockTimeout:
+                abandon_deferred = defer_tts_play_ticket_abandon(ticket)
             except Exception:
                 pass
         raise
     finally:
-        os.close(fd)
+        _close_play_lock_fd(fd, locked=locked)
 
 
 def sniff_audio_format(data: bytes) -> str:
@@ -597,7 +1017,9 @@ def estimate_duration_ms(data: bytes, sample_rate: int | None = None) -> int:
         return int(1000 * (len(data) / 2) / sample_rate)
     # ffprobe
     if shutil.which("ffprobe"):
-        with tempfile.NamedTemporaryFile(suffix=f".{fmt if fmt != 'unknown' else 'bin'}", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(
+            suffix=f".{fmt if fmt != 'unknown' else 'bin'}", delete=False
+        ) as tmp:
             p = Path(tmp.name)
         try:
             p.write_bytes(data)
@@ -806,9 +1228,7 @@ def _apply_playback_speed(
     try:
         cmd = [ffmpeg, "-y"]
         if fmt == "pcm":
-            cmd.extend(
-                ["-f", "s16le", "-ar", str(sample_rate or 24000), "-ac", "1"]
-            )
+            cmd.extend(["-f", "s16le", "-ar", str(sample_rate or 24000), "-ac", "1"])
         cmd.extend(
             [
                 "-i",

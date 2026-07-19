@@ -26,8 +26,11 @@ from hark.audio.cues import (
 from hark.audio.media import duck_media  # also open_answer_window late-bind
 from hark.audio.mic_mute import mic_muted_during_tts, repair_tts_mute_after_play
 from hark.audio.playback import (
+    TtsPlayLockTimeout,
+    TtsPlayTimeout,
     abandon_tts_play_ticket,
     claim_tts_play_ticket,
+    defer_tts_play_ticket_abandon,
     exclusive_playback,
     play_wav_bytes,
     write_wav,
@@ -141,7 +144,9 @@ def extract_question_items(text: str) -> list[str]:
 
     # 3) Word ordinals: "One: … Two: …" / "First — … Second — …"
     if _WORD_ORDINAL_SPLIT_RE.search(text):
-        word_parts = [p.strip() for p in _WORD_ORDINAL_SPLIT_RE.split(text) if p.strip()]
+        word_parts = [
+            p.strip() for p in _WORD_ORDINAL_SPLIT_RE.split(text) if p.strip()
+        ]
         if len(word_parts) >= 2:
             return word_parts
 
@@ -173,7 +178,9 @@ def format_tts_question_text(text: str) -> str:
     items = extract_question_items(text)
     if len(items) <= 1:
         return text
-    return "\n".join(f"{i}. {_strip_item_prefix(item)}" for i, item in enumerate(items, 1))
+    return "\n".join(
+        f"{i}. {_strip_item_prefix(item)}" for i, item in enumerate(items, 1)
+    )
 
 
 def print_tts_question_text(
@@ -319,9 +326,11 @@ def run_tts(
     ``use_cache``: when False, skip on-disk TTS phrase cache lookup and store
     (one-shot announces such as wake-label live-reload).
 
-    ``play_wait_timeout_s`` (B099): max seconds to wait for the exclusive play
-    queue turn. On timeout the ticket is abandoned and ``TimeoutError`` is raised.
-    Ambient boot uses a short timeout so a stuck queue never blocks wake arming.
+    ``play_wait_timeout_s`` (B099/B146): max cumulative seconds spent acquiring
+    the play ticket lock and waiting for the exclusive queue turn. Synthesis and
+    listen deferral do not consume this queue-wait budget. On timeout the ticket
+    is abandoned and ``TimeoutError`` is raised. Ambient boot uses a short timeout
+    so a stuck queue never blocks wake arming.
 
     Long text (B091): speak the full agent reply by default.
 
@@ -416,11 +425,7 @@ def run_tts(
     mute_repair: dict[str, Any] | None = None
     duck_meta: dict[str, Any] | None = None
     defer_meta: dict[str, Any] | None = None
-    near = (
-        near_end_ms
-        if near_end_ms is not None
-        else int(cfg.audio.listen_pre_arm_ms)
-    )
+    near = near_end_ms if near_end_ms is not None else int(cfg.audio.listen_pre_arm_ms)
     do_duck = bool(getattr(cfg.audio, "duck_media_during_tts", True))
 
     def _synth_one(piece: str) -> tuple[bytes, str, str, str, bool]:
@@ -480,7 +485,14 @@ def run_tts(
         if play:
             # Claim FIFO slot *before* synth so 5 concurrent launches keep order
             # even if later jobs finish synthesizing first (B092).
-            play_ticket = claim_tts_play_ticket()
+            claim_wait_started = time.monotonic()
+            if play_wait_timeout_s is None:
+                play_ticket = claim_tts_play_ticket()
+            else:
+                play_ticket = claim_tts_play_ticket(
+                    lock_timeout_s=max(0.0, float(play_wait_timeout_s))
+                )
+            claim_wait_elapsed = time.monotonic() - claim_wait_started
             try:
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     # Kick first synth outside the play hold (parallel with other jobs)
@@ -515,12 +527,8 @@ def run_tts(
                             max_wait_s=float(
                                 getattr(cfg.audio, "defer_tts_max_wait_s", 45.0)
                             ),
-                            poll_ms=int(
-                                getattr(cfg.audio, "defer_tts_poll_ms", 100)
-                            ),
-                            quiet_ms=int(
-                                getattr(cfg.audio, "defer_tts_quiet_ms", 200)
-                            ),
+                            poll_ms=int(getattr(cfg.audio, "defer_tts_poll_ms", 100)),
+                            quiet_ms=int(getattr(cfg.audio, "defer_tts_quiet_ms", 200)),
                         )
                         defer_meta = defer.as_meta()
                         if defer.deferred:
@@ -547,9 +555,17 @@ def run_tts(
                                 instructions=instructions,
                             )
 
+                    remaining_play_wait_s = (
+                        None
+                        if play_wait_timeout_s is None
+                        else max(
+                            0.0,
+                            float(play_wait_timeout_s) - claim_wait_elapsed,
+                        )
+                    )
                     with exclusive_playback(
                         ticket=play_ticket,
-                        wait_timeout_s=play_wait_timeout_s,
+                        wait_timeout_s=remaining_play_wait_s,
                     ):
                         # B119: re-probe at play time. Streaming quiet-gate (B105)
                         # may allow short acks while listen is STILL ACTIVE — that
@@ -612,10 +628,36 @@ def run_tts(
                                         )
                                     else:
                                         next_fut = None
-            except BaseException:
-                # Don't stall the FIFO if we never reached exclusive_playback
+            except BaseException as primary_exc:
+                # Don't stall the FIFO if we never reached exclusive_playback.
+                # Claim, queue wait, and cleanup share one acquisition budget;
+                # synthesis/listen deferral intentionally do not consume it.
+                queue_wait_elapsed = (
+                    max(0.0, float(primary_exc.elapsed_s))
+                    if isinstance(primary_exc, TtsPlayTimeout)
+                    else 0.0
+                )
+                cleanup_lock_timeout_s = (
+                    None
+                    if play_wait_timeout_s is None
+                    else max(
+                        0.0,
+                        float(play_wait_timeout_s)
+                        - claim_wait_elapsed
+                        - queue_wait_elapsed,
+                    )
+                )
                 try:
-                    abandon_tts_play_ticket(play_ticket)
+                    abandon_tts_play_ticket(
+                        play_ticket,
+                        lock_timeout_s=cleanup_lock_timeout_s,
+                    )
+                except TtsPlayLockTimeout:
+                    if not defer_tts_play_ticket_abandon(play_ticket):
+                        # One bounded retry mirrors exclusive_playback. If both
+                        # publications fail, the retained request is recovered
+                        # by the next successful same-process lock transaction.
+                        defer_tts_play_ticket_abandon(play_ticket)
                 except Exception:
                     pass
                 raise
@@ -732,7 +774,6 @@ def _log_no_open(
     )
 
 
-
 def _tag_meta_command(result: "ListenResult") -> "ListenResult":
     """Classify a captured (non-cancelled) transcript as a meta-command (B009).
 
@@ -771,7 +812,6 @@ def _log_empty_stt(
         phase=phase,
         syslog_fn=syslog,
     )
-
 
 
 def _estimate_wav_audio_ms(wav_bytes: bytes, *, sample_rate: int = 16000) -> int:
@@ -866,7 +906,6 @@ def _transcribe_logged(
         raise
 
 
-
 # join_radio_stt_segments / monotonic_partial_text / prefer_complete_transcript
 # live in hark.answer_window.text_join (owned by RadioSession); imported above.
 
@@ -947,7 +986,9 @@ def effective_radio_idle_end_s(
         radio_idle_end_silence_s=float(
             getattr(cfg.listen, "radio_idle_end_silence_s", 0.0) or 0.0
         ),
-        streaming=bool(streaming) if streaming is not None else bool(pol_base.streaming),
+        streaming=bool(streaming)
+        if streaming is not None
+        else bool(pol_base.streaming),
         streaming_ack_min_quiet_s=float(
             streaming_ack_min_quiet_s
             if streaming_ack_min_quiet_s is not None
@@ -1044,7 +1085,6 @@ def run_listen(
         audio_ok_after=audio_ok_after,
     )
     return open_answer_window(built, deps=deps)
-
 
 
 # SpeakThenListen (P1.M4): half-duplex handoff + confirm live in

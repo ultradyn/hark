@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from hark.audio.playback import TtsPlayTimeout
 from hark.config import HarkConfig
 from hark.confirm_lexicon import classify_confirm_reply
 from hark.exitcodes import ABORT, OK, PROVIDER, TIMEOUT, normalize_failure_exit
@@ -30,6 +31,28 @@ def _provider_failure_result(
     }
     if text is not None:
         result["text"] = text
+    return result
+
+
+def _timeout_failure_result(
+    exc: TimeoutError,
+    *,
+    tts_info: Any,
+    text: str | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """Keep ask failures JSON while retaining typed playback diagnostics."""
+    result: dict[str, Any] = {
+        "ok": False,
+        "error": error or str(exc),
+        "exit": TIMEOUT,
+        "tts": tts_info,
+    }
+    if text is not None:
+        result["text"] = text
+    if isinstance(exc, TtsPlayTimeout):
+        result["error_type"] = exc.error_type
+        result["tts_play_lock"] = exc.as_dict()
     return result
 
 
@@ -59,12 +82,10 @@ def _run_ask(
             end_mode=end_mode,
         )
     except TimeoutError as exc:
-        return {
-            "ok": False,
-            "error": str(exc),
-            "exit": TIMEOUT,
-            "tts": getattr(exc, "tts_info", None),
-        }
+        return _timeout_failure_result(
+            exc,
+            tts_info=getattr(exc, "tts_info", None),
+        )
     except ProviderError as exc:
         return _provider_failure_result(
             exc,
@@ -114,14 +135,13 @@ def _run_ask(
                 end_mode="silence",
                 last_tts=readback,
             )
-        except TimeoutError:
-            return {
-                "ok": False,
-                "error": "confirm timeout",
-                "exit": TIMEOUT,
-                "text": listened.text,
-                "tts": tts_info,
-            }
+        except TimeoutError as exc:
+            return _timeout_failure_result(
+                exc,
+                error=None if isinstance(exc, TtsPlayTimeout) else "confirm timeout",
+                text=listened.text,
+                tts_info=tts_info,
+            )
         except ProviderError as exc:
             return _provider_failure_result(
                 exc,
@@ -129,8 +149,8 @@ def _run_ask(
                 tts_info=tts_info,
             )
         except KeyboardInterrupt as exc:
-            # The first answer is already durable user context.  Preserve it
-            # if cancellation arrives during confirmation TTS or capture.
+            # The first answer is already durable user context. Preserve it if
+            # cancellation arrives during confirmation TTS or capture.
             if getattr(exc, "tts_info", None) is None:
                 setattr(exc, "tts_info", tts_info)
             setattr(exc, "answer_text", listened.text)
@@ -174,9 +194,7 @@ def interrupted_ask_result(exc: KeyboardInterrupt) -> dict[str, Any]:
     """Translate an interruption anywhere in the ask signal scope to JSON."""
     signal_name = getattr(exc, "signal_name", None)
     reason = getattr(exc, "reason", None)
-    end_phrase = reason or (
-        f"signal:{signal_name}" if signal_name else "interrupt"
-    )
+    end_phrase = reason or (f"signal:{signal_name}" if signal_name else "interrupt")
     result = {
         "ok": False,
         "cancelled": True,

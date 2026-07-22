@@ -2,7 +2,7 @@
 
 > When your agents need a word — voice bridge for Herdr coding agents. Speak blocked questions, listen for answers, deliver with stale-safe routing.
 
-Hark is open-source software (`hark` CLI + handsfree skill) that lets an operator supervise multiple [Herdr](https://herdr.dev/) coding agents by voice. Cloud STT/TTS only; no local speech models required. Multi-session (local + SSH). Human stays in the loop.
+Hark is open-source software (`hark` CLI + handsfree skill) that lets an operator supervise multiple [Herdr](https://herdr.dev/) coding agents by voice. Cloud STT/TTS by default; optional local speech extras (`wake`, `wake-sherpa`, `local-stt`) add on-device wake and offline STT. Multi-session (local + SSH). Human stays in the loop.
 
 ## Docs
 

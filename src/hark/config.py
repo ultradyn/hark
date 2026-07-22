@@ -209,6 +209,8 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
             "allow_espeak_fallback",
             # B095: print question text to terminal on ask / tts --listen
             "print_prompt",
+            # B161: desktop notification with Skip action while TTS plays
+            "notify_skip",
         }
     ),
     "confirm": frozenset({"mode"}),
@@ -504,6 +506,9 @@ class TtsConfig:
     # Print full question text to the controlling terminal when ask /
     # tts --listen speaks (B095). Default on; does not affect radio partials.
     print_prompt: bool = True
+    # Desktop notification with the full TTS text and a Skip action while TTS
+    # plays (B161). Default on; silently disabled without notify-send/session bus.
+    notify_skip: bool = True
 
 
 @dataclass
@@ -802,6 +807,7 @@ language = "en"
 # max_chars = 0                # total cap per TTS call; 0 = unlimited (speak full agent text)
 # chunk_chars = 1500           # per synth request; multi-chunk plays in full (B091)
 print_prompt = true          # print question text to terminal on ask / tts --listen (B095)
+notify_skip = true           # desktop notification with full text + Skip action while TTS plays (B161)
 
 [confirm]
 mode = "auto"
@@ -1505,6 +1511,7 @@ def load_config(path: Path | None = None) -> HarkConfig:
             playback_speed=tts_playback_speed,
             allow_espeak_fallback=bool(tts_raw.get("allow_espeak_fallback", False)),
             print_prompt=_as_bool(tts_raw.get("print_prompt"), default=True),
+            notify_skip=_as_bool(tts_raw.get("notify_skip"), default=True),
         ),
         confirm=ConfirmConfig(mode=str(confirm_raw.get("mode", "auto"))),
         safety=SafetyConfig(
@@ -1749,6 +1756,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "chunk_chars": cfg.tts.chunk_chars,
             "playback_speed": cfg.tts.playback_speed,
             "print_prompt": cfg.tts.print_prompt,
+            "notify_skip": cfg.tts.notify_skip,
         },
         "confirm": {"mode": cfg.confirm.mode},
         "dashboard": {

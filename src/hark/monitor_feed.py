@@ -55,6 +55,7 @@ MODE_A_WAKE_KINDS: frozenset[str] = frozenset(
         # TTS lifecycle (via ambient.jsonl side-channel from speech.run_tts)
         "tts.truncated",
         "tts.chunked",
+        "tts.skipped",
     }
 )
 

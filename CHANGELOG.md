@@ -6,6 +6,12 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- feat(tts, B161): desktop notification while TTS plays — shows the entire
+  question/TTS text and offers a Skip action that stops playback (and any
+  remaining chunks). Notification is dismissed when playback ends; silently
+  disabled without `notify-send` or a session bus. Opt out with
+  `[tts].notify_skip = false`. Result dict gains `user_skipped` on skip.
+
 ## 0.1.10
 
 - feat(ambient/streaming, B121 + B122): `[ambient].streaming = true` is

@@ -37,6 +37,7 @@ from hark.audio.playback import (
     defer_tts_play_ticket_abandon,
     exclusive_playback,
     play_wav_bytes,
+    playback_skip_generation,
     write_wav,
 )
 from hark.config import HarkConfig
@@ -63,6 +64,7 @@ from hark.providers.resolve import (
 from hark.signal_safety import SigintMaskGuard
 from hark.syslog import log as syslog
 from hark.tts_interrupt_policy import TtsSynthesisInterrupted, cli_process_exit_expected
+from hark.tts_notify import tts_skip_notification
 from hark.tts_isolation import (
     InProcessSynthTransport,
     SubprocessSynthTransport,
@@ -805,6 +807,7 @@ def run_tts(
     synth_pool: _InterruptibleSynthPool | None = None
     duck_meta: dict[str, Any] | None = None
     defer_meta: dict[str, Any] | None = None
+    user_skipped = False
     near = near_end_ms if near_end_ms is not None else int(cfg.audio.listen_pre_arm_ms)
     do_duck = bool(getattr(cfg.audio, "duck_media_during_tts", True))
 
@@ -987,34 +990,70 @@ def run_tts(
                                 cfg, enabled=do_duck, exclude_conference=True
                             ) as duck_state:
                                 duck_meta = duck_state.as_meta()
-                                for i in range(len(chunks)):
-                                    is_last = i == len(chunks) - 1
-                                    pr = play_wav_bytes(
-                                        audio_parts[i],
-                                        playback_speed=cfg.tts.playback_speed,
-                                        on_near_end=on_near_end if is_last else None,
-                                        near_end_ms=near
-                                        if (on_near_end and is_last)
-                                        else 0,
-                                        exclusive=False,
-                                    )
-                                    play_ms += pr.duration_ms
-                                    if i + 1 >= len(chunks):
-                                        break
-                                    # Resolve prefetched next; kick following while we play
-                                    assert next_fut is not None
-                                    try:
-                                        ab, pn, ct, vu, fch = next_fut.result()
-                                    except Exception as exc:
-                                        _record_synth_fail(chunks[i + 1], exc)
-                                        raise
-                                    _apply_synth(ab, pn, ct, vu, fch)
-                                    if i + 2 < len(chunks):
-                                        next_fut = pool.submit(
-                                            _synth_one, chunks[i + 2]
+                                # B161: desktop notification with the full text
+                                # and a Skip action for the playback span.
+                                # Snapshot the skip generation *before* showing
+                                # the notification so a click during spawn is
+                                # still honored.
+                                skip_gen = playback_skip_generation()
+                                chunks_played = 0
+                                with tts_skip_notification(cfg, full_text):
+                                    for i in range(len(chunks)):
+                                        if playback_skip_generation() != skip_gen:
+                                            # Skip clicked while we were between
+                                            # chunks (e.g. waiting on prefetch
+                                            # synth) — do not start the next one.
+                                            break
+                                        is_last = i == len(chunks) - 1
+                                        pr = play_wav_bytes(
+                                            audio_parts[i],
+                                            playback_speed=cfg.tts.playback_speed,
+                                            on_near_end=on_near_end
+                                            if is_last
+                                            else None,
+                                            near_end_ms=near
+                                            if (on_near_end and is_last)
+                                            else 0,
+                                            exclusive=False,
                                         )
-                                    else:
-                                        next_fut = None
+                                        play_ms += pr.duration_ms
+                                        chunks_played = i + 1
+                                        if playback_skip_generation() != skip_gen:
+                                            # User clicked Skip on the TTS
+                                            # notification (B161): stop the
+                                            # remaining chunks too.
+                                            break
+                                        if i + 1 >= len(chunks):
+                                            break
+                                        # Resolve prefetched next; kick following while we play
+                                        assert next_fut is not None
+                                        try:
+                                            ab, pn, ct, vu, fch = next_fut.result()
+                                        except Exception as exc:
+                                            _record_synth_fail(chunks[i + 1], exc)
+                                            raise
+                                        _apply_synth(ab, pn, ct, vu, fch)
+                                        if i + 2 < len(chunks):
+                                            next_fut = pool.submit(
+                                                _synth_one, chunks[i + 2]
+                                            )
+                                        else:
+                                            next_fut = None
+                                if playback_skip_generation() != skip_gen:
+                                    user_skipped = True
+                                    surface_tts_event(
+                                        "tts.skipped",
+                                        reason="user_notification",
+                                        chunk=chunks_played,
+                                        chunks=len(chunks),
+                                        chars=len(full_text),
+                                        instructions=(
+                                            "TTS playback skipped from the "
+                                            "desktop notification (B161). The "
+                                            "operator may not have heard the "
+                                            "full message."
+                                        ),
+                                    )
             except BaseException as primary_exc:
                 # Don't stall the FIFO if we never reached exclusive_playback.
                 # Claim, queue wait, and cleanup share one acquisition budget;
@@ -1139,6 +1178,8 @@ def run_tts(
         result["listen_defer"] = defer_meta
     if mute_skipped_capture:
         result["mute_skipped_capture"] = True
+    if user_skipped:
+        result["user_skipped"] = True
     if mute_repair is not None and mute_repair.get("repaired"):
         result["mute_repaired"] = mute_repair
     return result

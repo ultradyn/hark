@@ -222,6 +222,21 @@ def present_for_monitor(event: dict[str, Any]) -> dict[str, Any]:
                 or "Long TTS multi-chunk play (informational).",
             }
         )
+    elif kind == "tts.skipped":
+        compact.update(
+            {
+                "reason": event.get("reason"),
+                "chunk": event.get("chunk"),
+                "chunks": event.get("chunks"),
+                "chars": event.get("chars"),
+                "instructions": event.get("instructions")
+                or (
+                    "TTS playback was skipped by the user from the desktop "
+                    "notification (B161). The operator may not have heard the "
+                    "full message."
+                ),
+            }
+        )
     else:
         # Pass through compact non-null subset
         for key in (

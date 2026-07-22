@@ -33,6 +33,62 @@ class PlayResult:
     format: str
 
 
+# B161: user-initiated skip of in-process playback (TTS skip notification).
+# Stoppers are registered for the *currently playing* chunk only; the
+# generation counter lets the run_tts chunk loop notice a skip that landed
+# between stoppers (or while no playback was active) and stop early.
+# Scope is deliberately process-wide: a skip stops every in-process playback,
+# including short cues/chimes that happen to be playing concurrently — the
+# speaker FIFO serializes TTS with most cue playback, so overlap is rare.
+_skip_lock = threading.Lock()
+_skip_stoppers: set[Callable[[], None]] = set()
+_skip_generation = 0
+
+
+def request_playback_skip() -> bool:
+    """Stop any in-process playback right now (B161).
+
+    Returns True when at least one active playback stopper was invoked.
+    Always bumps the skip generation so callers that snapshot it before
+    playback can detect the request even if it raced playback setup.
+    """
+    global _skip_generation
+    with _skip_lock:
+        _skip_generation += 1
+        stoppers = list(_skip_stoppers)
+    invoked = False
+    for stop in stoppers:
+        try:
+            stop()
+            invoked = True
+        except Exception:
+            pass
+    return invoked
+
+
+def playback_skip_generation() -> int:
+    """Monotonic skip counter; snapshot before play to detect a later skip."""
+    with _skip_lock:
+        return _skip_generation
+
+
+@contextmanager
+def _skip_stopper(stop: Callable[[], None]) -> Iterator[int]:
+    """Register *stop* as the way to interrupt the in-flight playback.
+
+    Yields the skip generation atomically at registration time, so a skip
+    cannot land undetected between registering and snapshotting.
+    """
+    with _skip_lock:
+        _skip_stoppers.add(stop)
+        generation = _skip_generation
+    try:
+        yield generation
+    finally:
+        with _skip_lock:
+            _skip_stoppers.discard(stop)
+
+
 # Cross-process FIFO speaker: synth may run in parallel; play is serial (B092).
 # Ticket is claimed at *launch* (before synth) so N concurrent jobs keep order.
 # B099: holders track pid+claim time so dead processes cannot stall the queue.
@@ -1256,8 +1312,16 @@ def _play_pcm16(pcm: bytes, sample_rate: int) -> None:
         samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
         if samples.size == 0:
             return
-        sd.play(samples, sample_rate)
-        sd.wait()
+
+        def _stop() -> None:
+            try:
+                sd.stop()
+            except Exception:
+                pass
+
+        with _skip_stopper(_stop):
+            sd.play(samples, sample_rate)
+            sd.wait()
         return
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         p = Path(tmp.name)
@@ -1277,10 +1341,37 @@ def _play_file(path: Path) -> None:
         if not shutil.which(cmd[0]):
             continue
         try:
-            subprocess.run(cmd, check=True, capture_output=True)
-            return
-        except (FileNotFoundError, subprocess.CalledProcessError):
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except (FileNotFoundError, OSError):
             continue
+
+        def _stop(p: subprocess.Popen[bytes] = proc) -> None:
+            try:
+                p.terminate()
+            except OSError:
+                pass
+
+        with _skip_stopper(_stop) as skip_gen:
+            try:
+                rc = proc.wait()
+            except BaseException:
+                # Mirror subprocess.run: never leak a live player on interrupt.
+                try:
+                    proc.kill()
+                    proc.wait()
+                except OSError:
+                    pass
+                raise
+        if rc == 0:
+            return
+        if playback_skip_generation() != skip_gen:
+            # User skip terminated the player (B161) — do not restart the same
+            # audio through the next fallback player.
+            return
     if shutil.which("ffmpeg") and sd is not None:
         wav_path = path.with_suffix(".decoded.wav")
         try:

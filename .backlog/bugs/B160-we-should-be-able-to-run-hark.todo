@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-07-22T16:14:21Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-07-22T17:07:40Z"
 complexity: medium
 created_at: "2026-07-17T01:56:09Z"
 depends_on: []
+duration_minutes: 53.32670775848333
 estimate_hours: 1
 id: B160
 priority: high
 started_at: "2026-07-22T16:14:21Z"
-status: in_progress
+status: done
 tags: []
 title: We should be able to run 'hark tts --once' from anywhere any it should work. The --once flag indicates we're running in like isolation, not with a hark server, etc. If there is a hark server running in the bg, we can use that, or we just do it ourselves if not. The flag name '--once' may not be ideal, you should use a more appropriate name if you can think of one.
-updated_at: "2026-07-22T16:14:21Z"
+updated_at: "2026-07-22T17:07:40Z"
 ---
 
 We should be able to run 'hark tts --once' from anywhere any it should work. The --once flag indicates we're running in like isolation, not with a hark server, etc. If there is a hark server running in the bg, we can use that, or we just do it ourselves if not. The flag name '--once' may not be ideal, you should use a more appropriate name if you can think of one.

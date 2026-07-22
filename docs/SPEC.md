@@ -49,7 +49,7 @@ hark watch [--session ID]... [--statuses blocked,done] [--for-monitor] [--transp
 hark status [--session ID]... [--status …] [--read-excerpt] [--json]
 hark queue [--json]                    # pending interactions if tracked
 hark context <target> [--lines N] [--source …]
-hark tts …
+hark tts … [--standalone]            # one-shot marker: works from any cwd, no server required; reports server detection (--once alias, B160)
 hark listen … [--end-mode silence|radio]
 hark ask … [--confirm auto|always|never] [--end-mode silence|radio]
 hark reply <target> …                  # freeform (debug / simple)

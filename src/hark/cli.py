@@ -309,6 +309,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --listen: tag the captured reply with the blocked event it answers "
         "(echoed as for_event so a reply is never associated with the wrong pane)",
     )
+    tts.add_argument(
+        "--standalone",
+        "--once",
+        dest="standalone",
+        action="store_true",
+        help="declare a one-shot run (B160): works from any directory with no "
+        "hark server required; JSON output reports whether a background server "
+        "was detected (its playback coordination applies automatically when live)",
+    )
 
     li = sub.add_parser("listen", help="speech-to-text")
     li.add_argument("--provider")
@@ -1648,14 +1657,42 @@ def cmd_skip(args: argparse.Namespace) -> int:
     return OK
 
 
+def _detect_server_state() -> str:
+    """B160: report whether a hark server (harkd or mode-a workers) is live.
+
+    Detection is pidfile-based under the XDG state dir, so it works from any
+    working directory. When a server is live, one-shot commands coordinate
+    with it through the shared state-dir locks; when not, they run fully
+    in-process. Either way the command is self-sufficient.
+    """
+    from hark.daemon import probe_harkd, probe_mode_a
+
+    try:
+        if probe_harkd().running or probe_mode_a().running:
+            return "detected"
+    except Exception:
+        # A detection failure must never break a one-shot run — fall back to
+        # the self-contained path, which needs no server.
+        pass
+    return "none"
+
+
 def cmd_tts(args: argparse.Namespace, cfg) -> int:
     from hark.speech import run_tts, speak_and_listen
 
     text = " ".join(args.text)
     want_listen = bool(getattr(args, "listen", False))
+    standalone = bool(getattr(args, "standalone", False))
     if want_listen and args.no_play:
         eprint("hark tts: --listen requires playback (drop --no-play)")
         return USAGE
+    # Probe only after usage validation so an error exit never touches state.
+    server_state = _detect_server_state() if standalone else None
+
+    def _standalone_fields() -> dict:
+        if not standalone:
+            return {}
+        return {"standalone": True, "server": server_state}
 
     if not want_listen:
         result = run_tts(
@@ -1667,9 +1704,17 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
             out=args.out,
         )
         if args.json or args.no_play or args.out:
-            print(json.dumps(result))
+            print(json.dumps({**result, **_standalone_fields()}))
         else:
-            print(json.dumps({"ok": True, "provider": result["provider"]}))
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "provider": result["provider"],
+                        **_standalone_fields(),
+                    }
+                )
+            )
         return OK
 
     # Auto-listen: half-duplex default, or overlap_prearm (see speak_and_listen)
@@ -1688,6 +1733,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
             "tts": getattr(exc, "tts_info", None),
             "error": str(exc),
             "listen": None,
+            **_standalone_fields(),
         }
         print(json.dumps(payload, indent=2 if args.json else None))
         return (
@@ -1706,6 +1752,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
                     "text": listened.text,
                     "tts": result,
                     "stream_id": listened.stream_id,
+                    **_standalone_fields(),
                 },
                 indent=2 if args.json else None,
             )
@@ -1718,6 +1765,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
         "text": listened.text,
         "meta_command": listened.meta_command,
         "for_event": getattr(args, "event_id", None),
+        **_standalone_fields(),
         "listen": {
             "provider": listened.provider,
             "duration_ms": listened.duration_ms,

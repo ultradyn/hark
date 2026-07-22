@@ -6,6 +6,13 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- feat(tts, B160): `hark tts --standalone` (alias `--once`) — explicit
+  one-shot marker guaranteeing the command runs from any working directory
+  with no hark server required. JSON output reports `standalone` and
+  `server` (`detected`/`none`). Playback coordination with a live server
+  (harkd / mode-a workers) applies automatically via the shared state-dir
+  locks; without a server, synthesis and playback run fully in-process.
+
 ## 0.1.10
 
 - feat(ambient/streaming, B121 + B122): `[ambient].streaming = true` is

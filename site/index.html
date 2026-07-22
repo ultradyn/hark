@@ -407,7 +407,7 @@
               <div><span class="prompt">›</span> <span class="cmd">/hark</span></div>
               <div class="dim"># or: use the hark skill · handsfree alias</div>
               <div class="out">agent: running hark doctor…</div>
-              <div class="out">agent: arming watch --for-monitor…</div>
+              <div class="out">agent: arming monitor --for-monitor…</div>
               <div class="out">agent: ambient listening · say hey hark</div>
               <div class="err">agent.blocked  work/w3:p2  R2</div>
               <div class="dim">▸ speaks the question · listens · answers</div>
@@ -427,7 +427,7 @@
           <p>
             Handsfree voice expects a coding CLI/agent that can run shell tools <em>and</em> keep a long-lived
             <strong style="color: var(--ink)">Monitor</strong> (or equivalent) on
-            <code>hark watch --for-monitor</code>. Without that, blocks won’t interrupt the session.
+            <code>hark monitor --for-monitor</code>. Without that, blocks won’t interrupt the session.
           </p>
         </div>
         <ul class="logo-strip" aria-label="Compatible agents and orchestrators">
@@ -592,7 +592,7 @@
                   <td class="ok">Plugin</td>
                   <td>
                     Any plugin that keeps a long-lived Monitor on
-                    <code>hark monitor</code> works. Example:
+                    <code>hark monitor --for-monitor</code> works. Example:
                     <a class="product-link" href="https://github.com/clankercode/pi-monitor">pi-monitor</a>
                     (<code>pi install npm:pi-monitor</code>) — watches background
                     processes and delivers matching output into the session.
@@ -617,7 +617,7 @@
                   <td class="ok">Plugin</td>
                   <td>
                     Any plugin that keeps a long-lived Monitor on
-                    <code>hark monitor</code> works. Example:
+                    <code>hark monitor --for-monitor</code> works. Example:
                     <a class="product-link" href="https://github.com/clankercode/opencode-monitor-bg">opencode-monitor-bg</a>
                     (<code>monitor_start</code> / <code>monitor_fetch</code>) —
                     runs background processes and delivers their output back into
@@ -706,7 +706,7 @@
               <div><span class="prompt">$</span> <span class="cmd">hark doctor</span></div>
               <div class="out">overall: OK · ambient armed · xAI OAuth</div>
               <div class="dim">…</div>
-              <div><span class="prompt">$</span> <span class="cmd">hark watch --for-monitor</span></div>
+              <div><span class="prompt">$</span> <span class="cmd">hark monitor --for-monitor</span></div>
               <div class="err">agent.blocked  default/w7:p1  risk=R2</div>
               <div><span class="prompt">$</span> <span class="cmd">hark ask --confirm always "Approve mesh peer?"</span></div>
               <div class="dim">▸ mic muted · Eve speaking</div>

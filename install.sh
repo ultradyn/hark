@@ -402,8 +402,8 @@ Ambient wake (optional, local Vosk model):
   cd "$SRC_DIR" && ./scripts/setup-ambient.sh
 
 Re-run this installer anytime to update (idempotent).
-Pin a release:  HARK_REF=v0.1.0 bash install.sh
-  or:           curl -fsSL https://hark.xk.io/install.sh | HARK_REF=v0.1.0 bash
+Pin a release:  HARK_REF=v0.1.10 bash install.sh
+  or:           curl -fsSL https://hark.xk.io/install.sh | HARK_REF=v0.1.10 bash
   (hosted install.sh is updated on each version tag; HARK_REF pins the git checkout)
 ────────────────────────────────────────
 EOF

@@ -7,7 +7,7 @@
 | **Cloud STT/TTS default** | Full dictation stays cloud-first (ADR-004). Local neural STT is **optional** (B072), never required. |
 | **No required local neural STT/TTS** | Do not require Whisper.cpp, Piper, etc. for a working install. |
 | **Max reuse of operator accounts** | Pluggable providers: xAI, OpenAI, Anthropic, Google, MiniMax |
-| **Local allowed** | Mic capture, RMS gate, classic WebRTC VAD, playback, espeak-ng emergency TTS; optional post-wake local STT (`faster_whisper`) |
+| **Local allowed** | Mic capture, RMS gate, playback, espeak-ng emergency TTS; optional post-wake local STT (`faster_whisper`) |
 | **Avoid as primary** | Playwright website “Dictate” (optional last-resort provider only) |
 | **Not for ambient wake** | Do **not** use Whisper / full STT for continuous ambient wake — that path is Vosk / Sherpa KWS (B069–B070). |
 
@@ -18,7 +18,7 @@
 | **xAI Grok** | Yes — REST + WS | Yes — REST + WS | **Yes** (Smart Turn) | **Grok Build OAuth** (`~/.grok/auth.json`) preferred; `XAI_API_KEY` fallback | **Default primary** |
 | **OpenAI** | Yes — transcriptions + Realtime Whisper | Yes | Yes | `OPENAI_API_KEY`; also Codex / OpenCode / Pi CLI stores | Strong fallback |
 | **Anthropic** | **No public STT API** as of plan time | Product voice / TTS not a general TTS API for this | N/A | Claude Code Max is UI voice (`/voice`) | **Orchestrator**, not STT engine. Provider stub: status `unsupported` with message; optional experimental browser/product bridge later |
-| **Google (Gemini / Antigravity)** | **Yes** — Gemini audio understanding (file → transcript); Cloud STT if GCP | Yes — Gemini TTS / Cloud TTS | Partial (Live API / Cloud streaming) | `GOOGLE_API_KEY` / `GEMINI_API_KEY` / ADC | Good batch path after VAD segment |
+| **Google (Gemini / Antigravity)** | **Yes** — Gemini audio understanding (file → transcript); Cloud STT if GCP | Yes — Gemini TTS / Cloud TTS | Partial (Live API / Cloud streaming) | `GOOGLE_API_KEY` / `GEMINI_API_KEY` | Good batch path after VAD segment |
 | **MiniMax** | **ASR not clearly public** on main API docs | **Yes** — T2A (`/v1/t2a_v2`) | TTS streaming yes | `MINIMAX_API_KEY`; also `mmx` CLI / Pi / OpenCode / legacy `~/.minimax` | Use for **TTS**; STT = probe + stub until official ASR endpoint confirmed |
 
 **Principle:** implement every *documented* speech API we can; for missing STT (Anthropic, MiniMax ASR), ship a provider module that `hark doctor` reports as **unavailable** with a clear reason, not a silent fallback.
@@ -121,7 +121,7 @@ Interactive login: `grok login` (OAuth at `auth.x.ai`). Tokens refresh automatic
 **handsfree must:**
 
 1. Prefer reading a **usable access token** from `~/.grok/auth.json` (same precedence Grok CLI uses: session token over API key).  
-2. Fall back to `XAI_API_KEY` / `providers.xai.api_key`.  
+2. Fall back to `XAI_API_KEY` (env only — no config key fallback).  
 3. On 401, print: run `grok login` or set `XAI_API_KEY`.  
 4. **Never log the token.**
 
@@ -170,17 +170,18 @@ Never log the token. ChatGPT OAuth access tokens may not work for all `api.opena
 | Claude Code `/voice` | Product UI; tokens free in product; **not** a stable external STT endpoint for `hark listen` |
 | Role in system | **Handsfree orchestrator** (Claude Code Max) calling `hark` tools |
 
-**Implementation:**
+**Implementation:** handled inline in `providers/resolve.py` — selecting
+`provider = "anthropic"` raises `ProviderUnsupported`:
 
 ```text
-providers/anthropic_stt.py  → raises ProviderUnsupported("anthropic: no public STT API; use xai|openai|google")
-providers/anthropic_tts.py  → same unless a public TTS API appears
+STT: anthropic: no public STT API; use xai|openai|google
+TTS: anthropic: no public TTS API for hark; use xai|openai|minimax|google
 ```
 
 `hark doctor` shows:
 
 ```text
-anthropic stt: unsupported (use for orchestration only)
+· anthropic: unsupported STT/TTS (use as orchestrator only)
 ```
 
 Optional Phase 4: experimental `provider = "claude-code-voice"` via product automation — **out of scope v1**.
@@ -209,7 +210,7 @@ Refs: Gemini audio understanding / `generateContent` with audio; Files API uploa
 
 - Gemini TTS speech generation and/or Cloud Text-to-Speech  
 
-Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY` (and document ADC for Cloud STT if used).
+Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY` (env only — ADC is not implemented).
 
 ---
 
@@ -217,8 +218,8 @@ Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY` (and document ADC for Cloud STT if us
 
 ### TTS (v1 — implement)
 
-- `POST https://api.minimax.io/v1/t2a_v2` (region variants: `minimaxi.chat`, `api-uw.minimax.io`)  
-- Models such as `speech-2.8-hd` / current Speech lineup — pin via config  
+- `POST https://api.minimax.io/v1/t2a_v2` (fallback region: `api-uw.minimax.io`)  
+- Model default `speech-2.6-hd` — pin via `MINIMAX_TTS_MODEL` env  
 - Auth discovery (env first, then CLI stores — fail-open):
   1. `MINIMAX_API_KEY` (+ optional `MINIMAX_GROUP_ID` header when required)
   2. MiniMax CLI **`mmx`**: `~/.mmx/config.json` (`api_key` or `oauth.access_token`; honors `MMX_CONFIG_DIR`)
@@ -249,7 +250,7 @@ Public docs emphasize **T2A (text→audio)**, not ASR. Community notes suggest A
 | Capture | 16 kHz mono PCM16; PortAudio / sounddevice / cpal |
 | Playback | `paplay` / `ffplay` / Pulse |
 | Gate | RMS open/close + hangover |
-| VAD | Optional classic `webrtcvad` |
+| VAD | None integrated (no `webrtcvad` dependency; endpointing is RMS-based) |
 | Devices | `hark devices` |
 
 ---

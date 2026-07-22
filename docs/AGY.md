@@ -49,8 +49,9 @@ outside the TUI can still inject.
 This writes `watch.jsonl` + `ambient.jsonl` under `~/.local/state/hark/`.
 Ambient also dual-writes HEP wake events (`ambient.prompt`, partials, …) to
 `ambient.jsonl` from inside the process, so `hark monitor` still sees finals if
-stdout was redirected to a restart log. Operator check: `ls -l --time-style=full-iso
-~/.local/state/hark/ambient.jsonl ~/.local/state/hark/ambient-restart.log` and
+stdout was redirected to a restart log (`ambient-restart.log` is an operator
+redirect convention — hark does not create that file). Operator check:
+`ls -l --time-style=full-iso ~/.local/state/hark/ambient.jsonl` and
 `rg '"kind":"ambient.prompt"' ~/.local/state/hark/ambient.jsonl | tail`.
 
 ### 3. Register agentapi target (once per conversation)

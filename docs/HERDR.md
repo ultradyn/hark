@@ -28,7 +28,8 @@ Each Hark **session** is a named handle to one Herdr server:
 | `id` | Stable id in events (`local`, `work`, `laptop`) |
 | `socket` | Unix socket path, or tunnel endpoint |
 | `ssh` | Optional `user@host` to establish tunnel |
-| `herdr_bin` | Optional remote `herdr` path |
+| `herdr_bin` | Optional `herdr` binary path; **local sessions only** — ignored when `ssh` is set (tunnel-backed ops use the local client against `HERDR_SOCKET_PATH`) |
+| `remote_socket` | Optional remote socket path for SSH/tunnel sessions (default: Herdr's standard socket) |
 | `label` | Spoken name (“work box”) |
 
 ### Local
@@ -50,7 +51,7 @@ Env: `HERDR_SESSION`, `HERDR_SOCKET_PATH`.
    # then:
    HERDR_SOCKET_PATH=/tmp/herdr-work.sock herdr agent list
    ```  
-   `hark` should manage tunnels for `[[herdr.sessions]]` with `ssh = "workbox"` (spawn ControlMaster, local sock path under `~/.cache/hark/tunnels/`).  
+   `hark` should manage tunnels for `[[herdr.sessions]]` with `ssh = "workbox"` (dedicated `ssh -N -L` child process, local sock path under `~/.cache/hark/tunnels/`).  
 3. **Remote CLI over SSH (fallback poll):**  
    ```bash
    ssh workbox herdr agent list
@@ -137,7 +138,7 @@ NDJSON over Unix socket. Subscribe when available:
 {"id":"sub1","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.agent_status_changed"}]}}
 ```
 
-Bootstrap: `session.snapshot` if present, else `agent list` poll.
+Bootstrap: `agent list` poll (production `hark watch` reconciles from `agent list` at startup and after reconnects; `session.snapshot` is used only by `prototype/herdr_event_monitor.py`).
 
 If subscribe missing on protocol 14, poll only — still correct multi-session via separate sockets.
 

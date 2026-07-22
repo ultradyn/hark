@@ -52,6 +52,8 @@ See [plans/P1-M2-answerability.md](plans/P1-M2-answerability.md).
 - Half-duplex: discard gated samples during TTS.  
 - Adaptive noise gate + min speech duration + min non-filler tokens.  
 - Reject transcripts that highly overlap the just-spoken TTS text.  
+- TTS playback posts a desktop notification with a **Skip** action by default
+  (`[tts] notify_skip`); the operator can stop playback mid-speech.  
 - Optional wake prefix later.  
 
 ### Confirmation policy
@@ -72,6 +74,18 @@ suppresses R0/R1 confirmation but does not bypass R2/R3. An explicit
 operator override and skips the second confirmation for every risk class,
 including R2/R3. Omitting the per-call option applies configured policy; the
 explicit override does not persist or weaken later asks.
+
+Spoken confirm replies are classified **fail-closed**
+(`src/hark/confirm_lexicon.py`, B151/B157/B159): the classifier returns
+`yes` / `no` / `unclear`, and only an unambiguous `yes` authorizes.
+**Negations win over affirmatives** — a transcript containing a negation
+(`no`, `don't`, `never mind`, `negative`, …) is never an approval.
+Defer/condition/hedge markers (`but`, `wait`, `hold on`, `if`, `unless`,
+`maybe`, `later`, …) block immediate approval, so multi-clause replies like
+"yes but wait" fail closed to `unclear`. Unicode Format (Cf) and Mark (M*)
+code points are stripped before matching, and quoted negative contractions
+plus a documented set of apostrophe variants are normalized, so zero-width or
+lookalike obfuscation cannot smuggle a fake "yes" past the readback.
 
 ### Agent-content distrust
 

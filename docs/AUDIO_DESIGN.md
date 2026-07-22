@@ -8,7 +8,7 @@ Adapted from prior `AUDIO_DESIGN.md` for Hark.
 - **answer windows** only after Hark asks (or after ambient activation);  
 - mute/discard during TTS;  
 - adaptive noise floor + speech hysteresis;  
-- activation phrases for ambient (`hey hark` / `hey herald`);  
+- activation phrases for ambient (12 defaults over `hey iris` / `hey mercury` / `hey hark` / `hey herald` plus `hello` / `okay` variants);  
 - **product-scoped** control phrases (no casual “cancel that” defaults);  
 - risk-based confirmation.
 
@@ -91,7 +91,7 @@ re-open with local pre-roll is the v1 path.
 | End (radio) | `okay hark send`, `end prompt`, `hark over` | mid-clause bare `over`, `stop` |
 | Soft end (radio, default on) | sentence-final `over`, `okay over`, `send it`, `that's all`, `over and out` | mid-clause `over the weekend`, `send it to staging` |
 | Cancel | `hark cancel`, `abort hark send` | `cancel that`, `never mind` |
-| Activation | `hey hark`, `hey herald` | bare `hark` mid-sentence |
+| Activation | `hey hark`, `hey herald`, `hey iris`, `hey mercury` (+ `hello` / `okay` variants; 12 defaults) | bare `hark` mid-sentence |
 
 Operators may add casual phrases if they accept false triggers.
 
@@ -378,7 +378,8 @@ names/phrases on config reload. Vosk remains default until dogfood. Operator gui
 | `surface_timeouts` | `true` | When **on**, continuous ambient surfaces `ambient.timeout` each idle cycle (monitor NDJSON + syslog) as a heartbeat. When **off**, continuous idle cycles stay quiet (no timeout event) — turn off for noisy long-running handsfree; leave on if you want cache-warmup / liveness visibility. Alias: `emit_timeout_events`. One-shot `hark ambient --once` always emits timeout when nothing is heard. |
 | `listen.pre_roll_ms` | `300` | PCM kept from before speech-open on answer/post-wake capture (clamped **250–500**). Complements radio **post-cut** segment pad (B075). |
 
-CLI: `hark ambient` (forces a wake+listen cycle). Continuous: `hark ambient` without `--once`.
+CLI: `hark ambient --once` runs a single wake+listen cycle then exits. Bare
+`hark ambient` is the continuous handsfree loop (default `--loop`).
 
 ### Larger Vosk models (optional `model_path`)
 
@@ -447,6 +448,13 @@ While TTS is still finishing (and often while the mic is still muted), frames ar
 **discarded**. After TTS ends, another `overlap_discard_ms` of audio is dropped
 so residual acoustic echo does not open the energy gate or reach STT. Speech
 after the discard window is kept as usual.
+
+## TTS playback controls
+
+| Feature | Default | Notes |
+|---------|---------|-------|
+| `[tts] notify_skip` (B161) | `true` | Desktop notification with the full TTS text + a **Skip** action while TTS plays; clicking Skip stops playback. Silently disabled when `notify-send` / a session bus is unavailable. |
+| `hark tts --standalone` / `--once` (B160) | opt-in flag | One-shot TTS run that works from any directory with no hark server required; JSON output reports whether a background server was detected (its playback coordination applies automatically when live). |
 
 ## False-trigger defenses
 

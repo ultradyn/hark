@@ -58,7 +58,7 @@ Every SSE `data:` line is one envelope (`stream.schema.json`):
   "schema": "hark.dashboard.v1",
   "type": "event",
   "source": "watch",
-  "cursor": "watch:184,ambient:42,system:9051,usage:77,delivery:12",
+  "cursor": "watch:184,ambient:42,system:9051,usage:77,bound:5,delivery:12,serve:9",
   "payload": { "schema": "hark.event.v1", "kind": "agent.blocked", "…": "…" }
 }
 ```
@@ -98,11 +98,11 @@ First message on every stream connect:
   "schema": "hark.dashboard.v1",
   "type": "hello",
   "source": "serve",
-  "cursor": "watch:184,ambient:42,system:9051,usage:77,delivery:12",
+  "cursor": "watch:184,ambient:42,system:9051,usage:77,bound:5,delivery:12,serve:9",
   "payload": {
     "kind": "serve.hello",
     "server": "hark-serve-py",
-    "version": "0.1.6",
+    "version": "0.1.0",
     "sources": ["watch", "ambient", "system", "usage", "delivery", "serve"]
   }
 }
@@ -164,7 +164,7 @@ appropriate HTTP status (`error.schema` in `actions.schema.json`).
 | `GET  /api/v1/health` | server + doctor summary | `health.schema.json` |
 | `GET  /api/v1/config` | redacted config snapshot | `config.schema.json` |
 | `GET  /api/v1/events?since=<cursor>&sources=a,b&limit=N` | backfill page | `events-page.schema.json` |
-| `GET  /api/v1/stream?sources=a,b&replay=N` | SSE live stream | `stream.schema.json` per `data:` line |
+| `GET  /api/v1/stream?sources=a,b` | SSE live stream; resume via `Last-Event-ID` header or `since=<cursor>` | `stream.schema.json` per `data:` line |
 | `GET  /api/v1/herdr/sessions` | sessions/panes/status map | `herdr-sessions.schema.json` |
 | `GET  /api/v1/herdr/context/<session>/<pane>?lines=N` | recent pane context | `context.schema.json` |
 | `GET  /api/v1/deliveries` | pending queue + recent outcomes | `deliveries.schema.json` |
@@ -207,8 +207,14 @@ delivery to that event's recorded target.
 - Server MUST re-validate pane revision + question fingerprint before sending
   (same checks as `hark answer`) and MUST record the outcome idempotently.
 - Response `status`: `delivered` | `rejected` (stale/unknown/policy) |
-  `uncertain` (write may have landed). Rejections include `error.code`
-  `stale_target` | `unknown_event` | `already_delivered` | `bad_request`.
+  `uncertain` (write may have landed). Rejections report the reason as a
+  top-level `"detail"` string (not an `error.code` object):
+  `stale_revision` | `fingerprint_mismatch` | `missing_question_fingerprint` |
+  `fingerprint_unavailable` | `pane_gone` | `not_compatible` |
+  `unknown_event` | `already_delivered` | `bad_request`
+  (see `src/hark/answerability/reasons.py`). Malformed requests (missing
+  `event_id`, wrong field types) use the standard error envelope with
+  `bad_request`.
 
 ### `POST /api/v1/prompt`
 
@@ -223,15 +229,18 @@ orchestrator picks it up with its normal judgment. Response includes the new
   `POST /api/v1/dictation/transcribe` with the audio as the request body
   (`Content-Type: audio/webm`, `audio/mp4`, `audio/ogg`, or `audio/wav`).
   Server transcodes to WAV (ffmpeg) if needed, runs the configured STT
-  provider, returns `{ok, text, provider, latency_ms}`. `501
+  provider, returns `{ok, text, provider, latency_ms, audio_ms}`. `501
   {"error":{"code":"transcode_unavailable"}}` when ffmpeg is missing and the
-  body is not WAV.
+  body is not WAV; `400 bad_audio` when transcode fails; `502 stt_failed`
+  when the STT provider errors.
 - **Host capture**: `POST /api/v1/dictation/start {"mode":"host"}` drives the
   local `hark listen` flow (mic lease + ambient pause). Progress and the final
   transcript arrive on the stream as `serve.dictation` payloads
   (`state: recording|transcribing|done|failed|cancelled`, `text?`).
   `stop`/`cancel` control the capture. `409 {"error":{"code":"mic_busy"}}`
-  when the mic lease is held.
+  when the mic lease is held; `409 capture_active` when a host dictation is
+  already recording; `409 no_capture` on `stop`/`cancel` with no capture in
+  progress.
 - Submission of a transcript is a separate, explicit `/answer` or `/prompt`
   call after operator review. Dictation endpoints never deliver.
 
@@ -282,6 +291,9 @@ require_token = false   # force auth even on localhost
 tls_terminated = false  # set true behind tailscale serve / reverse proxy (Secure cookies)
 history_limit = 2000    # default backfill window per source
 ```
+
+When `token` is empty in `config.toml`, the server falls back to the
+`HARK_DASHBOARD_TOKEN` environment variable.
 
 ## Redaction (normative)
 

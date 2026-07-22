@@ -81,9 +81,9 @@ def test_stream_has_hello_first() -> None:
 def test_cursor_format() -> None:
     pat = re.compile(
         r"^[a-z][a-z0-9_-]*:[0-9]{1,19}"
-        r"(?:@(?:[A-Za-z0-9._-]+|[a-f0-9]{32}~[a-f0-9]{32}))?"
+        r"(?:@(?:[A-Za-z0-9._-]+|[a-f0-9]{32}~[a-f0-9]{32}(?:~[0-9]{1,19})?))?"
         r"(?:,[a-z][a-z0-9_-]*:[0-9]{1,19}"
-        r"(?:@(?:[A-Za-z0-9._-]+|[a-f0-9]{32}~[a-f0-9]{32}))?)*$"
+        r"(?:@(?:[A-Za-z0-9._-]+|[a-f0-9]{32}~[a-f0-9]{32}(?:~[0-9]{1,19})?))?)*$"
     )
     for row in STREAM_ROWS:
         assert pat.fullmatch(row["cursor"]), row["cursor"]

@@ -1,14 +1,18 @@
 ---
+claimed_at: "2026-07-22T16:14:21Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-07-22T15:29:34Z"
 depends_on: []
 estimate_hours: 1
 id: B161
 priority: high
-status: pending
+started_at: "2026-07-22T16:14:21Z"
+status: in_progress
 tags: []
 title: When TTS is playing, we should open a notification that allows the user to skip it. The notification should also have the entire question or TTS text.
-updated_at: "2026-07-22T15:29:34Z"
+updated_at: "2026-07-22T16:14:21Z"
 ---
 
 When TTS is playing, we should open a notification that allows the user to skip it. The notification should also have the entire question or TTS text.

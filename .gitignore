@@ -31,6 +31,9 @@ site/_review/
 
 .worktrees/
 
+# docs-audit-and-fix run state
+.docs-audit/
+
 # Curated TTS comparison audio (regenerate via scripts/gen-tts-samples.py)
 assets/tts/samples/**/*.mp3
 assets/tts/eve/

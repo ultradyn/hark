@@ -7,7 +7,8 @@ Scores fixtures/voice/wake/cases.jsonl with:
   - vosk       — optional (vosk package + small en-us model)
   - sherpa_kws — optional (B070 backend + KWS model); skipped when absent
 
-Never requires Sherpa for a successful exit when --allow-skip is set (default).
+Vosk/Sherpa are skipped by default when unavailable; pass --require-vosk /
+--require-sherpa to fail instead (exit 2).
 
 Usage:
   uv run python scripts/eval-wake-fixtures.py

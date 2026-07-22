@@ -9,12 +9,14 @@ shared fixture failures rather than “works in one language only.”
 ```text
 fixtures/
   README.md                 # this file
-  MANIFEST.json             # catalog + sha256 of key artifacts
+  MANIFEST.json             # catalog + sha256 of every fixture file
   text/                     # pure text goldens (no audio, no network)
     wake_match.jsonl        # activation / fuzzy wake
     radio_end.jsonl         # radio end/cancel phrases
     fingerprint.jsonl       # question fingerprint stability
     risk.jsonl              # risk classification
+    false_done.jsonl        # false "done" vs pending menus (answerability)
+    subagent_tasks.jsonl    # busy subagent task-list panes
   voice/
     README.md               # capture method + B071 eval harness notes
     wake/
@@ -26,7 +28,10 @@ fixtures/
     syslog/                 # internal system.jsonl-shaped samples
   usage/
     sample.jsonl            # tts/stt usage ledger samples
+  dashboard/                # webui fixtures mode goldens (VITE_FIXTURES=1)
+    stream.jsonl + *.json   # replayed by webui/src/lib/stream.ts, no backend
   herdr/                    # redacted Herdr agent-list + watch wire (B005)
+    README.md               # capture method + contract notes
 ```
 
 ## What each family is for
@@ -38,6 +43,7 @@ fixtures/
 | `events/hep` | Schema shape, partial HOLD, stream supersede | Event ingest / bus consumers |
 | `events/syslog` | Timeline wake→prompt | Optional internal log parsers |
 | `usage` | Ledger fields | Metrics parity |
+| `dashboard` | Webui fixtures mode (`VITE_FIXTURES=1`): stream replay + page snapshots | — |
 | `herdr` | Agent list / watch wire (redacted live) | Socket/CLI client parity (`parse_agent_list`) |
 
 **Media ducking (I002 / B044–B047):** realistic `pactl list sink-inputs` blobs

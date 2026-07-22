@@ -100,7 +100,8 @@ Cloud remains product default (`stt.provider = "auto"`, ADR-004). **Do not** use
 Whisper-family models for continuous ambient wake (name mangling + always-on cost).
 
 ```bash
-pip install 'hark[local-stt]'   # faster-whisper
+uv sync --extra local-stt          # faster-whisper (from a repo checkout)
+# or: pip install '.[local-stt]'
 ```
 
 ```toml

@@ -7,7 +7,7 @@
  │  Local machine                                                 │
  │                                                                │
  │  Handsfree orchestrator (outside Herdr)                        │
- │       ▲  Monitor: hark watch --for-monitor                     │
+ │       ▲  Monitor: hark monitor --for-monitor                   │
  │       │  tools: context, ask, answer, keys                     │
  │       │                                                        │
  │  ┌────┴─────┐     optional later      ┌─────────────────────┐  │
@@ -151,7 +151,7 @@ Producers append state JSONL; consumers share one deep follower
 | **Dashboard adapter** | Source map (`watch`/`ambient`/…/`bound`+`delivery`), envelope transforms, SSE resume |
 | **Presentation** | **Once** at the consumer edge that needs compact lines (`present_for_monitor`); `compact_mode_a_event` is an alias |
 
-**Cursor token** (dashboard SSE compatible): legacy `key:seq` remains accepted; emitted positions use `key:seq@incarnation~checkpoint~byte_offset`. Design note: [plans/P1-M5-state-feed-follower.md](plans/P1-M5-state-feed-follower.md).
+**Cursor token** (dashboard SSE compatible): legacy `key:seq` remains accepted; emitted positions use `key:seq@incarnation~checkpoint[~byte_offset]` (the `byte_offset` component is optional). Design note: [plans/P1-M5-state-feed-follower.md](plans/P1-M5-state-feed-follower.md).
 
 ## Monitor / harness compatibility
 

@@ -33,7 +33,7 @@ Not a general voice assistant. An LLM is **not** required on the critical path f
 
 | Mode | Priority | Description |
 |------|----------|-------------|
-| **A — Agent + tools** | **v1 only path** | Monitor on `hark watch`; agent runs `context` / `ask` / `answer` / `keys` |
+| **A — Agent + tools** | **v1 only path** | Monitor on `hark monitor --for-monitor`; agent runs `context` / `ask` / `answer` / `keys` |
 | **B — `harkd`** | **Post-v1** | Same library; full voice loop without orchestrator — **not in v1** |
 | **C — one-shot** | Always | `tts`, `listen`, freeform `reply` for debug |
 
@@ -46,11 +46,13 @@ Handsfree requires a long-lived wake path on `hark monitor --for-monitor` (or at
 ```
 hark doctor
 hark watch [--session ID]... [--statuses blocked,done] [--for-monitor] [--transport auto|socket|poll]
-hark status [--session ID]... [--status …] [--read-excerpt] [--json]
+hark monitor [--for-monitor] [--full] [--replay N] [--kinds KINDS]   # unified wake feed (Herdr + ambient)
+hark status [--session ID]... [--status …] [--json]
 hark queue [--json]                    # pending interactions if tracked
-hark context <target> [--lines N] [--source …]
+hark context <target> [--lines N]
 hark tts … [--standalone]            # one-shot marker: works from any cwd, no server required; reports server detection (--once alias, B160)
 hark listen … [--end-mode silence|radio]
+hark listen-end [--cancel] [--stream-id ID]   # finalize/cancel an active stream from partials
 hark ask … [--confirm auto|always|never] [--end-mode silence|radio]
 hark reply <target> …                  # freeform (debug / simple)
 hark keys <target> <key> [key…]
@@ -185,7 +187,7 @@ detect_false_done = true   # done/idle + menu-like pane → agent.needs_input
 [audio]
 # adaptive gate params — see AUDIO_DESIGN
 half_duplex = true
-post_tts_guard_ms = 350
+post_tts_guard_ms = 100
 # listen_pre_arm_ms = 300
 # overlap_prearm = false       # true: concurrent capture near TTS end
 # overlap_discard_ms = 150     # echo discard after TTS ends (overlap mode)
@@ -211,7 +213,7 @@ provider = "auto"
 
 [tts]
 provider = "auto"
-max_chars = 500
+max_chars = 0   # 0 = unlimited (soft word-boundary cut + tts.truncated HEP if exceeded)
 # playback_speed = 1.0  # pitch-preserving tempo; non-default needs ffmpeg
 
 [confirm]

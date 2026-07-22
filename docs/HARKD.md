@@ -14,7 +14,7 @@ Related: [ARCHITECTURE.md](ARCHITECTURE.md) · [SPEC.md](SPEC.md) §3 · [NAMING
 
 | Piece | Role |
 |-------|------|
-| `hark watch --for-monitor` | Long-lived HEP feed of `blocked` / `done` (required Monitor) |
+| `hark monitor --for-monitor` | Unified HEP feed of `blocked` / `done` + ambient wake events (required Monitor; `hark watch` alone misses ambient) |
 | `hark ambient` | Optional local wake (`hey hark` / …) → cloud STT prompt path |
 | `hark context` / `ask` / `answer` / `keys` / `tts` / `listen` | Tools the orchestrator (or human) invokes |
 | Skill `hark` / `handsfree` | Judgment: false done, menus, summaries, when to dig in |

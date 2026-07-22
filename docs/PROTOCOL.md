@@ -25,7 +25,7 @@ Every stdout line from `hark watch` / event bus is one JSON object.
     "agent_session": null,
     "friendly_name": "auth reviewer"
   },
-  "state": { "from": "working", "to": "blocked", "blocked_epoch": 3 },
+  "state": { "from": "working", "to": "blocked", "blocked_epoch": null },
   "question": {
     "kind": "permission",
     "text": "Allow running rm -rf build/?",
@@ -77,6 +77,11 @@ Consumers **MUST ignore unknown fields**.
 | `ambient.prompt` | Final ambient operator prompt (`final=true`) — classic radio final, or explicit conversation finalize |
 | `ambient.conversation_end` | Conversation session idle/shutdown end (no new prompt; wake re-armed) |
 | `ambient.cancelled` | Operator cancelled mid-capture / conversation |
+| `ambient.armed` | Ambient listener started; wake word armed |
+| `ambient.wake_near_miss` | Near-miss wake detection below threshold (diagnostics) |
+| `ambient.wake_learned` | New wake phrase learned / added |
+| `ambient.error` | Recoverable/fatal ambient error |
+| `ambient.reloaded` | Ambient config / wake model reloaded |
 
 ### Classic radio HOLD (`ambient.streaming = false`)
 
@@ -170,10 +175,11 @@ so orchestrators can answer menus without a mandatory second fetch:
 ## Dedupe key
 
 ```text
-(session_id, pane_id, agent_session?, blocked_epoch, question_fingerprint)
+(session_id, pane_id, kind/status, question_fingerprint)
 ```
 
-Reconnect/replay must not re-speak identical asks.
+`agent_session` and `blocked_epoch` are always `null` in v1 and are **not** part
+of the key. Reconnect/replay must not re-speak identical asks.
 
 ## Debounce
 

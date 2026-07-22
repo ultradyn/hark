@@ -39,13 +39,13 @@ python prototype/herdr_event_monitor.py --socket "$HERDR_SOCKET_PATH"
 
 Always run from **latest checkout** (`uv run hark`), not a stale global install.
 
-## Phase 2 — Harden (still Mode A)
+## Phase 2 — Harden (still Mode A; done)
 
-- Dedupe/debounce integration tests  
-- Idempotent delivery store (sqlite or jsonl)  
-- Echo-overlap rejection tests  
-- Doctor redaction  
-- Acceptance suite  
+- [x] Dedupe/debounce integration tests  
+- [x] Idempotent delivery store (jsonl — `src/hark/delivery.py`)  
+- [x] Echo-overlap rejection tests  
+- [x] Doctor redaction  
+- [x] Acceptance suite ([ACCEPTANCE.md](ACCEPTANCE.md))  
 
 ## Phase 3 — Native CLI
 

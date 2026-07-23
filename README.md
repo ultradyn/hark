@@ -62,6 +62,7 @@ The verse is playful; **routing and confirmation are not.** Site: **[hark.xk.io]
 | [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | Acceptance criteria |
 | [schemas/event-v1.schema.json](schemas/event-v1.schema.json) | Event JSON Schema |
 | [skill/hark/SKILL.md](skill/hark/SKILL.md) | Primary agent skill |
+| [site/setup.html](site/setup.html) / [hark.xk.io/setup.html](https://hark.xk.io/setup.html) | Dedicated first-run setup checklist |
 | [skill/hark/SETUP.md](skill/hark/SETUP.md) | First-run CLI setup (`hark setup`) |
 | [skill/hark/POST_INSTALL.md](skill/hark/POST_INSTALL.md) | After skills/CLI install checklist |
 | [skill/hark/WAKE_STT.md](skill/hark/WAKE_STT.md) | Local wake engines (Vosk / Sherpa) |

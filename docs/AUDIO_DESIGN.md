@@ -8,11 +8,18 @@ Adapted from prior `AUDIO_DESIGN.md` for Hark.
 - **answer windows** only after Hark asks (or after ambient activation);  
 - mute/discard during TTS;  
 - adaptive noise floor + speech hysteresis;  
-- activation phrases for ambient (12 defaults over `hey iris` / `hey mercury` / `hey hark` / `hey herald` plus `hello` / `okay` variants);  
+- activation phrases for ambient (exact 12 defaults: `hey`/`hello` × iris/mercury/hark/herald, plus `okay iris` / `okay mercury` / `okay hark` / `ok hark` — see `wake.DEFAULT_ACTIVATION_PHRASES`; names-mode also matches structural `okay herald` / `ok iris` etc.);  
 - **product-scoped** control phrases (no casual “cancel that” defaults);  
 - risk-based confirmation.
 
 ## Capture pipeline (answer window)
+
+Production listen goes through **Answer Window** (`hark.answer_window`):
+`speech.run_listen` → `policy_from_config` (profiles `bound_answer` /
+`post_wake` / `confirm`) → `open_answer_window` → `SilenceSession` or
+`RadioSession`. Low-level PCM/energy stays in `audio/capture.py`; end/cancel/
+soft phrases in `listen_end.py`. See [ARCHITECTURE.md](ARCHITECTURE.md) § Answer
+Window and [ENDPOINTING.md](ENDPOINTING.md) for the silence strategy seam.
 
 ```text
 device
@@ -88,10 +95,10 @@ re-open with local pre-roll is the v1 path.
 
 | Role | Default examples | Avoid as defaults |
 |------|------------------|-------------------|
-| End (radio) | `okay hark send`, `end prompt`, `hark over` | mid-clause bare `over`, `stop` |
-| Soft end (radio, default on) | sentence-final `over`, `okay over`, `send it`, `that's all`, `over and out` | mid-clause `over the weekend`, `send it to staging` |
-| Cancel | `hark cancel`, `abort hark send` | `cancel that`, `never mind` |
-| Activation | `hey hark`, `hey herald`, `hey iris`, `hey mercury` (+ `hello` / `okay` variants; 12 defaults) | bare `hark` mid-sentence |
+| End (radio) | full `listen_end.DEFAULT_END_PHRASES`: `okay hark send`, `ok hark send`, `hark send it`, `hark send`, `end prompt`, `end of prompt`, `hark over` | mid-clause bare `over`, `stop` |
+| Soft end (radio, default on) | sentence-final `over`, `okay over`, `send it`, `that's all`, `over and out` (see soft-end table) | mid-clause `over the weekend`, `send it to staging` |
+| Cancel | full `listen_end.DEFAULT_CANCEL_PHRASES`: `hark cancel`, `cancel hark`, `abort hark send`, `hark abort` | `cancel that`, `never mind` |
+| Activation | exact 12: `hey`/`hello` × iris/mercury/hark/herald + `okay iris` / `okay mercury` / `okay hark` / `ok hark` | bare `hark` mid-sentence |
 
 Operators may add casual phrases if they accept false triggers.
 
@@ -102,11 +109,11 @@ pauses. Finish a turn with any of:
 
 | Say… / do… | Kind |
 |------------|------|
-| **`okay hark send`** / **`hark over`** / **`end prompt`** | Product end (always on) |
+| **`okay hark send`** / **`ok hark send`** / **`hark send`** / **`hark send it`** / **`end prompt`** / **`end of prompt`** / **`hark over`** | Product end (always on; full default tuple) |
 | **`over`** (utterance-final prosign) / **`okay, over`** / **`okay over`** | Soft end (default on; always finish, never cancel) |
 | **`send it`**, **`that's all`**, **`over and out`**, **`message done`** | Soft end (default on) |
 | Stay quiet ~**6.3 s** after you have started speaking | Idle auto-finish (default 3× `end_silence_s`; B074) |
-| **`hark cancel`** | Abort without using the transcript |
+| **`hark cancel`** / **`cancel hark`** / **`abort hark send`** / **`hark abort`** | Abort without using the transcript |
 
 The orchestrator also **must** run `hark listen-end` when a partial clearly shows
 you are done (backup if soft-end misses). Skill bootstrap reminds operators:
@@ -126,8 +133,11 @@ for the evaluation, the strategy seam, and config.
 ```toml
 [listen]
 end_mode = "radio"
-end_phrases = ["okay hark send", "end prompt", "hark over"]
-cancel_phrases = ["hark cancel", "cancel hark", "abort hark send"]
+# Defaults match listen_end.DEFAULT_END_PHRASES / DEFAULT_CANCEL_PHRASES
+# (omit these keys to keep shipped tuples; override only to replace):
+# end_phrases = ["okay hark send", "ok hark send", "hark send it", "hark send",
+#                "end prompt", "end of prompt", "hark over"]
+# cancel_phrases = ["hark cancel", "cancel hark", "abort hark send", "hark abort"]
 strip_phrase = true
 max_listen_s = 300
 # Quiet before interim STT / ambient.partial (radio only; does not finalize)
@@ -148,13 +158,14 @@ Env: `HARK_LISTEN_END_MODE=radio`. Disable soft end with
 |--------|------|---------|------|
 | `end_silence_s` | **silence** only | 2.1 s | Quiet that **ends** the answer window |
 | `radio_partial_silence_s` | **radio** only | 0.6 s | Quiet that ends a **segment** → cloud STT → optional `ambient.partial` (HOLD) |
-| `radio_idle_end_silence_s` | **radio** answer only | **3× `end_silence_s`** (~6.3 s) | After speech has opened at least once, continuous quiet this long **auto-finishes** (soft-end path, not cancel). Before first open: no-op (initial timeout / nudges). **Streaming (B112):** effective idle clamped to `max(end_silence_s, streaming_ack_min_quiet_s)` |
+| `radio_idle_end_silence_s` | **radio** answer only | **3× `end_silence_s`** (~6.3 s) | After speech has opened at least once, continuous quiet this long **auto-finishes** (soft-end path, not cancel). Before first open: no-op (initial timeout / nudges). **Conversation streaming (B112):** effective idle clamped to `max(end_silence_s, streaming_ack_min_quiet_s)` for classic radio finalize paths |
 | `radio_segment_pad_ms` | **radio** only | 250 | Silence pad each side of a segment before STT (B075); does not change cut timing |
 | `radio_segment_overlap_ms` | **radio** only | 300 | Real PCM lookback from the prior segment into the next STT window (B085); prefers captured samples over silence pad for boundary phonemes |
 | `radio_end_silence_s` | legacy | 2.5 s | Kept for config BC; segment cadence is `radio_partial_silence_s` |
 | `stream_partials` | radio | `true` | Emit interim events when segment text grows |
-| `ambient.streaming` | ambient | `false` | When true, `ambient.partial` instructions allow short live TTS (B098); default HOLD; also clamps radio idle finalize (B112) |
-| `ambient.streaming_ack_min_quiet_s` | ambient | `2.0` | B105: when streaming, TTS play waits for this many seconds of operator quiet (or listen end); also lower bound for streaming radio idle clamp |
+| `ambient.streaming` | ambient | `false` | When true: **conversation mode** (B098/B121/B122) — open post-wake session; quiet ends a **turn** (`ambient.turn`; full TTS OK). Default false = classic radio HOLD + re-wake after each `ambient.prompt` |
+| `ambient.streaming_ack_min_quiet_s` | ambient | `2.0` | B105: quiet that ends a conversation **turn** and gates TTS play; also lower bound for streaming radio idle clamp |
+| `ambient.streaming_conversation_idle_s` | ambient | `45` | B122: after a turn, wait this long for more speech before re-arming wake (no re-saying iris/hark). Only when `streaming=true` |
 
 Radio does **not** finalize on short silence alone. After each short quiet
 (`radio_partial_silence_s`), Hark runs STT on accumulated audio: if an
@@ -164,29 +175,41 @@ opened**, if the operator stays quiet longer than the effective
 `radio_idle_end_silence_s` (~6.3 s classic; ~`end_silence_s` when
 `ambient.streaming` is on — B112), the answer window auto-finishes so forgotten
 radio closers do not leave the mic open indefinitely (B074). Short thinking
-pauses (~2 s) remain open in classic radio; streaming prefers prompt delivery
-after a natural pause. Before the first open, long quiet still uses the
-existing initial timeout / nudge path. Shorter `radio_partial_silence_s` → more
-frequent partials for the orchestrator; raise it (e.g. 1.0–1.5) to cut STT cost
-when pauses are long. Do **not** lower `end_silence_s` to chase radio partials —
-that would change normal silence-mode answer windows.
+pauses (~2 s) remain open in classic radio; conversation streaming prefers
+turn delivery after a natural pause. Before the first open, long quiet still
+uses the existing initial timeout / nudge path. Shorter
+`radio_partial_silence_s` → more frequent partials for the orchestrator; raise
+it (e.g. 1.0–1.5) to cut STT cost when pauses are long. Do **not** lower
+`end_silence_s` to chase radio partials — that would change normal silence-mode
+answer windows.
 
-#### Ambient streaming mode (B098 + B105 quiet gate + B112 latency)
+#### Ambient conversation / streaming mode (B098 + B105 + B112 + B121/B122)
 
 ```toml
 [ambient]
-# streaming = false                 # default: HOLD on ambient.partial (no live TTS)
-# streaming = true                  # short live TTS acks allowed on partials; pane still waits for final
-# streaming_ack_min_quiet_s = 2.0   # B105: hold play until operator quiet ≥ this (or listen ends)
+# streaming = false                      # default: classic radio HOLD + re-wake after ambient.prompt
+# streaming = true                       # conversation mode: open post-wake session (not short-acks-only)
+# streaming_ack_min_quiet_s = 2.0        # quiet that ends a *turn* + B105 TTS play gate
+# streaming_conversation_idle_s = 45.0   # long idle before re-arming wake (B122)
 ```
 
-Policy is carried on each `ambient.partial` as `streaming` + optional
-`ack_min_quiet_s` + `warning` / `instructions` (see [PROTOCOL.md](PROTOCOL.md)).
-When streaming is on, `hark tts` **enforces** the quiet gate: capture publishes
-operator speech energy; play + mic mute wait until quiet ≥
-`streaming_ack_min_quiet_s` (default 2s) or the listen ends, so continuous speech
-is not barged into. HOLD mode still waits for capture idle (B097). Half-duplex
-mute-during-TTS still applies in the allowed quiet window.
+When `streaming=true`, ambient routes to an open **post-wake conversation**
+(`ambient._conversation_after_wake`): operator quiet ≥
+`streaming_ack_min_quiet_s` ends a **turn** (`ambient.turn` / partials; **full
+TTS reply OK** — not radio-with-acks-only). Soft/end phrases are **optional**
+for explicit session finalize (`ambient.prompt` / conversation end); they are
+not required each turn. Long idle (`streaming_conversation_idle_s`, default
+45s) emits `ambient.conversation_end` and re-arms wake. Classic radio
+(`streaming=false`) keeps HOLD on partials and re-wakes after each
+`ambient.prompt`. See [PROTOCOL.md](PROTOCOL.md) for HEP kinds and
+`skill/hark/SKILL.md` for operator playbook.
+
+Policy is carried on each `ambient.partial` / `ambient.turn` as `streaming` +
+optional `ack_min_quiet_s` + `warning` / `instructions`. When streaming is on,
+`hark tts` **enforces** the quiet gate: capture publishes operator speech
+energy; play + mic mute wait until quiet ≥ `streaming_ack_min_quiet_s`
+(default 2s) or the turn listen ends. HOLD mode still waits for capture idle
+(B097). Half-duplex mute-during-TTS still applies in the allowed quiet window.
 
 **Silence end_mode + streaming (B108):** silence answer windows still finalize on
 `end_silence_s` after speech stops — streaming does **not** disable silence
@@ -200,17 +223,14 @@ endpointing. Two guards:
    While a silence-mode listen is active, TTS waits for capture end (HOLD) so
    mid-capture mute cannot freeze silence clocks (B084) and race finalize.
 
-Radio + streaming keep pause-gated short acks; use end phrases / soft end /
-`radio_idle_end_silence_s` / `hark listen-end` for radio turn end.
-
-**Prompt latency (B112 / GH #6):** with streaming on, radio post-speech idle
-auto-finish uses
+**Turn latency (B112 / GH #6):** with streaming on, quiet ≥
+`streaming_ack_min_quiet_s` ends the turn so the orchestrator can speak a full
+answer without waiting for classic ~6.3s radio idle. Classic radio post-speech
+idle still uses
 `min(radio_idle_end_silence_s, max(end_silence_s, streaming_ack_min_quiet_s))`
-so `ambient.prompt` arrives after a natural pause (~2.1s) instead of the classic
-~6.3s hold. Partials still fire on `radio_partial_silence_s`. Silence-mode
-auto-finalize while streaming is coordinated with B108 / GH #2 (endpointing).
-Mute holds **freeze** (not wipe) silence progress so mid-listen acks do not
-restart the quiet window.
+when streaming clamps finalize. Partials still fire on
+`radio_partial_silence_s`. Mute holds **freeze** (not wipe) silence progress so
+mid-listen TTS does not restart the quiet window.
 
 #### Radio segment boundary pad (B075) + ring overlap (B085)
 
@@ -240,8 +260,8 @@ While Hark holds the mic muted for half-duplex TTS (`mic_muted_during_tts` /
 - `max_s` capture budget
 
 Silence progress is **preserved** across a clean mute (no operator energy).
-Streaming TTS acks mid-listen therefore no longer wipe a nearly-complete quiet
-window and delay `ambient.prompt` (B112). Silence counters reset only when
+Conversation-mode TTS mid-listen therefore no longer wipes a nearly-complete quiet
+window or delays the next turn (B112). Silence counters reset only when
 capture still sees speech-level energy during mute or the post-unmute
 `mute_edge_pad_ms` window (logged as `listen.speech_during_mute` once per hold).
 
@@ -288,11 +308,13 @@ closers without agent intervention (radio dogfood).
    `radio_partial_silence_s` quiet — trailing silence required).
 2. Phrase is **utterance-final**: whole transcript equals the phrase, or the
    phrase is a word-bounded suffix after normalize + trailing punct strip.
-3. **Trailing politeness is ignored** (B106/B107): `thank you`, `and thank you`,
-   `thanks`, `thankyou` (STT collapse), `please`, `cheers`, and a few similar
-   closers are stripped before matching so `"… over thank you"` /
-   `"… that's all, thanks"` / `"… over and thank you"` still finalize.
-   Politeness alone is not an end phrase.
+3. **Trailing politeness is ignored** (B106/B107): strippers match
+   `listen_end.DEFAULT_TRAILING_COURTESY` — including `thank you` / `thanks` /
+   `thankyou` / `thank u` / `thx` / `ty` / `please` / `cheers` / `ta` /
+   `much appreciated` / longer “very/so much” forms, and similar — before
+   matching so `"… over thank you"` / `"… that's all, thanks"` /
+   `"… over and thank you"` still finalize. Politeness alone is not an end
+   phrase.
 4. Cancel and product `end_phrases` always win over soft phrases.
 5. Mid-clause text does **not** match — e.g. `"that's all I know about X"`
    never finishes on `"that's all"`, and `"please just send it to production"`
@@ -376,6 +398,15 @@ names/phrases on config reload. Vosk remains default until dogfood. Operator gui
 | `ring_s` | `5.0` | Continuous PCM ring capacity while ambient is armed (wake windows + headroom). |
 | `timeout_s` | `300` | One-shot: max wait for a wake before `ambient.timeout`. Continuous handsfree: idle cycle length before re-entering the wake wait (and optionally emitting `ambient.timeout`). `0` = no deadline / no timeout event. |
 | `surface_timeouts` | `true` | When **on**, continuous ambient surfaces `ambient.timeout` each idle cycle (monitor NDJSON + syslog) as a heartbeat. When **off**, continuous idle cycles stay quiet (no timeout event) — turn off for noisy long-running handsfree; leave on if you want cache-warmup / liveness visibility. Alias: `emit_timeout_events`. One-shot `hark ambient --once` always emits timeout when nothing is heard. |
+| `post_wake_lead_in_ms` | `150` | Settle after wake before arming cloud listen (`policy_from_config` profile `post_wake`). |
+| `post_wake_arm_cue` | `true` | Record-start beep when post-wake listen arms (B113; also in arm-cue table above). |
+| `post_wake_timeout_s` | `15` | Gate-open wait after wake (faster nudge than bound answer windows). |
+| `post_wake_abs_open_db` | unset | Optional absolute open threshold (dB) for post-wake only. |
+| `post_wake_no_open_nudge` | `true` | TTS nudge then re-listen once if post-wake gate never opens. |
+| `post_wake_no_open_tts` | `"I heard the wake but not your prompt."` | Nudge text when `post_wake_no_open_nudge` fires. |
+| `streaming` | `false` | Conversation mode when true (see § Ambient conversation / streaming). |
+| `streaming_ack_min_quiet_s` | `2.0` | Quiet that ends a conversation turn + TTS play gate (B105). |
+| `streaming_conversation_idle_s` | `45` | Re-arm wake after this idle between turns (**only when `streaming=true`**). |
 | `listen.pre_roll_ms` | `300` | PCM kept from before speech-open on answer/post-wake capture (clamped **250–500**). Complements radio **post-cut** segment pad (B075). |
 
 CLI: `hark ambient --once` runs a single wake+listen cycle then exits. Bare
@@ -454,7 +485,26 @@ after the discard window is kept as usual.
 | Feature | Default | Notes |
 |---------|---------|-------|
 | `[tts] notify_skip` (B161) | `true` | Desktop notification with the full TTS text + a **Skip** action while TTS plays; clicking Skip stops playback. Silently disabled when `notify-send` / a session bus is unavailable. |
+| `[tts] print_prompt` | `true` | Print the spoken text to stdout before / while synthesizing (operator transcript of what was said). |
+| `[tts] chunk_chars` | `1500` | Split long prompts into chunks of this many characters for synthesis/play. |
 | `hark tts --standalone` / `--once` (B160) | opt-in flag | One-shot TTS run that works from any directory with no hark server required; JSON output reports whether a background server was detected (its playback coordination applies automatically when live). |
+
+### Listen recovery defaults (`[listen]`)
+
+Answer Window / `SilenceSession` retries and nudges when the gate or STT fails
+softly:
+
+| Key | Default | Role |
+|-----|---------|------|
+| `empty_stt_retry` | `true` | Re-listen once if STT returns an empty transcript |
+| `empty_stt_nudge` | `true` | TTS “Sorry, I didn't catch that.” then re-listen once more |
+| `no_open_retry` | `true` | Re-listen once if the energy gate never opens |
+| `no_open_nudge` | `true` | TTS then re-listen once more on no-open |
+| `nudge_silence_s` | `0` | Extra quiet required before a recovery nudge path (0 = use normal silence) |
+| `open_margin_db` | `8.0` | dB above adaptive noise floor for speech-open |
+
+Post-wake uses ambient `post_wake_no_open_*` (see ambient table) instead of the
+bound-answer no-open nudge text.
 
 ## False-trigger defenses
 
@@ -482,11 +532,31 @@ conference active + hold_during_conference?
   no  → media ducking if enabled and duckable sink-inputs present
 ```
 
-Detection lives in `hark.audio.media` (`is_media_active` → `MediaMatch`): Pulse/
-PipeWire **sink-inputs** (RUNNING / Corked=no; excludes Hark’s own ffplay/paplay
-streams) plus optional MPRIS (`playerctl`). Conference streams may still appear
-in the match; duck lists use `exclude_conference=True` so callers do not
-volume-fight Zoom/Teams while hold is authoritative.
+Detection lives in `hark.conference` / `hark.audio.media` (`is_conference_active`,
+`is_media_active` → `MediaMatch`): process-name + optional browser A/V heuristic,
+Pulse/PipeWire **sink-inputs** (RUNNING / Corked=no; excludes Hark’s own
+ffplay/paplay streams) plus optional MPRIS (`playerctl`). Conference streams may
+still appear in the match; duck lists use `exclude_conference=True` so callers
+do not volume-fight Zoom/Teams while hold is authoritative.
+
+### Conference hold + defer-TTS knobs (`[audio]`)
+
+| Key | Default | Role |
+|-----|---------|------|
+| `hold_during_conference` | `true` | Hold/chime/queue full TTS while a call is detected |
+| `conference_chime_only` | `true` | Soft cue while held; speak the full question after the call ends |
+| `conference_process_names` | zoom/teams/webex/discord/slack… | Substrings matched against process names |
+| `conference_fail_open` | `true` | Missing `/proc` or tools → allow TTS (never hard-block speech) |
+| `conference_check_audio` | `true` | Also consider sink-input / audio activity for conference |
+| `conference_browser_av_heuristic` | `true` | Treat browser A/V call markers as conference |
+| `conference_poll_ms` | `2000` | How often to re-check while holding |
+| `conference_max_hold_s` | `30` | Max wait then speak anyway; `0` = wait until free |
+| `defer_tts_while_listening` | `true` | B097: do not start TTS while a listen capture is active |
+| `defer_tts_max_wait_s` | `45` | Then speak anyway; `0` = wait until capture ends |
+| `defer_tts_poll_ms` | `100` | Poll interval while deferring |
+| `defer_tts_quiet_ms` | `200` | Settle after stream finalizes before speaking |
+| `sync_hw_unmute` | `true` | Hardware unmute button → force OS/Pulse unmute |
+| `cue_volume` | `0.22` | Generated start/stop beep volume (0–1) |
 
 ### Fail-open and restore
 

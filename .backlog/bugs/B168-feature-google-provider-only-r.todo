@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-07-23T09:27:47Z"
+depends_on: []
+estimate_hours: 1
+id: B168
+priority: high
+status: pending
+tags: []
+title: 'feature: google provider only reads GEMINI_API_KEY/GOOGLE_API_KEY env — cannot borrow agy (Antigravity) OAuth the way it borrows grok/codex/pi auth files. If agy exposes a usable Google credential, add an auth-file adapter for it.'
+updated_at: "2026-07-23T09:27:47Z"
+---
+
+feature: google provider only reads GEMINI_API_KEY/GOOGLE_API_KEY env — cannot borrow agy (Antigravity) OAuth the way it borrows grok/codex/pi auth files. If agy exposes a usable Google credential, add an auth-file adapter for it.

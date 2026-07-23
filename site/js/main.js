@@ -37,36 +37,36 @@
       skills: {
         cmd: `npx skills add ${skillsRepo} -g -y`,
         hint: compact
-          ? "# skills only · still need hark CLI for handsfree"
-          : "# agent skills only · still need hark CLI (bash install or uv) for handsfree",
+          ? "# skills only · still need hark CLI · then /setup.html"
+          : "# agent skills only · still need hark CLI (bash/uv) · setup: hark.xk.io/setup.html",
         title: "skills · npx",
       },
       bash: {
         cmd: `curl -fsSL ${installUrl} | bash`,
         hint: compact
-          ? "# CLI + skills · script from hark.xk.io"
-          : "# installs CLI + skills to ~/.claude/skills · script from hark.xk.io",
+          ? "# CLI + skills · prefer: curl -o … && less && bash (see /setup.html)"
+          : "# CLI + skills · safer: curl -o /tmp/hark-install.sh && less && bash · see /setup.html",
         title: "bash · hark.xk.io",
       },
       npm: {
         cmd: `npm i -g ${npmPackage}`,
         hint: compact
-          ? `# package skills · or npx skills add ${skillsRepo}`
-          : `# package skills · or: npx skills add ${skillsRepo} -g -y`,
+          ? `# package skills · need CLI too · /setup.html`
+          : `# package skills · still need hark CLI · or: npx skills add ${skillsRepo} -g -y`,
         title: "npm · global",
       },
       pnpm: {
         cmd: `pnpm add -g ${npmPackage}`,
         hint: compact
-          ? `# package skills · or npx skills add ${skillsRepo}`
-          : `# package skills · or: npx skills add ${skillsRepo} -g -y`,
+          ? `# package skills · need CLI too · /setup.html`
+          : `# package skills · still need hark CLI · or: npx skills add ${skillsRepo} -g -y`,
         title: "pnpm · global",
       },
       bun: {
         cmd: `bun add -g ${npmPackage}`,
         hint: compact
-          ? `# package skills · or npx skills add ${skillsRepo}`
-          : `# package skills · or: npx skills add ${skillsRepo} -g -y`,
+          ? `# package skills · need CLI too · /setup.html`
+          : `# package skills · still need hark CLI · or: npx skills add ${skillsRepo} -g -y`,
         title: "bun · global",
       },
     };

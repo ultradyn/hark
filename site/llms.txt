@@ -6,11 +6,15 @@ Hark is open-source software (`hark` CLI + handsfree skill) that lets an operato
 
 ## Docs
 
+- [Setup (site)](https://hark.xk.io/setup.html): install → doctor → first-run setup → session profile → workers
+- [SETUP.md](https://github.com/ultradyn/hark/blob/master/skill/hark/SETUP.md): canonical agent first-run checklist
+- [POST_INSTALL.md](https://github.com/ultradyn/hark/blob/master/skill/hark/POST_INSTALL.md): deps after skills-only install
 - [Product](https://github.com/ultradyn/hark/blob/master/docs/PRODUCT.md): goals and non-goals
 - [Architecture](https://github.com/ultradyn/hark/blob/master/docs/ARCHITECTURE.md): handsfree path, library vs daemon
 - [Software spec](https://github.com/ultradyn/hark/blob/master/docs/SPEC.md): normative behaviour
 - [Protocol](https://github.com/ultradyn/hark/blob/master/docs/PROTOCOL.md): HEP event schema
 - [Herdr integration](https://github.com/ultradyn/hark/blob/master/docs/HERDR.md): multi-session contract
+- [Providers](https://github.com/ultradyn/hark/blob/master/docs/PROVIDERS.md): STT/TTS providers
 - [Safety](https://github.com/ultradyn/hark/blob/master/docs/SAFETY.md): risk levels, distrust pane text
 - [Audio design](https://github.com/ultradyn/hark/blob/master/docs/AUDIO_DESIGN.md): gate, ducking, half-duplex
 - [Hark skill](https://github.com/ultradyn/hark/blob/master/skill/hark/SKILL.md): handsfree orchestrator procedure

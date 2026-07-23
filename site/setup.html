@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Setup — Hark</title>
+    <meta
+      name="description"
+      content="First-run setup for Hark: install the CLI, run doctor, configure sessions and wake, then start workers. Skill-first handsfree for Herdr agents."
+    />
+    <link rel="canonical" href="https://hark.xk.io/setup.html" />
+    <meta property="og:title" content="Setup — Hark" />
+    <meta
+      property="og:description"
+      content="Install → doctor → setup → session profile → start. Handsfree voice for your Herdr agent herd."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://hark.xk.io/setup.html" />
+    <meta property="og:site_name" content="Hark" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:image" content="https://hark.xk.io/og.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Setup — Hark" />
+    <meta
+      name="twitter:description"
+      content="Install → doctor → setup → session profile → start. Handsfree voice for your Herdr agent herd."
+    />
+    <meta name="twitter:image" content="https://hark.xk.io/og.png" />
+    <meta name="theme-color" content="#05060a" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500;600;700&family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/components.css" />
+    <link rel="stylesheet" href="css/layout.css" />
+    <style>
+      /* Setup page: longform checklist on the marketing shell */
+      .setup-hero {
+        padding: var(--s-7) 0 var(--s-5);
+      }
+      .setup-hero h1 {
+        font-family: var(--font-display);
+        font-size: clamp(2.4rem, 5vw, 3.6rem);
+        font-weight: 550;
+        line-height: 1.05;
+        margin: 0 0 var(--s-3);
+        letter-spacing: var(--tracking-display);
+        background: linear-gradient(180deg, #fff 10%, var(--ink) 55%, var(--herald) 130%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .setup-hero .lede {
+        max-width: 42rem;
+        font-size: 1.15rem;
+        color: var(--muted);
+        margin: 0 0 var(--s-4);
+      }
+      .setup-toc {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.55rem 1rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        font-family: var(--font-mono);
+        font-size: 0.82rem;
+      }
+      .setup-toc a {
+        color: var(--herald);
+        text-decoration: none;
+        border-bottom: 1px solid transparent;
+      }
+      .setup-toc a:hover {
+        border-bottom-color: var(--herald);
+      }
+      .setup-section {
+        padding: var(--s-5) 0;
+        border-top: 1px solid var(--border);
+      }
+      .setup-section h2 {
+        font-family: var(--font-display);
+        font-size: 1.65rem;
+        margin: 0 0 var(--s-3);
+      }
+      .setup-section h3 {
+        font-family: var(--font-display);
+        font-size: 1.15rem;
+        margin: var(--s-4) 0 var(--s-2);
+        color: var(--ink);
+      }
+      .setup-section p,
+      .setup-section li {
+        color: var(--muted);
+        max-width: 44rem;
+      }
+      .setup-section p strong,
+      .setup-section li strong {
+        color: var(--ink);
+      }
+      .setup-section ul {
+        margin: 0 0 var(--s-3);
+        padding-left: 1.2rem;
+      }
+      .setup-section li + li {
+        margin-top: 0.35rem;
+      }
+      .setup-callout {
+        margin: var(--s-3) 0;
+        padding: var(--s-3) var(--s-4);
+        border-left: 3px solid var(--herald);
+        background: rgba(232, 184, 74, 0.06);
+        border-radius: 0 var(--radius) var(--radius) 0;
+        max-width: 44rem;
+      }
+      .setup-callout p {
+        margin: 0;
+      }
+      .setup-deep {
+        display: grid;
+        gap: var(--s-2);
+        margin: var(--s-3) 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .setup-deep a {
+        color: var(--ink);
+        text-decoration: none;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 0.15rem;
+      }
+      .setup-deep a:hover {
+        border-bottom-color: var(--herald);
+        color: var(--herald);
+      }
+      .nav__links a[aria-current="page"] {
+        color: var(--herald);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true">
+      <div class="atmosphere__grid"></div>
+    </div>
+
+    <header class="site-header" data-nav>
+      <div class="shell site-header__inner">
+        <nav class="nav" aria-label="Primary">
+          <a class="nav__brand" href="/">
+            <span class="nav__mark" aria-hidden="true"></span>
+            Hark
+          </a>
+          <ul class="nav__links">
+            <li><a href="/#why">Why</a></li>
+            <li><a href="/#use">Use</a></li>
+            <li><a href="/#supports">Supports</a></li>
+            <li><a href="/#safety">Safety</a></li>
+            <li><a href="/#install">Install</a></li>
+            <li><a href="/setup.html" aria-current="page">Setup</a></li>
+            <li><a href="https://github.com/ultradyn/hark">GitHub</a></li>
+          </ul>
+          <a class="nav__mobile-cta" href="https://github.com/ultradyn/hark">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="shell setup-hero">
+        <p class="eyebrow"><span class="eyebrow__dot" aria-hidden="true"></span> First run</p>
+        <h1>Setup</h1>
+        <p class="lede">
+          Installing the CLI is only half the path. This page is the product checklist:
+          health → sessions &amp; persona → workers → handsfree. Prefer letting the
+          <code>/hark</code> skill drive questions by voice; the CLI matches the same order.
+        </p>
+        <ul class="setup-toc" aria-label="On this page">
+          <li><a href="#prereqs">Prereqs</a></li>
+          <li><a href="#install">Install</a></li>
+          <li><a href="#doctor">Doctor</a></li>
+          <li><a href="#first-run">First-run setup</a></li>
+          <li><a href="#every-start">Every start</a></li>
+          <li><a href="#workers">Workers</a></li>
+          <li><a href="#deep">Deep links</a></li>
+        </ul>
+        <div class="btn-row" style="margin-top: var(--s-4)">
+          <a class="btn btn--primary" href="#first-run">First-run checklist</a>
+          <a class="btn btn--ghost" href="/#install">Install methods</a>
+        </div>
+      </section>
+
+      <section class="shell setup-section" id="prereqs">
+        <h2>Prerequisites</h2>
+        <ul>
+          <li><strong>Python 3.11+</strong> and a working mic/speakers (PortAudio; often <code>ffmpeg</code> for some paths).</li>
+          <li><a class="product-link" href="https://herdr.dev/">Herdr</a> <strong>≥ 0.7.1</strong> for the sessions you will watch.</li>
+          <li><strong>Speech auth</strong> for cloud STT/TTS (xAI OAuth, OpenAI, Google, MiniMax TTS, …) — <code>hark doctor</code> reports what it finds.</li>
+          <li>
+            <strong>Skills-only is not enough.</strong>
+            <code>npx skills</code> / the npm package copy agent skills; they do
+            <em>not</em> install the <code>hark</code> CLI, wake models, or system deps.
+            See
+            <a href="https://github.com/ultradyn/hark/blob/master/skill/hark/POST_INSTALL.md">POST_INSTALL.md</a>.
+          </li>
+        </ul>
+      </section>
+
+      <section class="shell setup-section" id="install">
+        <h2>Install (short)</h2>
+        <p>
+          Full picker lives on the
+          <a href="/#install">homepage Install section</a>.
+          Hosted script:
+          <a href="https://hark.xk.io/install.sh"><code>https://hark.xk.io/install.sh</code></a>
+          (published with each version tag).
+        </p>
+        <h3>Recommended: inspect, then run</h3>
+        <div class="term" style="max-width: 44rem">
+          <div class="term__bar">
+            <span class="term__dot"></span>
+            <span class="term__dot"></span>
+            <span class="term__dot"></span>
+            <span class="term__title">bash · inspect first</span>
+          </div>
+          <div class="term__body">
+            <div><span class="prompt">$</span> <span class="cmd">curl -fsSL https://hark.xk.io/install.sh -o /tmp/hark-install.sh</span></div>
+            <div class="dim"># less /tmp/hark-install.sh</div>
+            <div><span class="prompt">$</span> <span class="cmd">bash /tmp/hark-install.sh</span></div>
+          </div>
+        </div>
+        <p style="margin-top: var(--s-3)">
+          One-liner (trust the release that published it):
+          <code>curl -fsSL https://hark.xk.io/install.sh | bash</code>
+        </p>
+        <div class="setup-callout">
+          <p>
+            <strong>Dogfood / stale CLI:</strong> if <code>hark doctor</code> reports
+            <code>install: stale|frozen</code>, reinstall editable from your checkout:
+            <code>uv tool install -e . --force</code> or <code>./install.sh</code>.
+          </p>
+        </div>
+      </section>
+
+      <section class="shell setup-section" id="doctor">
+        <h2>Health — <code>hark doctor</code></h2>
+        <p>
+          Run before first setup and whenever speech or Herdr looks wrong.
+          Add <code>--json</code> for machine-readable output.
+        </p>
+        <div class="term" style="max-width: 28rem">
+          <div class="term__bar">
+            <span class="term__dot"></span>
+            <span class="term__dot"></span>
+            <span class="term__dot"></span>
+            <span class="term__title">doctor</span>
+          </div>
+          <div class="term__body">
+            <div><span class="prompt">$</span> <span class="cmd">hark doctor</span></div>
+          </div>
+        </div>
+        <ul style="margin-top: var(--s-3)">
+          <li>Fix red Herdr / tunnel / speech-key lines first.</li>
+          <li>Note the <strong>setup:</strong> line if incomplete or sessions are empty.</li>
+          <li>Doctor is discovery-oriented (credentials present); live API errors can still need a working provider.</li>
+        </ul>
+      </section>
+
+      <section class="shell setup-section" id="first-run">
+        <h2>First-run checklist</h2>
+        <p>
+          Use <code>hark setup</code> (non-interactive flags below) or let the skill ask one question at a time with
+          <code>hark ask</code> / <code>hark tts</code>. Do not arm handsfree until sessions are written.
+        </p>
+        <ol class="use-steps">
+          <li>
+            <strong>Health</strong>
+            <span><code>hark doctor</code> — clear install/Herdr/speech blockers.</span>
+          </li>
+          <li>
+            <strong>Herdr sessions</strong>
+            <span>Local, SSH, or mix → <code>[[herdr.sessions]]</code>. Never skip.</span>
+          </li>
+          <li>
+            <strong>Persona</strong>
+            <span>Feminine default: wake <strong>Iris</strong> (+ mercury/hark/herald), TTS <strong>eve</strong>. Masculine: <strong>Mercury</strong>, TTS <strong>leo</strong>. Or custom.</span>
+          </li>
+          <li>
+            <strong>TTS voice</strong>
+            <span>Any voice from the active provider catalog (samples when available).</span>
+          </li>
+          <li>
+            <strong>Wake backend</strong>
+            <span>Prefer <strong>Sherpa KWS</strong> when download works; <strong>Vosk</strong> if constrained; defer leaves stock <code>vosk</code> until you dogfood Sherpa.</span>
+          </li>
+          <li>
+            <strong>Model download</strong>
+            <span>If Sherpa: download script + <code>uv sync --extra wake-sherpa</code>. Fail-open to Vosk if download fails.</span>
+          </li>
+          <li>
+            <strong>Wake test</strong>
+            <span>Say <em>hey iris</em> / <em>hey mercury</em> (or your names). Optional: <code>hark ambient --once</code>.</span>
+          </li>
+          <li>
+            <strong>Setup flag</strong>
+            <span>Writes <code>setup-complete.json</code> (no secrets).</span>
+          </li>
+          <li>
+            <strong>Arm</strong>
+            <span>Continue with session profile + <code>hark start</code> / skill monitor loop.</span>
+          </li>
+        </ol>
+
+        <h3>CLI cheat</h3>
+        <div class="term" style="max-width: 48rem">
+          <div class="term__bar">
+            <span class="term__dot"></span>
+            <span class="term__dot"></span>
+            <span class="term__dot"></span>
+            <span class="term__title">hark setup</span>
+          </div>
+          <div class="term__body">
+            <div><span class="prompt">$</span> <span class="cmd">hark setup --yes --persona feminine --wake-engine sherpa_kws --sessions local</span></div>
+            <div class="dim"># --force to re-run · --sessions local,work=ssh:box · --voice eve · --names iris,hark</div>
+            <div class="dim"># --skip-doctor · --skip-download</div>
+          </div>
+        </div>
+        <div class="setup-callout">
+          <p>
+            Marketing copy often says <em>hey hark</em> / <em>hey herald</em> — those are aliases.
+            Product defaults after feminine setup are <strong>Iris</strong> (and related names), not brand-only wake.
+          </p>
+        </div>
+      </section>
+
+      <section class="shell setup-section" id="every-start">
+        <h2>Every <code>/hark</code> start</h2>
+        <p>
+          Even when setup is complete, the skill runs a <strong>structured startup interview</strong>
+          (scope session-local vs Herdr, autonomy, role, mode) and applies it with
+          <code>hark session-profile set … --apply</code> <em>before</em> ambient, watch, or monitor.
+          Do not arm with silent defaults.
+        </p>
+        <div class="term" style="max-width: 40rem">
+          <div class="term__bar">
+            <span class="term__dot"></span>
+            <span class="term__dot"></span>
+            <span class="term__dot"></span>
+            <span class="term__title">session-profile</span>
+          </div>
+          <div class="term__body">
+            <div><span class="prompt">$</span> <span class="cmd">hark session-profile show</span></div>
+            <div><span class="prompt">$</span> <span class="cmd">hark session-profile set … --apply</span></div>
+          </div>
+        </div>
+        <p style="margin-top: var(--s-3)">
+          If scope is <strong>herdr</strong>, confirm which sessions (local / SSH / mix).
+          Details live in the skill and
+          <a href="https://github.com/ultradyn/hark/blob/master/docs/HERDR.md">HERDR.md</a>.
+        </p>
+      </section>
+
+      <section class="shell setup-section" id="workers">
+        <h2>Workers — <code>hark start</code></h2>
+        <p>
+          Mode A handsfree uses worker processes (Herdr watch + ambient wake), not the experimental
+          <code>harkd</code> daemon. Do not run <code>harkd</code> alongside <code>hark start</code>.
+        </p>
+        <div class="term" style="max-width: 44rem">
+          <div class="term__bar">
+            <span class="term__dot"></span>
+            <span class="term__dot"></span>
+            <span class="term__dot"></span>
+            <span class="term__title">lifecycle</span>
+          </div>
+          <div class="term__body">
+            <div><span class="prompt">$</span> <span class="cmd">hark start</span></div>
+            <div><span class="prompt">$</span> <span class="cmd">hark start --status</span></div>
+            <div><span class="prompt">$</span> <span class="cmd">hark stop</span></div>
+            <div class="dim"># --no-ambient · --no-watch · --force-watch · --session &lt;id&gt;</div>
+          </div>
+        </div>
+        <ul style="margin-top: var(--s-3)">
+          <li><code>hark start</code> watches <strong>one</strong> Herdr session id (default <code>default</code>) — configure multi-session in config; start flags are per invocation.</li>
+          <li>If ambient dies immediately, check wake model/deps with doctor — do not assume a phantom start succeeded.</li>
+          <li>Then follow with <code>hark monitor</code> (or the skill’s Monitor) for the handsfree loop.</li>
+        </ul>
+      </section>
+
+      <section class="shell setup-section" id="deep">
+        <h2>Deep links</h2>
+        <ul class="setup-deep">
+          <li><a href="https://github.com/ultradyn/hark/blob/master/skill/hark/SETUP.md">skill/hark/SETUP.md</a> — canonical agent checklist</li>
+          <li><a href="https://github.com/ultradyn/hark/blob/master/skill/hark/POST_INSTALL.md">skill/hark/POST_INSTALL.md</a> — deps after skills-only</li>
+          <li><a href="https://github.com/ultradyn/hark/blob/master/skill/hark/WAKE_STT.md">skill/hark/WAKE_STT.md</a> — Vosk vs Sherpa</li>
+          <li><a href="https://github.com/ultradyn/hark/blob/master/skill/hark/SKILL.md">skill/hark/SKILL.md</a> — handsfree orchestrator</li>
+          <li><a href="https://github.com/ultradyn/hark/blob/master/docs/HERDR.md">docs/HERDR.md</a> — multi-session / SSH</li>
+          <li><a href="https://github.com/ultradyn/hark/blob/master/docs/CUSTOM_WAKE.md">docs/CUSTOM_WAKE.md</a> — custom wake phrases</li>
+          <li><a href="https://github.com/ultradyn/hark/blob/master/docs/PROVIDERS.md">docs/PROVIDERS.md</a> — STT/TTS providers</li>
+          <li><a href="/llms.txt">llms.txt</a> — machine-readable doc index</li>
+        </ul>
+        <div class="btn-row" style="margin-top: var(--s-5)">
+          <a class="btn btn--primary" href="/#use">Back to Use</a>
+          <a class="btn btn--ghost" href="https://github.com/ultradyn/hark">GitHub</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="shell footer__inner">
+        <div class="footer__row">
+          <div>
+            <strong style="color: var(--ink); font-family: var(--font-display)">Hark</strong>
+            <div>When your agents need a word.</div>
+            <p class="footer__credit">
+              Created by <a href="https://xk.io">Max Kaye (XertroV)</a> + AI
+            </p>
+          </div>
+          <div>
+            <a href="/">Home</a>
+            ·
+            <a href="/setup.html">Setup</a>
+            ·
+            <a href="https://github.com/ultradyn/hark">GitHub</a>
+            ·
+            <a href="/llms.txt">llms.txt</a>
+            ·
+            <a href="https://github.com/ultradyn/hark/blob/master/LICENSE">License</a>
+          </div>
+        </div>
+      </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+  </body>
+</html>

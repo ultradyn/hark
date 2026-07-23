@@ -54,7 +54,9 @@ See [plans/P1-M2-answerability.md](plans/P1-M2-answerability.md).
 - Reject transcripts that highly overlap the just-spoken TTS text.  
 - TTS playback posts a desktop notification with a **Skip** action by default
   (`[tts] notify_skip`); the operator can stop playback mid-speech.  
-- Optional wake prefix later.  
+- **Ambient wake** is local-only until activation (`vosk` / `sherpa_kws`; see
+  [AUDIO_DESIGN.md](AUDIO_DESIGN.md), [CUSTOM_WAKE.md](CUSTOM_WAKE.md)). Cloud
+  STT runs only post-wake / inside an answer window.  
 
 ### Confirmation policy
 
@@ -94,6 +96,8 @@ All text read from panes is **untrusted data**. The bridge may speak it and rout
 ### Local authority
 
 - No public TCP by default.  
+- Localhost dashboard HTTP (`hark webui` / `serve`) is allowed; binding
+  non-localhost **requires** `[dashboard].token` (see [DASHBOARD.md](DASHBOARD.md)).  
 - Control sockets (if any) mode `0600`, current user only.  
 - Never log tokens, cookies, or raw audio by default.  
 

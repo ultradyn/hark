@@ -43,25 +43,54 @@ Handsfree requires a long-lived wake path on `hark monitor --for-monitor` (or at
 
 ## 4. CLI (v1 surface)
 
+Public commands match `hark -h` (37). Grouped for readability; experimental
+commands are labeled. Prefer product path `hark start` / `stop` / `restart` for
+handsfree workers over Mode A scripts alone.
+
 ```
+# Bootstrap / config
 hark doctor
+hark setup                          # guided first-run (persona, wake, sessions)
+hark session-profile …              # every-start interview → watch/ambient mode
+hark config path|init|show
+
+# Herdr watch / status / context
 hark watch [--session ID]... [--statuses blocked,done] [--for-monitor] [--transport auto|socket|poll]
-hark monitor [--for-monitor] [--full] [--replay N] [--kinds KINDS]   # unified wake feed (Herdr + ambient)
+hark monitor [--for-monitor] [--full] [--replay N] [--kinds KINDS]
 hark status [--session ID]... [--status …] [--json]
-hark queue [--json]                    # pending interactions if tracked
 hark context <target> [--lines N]
-hark tts … [--standalone]            # one-shot marker: works from any cwd, no server required; reports server detection (--once alias, B160)
-hark listen … [--end-mode silence|radio]
-hark listen-end [--cancel] [--stream-id ID]   # finalize/cancel an active stream from partials
-hark ask … [--confirm auto|always|never] [--end-mode silence|radio]
-hark reply <target> …                  # freeform (debug / simple)
-hark keys <target> <key> [key…]
-hark answer <event_id> (--text … | --keys …)   # bound, preferred
+hark session …                      # list/ensure named Herdr sessions
+hark agent-start …                  # start coding agent in Herdr (+ optional kickoff)
+
+# Bound delivery / freeform
+hark queue [--json]
+hark answer <event_id> (--text … | --keys …)
 hark skip <event_id>
-hark mute | unmute
+hark reply <target> …
+hark keys <target> <key> [key…]
+
+# Speech
+hark tts … [--standalone]
+hark listen … [--end-mode silence|radio]
+hark listen-end [--cancel] [--stream-id ID]
+hark ask … [--confirm auto|always|never] [--end-mode silence|radio]
+hark ambient …                      # wake-phrase ambient (continuous by default)
+hark wake-enroll …                  # beep-paced wake enrollment samples
+
+# Workers / ops
+hark start | stop | restart         # handsfree workers (mode-a.pids); preferred
+hark mute | unmute | mute-sync
 hark devices
 hark providers [test NAME]
-hark config path|init|show
+hark stats                          # TTS/STT usage stats
+hark logs | watch-logs              # unified / live human-readable logs
+
+# Dashboard (aliases)
+hark webui | dashboard | serve      # live web UI (REST + SSE); see DASHBOARD.md
+
+# Experimental
+hark daemon …                       # harkd scaffold — not required for handsfree v1
+hark agentapi …                     # Antigravity (agy) wake/deliver — see AGY.md
 ```
 
 **Target:** `session_id/pane_id` or `--session` + pane.
@@ -160,13 +189,20 @@ Cancel phrases abort without delivery (`hark cancel`, not casual “cancel that�
 
 ## 10. Providers
 
-See [PROVIDERS.md](PROVIDERS.md). xAI via Grok OAuth preferred. No local neural STT/TTS. No Playwright as production STT.
+See [PROVIDERS.md](PROVIDERS.md). xAI via Grok OAuth preferred. **No required**
+local neural STT/TTS for a working install; optional post-wake local STT
+(`faster_whisper` / related) and local wake engines (`vosk` / `sherpa_kws`) are
+allowed. No Playwright as production STT.
 
 ## 11. Events
 
 See [PROTOCOL.md](PROTOCOL.md). Dedupe + debounce required. `--for-monitor` compact profile required for handsfree.
 
 ## 12. Config (sketch)
+
+Representative sketch — not encyclopedic. Full defaults live in
+`DEFAULT_CONFIG_TOML` (`src/hark/config.py`). Deep knobs: [AUDIO_DESIGN.md](AUDIO_DESIGN.md),
+[DASHBOARD.md](DASHBOARD.md), [PROVIDERS.md](PROVIDERS.md), [HERDR.md](HERDR.md).
 
 ```toml
 version = 1
@@ -207,9 +243,16 @@ endpoint_strategy = "energy"        # energy (default/fallback) | smart_turn
 strip_phrase = true
 max_listen_s = 300
 
+[ambient]
+# Local wake only until activation; cloud STT post-wake / answer window.
+# engine = "vosk"                 # or sherpa_kws — see AUDIO_DESIGN / CUSTOM_WAKE
+# streaming = false               # true = conversation mode (ambient.turn)
+# See AUDIO_DESIGN for snippet/ring/post-wake knobs.
+
 [stt]
 provider = "auto"
 # xai oauth via ~/.grok/auth.json
+# optional local: provider = "faster_whisper" — see PROVIDERS
 
 [tts]
 provider = "auto"
@@ -221,9 +264,27 @@ mode = "auto"   # configured policy: R2/R3 force always; per-call never may over
 
 [safety]
 deny_patterns = []  # optional hard blocks
+
+[dashboard]
+# localhost HTTP by default; non-localhost requires token — see DASHBOARD.md
+# host = "127.0.0.1"
+# token = ""
+
+# [agents]
+# prefer_aliases = true           # voice spawn CLI aliases — see HERDR.md
+# claude = "claude"
+
+[update]
+# GitHub release notice only (B088) — never auto-installs
+enabled = true
+# repo = "ultradyn/hark"
 ```
 
-Env: `HARK_CONFIG`, `HARK_LISTEN_END_MODE`, `HARK_SOFT_END_PHRASES_ENABLED`, `HARK_STT_PROVIDER`, `XAI_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MINIMAX_API_KEY`, `HERDR_SOCKET_PATH`.
+Env: `HARK_CONFIG`, `HARK_LISTEN_END_MODE`, `HARK_SOFT_END_PHRASES_ENABLED`,
+`HARK_STT_PROVIDER`, `HARK_UPDATE_CHECK`, `HARK_UPDATE_REPO`, `XAI_API_KEY`,
+`OPENAI_API_KEY`, `GEMINI_API_KEY`, `MINIMAX_API_KEY`, `HERDR_SOCKET_PATH`.
+`HARK_UPDATE_CHECK=0` disables the release notice; `HARK_UPDATE_REPO` overrides
+`[update].repo`.
 
 ## 13. Performance targets (excluding provider RTT)
 
@@ -245,7 +306,8 @@ Production: Rust rewrite, same CLI + HEP.
 
 ## 16. Definition of done (v1 handsfree)
 
-Without browser automation or local ML models:
+Without browser automation. Local ML is **optional** (wake engine / optional
+local STT) — not required for a working cloud-first install:
 
 1. Multi-session watch with HEP events + monitor profile.  
 2. Context + risk classify + fingerprint.  

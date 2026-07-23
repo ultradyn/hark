@@ -16,6 +16,7 @@ Every stdout line from `hark watch` / event bus is one JSON object.
   "priority": 80,
   "session_id": "work",
   "target": {
+    "server_instance": "work",
     "workspace_id": "w1",
     "tab_id": "w1:t1",
     "pane_id": "w1:p6",
@@ -30,7 +31,7 @@ Every stdout line from `hark watch` / event bus is one JSON object.
     "kind": "permission",
     "text": "Allow running rm -rf build/?",
     "choices": ["Yes", "No"],
-    "fingerprint": "blake3:…",
+    "fingerprint": "blake2b:…",
     "confidence": 0.9,
     "risk": "R2"
   },
@@ -45,6 +46,17 @@ Every stdout line from `hark watch` / event bus is one JSON object.
   "instructions": "…prefer pane_capture.text; optional hark context work/w1:p6"
 }
 ```
+
+`target.server_instance` is the Herdr session id (same value as top-level
+`session_id` on watch/agent events). Fingerprints are opaque strings;
+emitters use **`blake2b:`** + a 16-byte hex digest over NFKC-normalized
+question text + choices (`src/hark/fingerprint.py`).
+
+**Field families:** watch/agent/answer/bridge events usually carry
+`priority`, `disposition`, and (when pane-bound) `target`. Ambient kinds
+(`ambient.*`) are stream/voice events and typically omit those — see
+examples below. `disposition` may be `info` / `error` on lifecycle events
+(`watch.armed`, `watch.heartbeat`, `watch.error`, …).
 
 `pane_capture` is attached by default on `agent.blocked`, `agent.needs_input`, and
 `agent.question_changed` (config: `[watch] pane_capture`, `pane_capture_lines`,
@@ -188,6 +200,10 @@ Status edges: **150–400 ms** coalesce.
 
 ## Bound command (delivery)
 
+Illustrative CLI/library contract for bound delivery expectations — **not** a
+checked wire schema file (no `schemas/command-v1.schema.json`). Implemented by
+`hark answer` / answerability + `DeliveryStore`.
+
 ```json
 {
   "schema": "hark.command.v1",
@@ -198,7 +214,7 @@ Status edges: **150–400 ms** coalesce.
     "session_id": "work",
     "pane_id": "w1:p6",
     "pane_revision": 42,
-    "question_fingerprint": "blake3:…"
+    "question_fingerprint": "blake2b:…"
   },
   "text": "No, keep the build directory.",
   "keys": null
@@ -213,5 +229,8 @@ Rejects if expectation fails (safer than free `hark reply` for production loops)
 
 ## JSON Schema
 
-Normative file: `schemas/event-v1.schema.json` (in repo).  
+Normative file: `schemas/event-v1.schema.json` (in repo). Required core fields:
+`schema`, `event_id`, `observed_at`, `kind`. Watch/agent fields (`priority`,
+`disposition`, `target`) and ambient stream fields are optional at the schema
+level so both families validate; see field families above.  
 Interaction FSM states (for `harkd` / queue): see prior art interaction schema — optional in handsfree.

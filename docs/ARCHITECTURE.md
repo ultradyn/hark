@@ -35,7 +35,9 @@
 ## Multi-session
 
 One watch process merges N sessions; every event has `session_id`.  
-Remote: SSH tunnel of Unix socket (preferred) or `ssh host herdr …` poll fallback.
+Remote: SSH tunnel of Unix socket (preferred). Shelling out to
+`ssh host herdr …` is **manual/debug only** — not a Hark production transport
+(see [HERDR.md](HERDR.md)).
 
 ## Event path
 
@@ -43,12 +45,15 @@ Remote: SSH tunnel of Unix socket (preferred) or `ssh host herdr …` poll fallb
 Herdr wire event
   → debounce
   → normalize HEP (hark.event.v1)
-  → dedupe by (session, pane, epoch, fingerprint)
-  → priority queue
-  → orchestrator: stdout --for-monitor
-  → (Mode B: dialogue FSM)
+  → dedupe by (session_id, pane_id, kind/status, question_fingerprint)
+  → NDJSON stdout / state feeds (--for-monitor); events carry a priority field
+  → (Mode B / future harkd: dialogue FSM + queue)
 ```
 
+`blocked_epoch` is always null in v1 and is **not** part of the dedupe key
+(see [PROTOCOL.md](PROTOCOL.md)). Mode A does not run an in-process priority
+scheduler; `hark queue` is the bound-event delivery store, not a watch
+priority queue.
 ## Interaction path (bound)
 
 ```text

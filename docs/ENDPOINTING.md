@@ -50,7 +50,11 @@ enough for most close-talk answer windows.
 
 ## Design — the strategy seam
 
-Implemented in `src/hark/endpointing.py`.
+Implemented in `src/hark/endpointing.py`. Production silence listens open via
+**Answer Window** (`SilenceSession` in `answer_window/silence.py`); the capture
+loop below is the low-level energy / Smart Turn path that session binds.
+Radio finalize is separate (`answer_window/radio.py` + end/soft phrases / idle /
+`listen-end`) — **not** Smart Turn.
 
 ```text
 capture block loop (audio/capture.py)

@@ -21,7 +21,11 @@ There are **two customization styles**. Pick one.
 Configure **product names** (defaults: `iris`, `mercury`, `hark`, `herald`). Multiple names are
 fine. Matching is structural:
 
-- Greating + name: `hey` / `hello` / `hi` / `yo` / `ok` / `okay` / `sup` + name
+- Greeting + name (Vosk / text path `_PREFIXES`): `hey` / `hello` / `hi` / `yo` /
+  `ok` / `okay` / `sup` + name
+- Sherpa KWS keyword build (`_KWS_PREFIXES`): `hey` / `hello` / `okay` / `ok` /
+  `hi` + name — **no** `yo` / `sup` (those are Vosk/text-only); bare name is
+  still added for KWS
 - Bare name: `herald`, `harold`, `hark` (optional fillers `um` / `uh`)
 - Seed mishears for built-in names (e.g. `hook`→hark, `harold`→herald)
 - **Learned** name alternates from failed wake attempts (no restart)
@@ -87,6 +91,7 @@ Disable with `learn_from_near_misses = false`.
 | Key | Role |
 |-----|------|
 | `wake_mode` | `names` (default) or `phrases` |
+| `activation_mode` | Alias of `wake_mode` (`resolve_wake_policy`) |
 | `names` / `activation_names` / `wake_names` | Canonical names (names mode) |
 | `extra_names` | Append names |
 | `trigger_phrases` / `activation_phrases` | Full phrase list (phrases mode) or legacy |

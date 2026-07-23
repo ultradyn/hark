@@ -19,7 +19,7 @@
 #   --prefix DIR       Install prefix for pip path (default: ~/.local; env PREFIX)
 #   --destdir DIR      Staging root prepended to prefix (env DESTDIR)
 #   --method uv|pip    Prefer uv tool install or pip --user/prefix (default: auto)
-#   --with-wake        Also install optional ambient wake extra (vosk)
+#   --with-wake        Install Vosk Python package only (not the model)
 #   --no-skills        Skip copying skill files
 #   --no-cli           Skip CLI install (skills only)
 #   --force            Reinstall CLI even if present
@@ -92,7 +92,7 @@ Options / env:
   --prefix DIR       Install prefix for pip path (default: ~/.local; env PREFIX)
   --destdir DIR      Staging root prepended to prefix (env DESTDIR)
   --method uv|pip    Prefer uv tool install or pip (default: auto)
-  --with-wake        Also install optional ambient wake extra (vosk)
+  --with-wake        Install Vosk Python package only (not the model)
   --no-skills        Skip copying skill files
   --no-cli           Skip CLI install (skills only)
   --force            Reinstall CLI even if present
@@ -387,9 +387,15 @@ Next steps:
        export PATH="\$HOME/.local/bin:\$PATH"
   2. Health check:
        hark doctor
-  3. Optional config:
+  3. First-run setup (persona, wake engine, sessions):
+       hark setup
+     # details: skill/hark/SETUP.md
+  4. Optional config:
        hark config init
-  4. In Claude Code / compatible agents, run the skill:
+  5. Start workers, then one Monitor feed:
+       hark start
+       hark monitor
+  6. In Claude Code / compatible agents, run the skill:
        /hark
      (alias: /handsfree)
 
@@ -398,8 +404,14 @@ Skills-only install (if you only need agent skills):
   # or: npm i -g @ultradyn/hark && hark-skill path
   # (CLI still required for handsfree — use this installer or uv tool install)
 
-Ambient wake (optional, local Vosk model):
+Ambient wake (optional; --with-wake installs the Vosk Python package only, not a model):
+  # Vosk (CLI default until dogfood): model + enable
   cd "$SRC_DIR" && ./scripts/setup-ambient.sh
+  # Sherpa KWS (preferred for product-name wake when feasible):
+  #   uv tool install -e '.[wake-sherpa]' --force   # or: uv sync --extra wake-sherpa
+  #   ./scripts/download-sherpa-kws-model.sh
+  #   hark setup --wake-engine sherpa_kws
+  # See skill/hark/WAKE_STT.md / POST_INSTALL.md
 
 Re-run this installer anytime to update (idempotent).
 Pin a release:  HARK_REF=v0.1.10 bash install.sh

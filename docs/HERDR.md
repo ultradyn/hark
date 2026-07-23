@@ -7,7 +7,7 @@
 | Herdr app | **≥ 0.7.1** |
 | Socket protocol | **≥ 14** (0.7.1 on operator host reports 14) |
 | Orchestrator location | **Outside** Herdr (local machine) |
-| Herdr location | Local and/or remote; **multi-session** supported |
+| Herdr location | Local and/or remote; **multi-session config** supported (see below) |
 
 Probe always:
 
@@ -32,6 +32,12 @@ Each Hark **session** is a named handle to one Herdr server:
 | `remote_socket` | Optional remote socket path for SSH/tunnel sessions (default: Herdr's standard socket) |
 | `label` | Spoken name (“work box”) |
 
+**Config vs handsfree start:**
+
+- **Config / targets / doctor:** multiple `[[herdr.sessions]]` entries are first-class. Event identity and `hark reply` / `keys` use `session/pane` across any configured id.
+- **`hark watch`:** with no `--session`, watches **all** configured sessions (fallback id `local` if the list is empty). Pass `--session` once per id (`hark watch --session a --session b`) to select a subset.
+- **`hark start` / `restart`:** spawn **one** watch worker for a single `--session` (also `HARK_SESSION` in `run-mode-a.sh`). CLI default is **`default`**, while the stock config template uses `id = "local"` — pass `--session local` (or rename the config id) so the id matches a configured session. Watching every configured session from one `hark start` is not current product behavior.
+
 ### Local
 
 ```bash
@@ -45,18 +51,18 @@ Env: `HERDR_SESSION`, `HERDR_SOCKET_PATH`.
 ### Remote (v1 approaches)
 
 1. **SSH remote attach (human UI):** `herdr --remote workbox` — good for humans; automation may still prefer sockets.  
-2. **SSH tunnel of the Unix socket (preferred for `hark`):**  
+2. **SSH tunnel of the Unix socket (preferred — what Hark automates):**  
    ```bash
    ssh -L /tmp/herdr-work.sock:/home/you/.config/herdr/herdr.sock workbox -N
    # then:
    HERDR_SOCKET_PATH=/tmp/herdr-work.sock herdr agent list
    ```  
-   `hark` should manage tunnels for `[[herdr.sessions]]` with `ssh = "workbox"` (dedicated `ssh -N -L` child process, local sock path under `~/.cache/hark/tunnels/`).  
-3. **Remote CLI over SSH (fallback poll):**  
+   For `[[herdr.sessions]]` with `ssh = "…"`, Hark runs a dedicated `ssh -N -L` child and attaches a local `HerdrClient` to the forwarded socket. Preferred local path is under the XDG cache (`~/.cache/hark/tunnels/` by default) with a **transport-digest** filename (stable for session id + ssh + remote socket), not a bare session name. If that path exceeds the AF_UNIX length budget (~100 bytes), Hark falls back to a short path under `/tmp` or `/var/tmp` as `hark-{uid}-{namespace}/…`. Tunnels use crash-safe lease/owner markers (B152).  
+3. **Remote CLI over SSH (manual / debug only):**  
    ```bash
    ssh workbox herdr agent list
    ```  
-   Higher latency; OK for poll transport.
+   Useful for humans debugging without a tunnel. **Not** a Hark poll transport — production watch/`HerdrSessionAccess` always uses approach 2 (tunnel + local socket client). `transport=poll` still talks to the local forwarded socket / local `herdr` CLI, not `ssh host herdr`.
 
 ### Event identity
 
@@ -68,6 +74,35 @@ hark reply work/w1:p6 "yes"
 hark reply --session work w1:p6 "yes"
 hark keys work/w1:p6 2 enter
 ```
+
+## Session profile (B125)
+
+Handsfree startup interview answers live at
+`~/.local/state/hark/session_profile.json` (XDG state). Fields: **scope**,
+**autonomy**, **role**, **mode**.
+
+| Scope | Meaning for `hark start` / `restart` |
+|-------|--------------------------------------|
+| `herdr` (default when no profile) | Start Herdr watch (forward agent events) |
+| `session_local` | Skip Herdr watch — ambient/orchestrator only |
+
+CLI:
+
+```bash
+hark session-profile show
+hark session-profile set --scope herdr|session_local [--autonomy …] [--role …] [--mode …] [--apply]
+hark session-profile apply    # write saved mode into config.toml
+hark session-profile clear    # remove profile; start defaults return
+```
+
+Watch overrides on `hark start` / `restart`:
+
+- `--no-watch` — never start watch (wins over profile and `--force-watch`)
+- `--force-watch` — start watch even when scope is `session_local`
+- no profile file → treat as watch-on (`herdr` scope)
+
+`--apply` / `apply` map **mode** into `[ambient].streaming` / `[listen].end_mode`.
+Skill docs point here for the CLI; this section is the public home.
 
 ## Semantic states
 
@@ -124,6 +159,17 @@ herdr agent start <name> [--cwd PATH] [--workspace ID] [--tab ID] [--split right
 
 See `docs/plans/I005-voice-herdr-agent-control.md` and `hark.agents.resolve` for alias reject rules (gcc-as-`cc`, CodeRabbit-as-`cr`).
 
+**`[agents]` config** (voice spawn resolution):
+
+```toml
+[agents]
+prefer_aliases = true   # default: try safe short aliases (cc/cx/gk/cr) before canonical
+# claude = "claude"     # or absolute path / PATH token override per agent key
+# codex = "codex"
+```
+
+`prefer_aliases = true` prefers short aliases only when they resolve to a **safe** PATH binary (not gcc-as-`cc` / CodeRabbit-as-`cr`). Set `false` to prefer canonical names first. Per-agent keys override the resolved command entirely.
+
 ### Keys for menus
 
 Herdr key-combo syntax: `enter`, `tab`, `esc`, `down`, `up`, digits as printable keys, `ctrl+c`, etc.
@@ -140,7 +186,7 @@ NDJSON over Unix socket. Subscribe when available:
 
 Bootstrap: `agent list` poll (production `hark watch` reconciles from `agent list` at startup and after reconnects; `session.snapshot` is used only by `prototype/herdr_event_monitor.py`).
 
-If subscribe missing on protocol 14, poll only — still correct multi-session via separate sockets.
+If subscribe missing on protocol 14, poll only — still correct multi-session via separate sockets (one client/socket per configured session id).
 
 ## Context for judgment
 

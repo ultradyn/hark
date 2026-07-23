@@ -163,3 +163,4 @@ bugs:
     - file: B162-doctor-shows-provider-on-crede.todo
     - file: B163-openai-codex-token-lacks-audio.todo
     - file: B164-provider-auto-does-not-fall-ba.todo
+    - file: B165-no-viable-stt-not-detected-as.todo

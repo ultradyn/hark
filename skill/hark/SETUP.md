@@ -1,11 +1,17 @@
 # Hark first-run setup checklist
 
-Canonical **question order** for agent-driven and CLI setup.  
-CLI: `hark setup` (flags: `--yes`, `--persona`, `--wake-engine`, `--voice`, …).  
+Two separate flows — do not conflate them:
+
+| Flow | When | What |
+|------|------|------|
+| **A. First-run `hark setup`** | Missing/stale `setup-complete.json`, empty sessions, or `--force` | CLI question order below (sessions → persona → TTS → wake). Writes config + flag. |
+| **B. Every `/hark` skill start** | Always, before arming | B125 structured interview (scope → autonomy → role → mode) + `session-profile set … --apply`; sessions only if `scope=herdr`; persona/wake only if setup incomplete. See [SKILL.md](SKILL.md) **Session + voice bootstrap**. |
+
+CLI: `hark setup` (flags: `--yes`, `--force`, `--persona`, `--wake-engine`, `--voice`, `--names`, `--sessions`, `--skip-doctor`, `--skip-download`).  
 Flag file: `~/.local/state/hark/setup-complete.json` (includes **`hark_version`**).
 
 Related: [POST_INSTALL.md](POST_INSTALL.md) (CLI + Python/system deps after `npx skills`),
-[WAKE_STT.md](WAKE_STT.md) (local wake; **prefer Sherpa KWS** for product names),
+[WAKE_STT.md](WAKE_STT.md) (local wake; stock default **vosk**, recommend **Sherpa KWS** when model install succeeds),
 [SKILL.md](SKILL.md), `docs/CUSTOM_WAKE.md`, `docs/plans/B069-local-stt-survey.md`.
 
 ---
@@ -14,15 +20,15 @@ Related: [POST_INSTALL.md](POST_INSTALL.md) (CLI + Python/system deps after `npx
 
 | Condition | Action |
 |-----------|--------|
-| No `setup-complete.json` | Full setup (this checklist) |
-| `setup_schema_version` older than current | Re-ask **only new** questions |
+| No `setup-complete.json` | Full **Flow A** (`hark setup`) |
+| `setup_schema_version` older than current | Re-run setup (**today: full Flow A**; future may ask only new keys) |
 | Empty / missing `answers.sessions` | Re-ask **Herdr sessions** (local / SSH / mix); `hark doctor` warns |
 | Operator asks to reconfigure | Full or partial; use `--force` on CLI |
-| Already complete, same schema | **Still voice-confirm sessions** on each `/hark` skill start (B116); skip full persona/engine if unchanged, then arm |
+| Already complete, same schema | Skip Flow A. On each `/hark` start still run **Flow B** (B125 interview + `session-profile set --apply`); ask sessions only if `scope=herdr`; persona/wake only if setup incomplete |
 
 Schema version lives in code as `SETUP_SCHEMA_VERSION` (`hark.setup_flow`).
 
-**Agent hard rule (B116 + B125):** on every `/hark` or `/handsfree` skill start, **before** ambient/watch/monitor, run the **structured startup interview** (scope session-local vs Herdr, autonomy, role, mode) and `hark session-profile set … --apply`. If scope is **herdr**, also ask which Herdr sessions (local / SSH / mix). If setup incomplete, also ask persona / wake name / TTS voice. Do not arm with silent defaults. See SKILL.md **Session + voice bootstrap** and **Structured startup interview**.
+**Agent hard rule (B116 + B125):** on every `/hark` or `/handsfree` skill start, **before** ambient/watch/monitor, run Flow B. Do not arm with silent defaults. See SKILL.md **Session + voice bootstrap** and **Structured startup interview**.
 
 ---
 
@@ -46,17 +52,19 @@ uv run hark …
 
 If `hark start` is “invalid choice”, reinstall editable before debugging Mode A.
 
-## Question order (canonical)
+## Flow A — First-run `hark setup` (CLI question order)
+
+`hark setup` / `run_setup` asks and writes config + flag. It does **not** run wake-confirm, enrollment, or arm handsfree (those are post-CLI / agent — steps 7–9).
 
 1. **Health** — `hark doctor` (text OK). Fix Herdr / tunnels / speech keys if red.
    Check **install:** — if `stale` / `frozen` / missing cmds, reinstall editable first
    (see above). Note **setup:** line if incomplete / empty sessions.
-2. **Herdr sessions** — local / SSH / mix (**always first preference question**; never skip)  
+2. **Herdr sessions** — local / SSH / mix (**always asked in Flow A**; never skip here)  
    Write `[[herdr.sessions]]` (local without `ssh`, remote with `ssh = "…"`).  
    Voice: `hark ask --confirm never "Which Herdr sessions should I watch? Local only, a remote SSH host, or both?"`  
    CLI non-interactive: `hark setup --yes --sessions local` or  
    `--sessions local,work=ssh:workbox`.  
-   See SKILL.md **Herdr sessions**.
+   See SKILL.md **Herdr sessions**. (On skill start, sessions are asked only when Flow B chose `scope=herdr`.)
 3. **Persona**  
    - **Feminine (default):** wake names include **Iris** (+ mercury/hark/herald); TTS **eve**  
    - **Masculine:** **Mercury** (+ iris/hark/herald); TTS **leo**  
@@ -66,17 +74,18 @@ If `hark start` is “invalid choice”, reinstall editable before debugging Mod
    **B076** multi-provider auth: if OpenAI/MiniMax keys missing, **gracefully degrade**
    (list bundled samples only; still accept a typed voice id). Do not hard-fail setup.
 5. **Wake backend** — **Vosk** vs **Sherpa KWS** (extensible later):  
-   - Recommend **Sherpa KWS** when download/install OK (keyword spotting ≫ Vosk ASR for iris/hark; see [WAKE_STT.md](WAKE_STT.md)).  
-   - Prefer **Vosk** if constrained (already installed, no download, tiny deps).  
-   - **Defer** → leave `engine = "vosk"` (product default until dogfood).  
+   - **Stock default / `--yes` without `--wake-engine`:** `vosk` (CLI help: “default vosk until dogfood”).  
+   - **Recommend Sherpa KWS** when the model is already on disk or download/install succeeds (keyword spotting ≫ Vosk ASR for iris/hark; see [WAKE_STT.md](WAKE_STT.md)).  
+   - Prefer **Vosk** if constrained (already installed, no download, tiny deps) or `--skip-download`.  
+   - **Defer** → leave `engine = "vosk"`.  
    Config: `[ambient] engine = "vosk" | "sherpa_kws"`.
 6. **Download model** if Sherpa selected:  
    `./scripts/download-sherpa-kws-model.sh`  
    `uv sync --extra wake-sherpa`  
    Fail-open: if download fails, fall back to Vosk and note in setup answers.
-7. **Confirm wake test** — ask operator to say **hey iris** / **hey mercury** (or configured names).  
-   Optional ambient once: `hark ambient --once` with ambient enabled.
-8. **Write setup-complete flag** with:
+7. **(Post-CLI / agent) Confirm wake test** — ask operator to say **hey iris** / **hey mercury** (or configured names).  
+   Optional ambient once: `hark ambient --once` (workers arm ambient in-memory; disk `enabled` may still be false — see Config keys).
+8. **Write setup-complete flag** — CLI does this at end of Flow A with:
    ```json
    {
      "hark_version": "<version that wrote the flag>",
@@ -93,14 +102,47 @@ If `hark start` is “invalid choice”, reinstall editable before debugging Mod
      }
    }
    ```
-   No secrets in this file.
-9. **Arm handsfree** — continue SKILL.md (monitor, TTS mode, queue announce).
+   No secrets in this file. CLI then prints “Next: confirm wake… then arm handsfree…” and returns.
+9. **(Post-CLI / agent) Arm handsfree** — Flow B if not done, then continue SKILL.md (monitor, TTS mode, queue announce).
 
-**Voice-first:** after doctor, prefer `hark tts` / `hark ask` **one question at a time** when the Hark skill drives setup. Sessions → persona/wake → TTS voice → engine. Do not stack questions. Do not arm handsfree until sessions are answered and written.
+**Voice-first (agent driving Flow A):** after doctor, prefer `hark tts` / `hark ask` **one question at a time**. Sessions → persona/wake → TTS voice → engine. Do not stack questions. Do not arm until Flow A answers are written and Flow B is done.
+
+---
+
+## Flow B — Session profile + start (every skill start)
+
+Persist the B125 interview, then start workers. Deep tables live in SKILL.md; this is the minimum SETUP agents must not miss.
+
+```bash
+hark session-profile set \
+  --scope session_local|herdr \
+  --autonomy silent|blocked_only|proactive|babysit \
+  --role "…" \
+  --mode auto_end|radio|conversation \
+  --apply
+hark session-profile show   # path: ~/.local/state/hark/session_profile.json
+# note start_watch= (false when scope=session_local)
+```
+
+Defaults when no profile file: `herdr` + `blocked_only` + `radio`.
+
+```bash
+hark start                  # watch + ambient per profile / flags
+hark start --force-watch    # watch even if session_local
+hark start --no-watch       # skip Herdr watch
+hark start --no-ambient     # skip ambient wake loop
+```
+
+`scope=session_local` → `hark start` skips Herdr watch unless `--force-watch`.
 
 ---
 
 ## Config keys touched
+
+`hark setup` / `apply_answers_to_config` writes the keys below. It does **not** set
+`[ambient] enabled = true` (package default stays `false` on disk). Continuous ambient
+via `hark start` / workers arms the loop in-memory; doctor may still report
+`ambient: enabled=False` until an operator flips the disk flag.
 
 ```toml
 [tts]
@@ -109,7 +151,7 @@ voice = "eve"            # or leo / catalog id
 # playback_speed = 1.0   # pitch-preserving tempo; non-default needs ffmpeg
 
 [ambient]
-enabled = true           # when operator is ready for ambient
+# enabled = false        # setup does not write this; flip manually if desired
 wake_mode = "names"
 names = ["iris", "mercury", "hark", "herald"]
 engine = "vosk"          # or "sherpa_kws"
@@ -124,9 +166,13 @@ id = "local"
 ## CLI cheat
 
 ```bash
-hark setup --yes --persona feminine --wake-engine vosk
-hark setup --yes --persona masculine --wake-engine sherpa_kws
+hark setup --yes --persona feminine --wake-engine vosk \
+  --sessions local --voice eve
+hark setup --yes --persona masculine --wake-engine sherpa_kws \
+  --sessions local --names mercury,iris,hark,herald
+hark setup --yes --skip-download --wake-engine vosk   # no Sherpa fetch
 hark setup --force   # re-run full flow
+hark setup --skip-doctor --yes --sessions local
 ```
 
 ---
@@ -153,6 +199,6 @@ Beeps via `audio.cues`.
 | Problem | Behavior |
 |---------|----------|
 | Sherpa model missing | Doctor `status=missing_model`; keep/use `engine=vosk` |
-| `sherpa-onnx` not installed | Doctor warns `uv sync --extra wake-sherpa` |
+| `sherpa-onnx` / vosk package missing | Doctor `status=package_missing` (+ install hint, e.g. `uv sync --extra wake-sherpa`) |
 | Vosk model missing | `./scripts/setup-ambient.sh` / `download-vosk-model.sh` |
 | TTS sample auth incomplete | Skip playback; still set voice id (B076 when ready) |

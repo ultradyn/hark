@@ -30,9 +30,11 @@ a general sentence.
 **What wake is not:** Full conversation STT. After wake, utterance STT still goes
 to cloud (or optional local Whisper — not for always-on wake).
 
-**Recommend for most operators:** `engine = "sherpa_kws"` once the model +
-`wake-sherpa` extra are installed. Keep **Vosk** only if you need the smaller
-dep set or are debugging without ONNX.
+**Stock default** (config + `hark setup --yes` without `--wake-engine`): **`vosk`**
+until dogfood flips the default. **Recommend for most operators:**
+`engine = "sherpa_kws"` once the model + `wake-sherpa` extra are installed
+(download OK / already on disk). Keep **Vosk** if you need the smaller dep set,
+`--skip-download`, or are debugging without ONNX.
 
 ---
 
@@ -44,8 +46,8 @@ dep set or are debugging without ONNX.
 | **Vosk** (stock default) | `engine = "vosk"` | Constrained disk/deps; already set up; alias learning OK | ~40 M zip / ~68 M installed; RSS ~150 MiB |
 | **text_probe** | `engine = "text_probe"` | Tests only | — |
 
-Config default in the package remains **Vosk** for backward compatibility; handsfree
-setup / dogfood should **recommend Sherpa** when download is OK.
+Config default in the package remains **Vosk** (CLI: “default vosk until dogfood”);
+handsfree setup should **recommend Sherpa** when the model install succeeds.
 
 ---
 
@@ -68,7 +70,7 @@ setup / dogfood should **recommend Sherpa** when download is OK.
   (`sherpa-onnx` + `sentencepiece` + **`onnxruntime`** — provides `libonnxruntime.so`)
 - Path (auto): `~/.local/share/hark/models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01`
 - Keywords built from `WakePolicy` (names×prefixes + exact phrases); **rebuild on config reload / SIGHUP**
-- Doctor: `hark doctor` reports `status=ready|missing_model|package_missing` for `engine=sherpa_kws`
+- Doctor: `hark doctor` reports `status=ready|missing_model|package_missing` for both `vosk` and `sherpa_kws` (engine-dependent)
 - Handsfree launcher (`scripts/run-mode-a.sh`) puts onnxruntime’s `capi/` on `LD_LIBRARY_PATH`
   so `import sherpa_onnx` can resolve the shared library (Hark also re-execs once if needed)
 

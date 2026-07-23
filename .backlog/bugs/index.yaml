@@ -165,3 +165,4 @@ bugs:
     - file: B164-provider-auto-does-not-fall-ba.todo
     - file: B165-no-viable-stt-not-detected-as.todo
     - file: B166-config-accepts-stt-provider-mi.todo
+    - file: B167-feature-from-operator-first-ru.todo

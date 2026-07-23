@@ -95,7 +95,7 @@ Both modes **MUST** use the same XDG layout (overridable via `XDG_*`):
    Handsfree (v1 product)         │              harkd (optional)
    · agent + skill + Monitor      │              · always-on process
    · hark answer is delivery      │              · future: auto voice loop
-   · run-mode-a.sh workers        │              · harkd.pid single-instance
+   · hark start / run-mode-a.sh   │              · harkd.pid single-instance
            │                      │                      │
            └────────── MUST NOT both auto-deliver ───────┘
 ```
@@ -110,7 +110,7 @@ Both modes **MUST** use the same XDG layout (overridable via `XDG_*`):
 
 ### Coexistence rules (v0)
 
-1. **At most one** of: live `harkd` **or** handsfree workers from `run-mode-a.sh`.  
+1. **At most one** of: live `harkd` **or** handsfree workers (`hark start` / `run-mode-a.sh`) via `mode-a.pids`.  
 2. `hark daemon start` **MUST refuse** if another live `harkd.pid` exists.  
 3. `hark daemon start` **MUST refuse** if `mode-a.pids` lists live PIDs (handsfree already owns ambient/watch).  
 4. `./scripts/run-mode-a.sh` **MUST refuse** if a live `harkd.pid` exists (avoid killing/replacing daemon workers silently).  

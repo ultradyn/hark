@@ -41,9 +41,12 @@ outside the TUI can still inject.
 
 ### 2. Start workers
 
+Preferred:
+
 ```bash
-./scripts/run-mode-a.sh
-# or: hark daemon start --workers
+hark start
+# or: ./scripts/run-mode-a.sh
+# experimental alternate: hark daemon start --workers
 ```
 
 This writes `watch.jsonl` + `ambient.jsonl` under `~/.local/state/hark/`.

@@ -2,15 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/xertrov/hark/schemas/event-v1.schema.json",
   "title": "Hark Event v1",
+  "description": "HEP envelope. Watch/agent/answer/bridge events typically include priority, disposition, and target; ambient.* events often omit those (emitters in partial.py / wake.py). Consumers MUST ignore unknown fields.",
   "type": "object",
   "required": [
     "schema",
     "event_id",
     "observed_at",
-    "kind",
-    "priority",
-    "target",
-    "disposition"
+    "kind"
   ],
   "properties": {
     "schema": {
@@ -34,17 +32,25 @@
         "agent.question_changed",
         "agent.needs_input",
         "agent.completed",
-        "agent.failed",
         "agent.state_changed",
         "target.invalidated",
-        "answer.captured",
         "answer.transcribed",
         "answer.confirmation_required",
         "answer.delivered",
         "answer.delivery_uncertain",
         "answer.rejected",
         "bridge.degraded",
-        "bridge.recovered"
+        "bridge.recovered",
+        "ambient.partial",
+        "ambient.turn",
+        "ambient.prompt",
+        "ambient.conversation_end",
+        "ambient.cancelled",
+        "ambient.armed",
+        "ambient.wake_near_miss",
+        "ambient.wake_learned",
+        "ambient.error",
+        "ambient.reloaded"
       ]
     },
     "priority": {
@@ -54,13 +60,7 @@
     },
     "target": {
       "type": "object",
-      "required": [
-        "server_instance",
-        "workspace_id",
-        "tab_id",
-        "pane_id",
-        "pane_revision"
-      ],
+      "description": "Herdr pane identity for watch/agent/answer events. Ambient events typically omit target. Emitters set server_instance to session_id; partial targets (e.g. target.invalidated) may omit workspace/tab/revision.",
       "properties": {
         "server_instance": {
           "type": "string"
@@ -77,6 +77,12 @@
         "pane_revision": {
           "type": "integer",
           "minimum": 0
+        },
+        "terminal_id": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "agent": {
           "type": [
@@ -153,7 +159,8 @@
           }
         },
         "fingerprint": {
-          "type": "string"
+          "type": "string",
+          "description": "Opaque label; emitters use blake2b:<hex> (16-byte digest)."
         },
         "confidence": {
           "type": [
@@ -189,7 +196,9 @@
         "skipped",
         "answered",
         "invalidated",
-        "failed"
+        "failed",
+        "info",
+        "error"
       ]
     },
     "session_id": {

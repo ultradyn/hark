@@ -92,7 +92,8 @@ Do not screenshot the live homepage for social previews — edit the HTML card a
 
 ```bash
 cd site && python3 -m http.server 8765
-# open http://127.0.0.1:8765
+# open http://127.0.0.1:8765/          (marketing)
+# open http://127.0.0.1:8765/setup.html (first-run checklist)
 ```
 
 ## Deploy
@@ -100,10 +101,11 @@ cd site && python3 -m http.server 8765
 GitHub Actions (`.github/workflows/pages.yml`) publishes the site on **version tags only**
 (`v*`, same cadence as npm releases). The artifact is:
 
-- contents of `site/`
+- contents of `site/` (includes `index.html`, `setup.html`, `llms.txt`, assets, CSS/JS)
 - plus root **`install.sh`** → served as **https://hark.xk.io/install.sh**
 
 So the bash one-liner always matches the tagged release tree. Manual redeploy:
 Actions → “Deploy site to GitHub Pages” → Run workflow.
+Setup page URL after deploy: **https://hark.xk.io/setup.html**.
 
 Enable Pages → Source: **GitHub Actions** in repo settings if needed.

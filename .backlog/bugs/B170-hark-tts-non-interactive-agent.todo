@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-07-23T12:50:10Z"
+depends_on: []
+estimate_hours: 1
+id: B170
+priority: high
+status: pending
+tags: []
+title: 'hark tts (non-interactive/agent use) fails with ''MiniMax TTS requires consent'' until tts.minimax_ok=true or HARK_TTS_MINIMAX_OK=1. Friction: an agent that configured minimax as the TTS provider and used it successfully earlier in the session hit a consent wall mid-session (consent state not persisted from prior successful sends, or a new gate was added). Agents can''t answer an interactive consent prompt. Suggest: hark doctor / hark setup should surface and let you pre-accept TTS provider consent, and ''hark session-profile set --apply'' or first successful send should persist consent. Workaround: HARK_TTS_MINIMAX_OK=1 env var.'
+updated_at: "2026-07-23T12:50:10Z"
+---
+
+hark tts (non-interactive/agent use) fails with 'MiniMax TTS requires consent' until tts.minimax_ok=true or HARK_TTS_MINIMAX_OK=1. Friction: an agent that configured minimax as the TTS provider and used it successfully earlier in the session hit a consent wall mid-session (consent state not persisted from prior successful sends, or a new gate was added). Agents can't answer an interactive consent prompt. Suggest: hark doctor / hark setup should surface and let you pre-accept TTS provider consent, and 'hark session-profile set --apply' or first successful send should persist consent. Workaround: HARK_TTS_MINIMAX_OK=1 env var.

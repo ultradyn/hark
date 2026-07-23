@@ -47,7 +47,7 @@
       "properties": {
         "ok": { "type": "boolean" },
         "event_id": { "type": "string" },
-        "status": { "enum": ["delivered", "rejected", "uncertain"] },
+        "status": { "enum": ["delivered", "rejected", "uncertain", "in_progress"] },
         "detail": { "type": ["string", "null"] }
       }
     },

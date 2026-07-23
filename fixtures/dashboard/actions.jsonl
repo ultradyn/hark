@@ -5,6 +5,7 @@
 {"id":"answer-delivered","def":"answerResponse","data":{"ok":true,"event_id":"01JBLOCKED0000000000000001","status":"delivered","detail":null}}
 {"id":"answer-rejected","def":"answerResponse","data":{"ok":false,"event_id":"01JSTALE000000000000000009","status":"rejected","detail":"pane_revision mismatch"}}
 {"id":"answer-uncertain","def":"answerResponse","data":{"ok":true,"event_id":"01JBLOCKED0000000000000001","status":"uncertain","detail":"send timed out after write"}}
+{"id":"answer-in-progress","def":"answerResponse","data":{"ok":false,"event_id":"01JBLOCKED0000000000000001","status":"in_progress","detail":"delivery_in_progress"}}
 {"id":"prompt-request","def":"promptRequest","data":{"text":"summarize what the auth reviewer is asking","session_id":null}}
 {"id":"prompt-response","def":"promptResponse","data":{"ok":true,"event_id":"01JPROMPT00000000000000001"}}
 {"id":"transcribe-response","def":"transcribeResponse","data":{"ok":true,"text":"no keep the build directory","provider":"xai","latency_ms":812,"audio_ms":2600}}

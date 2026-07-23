@@ -84,6 +84,11 @@ Every SSE `data:` line is one envelope (`stream.schema.json`):
   lowercase hexadecimal values; the optional offset is unsigned decimal. Keys
   match `[a-z][a-z0-9_-]*` and are unique. Invalid cursor input is rejected
   with `400 bad_cursor` before any SSE frame is emitted.
+- One `source` MAY advance more than one cursor key. Delivery envelopes share
+  `source=delivery` but split keys by payload `type`: `bound` events
+  (`events.jsonl`) advance `bound`; outcome events (`deliveries.jsonl`)
+  advance `delivery`. Composite cursors therefore carry both
+  `bound:…,delivery:…`.
 - The checkpoint proves the complete raw-line prefix through `seq`. It permits
   bounded forward pagination when the source is unchanged. If the file was
   rotated or acknowledged bytes were rewritten, the server safely replays the
@@ -122,7 +127,7 @@ new event acknowledgement.
 | `system` | LogEvent: `ts` (float s), `seq`, `level` (`debug\|info\|warn\|error`), `component`, `event`, `message`, `data{}`, `pid` | `system.jsonl` |
 | `usage` | UsageEvent: `kind` (`tts\|stt`), `ts`, `provider?`, `voice?`, `ok`, `chars`, `words`, `audio_ms`, `latency_ms`, `error?`, `meta{}` | `usage.jsonl` |
 | `delivery` | `{type:"bound", …BoundEvent}` or `{type:"outcome", event_id, status, ts, …}` | `events.jsonl`, `deliveries.jsonl` |
-| `serve` | `{kind:"serve.*", …}` server meta: hello, dictation state, live spectrum, degradations | in-process |
+| `serve` | `{kind:"serve.*", …}` server meta: hello, dictation state, live spectrum | in-process |
 
 Note: HEP payloads are validated structurally (envelope + required HEP core
 fields), **not** against `event-v1.schema.json`'s closed kind enum —
@@ -143,7 +148,8 @@ Flow (`EventSource` cannot set headers, so header-only auth is out):
 
 1. `POST /api/v1/auth` `{"token": "…"}` → `200 {"ok": true}` +
    `Set-Cookie: hark_dash=<session>; HttpOnly; SameSite=Strict; Path=/`
-   (+ `Secure` when serving TLS or behind `tls_terminated = true`).
+   (+ `Secure` iff `tls_terminated = true` — the stdlib server does not
+   terminate TLS itself; set this behind `tailscale serve` / a reverse proxy).
 2. All subsequent requests (including the SSE stream) authenticate via the
    cookie. `Authorization: Bearer <token>` is ALSO accepted everywhere (for
    non-browser clients).
@@ -161,7 +167,7 @@ appropriate HTTP status (`error.schema` in `actions.schema.json`).
 | Method + path | Purpose | Schema |
 |---|---|---|
 | `POST /api/v1/auth` | token → session cookie | `actions.schema.json#authRequest/authResponse` |
-| `GET  /api/v1/health` | server + doctor summary | `health.schema.json` |
+| `GET  /api/v1/health` | server meta + doctor + additive `pipeline` / `update` | `health.schema.json` |
 | `GET  /api/v1/config` | redacted config snapshot | `config.schema.json` |
 | `GET  /api/v1/events?since=<cursor>&sources=a,b&limit=N` | backfill page | `events-page.schema.json` |
 | `GET  /api/v1/stream?sources=a,b` | SSE live stream; resume via `Last-Event-ID` header or `since=<cursor>` | `stream.schema.json` per `data:` line |
@@ -179,7 +185,8 @@ appropriate HTTP status (`error.schema` in `actions.schema.json`).
 
 - `since`: composite (or single-source) cursor; omitted → recent tail.
 - `sources`: comma filter (default: all).
-- `limit`: max events (server clamps; default 500).
+- `limit`: max events to return (default 500, hard max 2000; server clamps).
+  Per-source fresh tails are still bounded by `history_limit` (default 2000).
 - Response: `{ok, events: [envelope…], cursor: "<composite after last>",
   complete: <bool — false if more available before now>}`.
 - With `since`, pages move forward from the cursor: when `complete` is false,
@@ -189,6 +196,15 @@ appropriate HTTP status (`error.schema` in `actions.schema.json`).
 - Without `since`, the endpoint is a recent-tail snapshot.  Records older than
   the configured history/limit window are intentionally outside that snapshot;
   the page cursor establishes the current high-water mark for the live stream.
+
+### `GET /api/v1/health`
+
+Returns `{schema, ok, server, doctor, pipeline?, update?}`. `server` includes
+bind/auth/`tls_terminated`/`ffmpeg` meta. Additive fields (consumers MUST
+tolerate absence or unknown keys):
+
+- `pipeline` — daemon coordination plus ambient pause / announce-hold counts.
+- `update` — self-update advisory (`update_available`, versions, cache flags).
 
 ### `POST /api/v1/answer` — safe delivery (normative)
 
@@ -207,21 +223,27 @@ delivery to that event's recorded target.
 - Server MUST re-validate pane revision + question fingerprint before sending
   (same checks as `hark answer`) and MUST record the outcome idempotently.
 - Response `status`: `delivered` | `rejected` (stale/unknown/policy) |
-  `uncertain` (write may have landed). Rejections report the reason as a
-  top-level `"detail"` string (not an `error.code` object):
+  `uncertain` (write may have landed) | `in_progress` (another owner holds
+  the delivery single-flight lock). `in_progress` / most `rejected` answers
+  use HTTP 409 (404 for `unknown_event`, 400 for `bad_request`).
+- `"detail"` is an open string consumers MUST display opaquely (not an
+  `error.code` object). Answerability/live-check codes from
+  `src/hark/answerability/reasons.py` include:
   `stale_revision` | `fingerprint_mismatch` | `missing_question_fingerprint` |
   `fingerprint_unavailable` | `pane_gone` | `not_compatible` |
-  `unknown_event` | `already_delivered` | `bad_request`
-  (see `src/hark/answerability/reasons.py`). Malformed requests (missing
-  `event_id`, wrong field types) use the standard error envelope with
-  `bad_request`.
+  `unknown_event` | `already_delivered` | `bad_request`.
+  Delivery ownership / single-flight also surfaces codes such as
+  `delivery_in_progress`, `delivery_ownership_lost`, `not_pending` /
+  `not_pending:*`, `delivery_state_changed_after_send` (and legacy
+  `not_blocked`). Malformed requests (missing `event_id`, wrong field types)
+  use the standard error envelope with `bad_request`.
 
 ### `POST /api/v1/prompt`
 
 `{"text": "…", "session_id": null}` → appends a final `ambient.prompt` HEP
 event to the ambient feed (same shape as a voice wake), so the orchestrator
-orchestrator picks it up with its normal judgment. Response includes the new
-`event_id`. This is the unbound path; routing stays with the orchestrator.
+picks it up with its normal judgment. Response includes the new `event_id`.
+This is the unbound path; routing stays with the orchestrator.
 
 ### Dictation
 

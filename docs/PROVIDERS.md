@@ -210,7 +210,12 @@ Refs: Gemini audio understanding / `generateContent` with audio; Files API uploa
 
 - Gemini TTS speech generation and/or Cloud Text-to-Speech  
 
-Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY` (env only — ADC is not implemented).
+Auth discovery (env first, then CLI stores — fail-open):
+
+1. `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+2. Antigravity (`agy`) OAuth `~/.gemini/oauth_creds.json` (`access_token` / `api_key`)
+3. OpenCode `$XDG_DATA_HOME/opencode/auth.json` — `google` / `gemini` keys
+4. Pi agent `~/.pi/agent/auth.json` — `google` / `gemini` keys
 
 ---
 
@@ -268,7 +273,7 @@ Public docs emphasize **T2A (text→audio)**, not ASR. Community notes suggest A
 | `MINIMAX_API_KEY` | MiniMax TTS (preferred explicit) |
 | `~/.mmx/config.json` | MiniMax via **`mmx`** CLI |
 | `~/.minimax` | Legacy MiniMax key file/dir |
-| `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Google |
+| `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `~/.gemini/oauth_creds.json` | Google (explicit key or agy OAuth) |
 | Anthropic keys | Not required for voice I/O; used by orchestrator host |
 
 ---

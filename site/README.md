@@ -11,7 +11,9 @@ Marketing / docs landing for [ultradyn/hark](https://github.com/ultradyn/hark).
 | `css/components.css` | Buttons, cards, terminal, flow, nav, verse |
 | `css/layout.css` | Hero, grids, sections |
 | `js/main.js` | Nav scroll (+ optional `#wave` canvas) |
-| `index.html` | Single-page composition; hero RHS = SVG architecture diagram |
+| `index.html` | Marketing SPA; hero RHS = SVG architecture diagram |
+| `setup.html` | Dedicated first-run setup checklist (doctor → setup → session-profile → start) |
+| `llms.txt` | LLM-oriented doc index (includes Setup) |
 
 Change brand colors or type scale in **tokens only**; components consume `var(--…)`.
 

@@ -6,6 +6,17 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- feat(providers): `[stt].disabled` / `[tts].disabled` (and
+  `HARK_STT_DISABLED` / `HARK_TTS_DISABLED`) skip banned providers even when
+  credentials exist; `hark doctor` reports the disable lists.
+- feat(tts): MiniMax TTS gated by `tts.minimax_ok` / `HARK_TTS_MINIMAX_OK` —
+  first interactive use asks consent and persists the flag; non-interactive
+  runs fail closed with a clear hint. Doctor surfaces `tts_minimax_ok`.
+- feat(stt, openai): default STT model `gpt-4o-mini-transcribe` so Codex
+  ChatGPT OAuth works; `whisper-1` remains the fallback for API keys.
+- feat(providers, B168): Google STT/TTS may borrow agy (Antigravity) OAuth
+  from `~/.gemini/oauth_creds.json` after env keys, with doctor/providers
+  source labeling.
 - feat(tts, B160): `hark tts --standalone` (alias `--once`) — explicit
   one-shot marker guaranteeing the command runs from any working directory
   with no hark server required. JSON output reports `standalone` and

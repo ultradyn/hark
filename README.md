@@ -56,12 +56,15 @@ The verse is playful; **routing and confirmation are not.** Site: **[hark.xk.io]
 | [docs/AUDIO_DESIGN.md](docs/AUDIO_DESIGN.md) | Gate, endpointing, half-duplex |
 | [docs/ENDPOINTING.md](docs/ENDPOINTING.md) | Turn detection eval + Smart Turn seam |
 | [docs/HERDR.md](docs/HERDR.md) | Herdr / multi-session |
-| [docs/DASHBOARD.md](docs/DASHBOARD.md) | Live web dashboard (`hark serve`) — REST + SSE contract |
-| [docs/PROVIDERS.md](docs/PROVIDERS.md) | STT/TTS providers |
+| [docs/DASHBOARD.md](docs/DASHBOARD.md) | Live web dashboard (`hark webui` / `dashboard` / `serve`) — REST + SSE |
+| [docs/PROVIDERS.md](docs/PROVIDERS.md) | STT/TTS providers (`hark providers`) |
 | [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | Build plan |
 | [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | Acceptance criteria |
 | [schemas/event-v1.schema.json](schemas/event-v1.schema.json) | Event JSON Schema |
 | [skill/hark/SKILL.md](skill/hark/SKILL.md) | Primary agent skill |
+| [skill/hark/SETUP.md](skill/hark/SETUP.md) | First-run CLI setup (`hark setup`) |
+| [skill/hark/POST_INSTALL.md](skill/hark/POST_INSTALL.md) | After skills/CLI install checklist |
+| [skill/hark/WAKE_STT.md](skill/hark/WAKE_STT.md) | Local wake engines (Vosk / Sherpa) |
 | [skill/handsfree/SKILL.md](skill/handsfree/SKILL.md) | Alias skill (same loop) |
 | [prototype/herdr_event_monitor.py](prototype/herdr_event_monitor.py) | Socket subscribe probe |
 
@@ -75,6 +78,8 @@ The verse is playful; **routing and confirmation are not.** Site: **[hark.xk.io]
 - Recoverable across disconnects (no silent double-send)  
 
 ## Install
+
+**Prerequisites:** Python **3.11+**, PortAudio (for `sounddevice`), **ffmpeg** (recommended), and [Herdr](https://herdr.dev/) **≥ 0.7.1**. Full checklist: [`skill/hark/POST_INSTALL.md`](skill/hark/POST_INSTALL.md).
 
 ### One-liner (CLI + skills)
 
@@ -97,13 +102,17 @@ The installer is **idempotent** and HTTPS-only. It:
 - Clones or updates the repo under `~/.local/share/hark/src` (override with `HARK_HOME` / `--dir`)
 - Installs the `hark` CLI via **uv** (`uv tool install --editable`) or **pip** (`--method pip`)
 - Copies agent skills to `~/.claude/skills/{hark,handsfree}` (override with `HARK_SKILLS_DIR`)
-- Supports `PREFIX` / `DESTDIR`, `HARK_REF` (branch/tag/commit), `--with-wake`, `--no-skills`, `--no-cli`
+- Supports `PREFIX` / `DESTDIR`, `HARK_REF` (branch/tag/commit), `--with-wake` (Vosk **Python package only** — not the model; use `./scripts/setup-ambient.sh` or `hark setup` for models), `--no-skills`, `--no-cli`
 
-Then:
+Then (first-run):
 
 ```bash
 hark doctor
-# In Claude Code / Grok Build / Antigravity / Pi / OpenCode / Codex:
+hark setup                 # guided first-run; see skill/hark/SETUP.md
+hark start                 # ambient + watch workers (idempotent)
+# In a Monitor-capable agent, one long-lived feed:
+#   hark monitor           # compact HEP default; or: hark monitor --for-monitor
+# Then in Claude Code / Grok Build / Antigravity / Pi / OpenCode / Codex:
 #   /hark
 ```
 
@@ -131,13 +140,14 @@ Skills install does **not** install Python packages, PortAudio, or wake models �
 see [`skill/hark/POST_INSTALL.md`](skill/hark/POST_INSTALL.md) (agent-facing
 checklist after `npx skills`).
 
-**Monitor-capable harness required.** Arm a long-lived wake on:
+**Monitor-capable harness required.** After `hark setup`, start workers then arm **one** long-lived Monitor:
 
 ```bash
-hark monitor
+hark start
+hark monitor               # compact HEP default; use --for-monitor with harness Monitor tools
 ```
 
-(Compact HEP lines are the default; use `--full` only when you need uncompacted events.) Claude Code and Grok Build provide a native Monitor; on other harnesses:
+(Use `--full` only when you need uncompacted events.) Claude Code and Grok Build provide a native Monitor; on other harnesses:
 
 - **Pi** — [pi-monitor](https://github.com/clankercode/pi-monitor) (`pi install npm:pi-monitor`): `Monitor` tool that runs a background command and delivers regex-matching stdout into the session
 - **OpenCode** — [opencode-monitor-bg](https://github.com/clankercode/opencode-monitor-bg): `monitor_start` / `monitor_list` / `monitor_fetch` / `monitor_kill` — background output delivered back into the owning session
@@ -159,14 +169,24 @@ See [`packages/ultradyn-hark/README.md`](packages/ultradyn-hark/README.md). Main
 cd /path/to/hark   # or your clone
 uv sync
 uv run hark doctor
+uv run hark setup                # first-run (persona, wake engine, sessions)
 uv run hark config init          # optional ~/.config/hark/config.toml
+# Every handsfree start: session interview → profile (drives watch + ambient):
+# uv run hark session-profile set … --apply   # see skill/hark/SETUP.md / docs/HERDR.md
 uv run hark status
+uv run hark providers            # STT/TTS discovery; also: hark providers voices
+uv run hark start                # ambient + watch --for-monitor (idempotent; mode-a.pids)
+#   flags: --no-watch | --force-watch | --no-ambient | --session ID | --status
 uv run hark monitor              # primary handsfree feed (compact default)
+uv run hark restart              # stop then start (same start flags + --force / --timeout)
+uv run hark stop                 # graceful stop (HARK_STOP_GRACE_S / --timeout)
 uv run hark tts "hello"
 uv run hark listen               # speak, then silence ends (or end_mode=radio)
 uv run hark ask "What color?"
-uv run hark start                # ambient + watch workers (idempotent; mode-a.pids)
-uv run hark stop                 # graceful stop workers
+uv run hark mute                 # system default mic (pactl)
+uv run hark unmute
+uv run hark mute-sync            # hardware unmute → OS (--once or --watch)
+uv run hark webui                # live dashboard (aliases: dashboard, serve)
 # ambient alone (needs vosk model if engine=vosk):
 # uv run hark ambient
 uv run hark watch-logs           # live colorful system.jsonl (Ctrl-C to stop)
@@ -210,8 +230,13 @@ Larger models: set `ambient.model_path` after download — see
 
 - `[listen] end_mode = "radio"` — long pauses OK until `okay hark send` / `end prompt`
 - Cancel defaults are product-scoped: `hark cancel` (not “cancel that”)
-- `[ambient]` — local 2–3s wake for `hey hark` / `hey herald` (no cloud until activated)
-- `[audio] mute_mic_during_tts` — Wave mute ring while TTS plays
+- `[ambient]` — local 2–3s wake for `hey hark` / `hey herald` (no cloud until activated); `hark start` respects session-profile scope
+- `[audio] mute_mic_during_tts` — Wave mute ring while TTS plays; recovery: `hark mute-sync`
+- `[dashboard]` — live UI bind/port (`hark webui` / `dashboard` / `serve`); see [docs/DASHBOARD.md](docs/DASHBOARD.md)
+- `[stt]` / `[tts]` — provider order, streaming knobs, disable lists; `hark providers`
+- `[update]` — optional update check
+- `[agents]` — agent CLI aliases for `hark agent-start`
+- Full defaults: `hark config init` (writes template) or `DEFAULT_CONFIG` in `src/hark/config.py`
 
 ## Fixtures (Python ↔ Rust parity)
 

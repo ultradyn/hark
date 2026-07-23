@@ -30,5 +30,23 @@
       { "name": "xai", "available": true, "source": "grok auth", "detail": null },
       { "name": "openai", "available": false, "source": null, "detail": "OPENAI_API_KEY not set" }
     ]
+  },
+  "pipeline": {
+    "ambient_pause": false,
+    "announce_hold_queued": 0
+  },
+  "update": {
+    "current_version": "0.1.6",
+    "latest_version": "0.1.6",
+    "update_available": false,
+    "html_url": null,
+    "tag_name": null,
+    "checked_at": null,
+    "checked_at_iso": null,
+    "from_cache": false,
+    "stale": false,
+    "disabled": false,
+    "error": null,
+    "repo": "example/hark"
   }
 }

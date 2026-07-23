@@ -190,6 +190,8 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
     }),
     "stt": frozenset({
         "provider",
+        # Skip these providers even when credentials exist
+        "disabled",
         # Optional local full-STT (B072) — cloud remains default under auto
         "local_model",
         "local_device",
@@ -201,6 +203,9 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
     "tts": frozenset(
         {
             "provider",
+            "disabled",
+            # One-time consent before MiniMax TTS (default false)
+            "minimax_ok",
             "voice",
             "language",
             "max_chars",
@@ -480,6 +485,8 @@ class SttConfig:
     # auto | xai | openai | google | faster_whisper | moonshine
     # (aliases: local / whisper / faster-whisper → faster_whisper)
     provider: str = "auto"
+    # Provider names to skip even when credentials exist (auto + pin).
+    disabled: list[str] = field(default_factory=list)
     # Local full-STT (B072 / optional). Not used for ambient wake.
     local_model: str = "tiny.en"  # faster-whisper: tiny.en | base.en | …
     local_device: str = "cpu"  # cpu | cuda (GPU optional, never required)
@@ -492,6 +499,10 @@ class SttConfig:
 @dataclass
 class TtsConfig:
     provider: str = "auto"
+    # Provider names to skip even when credentials exist (auto + pin).
+    disabled: list[str] = field(default_factory=list)
+    # Consent before MiniMax TTS (persisted after interactive yes).
+    minimax_ok: bool = False
     # Provider voice id (xAI: eve/ara/leo/rex/sal/… — `hark providers voices`)
     voice: str | None = None
     language: str = "en"
@@ -787,6 +798,7 @@ config_watch_debounce_ms = 400
 
 [stt]
 provider = "auto"
+# disabled = ["google"]       # skip even with credentials (auto + pin)
 # Optional local full-STT for offline / privacy (B072). Cloud stays default.
 # Do NOT use Whisper for continuous ambient wake (see B069 / B070 for KWS).
 # provider = "faster_whisper"   # or "moonshine" (stretch) | "local" alias
@@ -796,10 +808,12 @@ provider = "auto"
 # local_model_path = ""         # optional on-disk CT2 model dir
 # local_fail_open = true        # fall back to cloud auto if local unavailable
 # local_download = true         # allow Hugging Face model download on first use
-# Env: HARK_STT_PROVIDER, HARK_STT_LOCAL_MODEL, HARK_STT_LOCAL_FAIL_OPEN, …
+# Env: HARK_STT_PROVIDER, HARK_STT_DISABLED, HARK_STT_LOCAL_MODEL, …
 
 [tts]
 provider = "auto"
+# disabled = ["minimax"]      # skip even with credentials (auto + pin)
+minimax_ok = false           # set true (or confirm once on TTY) before MiniMax TTS
 voice = "eve"                # xAI: eve ara leo rex sal … — hark providers voices
 language = "en"
 # playback_speed = 1.0         # pitch-preserving tempo; non-default needs ffmpeg
@@ -808,6 +822,7 @@ language = "en"
 # chunk_chars = 1500           # per synth request; multi-chunk plays in full (B091)
 print_prompt = true          # print question text to terminal on ask / tts --listen (B095)
 notify_skip = true           # desktop notification with full text + Skip action while TTS plays (B161)
+# Env: HARK_TTS_DISABLED, HARK_TTS_MINIMAX_OK=1
 
 [confirm]
 mode = "auto"
@@ -1267,7 +1282,24 @@ def load_config(path: Path | None = None) -> HarkConfig:
         )
     else:
         stt_local_download = _as_bool(stt_raw.get("local_download"), default=True)
+    stt_disabled = _as_list_str(stt_raw.get("disabled"), [])
+    env_stt_disabled = os.environ.get("HARK_STT_DISABLED")
+    if env_stt_disabled is not None:
+        stt_disabled = _as_list_str(env_stt_disabled, stt_disabled)
     tts_provider = str(tts_raw.get("provider", "auto"))
+    tts_disabled = _as_list_str(tts_raw.get("disabled"), [])
+    env_tts_disabled = os.environ.get("HARK_TTS_DISABLED")
+    if env_tts_disabled is not None:
+        tts_disabled = _as_list_str(env_tts_disabled, tts_disabled)
+    tts_minimax_ok = _as_bool(tts_raw.get("minimax_ok"), default=False)
+    env_minimax_ok = os.environ.get("HARK_TTS_MINIMAX_OK")
+    if env_minimax_ok is not None:
+        tts_minimax_ok = env_minimax_ok.strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
 
     end_mode_raw = str(listen_raw.get("end_mode", "silence"))
     if os.environ.get("HARK_LISTEN_END_MODE"):
@@ -1487,6 +1519,7 @@ def load_config(path: Path | None = None) -> HarkConfig:
         ),
         stt=SttConfig(
             provider=stt_provider,
+            disabled=stt_disabled,
             local_model=stt_local_model,
             local_device=stt_local_device,
             local_compute_type=stt_local_compute,
@@ -1496,6 +1529,8 @@ def load_config(path: Path | None = None) -> HarkConfig:
         ),
         tts=TtsConfig(
             provider=tts_provider,
+            disabled=tts_disabled,
+            minimax_ok=tts_minimax_ok,
             voice=(
                 str(tts_raw["voice"])
                 if tts_raw.get("voice")
@@ -1741,6 +1776,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
         },
         "stt": {
             "provider": cfg.stt.provider,
+            "disabled": list(cfg.stt.disabled),
             "local_model": cfg.stt.local_model,
             "local_device": cfg.stt.local_device,
             "local_compute_type": cfg.stt.local_compute_type,
@@ -1750,6 +1786,8 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
         },
         "tts": {
             "provider": cfg.tts.provider,
+            "disabled": list(cfg.tts.disabled),
+            "minimax_ok": cfg.tts.minimax_ok,
             "voice": cfg.tts.voice,
             "language": cfg.tts.language,
             "max_chars": cfg.tts.max_chars,

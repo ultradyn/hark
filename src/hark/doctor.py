@@ -210,6 +210,12 @@ def run_doctor(
         )
 
     # Optional local full-STT (B072) — soft readiness only; cloud remains default
+    report["stt_provider"] = cfg.stt.provider
+    report["stt_local_fail_open"] = bool(getattr(cfg.stt, "local_fail_open", True))
+    report["stt_disabled"] = list(getattr(cfg.stt, "disabled", []) or [])
+    report["tts_provider"] = cfg.tts.provider
+    report["tts_disabled"] = list(getattr(cfg.tts, "disabled", []) or [])
+    report["tts_minimax_ok"] = bool(getattr(cfg.tts, "minimax_ok", False))
     try:
         from hark.providers.local_stt import local_stt_statuses
 
@@ -223,8 +229,6 @@ def run_doctor(
             }
             for s in local_stt_statuses(model=local_model)
         ]
-        report["stt_provider"] = cfg.stt.provider
-        report["stt_local_fail_open"] = bool(getattr(cfg.stt, "local_fail_open", True))
     except Exception as exc:  # pragma: no cover - defensive
         report["local_stt"] = []
         report["local_stt_error"] = str(exc)
@@ -555,6 +559,16 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
         mark = "✓" if p["available"] else "·"
         src = f" [{p['source']}]" if p["source"] else ""
         print(f"    {mark} {p['name']}{src}: {p['detail']}", file=out)
+    stt_dis = report.get("stt_disabled") or []
+    tts_dis = report.get("tts_disabled") or []
+    print(
+        f"  speech policy: stt.provider={report.get('stt_provider', 'auto')} "
+        f"disabled={stt_dis or '[]'}; "
+        f"tts.provider={report.get('tts_provider', 'auto')} "
+        f"disabled={tts_dis or '[]'} "
+        f"minimax_ok={report.get('tts_minimax_ok', False)}",
+        file=out,
+    )
     local_stt = report.get("local_stt") or []
     if local_stt:
         pinned = report.get("stt_provider") or "auto"

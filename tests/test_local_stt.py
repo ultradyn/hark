@@ -151,7 +151,9 @@ def test_resolve_local_fail_open_to_cloud(monkeypatch):
             return Transcript(text="cloud", provider="xai")
 
     monkeypatch.setattr(resolve_mod, "_try_local_stt", fail_local)
-    monkeypatch.setattr(resolve_mod, "_resolve_cloud_stt", lambda name="auto": _Cloud())
+    monkeypatch.setattr(
+        resolve_mod, "_resolve_cloud_stt", lambda name="auto", **_k: _Cloud()
+    )
     cfg = SttConfig(provider="faster_whisper", local_fail_open=True)
     stt = resolve_stt("faster_whisper", stt_cfg=cfg)
     assert stt.name == "xai"
@@ -182,7 +184,9 @@ def test_resolve_auto_never_picks_local(monkeypatch):
             return Transcript(text="c", provider="openai")
 
     monkeypatch.setattr(resolve_mod, "_try_local_stt", boom_local)
-    monkeypatch.setattr(resolve_mod, "_resolve_cloud_stt", lambda name="auto": _Cloud())
+    monkeypatch.setattr(
+        resolve_mod, "_resolve_cloud_stt", lambda name="auto", **_k: _Cloud()
+    )
     stt = resolve_stt("auto")
     assert stt.name == "openai"
     assert called["local"] is False

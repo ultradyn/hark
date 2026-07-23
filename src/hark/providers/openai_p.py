@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import os
+
 import httpx
 
 from hark.providers.auth import resolve_openai_api_key
 from hark.providers.base import ProviderError, SynthResult, Transcript, provider_operation
 
 API = "https://api.openai.com/v1"
+
+# Codex ChatGPT OAuth lacks whisper-1 / TTS scopes; gpt-4o-*-transcribe works.
+_DEFAULT_STT_MODEL = "gpt-4o-mini-transcribe"
+_FALLBACK_STT_MODEL = "whisper-1"
 
 
 def _key() -> str:
@@ -19,6 +25,10 @@ def _key() -> str:
     return k
 
 
+def _stt_model() -> str:
+    return (os.environ.get("OPENAI_STT_MODEL") or _DEFAULT_STT_MODEL).strip() or _DEFAULT_STT_MODEL
+
+
 class OpenAIStt:
     name = "openai"
 
@@ -26,7 +36,8 @@ class OpenAIStt:
     def transcribe(self, wav_bytes: bytes, *, language: str | None = None) -> Transcript:
         headers = {"Authorization": f"Bearer {_key()}"}
         files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
-        data = {"model": "whisper-1"}
+        model = _stt_model()
+        data = {"model": model}
         if language:
             data["language"] = language
         with httpx.Client(timeout=120.0) as client:
@@ -36,6 +47,20 @@ class OpenAIStt:
                 files=files,
                 data=data,
             )
+            # API keys often allow whisper-1; Codex OAuth often only allows gpt-4o-*.
+            if (
+                r.status_code in (400, 401, 403, 404)
+                and model != _FALLBACK_STT_MODEL
+                and not os.environ.get("OPENAI_STT_MODEL")
+            ):
+                data = dict(data)
+                data["model"] = _FALLBACK_STT_MODEL
+                r = client.post(
+                    f"{API}/audio/transcriptions",
+                    headers=headers,
+                    files=files,
+                    data=data,
+                )
             if r.status_code >= 400:
                 raise ProviderError(f"OpenAI STT HTTP {r.status_code}: {r.text[:300]}")
             payload = r.json()

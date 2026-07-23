@@ -16,7 +16,7 @@
 | Provider | STT | TTS | Streaming STT | Auth for this project | Notes |
 |----------|-----|-----|---------------|----------------------|--------|
 | **xAI Grok** | Yes — REST + WS | Yes — REST + WS | **Yes** (Smart Turn) | **Grok Build OAuth** (`~/.grok/auth.json`) preferred; `XAI_API_KEY` fallback | **Default primary** |
-| **OpenAI** | Yes — transcriptions + Realtime Whisper | Yes | Yes | `OPENAI_API_KEY`; also Codex / OpenCode / Pi CLI stores | Strong fallback |
+| **OpenAI** | Yes — `gpt-4o-mini-transcribe` (default; Codex ChatGPT OAuth) + `whisper-1` fallback for API keys; Realtime | Yes | Yes | `OPENAI_API_KEY`; also Codex / OpenCode / Pi CLI stores | Strong fallback; Codex OAuth lacks `whisper-1` / TTS scopes today |
 | **Anthropic** | **No public STT API** as of plan time | Product voice / TTS not a general TTS API for this | N/A | Claude Code Max is UI voice (`/voice`) | **Orchestrator**, not STT engine. Provider stub: status `unsupported` with message; optional experimental browser/product bridge later |
 | **Google (Gemini / Antigravity)** | **Yes** — Gemini audio understanding (file → transcript); Cloud STT if GCP | Yes — Gemini TTS / Cloud TTS | Partial (Live API / Cloud streaming) | `GOOGLE_API_KEY` / `GEMINI_API_KEY` | Good batch path after VAD segment |
 | **MiniMax** | **ASR not clearly public** on main API docs | **Yes** — T2A (`/v1/t2a_v2`) | TTS streaming yes | `MINIMAX_API_KEY`; also `mmx` CLI / Pi / OpenCode / legacy `~/.minimax` | Use for **TTS**; STT = probe + stub until official ASR endpoint confirmed |
@@ -27,10 +27,25 @@
 
 ## Default resolution order
 
+Disabled providers are skipped even when credentials exist:
+
+```toml
+[stt]
+disabled = ["google"]          # never use for STT (auto or pin)
+
+[tts]
+disabled = []                  # e.g. ["minimax"]
+minimax_ok = false             # must be true before MiniMax TTS runs
+```
+
+Env: `HARK_STT_DISABLED`, `HARK_TTS_DISABLED` (comma-separated), `HARK_TTS_MINIMAX_OK=1`.
+
+MiniMax TTS: on first interactive use when MiniMax would be selected, Hark asks for consent and persists `tts.minimax_ok = true`. Non-interactive runs fail with a clear hint until the flag is set.
+
 ### STT (`stt.provider = "auto"`)
 
 1. **xAI** if Grok OAuth token or `XAI_API_KEY` works  
-2. **OpenAI** if key present  
+2. **OpenAI** if key present (default model `gpt-4o-mini-transcribe`; falls back to `whisper-1` for API keys — Codex ChatGPT OAuth supports GPT-4o transcribe but not `whisper-1`)  
 3. **Google/Gemini** if key present  
 4. Else error listing how to configure  
 
@@ -38,7 +53,7 @@
 
 1. **xAI** (same auth as STT)  
 2. **OpenAI**  
-3. **MiniMax** (strong dedicated TTS)  
+3. **MiniMax** (only when `tts.minimax_ok` is true, or after interactive consent)  
 4. **Google** Gemini/Cloud TTS  
 5. Else espeak-ng emergency only if `tts.allow_espeak_fallback = true`
 
@@ -232,6 +247,7 @@ Auth discovery (env first, then CLI stores — fail-open):
   4. OpenCode auth — `minimax*` / `minimax-coding-plan` keys
   5. Legacy `~/.minimax` (raw key file or dir with `config.json` / `api_key`)
 - Never log the token. Interactive login: `mmx auth login`.
+- **Consent:** MiniMax is not used until `tts.minimax_ok = true` (or interactive yes / `HARK_TTS_MINIMAX_OK=1`). Use `[tts] disabled = ["minimax"]` to ban it entirely.
 
 ### STT
 

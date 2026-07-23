@@ -795,7 +795,19 @@ def run_tts(
     store = UsageStore()
     t0 = time.monotonic()
     voice_id = voice or cfg.tts.voice or "eve"
-    provider_name = provider or cfg.tts.provider
+    # Resolve once in the parent (TTY MiniMax consent + disabled list) so the
+    # isolated synth worker receives a concrete provider name.
+    _requested = provider or cfg.tts.provider
+    _chosen = resolve_tts(
+        _requested,
+        voice=voice_id,
+        language=cfg.tts.language,
+        tts_cfg=cfg.tts,
+        allow_prompt=True,
+        config_path=cfg.path,
+    )
+    resolved_provider = getattr(_chosen, "name", None) or _requested
+    provider_name = resolved_provider
     content_type = "audio/mpeg"
     used_voice = voice_id
     from_cache = False
@@ -823,7 +835,7 @@ def run_tts(
         transport = _synth_transport_factory(owner)
         result = transport.synthesize(
             SynthRequest(
-                provider=provider or cfg.tts.provider,
+                provider=resolved_provider,
                 voice=voice_id,
                 language=cfg.tts.language,
                 text=piece,
@@ -849,7 +861,7 @@ def run_tts(
     def _record_synth_fail(piece: str, exc: BaseException) -> None:
         store.record_tts(
             text=piece,
-            provider=provider or cfg.tts.provider,
+            provider=resolved_provider,
             voice=voice_id,
             ok=False,
             error=str(exc)[:200],

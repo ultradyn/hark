@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-08-10T12:33:00Z"
+depends_on: []
+estimate_hours: 1
+id: B172
+priority: high
+status: pending
+tags: []
+title: 'radio end-phrase detection: operator said ''that covers it.'' then sat through a long silence before resorting to ''i''m done answering the question'' — neither is in the soft end-phrase lexicon, so a ~110s capture for a ~30s answer (2026-08-10 hark ask, end_phrase eventually ''over''). Suggest: (1) extend soft utterance-final closers (''that covers it'', "i''m done", ''done answering'', ''that answers it''); (2) radio idle nudge — after N s of post-speech silence play a soft cue or emit a partial so the agent/ask can offer listen-end; (3) surface partials to blocking ask so it can auto-finish on semantic closers.'
+updated_at: "2026-08-10T12:33:00Z"
+---
+
+radio end-phrase detection: operator said 'that covers it.' then sat through a long silence before resorting to 'i'm done answering the question' — neither is in the soft end-phrase lexicon, so a ~110s capture for a ~30s answer (2026-08-10 hark ask, end_phrase eventually 'over'). Suggest: (1) extend soft utterance-final closers ('that covers it', "i'm done", 'done answering', 'that answers it'); (2) radio idle nudge — after N s of post-speech silence play a soft cue or emit a partial so the agent/ask can offer listen-end; (3) surface partials to blocking ask so it can auto-finish on semantic closers.

@@ -170,3 +170,4 @@ bugs:
     - file: B169-hark-start-reports-started-mis.todo
     - file: B170-hark-tts-non-interactive-agent.todo
     - file: B171-conference-hold-false-positive.todo
+    - file: B172-radio-end-phrase-detection-ope.todo

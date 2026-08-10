@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-08-10T13:11:21Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-08-10T13:16:16Z"
 complexity: medium
 created_at: "2026-08-10T13:11:06Z"
 depends_on: []
+duration_minutes: 4.918842912433333
 estimate_hours: 3
 id: B174
 priority: high
 started_at: "2026-08-10T13:11:21Z"
-status: in_progress
+status: done
 tags: []
 title: 'feature: Custom STT provider (OpenAI-compatible /v1/audio/transcriptions)'
-updated_at: "2026-08-10T13:11:21Z"
+updated_at: "2026-08-10T13:16:16Z"
 ---
 Add an explicit Custom STT provider variant that talks to any OpenAI-compatible speech-to-text HTTP API.
 

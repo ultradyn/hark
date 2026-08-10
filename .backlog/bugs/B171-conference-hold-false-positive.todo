@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-08-10T12:19:36Z"
+depends_on: []
+estimate_hours: 1
+id: B171
+priority: high
+status: pending
+tags: []
+title: 'conference hold false-positive: browser main-process cmdline retains zoom.us/j/ join URL from launch forever (until browser restart), so hold_during_conference holds ALL TTS with chime-only beeps long after the meeting ended. Seen 2026-08-10: Brave launched 1d11h earlier with join URL; stale zoom client also lingered. Suggest: ignore boot-time argv URLs (age-gate cmdline matches), require live AV stream from the matched process, and/or cap via conference_max_hold_s with audible/logged hint. Also: hark doctor should surface ''conference hold ACTIVE (matched: ...)'' so operators see why TTS is silent.'
+updated_at: "2026-08-10T12:19:36Z"
+---
+
+conference hold false-positive: browser main-process cmdline retains zoom.us/j/ join URL from launch forever (until browser restart), so hold_during_conference holds ALL TTS with chime-only beeps long after the meeting ended. Seen 2026-08-10: Brave launched 1d11h earlier with join URL; stale zoom client also lingered. Suggest: ignore boot-time argv URLs (age-gate cmdline matches), require live AV stream from the matched process, and/or cap via conference_max_hold_s with audible/logged hint. Also: hark doctor should surface 'conference hold ACTIVE (matched: ...)' so operators see why TTS is silent.

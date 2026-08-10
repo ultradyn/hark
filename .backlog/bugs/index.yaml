@@ -172,3 +172,4 @@ bugs:
     - file: B171-conference-hold-false-positive.todo
     - file: B172-radio-end-phrase-detection-ope.todo
     - file: B173-hark-ask-returned-text-null-en.todo
+    - file: B174-feature-custom-stt-provider-op.todo

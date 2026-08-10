@@ -1,0 +1,62 @@
+---
+complexity: medium
+created_at: "2026-08-10T13:11:06Z"
+depends_on: []
+estimate_hours: 3
+id: B174
+priority: high
+status: pending
+tags:
+    - stt
+    - providers
+title: 'feature: Custom STT provider (OpenAI-compatible /v1/audio/transcriptions)'
+updated_at: "2026-08-10T13:11:06Z"
+---
+Add an explicit Custom STT provider variant that talks to any OpenAI-compatible speech-to-text HTTP API.
+
+## Goal
+Operators can pin `stt.provider = \"custom\"` (never via auto) and point Hark at a base URL + API key + model. Product name is **Custom STT** — do not brand any specific gateway.
+
+## API we adhere to (document in docs/PROVIDERS.md)
+OpenAI-compatible batch STT surface only (no Realtime/WS):
+
+- `POST {base_url}/audio/transcriptions`
+- Auth: `Authorization: Bearer <token>`
+- Content-Type: `multipart/form-data`
+- Fields: `file` (wav bytes, filename `audio.wav`, type `audio/wav`), `model` (required), optional `language`
+- Success response: JSON with `text` string (default OpenAI json shape)
+- Errors: non-2xx → ProviderError with status + short body excerpt (no audio/token logging)
+
+`base_url` is the OpenAI-style root including `/v1` (e.g. `https://gateway.example.com/v1`).
+
+## Config / env
+```toml
+[stt]
+provider = \"custom\"
+custom_base_url = \"https://gateway.example.com/v1\"
+# prefer env for secrets:
+# custom_api_key = \"...\"   # optional; env wins
+custom_model = \"gpt-4o-mini-transcribe\"  # or gateway-documented model id
+```
+
+| Env | Maps to |
+|-----|---------|
+| `HARK_STT_PROVIDER=custom` | pin |
+| `HARK_STT_CUSTOM_BASE_URL` | base URL |
+| `HARK_STT_CUSTOM_API_KEY` | bearer token |
+| `HARK_STT_CUSTOM_MODEL` | model field |
+
+## Acceptance
+- [ ] `CustomStt` implements `SttProvider.transcribe`
+- [ ] resolve_stt(\"custom\") requires base_url + key; clear errors if missing
+- [ ] not selected by `auto`
+- [ ] config load + config_to_dict round-trip
+- [ ] unit tests with httpx mock (multipart shape, language, errors)
+- [ ] docs/PROVIDERS.md documents Custom STT + API contract (no product-gateway branding)
+- [ ] doctor / `hark providers` surface custom when configured (soft readiness: base_url+key present)
+- [ ] CHANGELOG entry
+
+## Out of scope (this ticket)
+- Custom TTS
+- Native dual-mount `/v1/stt` client path (OpenAI `/audio/transcriptions` only)
+- Streaming STT

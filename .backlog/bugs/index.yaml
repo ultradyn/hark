@@ -173,3 +173,4 @@ bugs:
     - file: B172-radio-end-phrase-detection-ope.todo
     - file: B173-hark-ask-returned-text-null-en.todo
     - file: B174-feature-custom-stt-provider-op.todo
+    - file: B175-doctor-reports-speech-ready-xa.todo

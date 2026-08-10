@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-08-10T12:58:30Z"
+depends_on: []
+estimate_hours: 1
+id: B173
+priority: high
+status: pending
+tags: []
+title: 'hark ask returned {text:null, end_phrase:null} and ended EARLY while the operator was mid-answer (2026-08-10 ~22:55, radio mode, session_local profile). Operator confirms he was answering; no transcript captured, no end phrase fired. Prior asks in the same session worked. Need: never return silently-null on an armed capture — surface why (mic lease lost? worker restart? STT empty? timeout path returning early) in the JSON (e.g. reason field), and log the capture lifecycle to state dir for post-mortem.'
+updated_at: "2026-08-10T12:58:30Z"
+---
+
+hark ask returned {text:null, end_phrase:null} and ended EARLY while the operator was mid-answer (2026-08-10 ~22:55, radio mode, session_local profile). Operator confirms he was answering; no transcript captured, no end phrase fired. Prior asks in the same session worked. Need: never return silently-null on an armed capture — surface why (mic lease lost? worker restart? STT empty? timeout path returning early) in the JSON (e.g. reason field), and log the capture lifecycle to state dir for post-mortem.

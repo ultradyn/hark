@@ -171,3 +171,4 @@ bugs:
     - file: B170-hark-tts-non-interactive-agent.todo
     - file: B171-conference-hold-false-positive.todo
     - file: B172-radio-end-phrase-detection-ope.todo
+    - file: B173-hark-ask-returned-text-null-en.todo

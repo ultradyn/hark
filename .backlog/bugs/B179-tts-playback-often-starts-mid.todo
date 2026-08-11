@@ -1,15 +1,14 @@
 ---
+completed_at: null
 complexity: medium
 created_at: "2026-08-11T15:44:07Z"
 depends_on: []
 estimate_hours: 2
 id: B179
 priority: high
+started_at: null
 status: pending
-tags:
-    - dogfood
-    - tts
-    - wayfinding
+tags: []
 title: TTS playback often starts mid-utterance (drops question preamble)
 updated_at: "2026-08-11T15:44:07Z"
 ---
@@ -44,3 +43,5 @@ Operator cannot reliably hear full multiple-choice questions; forces repeat and 
 - [ ] Fix or documented mitigation for long `hark ask` prompts
 - [ ] At least one automated check: full prompt text vs STT of played audio (or duration floor)
 - [ ] Dogfood re-test with multi-option wayfinding questions
+
+Repro again 2026-08-11 wayfinding Q9: operator heard TTS start just after 'Option A colon' — missed question preamble. Same session radio+google eve+media duck. Prompt was multi-option priority vs P19.

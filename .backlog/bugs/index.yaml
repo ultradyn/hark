@@ -177,3 +177,4 @@ bugs:
     - file: B176-hark-ask-tts-start-was-inaudib.todo
     - file: B177-hark-ask-intermittently-fails.todo
     - file: B178-hark-loses-the-entire-in-progr.todo
+    - file: B179-tts-playback-often-starts-mid.todo

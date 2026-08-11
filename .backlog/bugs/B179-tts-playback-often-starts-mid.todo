@@ -1,0 +1,46 @@
+---
+complexity: medium
+created_at: "2026-08-11T15:44:07Z"
+depends_on: []
+estimate_hours: 2
+id: B179
+priority: high
+status: pending
+tags:
+    - dogfood
+    - tts
+    - wayfinding
+title: TTS playback often starts mid-utterance (drops question preamble)
+updated_at: "2026-08-11T15:44:07Z"
+---
+## Symptom
+During wayfinding with `hark ask` (radio mode, session-local), the operator repeatedly heard TTS **start mid-question** — missing the beginning (e.g. questions appeared to "always start at option C"). Happened on multiple consecutive asks in one session (LLMP non-chat passthrough wayfinding, 2026-08-11).
+
+## Impact
+Operator cannot reliably hear full multiple-choice questions; forces repeat and slows HITL planning.
+
+## Environment
+- hark doctor: v0.1.0 editable from `/home/xertrov/src/grok/hark` (git reported ahead of release tag)
+- TTS provider: google (voice eve) in this session; STT custom → LLMP grok-stt
+- Mode: radio (`listen.end_mode=radio`), ambient streaming=false
+- Media duck on during TTS
+- Session profile: session_local, proactive, radio
+
+## Repro notes for fixture
+1. `hark session-profile set --scope session_local --autonomy proactive --role "wayfinding" --mode radio --apply`
+2. Ask a long multi-option question via `hark ask --confirm never "Question N. ... Option A: ... Option B: ... Option C: ... Recommend C. ..."`
+3. Operator reports audio starts after option A/B preamble — only hears from ~option C onward.
+
+## Desired investigation
+- Capture/retain TTS PCM for failing turns as automatic regression fixtures (audio + STT transcript of what was played vs full prompt text).
+- Check media-duck / conference hold / play-queue truncation / chunk boundaries / mic-mute race.
+- Compare prompt chars vs played audio duration (e.g. 400-char prompt should not sound like half).
+
+## Related secondary crash (same session)
+`hark tts "..."` once exited with: `double free or corruption (!prev)` then hang until timeout — file/fix separately if not same root cause; capture under this bug if stack ties to TTS play path.
+
+## Acceptance
+- [ ] Root cause identified (play path vs duck vs chunking)
+- [ ] Fix or documented mitigation for long `hark ask` prompts
+- [ ] At least one automated check: full prompt text vs STT of played audio (or duration floor)
+- [ ] Dogfood re-test with multi-option wayfinding questions

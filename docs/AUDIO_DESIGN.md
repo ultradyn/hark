@@ -638,6 +638,30 @@ bound-answer no-open nudge text.
 
 - Wake snippets processed locally; not uploaded.  
 - Delete raw audio after STT unless debug capture enabled.  
+- **Answer-window recovery (B178):** while a listen is open, accepted microphone
+  PCM is appended under a private state tree
+  (`$XDG_STATE_HOME/hark/recover/streams/<stream_id>/`, dirs `0700`, files
+  `0600`) and flushed about every second so SIGINT/SIGTERM, harness timeouts,
+  crashes, or parent death lose at most a few seconds of speech — not the whole
+  answer. Metadata (`meta.json`) holds stream id, sample format, timestamps,
+  status, and optional short partial text; it does **not** store API keys or
+  unbound secrets. On **successful** clean completion (transcript / intentional
+  cancel / reload abort), the stream directory is removed immediately. On
+  abnormal exit the files remain for operator recovery:
+
+  ```text
+  hark recover list
+  hark recover show <stream_id>
+  hark recover export <stream_id> -o answer.wav
+  hark recover transcribe <stream_id> [--discard]
+  hark recover discard <stream_id>
+  hark recover purge [--older-than-days 7]
+  ```
+
+  `hark doctor` surfaces orphaned streams (soft warning) and purges entries
+  older than **7 days** by default. Treat the recover tree as sensitive
+  operator speech; discard when no longer needed.  
+
 
 ## Conference hold vs media ducking
 

@@ -30,6 +30,7 @@ from hark.answer_window.silence import (
     is_no_open_timeout as _is_no_open_timeout,
 )
 from hark.audio.capture import effective_radio_segment_pad_ms
+from hark.audio.stream_recovery import open_stream_recovery
 from hark.endpointing import EndpointStrategy
 from hark.listen_end import EndMode
 from hark.partial import new_stream_id
@@ -348,8 +349,42 @@ def open_answer_window(
     do_duck_stt = bool(policy.duck_media_during_stt)
     do_pause_stt = bool(policy.pause_media_during_stt)
 
+    # B178: durable PCM recovery for abnormal interruption (harness kill, signal,
+    # crash). Successful clean completion discards the private stream dir.
+    recovery = open_stream_recovery(
+        stream, mode=mode.value, sample_rate=gate_spec.sample_rate
+    )
+    recovery_done = False
+
+    def _recovery_pcm(pcm: bytes) -> None:
+        recovery.append_pcm(pcm)
+
+    def _recovery_success() -> None:
+        nonlocal recovery_done
+        if recovery_done:
+            return
+        recovery_done = True
+        try:
+            recovery.complete_and_discard()
+        except Exception:
+            pass
+
+    def _recovery_keep(*, reason: str | None = None) -> None:
+        nonlocal recovery_done
+        if recovery_done:
+            return
+        recovery_done = True
+        try:
+            if reason:
+                recovery.mark_interrupted(reason=reason)
+            else:
+                recovery.close_retain(reason="incomplete")
+        except Exception:
+            pass
+
     # Pause ambient wake scanning so we get the mic (dogfood B010)
     with (
+        recovery,
         pause_ambient_for_mic(reason="listen"),
         MicLease("listen"),
         BusySection("listen"),
@@ -418,10 +453,16 @@ def open_answer_window(
                             audio_ok_after=lead_ok,
                             endpoint_strategy=endpoint_strategy,
                             on_endpoint_event=_endpoint_event,
+                            on_accepted_pcm=_recovery_pcm,
                         )
+                        try:
+                            recovery.note_segment(force_flush=True)
+                        except Exception:
+                            pass
                     except TimeoutError as exc:
                         # Reload mid-wait (before speech / empty capture) → clean cancel
                         if _reload_abort():
+                            _recovery_success()
                             return _reload_cancel_result()
                         _cue_stop_once(reason="timeout")
                         err_s = str(exc)
@@ -471,6 +512,7 @@ def open_answer_window(
                         raise
                     # Config reload mid-capture (should_stop) — not a normal silence end
                     if _reload_abort():
+                        _recovery_success()
                         return _reload_cancel_result(duration_ms=cap.duration_ms)
                     agent_act = consume_listen_action(stream)
                     _cue_stop_once(
@@ -488,6 +530,7 @@ def open_answer_window(
                             ok=False,
                             error="agent_cancel",
                         )
+                        _recovery_success()
                         return ListenResult(
                             text="",
                             provider=getattr(stt, "name", "unknown"),
@@ -582,6 +625,7 @@ def open_answer_window(
                             empty_stt_attempts=attempt,
                             after_tts=after_tts,
                         )
+                    _recovery_success()
                     return ListenResult(
                         text=tr.text,
                         provider=tr.provider,
@@ -653,6 +697,7 @@ def open_answer_window(
                 _arm_cue_if_requested()
             while time.monotonic() - started < max_listen:
                 if _reload_abort():
+                    _recovery_success()
                     return _reload_cancel_result(
                         duration_ms=int(1000 * (time.monotonic() - started)),
                         text=radio_sess.last_partial_text,
@@ -705,9 +750,18 @@ def open_answer_window(
                         ),
                         discard_leading_ms=seg_discard,
                         audio_ok_after=seg_ok_after,
+                        on_accepted_pcm=_recovery_pcm,
                     )
+                    try:
+                        recovery.note_segment(
+                            partial_text=radio_sess.last_partial_text or None,
+                            force_flush=True,
+                        )
+                    except Exception:
+                        pass
                 except TimeoutError:
                     if _reload_abort():
+                        _recovery_success()
                         return _reload_cancel_result(
                             duration_ms=int(1000 * (time.monotonic() - started)),
                             text=radio_sess.last_partial_text,
@@ -751,6 +805,7 @@ def open_answer_window(
                                 ok=hit.kind != "cancel",
                                 error="cancel" if hit.kind == "cancel" else None,
                             )
+                            _recovery_success()
                             return radio_sess.result_for_phrase_hit(
                                 hit,
                                 text=tr.text,
@@ -776,6 +831,7 @@ def open_answer_window(
                             text_len=len(body),
                             partials_emitted=radio_sess.partial_seq,
                         )
+                        _recovery_success()
                         return ListenResult(
                             text=body,
                             provider=tr.provider,
@@ -799,6 +855,7 @@ def open_answer_window(
                     raise
                 # Config reload mid-segment (should_stop) — clean cancel with stop cue
                 if _reload_abort():
+                    _recovery_success()
                     return _reload_cancel_result(
                         duration_ms=int(1000 * (time.monotonic() - started)),
                         text=radio_sess.last_partial_text,
@@ -901,6 +958,11 @@ def open_answer_window(
                             latency_ms=latency_ms,
                             ok=True,
                         )
+                    try:
+                        recovery.set_partial_text(ended.text or radio_sess.last_partial_text)
+                    except Exception:
+                        pass
+                    _recovery_success()
                     return ended
                 # Joined segment STT is append-only; RadioSession refuses shrink
                 # so a flaky mid-slice rewrite cannot drop words already seen.
@@ -915,6 +977,10 @@ def open_answer_window(
                 ):
                     ev = radio_sess.last_partial_event or {}
                     frag = ev.get("fragment") or ""
+                    try:
+                        recovery.set_partial_text(radio_sess.last_partial_text)
+                    except Exception:
+                        pass
                     # Prefer fragment in logs so each radio slice is visible
                     # (full cumulative body is still on the event as text).
                     syslog(
@@ -987,6 +1053,7 @@ def open_answer_window(
                         latency_ms=latency_ms,
                         ok=True,
                     )
+                    _recovery_success()
                     return radio_sess.result_for_agent_action(
                         "finish",
                         text=body,
@@ -1002,6 +1069,7 @@ def open_answer_window(
                         latency_ms=latency_ms,
                         ok=True,
                     )
+                    _recovery_success()
                     return ListenResult(
                         text=body,
                         provider=tr.provider,
@@ -1012,6 +1080,7 @@ def open_answer_window(
                         partials_emitted=radio_sess.partial_seq,
                     )
             if agent_act == "cancel":
+                _recovery_success()
                 return radio_sess.result_for_agent_action(
                     "cancel",
                     text=radio_sess.last_partial_text,
@@ -1021,3 +1090,7 @@ def open_answer_window(
             raise TimeoutError(f"radio listen exceeded max_listen_s={max_listen}")
         finally:
             clear_active_listen(stream)
+            # Abnormal exit (signal, crash path that still runs finally, uncaught
+            # error): keep durable PCM. Successful paths already discarded it.
+            if not recovery_done:
+                _recovery_keep(reason="abnormal_exit")

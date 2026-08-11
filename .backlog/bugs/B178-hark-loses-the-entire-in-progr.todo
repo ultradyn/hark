@@ -46,3 +46,5 @@ Hark must never lose more than a few seconds of accepted microphone audio becaus
 ## Related
 
 B143 fixed interrupted capture cleanup and structured cancellation. This bug is specifically durable audio recovery and bounded data loss.
+
+Implemented on branch fix/B178: private recover/streams PCM durability, hark recover CLI, doctor section, tests including SIGKILL mid-stream.

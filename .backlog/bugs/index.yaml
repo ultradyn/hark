@@ -174,3 +174,4 @@ bugs:
     - file: B173-hark-ask-returned-text-null-en.todo
     - file: B174-feature-custom-stt-provider-op.todo
     - file: B175-doctor-reports-speech-ready-xa.todo
+    - file: B176-hark-ask-tts-start-was-inaudib.todo

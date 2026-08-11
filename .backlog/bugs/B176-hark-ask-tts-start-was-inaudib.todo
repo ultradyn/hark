@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-08-11T12:20:47Z"
+depends_on: []
+estimate_hours: 1
+id: B176
+priority: high
+status: pending
+tags: []
+title: hark ask TTS start was inaudible/missed; operator suspects mute/media-duck sequencing muted the beginning. Reproduced during tm-plugin-skills Wayfinder bootstrap with google/eve TTS; subsequent short prompt reported the issue.
+updated_at: "2026-08-11T12:20:47Z"
+---
+
+hark ask TTS start was inaudible/missed; operator suspects mute/media-duck sequencing muted the beginning. Reproduced during tm-plugin-skills Wayfinder bootstrap with google/eve TTS; subsequent short prompt reported the issue.

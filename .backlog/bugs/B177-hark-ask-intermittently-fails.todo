@@ -1,0 +1,14 @@
+---
+complexity: medium
+created_at: "2026-08-11T12:22:03Z"
+depends_on: []
+estimate_hours: 1
+id: B177
+priority: high
+status: pending
+tags: []
+title: 'hark ask intermittently fails before listen with Gemini TTS HTTP 400: model tried to generate text but should only be used for TTS. Ordinary planning questions trigger it under provider=auto/google; retrying a shorter prompt often works. Need provider fallback/retry so ask remains usable.'
+updated_at: "2026-08-11T12:22:03Z"
+---
+
+hark ask intermittently fails before listen with Gemini TTS HTTP 400: model tried to generate text but should only be used for TTS. Ordinary planning questions trigger it under provider=auto/google; retrying a shorter prompt often works. Need provider fallback/retry so ask remains usable.

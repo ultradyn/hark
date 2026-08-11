@@ -175,3 +175,4 @@ bugs:
     - file: B174-feature-custom-stt-provider-op.todo
     - file: B175-doctor-reports-speech-ready-xa.todo
     - file: B176-hark-ask-tts-start-was-inaudib.todo
+    - file: B177-hark-ask-intermittently-fails.todo

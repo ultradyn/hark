@@ -1,0 +1,32 @@
+---
+complexity: medium
+created_at: "2026-08-11T15:44:08Z"
+depends_on: []
+estimate_hours: 1
+id: B180
+priority: high
+status: pending
+tags:
+    - dogfood
+    - tts
+    - crash
+title: 'hark tts: double free or corruption (!prev) then hang'
+updated_at: "2026-08-11T15:44:08Z"
+---
+## Symptom
+During LLMP wayfinding session 2026-08-11, after several successful `hark ask` turns:
+```
+hark tts "C locked for nav. Also filing a Hark bug..."
+# → double free or corruption (!prev)
+# command timed out after 90s
+```
+
+## Context
+- Editable hark from ~/src/grok/hark
+- TTS google/eve, media duck on
+- Workers already running (ambient)
+
+## Acceptance
+- [ ] Repro or ASAN/valgrind on TTS play path
+- [ ] Fix double-free; no hang after crash
+- [ ] Regression test or stress on rapid tts after ask

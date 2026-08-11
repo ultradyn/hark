@@ -178,3 +178,4 @@ bugs:
     - file: B177-hark-ask-intermittently-fails.todo
     - file: B178-hark-loses-the-entire-in-progr.todo
     - file: B179-tts-playback-often-starts-mid.todo
+    - file: B180-hark-tts-double-free-or-corrup.todo

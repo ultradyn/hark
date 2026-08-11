@@ -1,14 +1,18 @@
 ---
+claimed_at: "2026-08-11T13:37:48Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-08-11T13:07:10Z"
 depends_on: []
 estimate_hours: 1
 id: B178
 priority: high
-status: pending
+started_at: "2026-08-11T13:37:48Z"
+status: in_progress
 tags: []
 title: Hark loses the entire in-progress recording when ask/listen is interrupted; persist recoverable audio continuously with bounded loss
-updated_at: "2026-08-11T13:07:10Z"
+updated_at: "2026-08-11T13:37:48Z"
 ---
 ## Dogfood incident
 

@@ -1,0 +1,44 @@
+---
+complexity: medium
+created_at: "2026-08-11T13:07:10Z"
+depends_on: []
+estimate_hours: 1
+id: B178
+priority: high
+status: pending
+tags: []
+title: Hark loses the entire in-progress recording when ask/listen is interrupted; persist recoverable audio continuously with bounded loss
+updated_at: "2026-08-11T13:07:10Z"
+---
+## Dogfood incident
+
+During a long \ radio answer on 2026-08-11, the orchestration harness killed the command at its 300-second tool timeout while the operator was still speaking. The child terminated and no transcript was returned.
+
+This trigger was the caller's five-minute timeout, not Hark's ambient worker. The ambient worker remained alive. Existing B143 handles cancellation/cleanup, but does not make captured speech durable.
+
+## Evidence
+
+- The answer-window keeps completed segment PCM only in the in-memory \ list in \.
+- The currently active \ segment is also in memory until it returns.
+- Search of \, \, and \ after interruption found no recording/chunk for this answer window and no recent recoverable WAV/PCM file.
+- No current listen-state file or final/partial transcript exists for the interrupted stream. The only recent WAV files are unrelated short wake-debug snippets.
+- Therefore this approximately five-minute response appears unrecoverable.
+
+## Required invariant
+
+Hark must never lose more than a few seconds of accepted microphone audio because of SIGINT/SIGTERM, parent death, process crash, provider failure, machine interruption, or harness timeout.
+
+## Wanted behavior
+
+- Persist active answer-window audio continuously or in short atomic chunks under a private state/recovery directory, keyed by stream ID.
+- Flush/fsync or otherwise bound the uncommitted tail to a few seconds; do not wait for a silence-delimited segment or final STT.
+- Maintain enough metadata to identify prompt, stream, sample format, timestamps, completion state, and any partial transcripts without storing secrets.
+- On abnormal exit, retain and surface the recoverable recording on the next Hark invocation/status/doctor, with a command to transcribe, inspect, resume/submit where safe, or discard it.
+- On successful transcription/delivery, clean up according to a documented retention policy.
+- Handle multi-segment radio/conversation captures and the currently open segment; preserving only already-transcribed partial text is insufficient.
+- Use restrictive permissions and document privacy/storage implications.
+- Add tests that kill a recording process mid-stream and prove all but at most the configured small tail is recoverable.
+
+## Related
+
+B143 fixed interrupted capture cleanup and structured cancellation. This bug is specifically durable audio recovery and bounded data loss.

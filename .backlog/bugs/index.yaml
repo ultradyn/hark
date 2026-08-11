@@ -179,3 +179,4 @@ bugs:
     - file: B178-hark-loses-the-entire-in-progr.todo
     - file: B179-tts-playback-often-starts-mid.todo
     - file: B180-hark-tts-double-free-or-corrup.todo
+    - file: B181-hark-tts-can-block-for-80-120s.todo

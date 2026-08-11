@@ -1,0 +1,41 @@
+---
+complexity: medium
+created_at: "2026-08-11T16:07:29Z"
+depends_on: []
+estimate_hours: 1
+id: B181
+priority: high
+status: pending
+tags:
+    - tts
+    - google
+    - timeout
+    - dogfood
+title: hark tts can block for 80-120s with no audible output before Gemini timeout
+updated_at: "2026-08-11T16:07:29Z"
+---
+## Symptom
+During live dogfooding, `hark tts` remained blocked for more than 80 seconds with no audible speech. The operator independently reported hearing nothing. It eventually exited 4 after roughly 120 seconds.
+
+## Captured evidence
+`hark logs --json` recorded:
+- `tts.error`: `Gemini TTS failed: The read operation timed out`
+- provider `google`, voice `eve`
+- chars `230`, words `35`
+- `latency_ms`: `120487`
+- `audio_ms`: `0`
+- pid `1402331`
+
+A nearby retry also took 91.175 seconds before succeeding (`tts.ok`, 64.955 seconds audio for 209 chars), so the UX can remain silent for a very long time even without a final error.
+
+## Expected
+Bound synthesis/connect/read latency well below 80 seconds; provide prompt progress or a timeout/fallback while no audio is available; always restore audio/mic/queue state on timeout.
+
+## Environment
+- Hark CLI reports 0.1.0, editable checkout `/home/xertrov/src/grok/hark`
+- checkout description: `v0.1.10-323-g540937d-dirty`
+- configured TTS policy: auto with xAI/openAI disabled, selecting Google/Gemini
+- no credentials included
+
+## Suggested regression coverage
+Simulate a TTS provider read stall and assert a bounded deadline, visible progress/failure, fallback policy, queue release, and mic/media restoration.

@@ -1,17 +1,18 @@
 ---
+claimed_at: "2026-08-17T05:25:34Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-08-17T05:24:44Z"
 depends_on: []
 estimate_hours: 1
 id: B182
 priority: high
-status: pending
-tags:
-    - tts
-    - providers
-    - custom-gateway
+started_at: "2026-08-17T05:25:34Z"
+status: in_progress
+tags: []
 title: Custom TTS provider (OpenAI-compatible gateway, mirror of B174 Custom STT)
-updated_at: "2026-08-17T05:24:44Z"
+updated_at: "2026-08-17T05:25:34Z"
 ---
 Hark has Custom STT (B174, provider="custom") but no Custom TTS — TTS resolves only xai|openai|minimax|google|anthropic. Add an explicit-pin Custom TTS provider for any OpenAI-compatible audio/speech gateway (product name: Custom TTS; never name specific gateways in user-facing docs/config).
 

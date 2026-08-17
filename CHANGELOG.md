@@ -6,6 +6,18 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- feat(stt): Custom STT key sources — `custom_api_key` / env,
+  `custom_api_key_file` / `HARK_STT_CUSTOM_API_KEY_FILE`, and
+  `custom_api_key_command` / `HARK_STT_CUSTOM_API_KEY_COMMAND` (shell
+  stdout, first non-empty line). Precedence: literal → file → command.
+  Secrets stay out of config dumps; doctor reports readiness.
+- feat(stt, B174): **Custom STT** provider (`stt.provider = "custom"`) —
+  OpenAI-compatible batch `POST {base}/audio/transcriptions` (optional
+  `custom_path = "/stt"` dual-mount). Config/env:
+  `custom_base_url`, `custom_model`, `custom_path`,
+  `HARK_STT_CUSTOM_API_KEY` (secret never dumped). Explicit pin only —
+  never selected by `auto`. Documented client contract in
+  `docs/PROVIDERS.md`. Doctor / `hark providers` report config readiness.
 - feat(providers): `[stt].disabled` / `[tts].disabled` (and
   `HARK_STT_DISABLED` / `HARK_TTS_DISABLED`) skip banned providers even when
   credentials exist; `hark doctor` reports the disable lists.

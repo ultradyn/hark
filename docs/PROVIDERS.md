@@ -19,6 +19,7 @@ Shipped I/O is **batch REST** (`httpx` POST). Upstream Realtime/WS/Cloud streami
 |----------|-----|-----|----------------------|----------------------|--------|
 | **xAI Grok** | Yes — batch REST | Yes — batch REST | **No** (upstream WS exists; unused) | **Grok Build OAuth** (`~/.grok/auth.json`) preferred; `XAI_API_KEY` fallback | **Default primary** |
 | **OpenAI** | Yes — `gpt-4o-mini-transcribe` (default; Codex ChatGPT OAuth) + `whisper-1` fallback for API keys when `OPENAI_STT_MODEL` unset | Yes — batch REST | **No** (Realtime API not implemented) | `OPENAI_API_KEY`; also Codex / OpenCode / Pi CLI stores | Strong fallback; Codex OAuth lacks `whisper-1` / TTS scopes today |
+| **Custom STT** | Yes — OpenAI-compatible batch REST (configurable base URL) | **No** (this variant is STT-only) | **No** | Bearer via env / key file / key command | Explicit pin only (`provider = "custom"`); never via `auto` |
 | **Anthropic** | **No public STT API** as of plan time | Product voice / TTS not a general TTS API for this | N/A | Claude Code Max is UI voice (`/voice`) | **Orchestrator**, not STT engine. Provider stub: status `unsupported` with message |
 | **Google (Gemini / Antigravity)** | **Yes** — Gemini audio understanding (file → transcript); Cloud STT **not implemented** | Yes — Gemini TTS; Cloud TTS **not implemented** | **No** (Live/Cloud streaming unused) | `GOOGLE_API_KEY` / `GEMINI_API_KEY`; also **agy** OAuth + OpenCode / Pi | Good batch path after RMS/energy (or Smart Turn) segment |
 | **MiniMax** | **ASR not clearly public** on main API docs | **Yes** — T2A (`/v1/t2a_v2`), batch (`stream: false`) | N/A (TTS not streamed in hark) | `MINIMAX_API_KEY`; also `mmx` CLI / Pi / OpenCode / legacy `~/.minimax` | Use for **TTS**; STT = `unsupported` until official ASR endpoint confirmed |
@@ -61,11 +62,15 @@ MiniMax TTS: on first interactive use when MiniMax would be selected, Hark asks 
 4. **Google** Gemini TTS (when credentials present)  
 5. Else error — hint lists `grok login` / `XAI_API_KEY` / `OPENAI_API_KEY` / `MINIMAX_API_KEY` (Google/agy is still in the order above but **omitted from that hint string** today)
 
-Operator may pin: `provider = "xai" | "openai" | "google" | "minimax" | "anthropic"`.
+Operator may pin: `provider = "xai" | "openai" | "google" | "minimax" | "anthropic" | "custom"`.
 
 Optional local (explicit only — never via `auto`):
 
 `provider = "faster_whisper" | "local" | "moonshine"` — see [Optional local full-STT](#optional-local-full-stt-b072) below.
+
+Optional Custom STT gateway (explicit only — never via `auto`):
+
+`provider = "custom"` — see [Custom STT](#custom-stt-openai-compatible-gateway) below.
 
 ---
 
@@ -122,6 +127,78 @@ Target feel for local post-wake: **≲ 1–1.5 s** after speech end on mid hardw
 - **Not** selected by `provider = "auto"`.
 
 `hark doctor` and `hark providers` report local engine **import readiness** (soft; missing extra is not a hard fail). Cloud provider rows remain credential-discovery only.
+
+---
+
+## Custom STT (OpenAI-compatible gateway)
+
+Pin an HTTP speech-to-text endpoint that speaks the **OpenAI audio transcriptions** wire format (batch REST only). This is for operators who front STT behind their own reverse proxy or internal gateway. **Not selected by `auto`.**
+
+### Client API Hark adheres to
+
+Hark is a client. The gateway must accept:
+
+| | |
+|---|---|
+| Method / path | `POST {base_url}{custom_path}` |
+| Default path | `/audio/transcriptions` (OpenAI surface) |
+| Alternate path | `/stt` (native dual-mount style; same multipart body) |
+| Auth | `Authorization: Bearer <token>` |
+| Content-Type | `multipart/form-data` |
+| Form fields | **`file`** — WAV bytes, filename `audio.wav`, content-type `audio/wav`; **`model`** — string (required on `/audio/transcriptions`; optional on `/stt` when the gateway injects a default); optional **`language`** (BCP-47 / ISO code when the gateway supports it) |
+| Success body | JSON with a transcript string in `text` (preferred), or `transcript`, or `result.text`. Word arrays (`words[]`) are accepted as a fallback join. Plain-text bodies are accepted if JSON parse fails. |
+| Errors | Non-2xx → operator-visible `ProviderError` with HTTP status + short body excerpt. **Audio bytes and bearer tokens are never logged.** |
+| Non-goals | Realtime / WebSocket STT; streaming multipart; OpenAI `response_format` variants beyond default JSON/text; TTS |
+
+`base_url` is the OpenAI-style API root **including** the version segment, e.g. `https://gateway.example.com/v1`. Hark joins `{base_url}{custom_path}` with no extra `/v1` insertion.
+
+Example request shape (equivalent to what Hark sends):
+
+```bash
+curl -sS -X POST "$BASE/audio/transcriptions" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@answer.wav;type=audio/wav" \
+  -F "model=gpt-4o-mini-transcribe" \
+  -F "language=en"
+# → {"text":"…"}
+```
+
+Native dual-mount style (same auth + multipart; model may be optional server-side):
+
+```bash
+curl -sS -X POST "$BASE/stt" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@answer.wav;type=audio/wav" \
+  -F "model=grok-stt"
+```
+
+### Config / env
+
+```toml
+[stt]
+provider = "custom"
+custom_base_url = "https://gateway.example.com/v1"
+custom_model = "gpt-4o-mini-transcribe"   # or a gateway-documented model id
+# custom_path = "/audio/transcriptions"  # default; set "/stt" for native dual-mount
+# Key sources (first hit wins) — keep secrets out of config when possible:
+# custom_api_key = "…"                   # or HARK_STT_CUSTOM_API_KEY
+# custom_api_key_file = "~/.llmp"        # or HARK_STT_CUSTOM_API_KEY_FILE
+# custom_api_key_command = "cat ~/.llmp" # or HARK_STT_CUSTOM_API_KEY_COMMAND
+```
+
+| Env | Maps to |
+|-----|---------|
+| `HARK_STT_PROVIDER=custom` | pin Custom STT |
+| `HARK_STT_CUSTOM_BASE_URL` | `stt.custom_base_url` |
+| `HARK_STT_CUSTOM_API_KEY` | bearer token (highest priority) |
+| `HARK_STT_CUSTOM_API_KEY_FILE` | `stt.custom_api_key_file` — path to a file holding the token (whole file, stripped) |
+| `HARK_STT_CUSTOM_API_KEY_COMMAND` | `stt.custom_api_key_command` — shell command; stdout first non-empty line is the token |
+| `HARK_STT_CUSTOM_MODEL` | `stt.custom_model` |
+| `HARK_STT_CUSTOM_PATH` | `stt.custom_path` (`/audio/transcriptions` or `/stt`) |
+
+**Key precedence:** literal env/config key → key file → key command.
+
+`hark doctor` / `hark providers` report **config readiness** (base URL + key source + model-when-required), not a live probe. `config_to_dict` / JSON dumps expose `custom_api_key_configured` (true if any key source is set) plus the file path / command string — never the secret itself.
 
 ---
 
@@ -304,6 +381,7 @@ Public docs emphasize **T2A (text→audio)**, not ASR. Community notes suggest A
 | `~/.mmx/config.json` | MiniMax via **`mmx`** CLI |
 | `~/.minimax` | Legacy MiniMax key file/dir |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `~/.gemini/oauth_creds.json` | Google (explicit key or agy OAuth); also OpenCode/Pi above |
+| `HARK_STT_CUSTOM_API_KEY` / `_FILE` / `_COMMAND` (+ `HARK_STT_CUSTOM_BASE_URL`) | Custom STT gateway bearer (explicit `provider = "custom"`) |
 | Anthropic keys | Not required for voice I/O; used by orchestrator host |
 
 ---

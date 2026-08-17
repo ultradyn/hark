@@ -2064,6 +2064,30 @@ def cmd_providers(args: argparse.Namespace) -> int:
             )
     except Exception:
         pass
+    # Custom STT readiness (B174) — config/env presence only
+    try:
+        from hark.config import load_config
+        from hark.providers.custom_stt import custom_stt_status
+
+        cfg = load_config()
+        cst = custom_stt_status(
+            base_url=getattr(cfg.stt, "custom_base_url", None),
+            api_key=getattr(cfg.stt, "custom_api_key", None),
+            api_key_file=getattr(cfg.stt, "custom_api_key_file", None),
+            api_key_command=getattr(cfg.stt, "custom_api_key_command", None),
+            model=getattr(cfg.stt, "custom_model", None),
+            path=getattr(cfg.stt, "custom_path", None),
+        )
+        rows.append(
+            {
+                "name": cst.name,
+                "available": cst.available,
+                "source": "config" if cst.available else None,
+                "detail": cst.detail,
+            }
+        )
+    except Exception:
+        pass
     if args.test_name:
         name = args.test_name.lower().replace("-", "_")
         rows = [

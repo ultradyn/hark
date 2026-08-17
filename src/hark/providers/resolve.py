@@ -31,6 +31,9 @@ _LOCAL_STT_NAMES = frozenset(
     }
 )
 
+# Custom STT (B174) — OpenAI-compatible gateway; explicit pin only.
+_CUSTOM_STT_NAMES = frozenset({"custom", "custom_stt", "custom-stt"})
+
 _MINIMAX_OK_HINT = (
     "MiniMax TTS requires consent — set tts.minimax_ok = true in config.toml, "
     "or HARK_TTS_MINIMAX_OK=1, or run an interactive hark tts once and answer yes"
@@ -43,6 +46,8 @@ def _normalize_provider_name(name: str) -> str:
         return "google"
     if n in ("faster-whisper", "whisper", "local"):
         return "faster_whisper"
+    if n in ("custom_stt", "custom-stt"):
+        return "custom"
     return n
 
 
@@ -50,6 +55,8 @@ def _normalize_stt_name(name: str) -> str:
     n = (name or "auto").lower().strip()
     if n in ("faster-whisper", "whisper", "local"):
         return "faster_whisper"
+    if n in ("custom_stt", "custom-stt"):
+        return "custom"
     return n
 
 
@@ -259,6 +266,50 @@ def _try_local_stt(name: str, opts: dict) -> SttProvider:
     return stt
 
 
+def _custom_opts(stt_cfg: SttConfig | None) -> dict:
+    """Resolve Custom STT settings from config (and env already folded into cfg)."""
+    from hark.providers.custom_stt import resolve_custom_api_key
+
+    if stt_cfg is None:
+        return {
+            "base_url": os.environ.get("HARK_STT_CUSTOM_BASE_URL"),
+            "api_key": resolve_custom_api_key(
+                os.environ.get("HARK_STT_CUSTOM_API_KEY"),
+                os.environ.get("HARK_STT_CUSTOM_API_KEY_FILE"),
+                os.environ.get("HARK_STT_CUSTOM_API_KEY_COMMAND"),
+            ),
+            "model": os.environ.get("HARK_STT_CUSTOM_MODEL"),
+            "path": os.environ.get("HARK_STT_CUSTOM_PATH"),
+        }
+    return {
+        "base_url": getattr(stt_cfg, "custom_base_url", None)
+        or os.environ.get("HARK_STT_CUSTOM_BASE_URL"),
+        "api_key": resolve_custom_api_key(
+            getattr(stt_cfg, "custom_api_key", None)
+            or os.environ.get("HARK_STT_CUSTOM_API_KEY"),
+            getattr(stt_cfg, "custom_api_key_file", None)
+            or os.environ.get("HARK_STT_CUSTOM_API_KEY_FILE"),
+            getattr(stt_cfg, "custom_api_key_command", None)
+            or os.environ.get("HARK_STT_CUSTOM_API_KEY_COMMAND"),
+        ),
+        "model": getattr(stt_cfg, "custom_model", None)
+        or os.environ.get("HARK_STT_CUSTOM_MODEL"),
+        "path": getattr(stt_cfg, "custom_path", None)
+        or os.environ.get("HARK_STT_CUSTOM_PATH"),
+    }
+
+
+def _try_custom_stt(opts: dict) -> SttProvider:
+    from hark.providers.custom_stt import CustomStt
+
+    return CustomStt(
+        base_url=opts.get("base_url") or "",
+        api_key=opts.get("api_key") or "",
+        model=opts.get("model"),
+        path=opts.get("path"),
+    )
+
+
 def resolve_stt(
     name: str = "auto",
     *,
@@ -271,9 +322,14 @@ def resolve_stt(
     ``local-stt`` extra (or Moonshine stretch install). When local is selected
     and unavailable, ``stt.local_fail_open`` (default True) falls back to cloud
     auto-resolution.
+
+    Custom STT (``custom``) is explicit-only — never selected by ``auto``.
     """
     disabled = _stt_disabled(stt_cfg)
     raw = (name or "auto").lower().strip()
+    if raw in _CUSTOM_STT_NAMES or _normalize_stt_name(raw) == "custom":
+        _reject_if_disabled("custom", disabled, kind="stt")
+        return _try_custom_stt(_custom_opts(stt_cfg))
     if raw in _LOCAL_STT_NAMES or _normalize_stt_name(raw) in (
         "faster_whisper",
         "moonshine",

@@ -233,9 +233,51 @@ def run_doctor(
         report["local_stt"] = []
         report["local_stt_error"] = str(exc)
 
+    # Custom STT (B174) — soft readiness (base_url + key); never auto-selected
+    try:
+        from hark.providers.custom_stt import custom_stt_status
+
+        cst = custom_stt_status(
+            base_url=getattr(cfg.stt, "custom_base_url", None),
+            api_key=getattr(cfg.stt, "custom_api_key", None),
+            api_key_file=getattr(cfg.stt, "custom_api_key_file", None),
+            api_key_command=getattr(cfg.stt, "custom_api_key_command", None),
+            model=getattr(cfg.stt, "custom_model", None),
+            path=getattr(cfg.stt, "custom_path", None),
+        )
+        report["custom_stt"] = {
+            "name": cst.name,
+            "available": cst.available,
+            "detail": cst.detail,
+            "base_url": cst.base_url,
+            "path": cst.path,
+            "model": cst.model,
+        }
+        report["providers"].append(
+            {
+                "name": "custom",
+                "available": cst.available,
+                "source": "config" if cst.available else None,
+                "detail": cst.detail,
+            }
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        report["custom_stt_error"] = str(exc)
+
     # Primary speech path
     xai = next((p for p in report["providers"] if p["name"] == "xai"), None)
-    if xai and not xai["available"]:
+    pinned = (report.get("stt_provider") or "auto").lower().strip()
+    custom_ready = bool((report.get("custom_stt") or {}).get("available"))
+    if pinned in ("custom", "custom_stt", "custom-stt"):
+        report["speech_ok"] = custom_ready
+        if not custom_ready:
+            report["speech_hint"] = (
+                "custom STT incomplete — set custom_base_url + "
+                "HARK_STT_CUSTOM_API_KEY (+ custom_model for /audio/transcriptions)"
+            )
+        else:
+            report.pop("speech_hint", None)
+    elif xai and not xai["available"]:
         # not fatal for doctor of herdr path, but mark speech degraded
         report["speech_ok"] = False
         report["speech_hint"] = "run grok login or set XAI_API_KEY"
@@ -583,6 +625,13 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
             print(f"    {mark} {p['name']}: {p['detail']}", file=out)
             if p.get("rtf_note"):
                 print(f"      RTF: {p['rtf_note']}", file=out)
+    custom = report.get("custom_stt")
+    if custom:
+        mark = "✓" if custom.get("available") else "·"
+        print(
+            f"  custom STT: {mark} {custom.get('detail')}",
+            file=out,
+        )
     listen = report.get("listen") or {}
     print(
         f"  listen: end_mode={listen.get('end_mode', '?')} "

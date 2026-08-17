@@ -199,6 +199,13 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "local_model_path",
         "local_fail_open",
         "local_download",
+        # Custom STT (B174) — OpenAI-compatible gateway, explicit pin only
+        "custom_base_url",
+        "custom_api_key",
+        "custom_api_key_file",
+        "custom_api_key_command",
+        "custom_model",
+        "custom_path",
     }),
     "tts": frozenset(
         {
@@ -482,8 +489,9 @@ class AmbientConfig:
 
 @dataclass
 class SttConfig:
-    # auto | xai | openai | google | faster_whisper | moonshine
+    # auto | xai | openai | google | custom | faster_whisper | moonshine
     # (aliases: local / whisper / faster-whisper → faster_whisper)
+    # custom is explicit-only (never selected by auto) — OpenAI-compatible gateway.
     provider: str = "auto"
     # Provider names to skip even when credentials exist (auto + pin).
     disabled: list[str] = field(default_factory=list)
@@ -494,6 +502,14 @@ class SttConfig:
     local_model_path: str | None = None  # CT2 dir override; else HF cache by name
     local_fail_open: bool = True  # if local missing → cloud auto
     local_download: bool = True  # allow HF download on first use
+    # Custom STT (B174) — OpenAI-compatible POST {base}/audio/transcriptions
+    # (optional path override e.g. /stt for native dual-mount). Explicit pin only.
+    custom_base_url: str | None = None  # e.g. https://gateway.example.com/v1
+    custom_api_key: str | None = None  # prefer HARK_STT_CUSTOM_API_KEY env
+    custom_api_key_file: str | None = None  # file holding the key (e.g. "~/.llmp")
+    custom_api_key_command: str | None = None  # shell cmd printing key on stdout
+    custom_model: str | None = None  # required for /audio/transcriptions
+    custom_path: str | None = None  # default /audio/transcriptions
 
 
 @dataclass
@@ -808,7 +824,20 @@ provider = "auto"
 # local_model_path = ""         # optional on-disk CT2 model dir
 # local_fail_open = true        # fall back to cloud auto if local unavailable
 # local_download = true         # allow Hugging Face model download on first use
-# Env: HARK_STT_PROVIDER, HARK_STT_DISABLED, HARK_STT_LOCAL_MODEL, …
+# Custom STT (B174) — OpenAI-compatible gateway (explicit pin; never via auto).
+# provider = "custom"
+# custom_base_url = "https://gateway.example.com/v1"
+# custom_model = "gpt-4o-mini-transcribe"   # or gateway model id (e.g. grok-stt)
+# custom_path = "/audio/transcriptions"    # or "/stt" for native dual-mount
+# Key (first hit): env HARK_STT_CUSTOM_API_KEY > custom_api_key >
+#   custom_api_key_file / HARK_STT_CUSTOM_API_KEY_FILE >
+#   custom_api_key_command / HARK_STT_CUSTOM_API_KEY_COMMAND
+# custom_api_key_file = "~/.llmp"           # file holding the key
+# custom_api_key_command = "cat ~/.llmp"    # shell cmd; stdout first line = key
+# Env: HARK_STT_PROVIDER, HARK_STT_DISABLED, HARK_STT_LOCAL_MODEL,
+#      HARK_STT_CUSTOM_BASE_URL, HARK_STT_CUSTOM_API_KEY,
+#      HARK_STT_CUSTOM_API_KEY_FILE, HARK_STT_CUSTOM_API_KEY_COMMAND,
+#      HARK_STT_CUSTOM_MODEL, HARK_STT_CUSTOM_PATH
 
 [tts]
 provider = "auto"
@@ -1246,6 +1275,46 @@ def load_config(path: Path | None = None) -> HarkConfig:
     stt_provider = os.environ.get("HARK_STT_PROVIDER") or str(
         stt_raw.get("provider", "auto")
     )
+    stt_custom_base_url = os.environ.get("HARK_STT_CUSTOM_BASE_URL") or (
+        str(stt_raw["custom_base_url"]).strip()
+        if stt_raw.get("custom_base_url")
+        else None
+    )
+    if stt_custom_base_url is not None and not str(stt_custom_base_url).strip():
+        stt_custom_base_url = None
+    stt_custom_api_key = os.environ.get("HARK_STT_CUSTOM_API_KEY") or (
+        str(stt_raw["custom_api_key"]).strip()
+        if stt_raw.get("custom_api_key")
+        else None
+    )
+    if stt_custom_api_key is not None and not str(stt_custom_api_key).strip():
+        stt_custom_api_key = None
+    stt_custom_api_key_file = os.environ.get("HARK_STT_CUSTOM_API_KEY_FILE") or (
+        str(stt_raw["custom_api_key_file"]).strip()
+        if stt_raw.get("custom_api_key_file")
+        else None
+    )
+    if stt_custom_api_key_file is not None and not str(stt_custom_api_key_file).strip():
+        stt_custom_api_key_file = None
+    stt_custom_api_key_command = os.environ.get("HARK_STT_CUSTOM_API_KEY_COMMAND") or (
+        str(stt_raw["custom_api_key_command"]).strip()
+        if stt_raw.get("custom_api_key_command")
+        else None
+    )
+    if stt_custom_api_key_command is not None and not str(
+        stt_custom_api_key_command
+    ).strip():
+        stt_custom_api_key_command = None
+    stt_custom_model = os.environ.get("HARK_STT_CUSTOM_MODEL") or (
+        str(stt_raw["custom_model"]).strip() if stt_raw.get("custom_model") else None
+    )
+    if stt_custom_model is not None and not str(stt_custom_model).strip():
+        stt_custom_model = None
+    stt_custom_path = os.environ.get("HARK_STT_CUSTOM_PATH") or (
+        str(stt_raw["custom_path"]).strip() if stt_raw.get("custom_path") else None
+    )
+    if stt_custom_path is not None and not str(stt_custom_path).strip():
+        stt_custom_path = None
     stt_local_model = os.environ.get("HARK_STT_LOCAL_MODEL") or str(
         stt_raw.get("local_model", "tiny.en")
     )
@@ -1526,6 +1595,12 @@ def load_config(path: Path | None = None) -> HarkConfig:
             local_model_path=stt_local_model_path,
             local_fail_open=stt_local_fail_open,
             local_download=stt_local_download,
+            custom_base_url=stt_custom_base_url,
+            custom_api_key=stt_custom_api_key,
+            custom_api_key_file=stt_custom_api_key_file,
+            custom_api_key_command=stt_custom_api_key_command,
+            custom_model=stt_custom_model,
+            custom_path=stt_custom_path,
         ),
         tts=TtsConfig(
             provider=tts_provider,
@@ -1783,6 +1858,17 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "local_model_path": cfg.stt.local_model_path,
             "local_fail_open": cfg.stt.local_fail_open,
             "local_download": cfg.stt.local_download,
+            "custom_base_url": cfg.stt.custom_base_url,
+            # never the secret itself (parity with dashboard.token redaction)
+            "custom_api_key_configured": bool(
+                cfg.stt.custom_api_key
+                or cfg.stt.custom_api_key_file
+                or cfg.stt.custom_api_key_command
+            ),
+            "custom_api_key_file": cfg.stt.custom_api_key_file,
+            "custom_api_key_command": cfg.stt.custom_api_key_command,
+            "custom_model": cfg.stt.custom_model,
+            "custom_path": cfg.stt.custom_path,
         },
         "tts": {
             "provider": cfg.tts.provider,

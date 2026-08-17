@@ -29,9 +29,9 @@ Hark has Custom STT (B174, provider="custom") but no Custom TTS — TTS resolves
 - config_to_dict(): custom_api_key_configured bool only — never the secret (parity with stt redaction).
 - doctor.py + cli.py cmd_providers: readiness row(s) for Custom TTS.
 - docs/PROVIDERS.md: § Custom TTS with client contract table + curl examples + env table; CHANGELOG entry.
-- Tests: mirror tests/test_custom_stt.py coverage — key resolution (literal/file/command precedence, error labels), path normalization, join URL, model-required for /audio/speech, status readiness states, resolve_ttts pin + disabled + never-in-auto, redaction in config_to_dict, httpx MockTransport synthesize success (parses audio bytes + content-type) and error paths (401, >=400).
+- Tests: mirror tests/test_custom_stt.py coverage — key resolution (literal/file/command precedence, error labels), path normalization, join URL, model-required for /audio/speech, status readiness states, resolve_tts pin + disabled + never-in-auto, redaction in config_to_dict, httpx MockTransport synthesize success (parses audio bytes + content-type) and error paths (401, >=400).
 
 ## Acceptance
 - pytest green on new + existing tests.
 - hark providers / hark doctor show Custom TTS readiness.
-- tts.provider=custom + base/key/model pins synthesize real audio end-to-end (covered by B176 dogfood).
+- tts.provider=custom + base/key/model pins synthesize real audio end-to-end (covered by B183 dogfood).

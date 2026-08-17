@@ -1,0 +1,30 @@
+---
+complexity: medium
+created_at: "2026-08-17T05:25:04Z"
+depends_on:
+    - B182
+estimate_hours: 1
+id: B183
+priority: high
+status: pending
+tags:
+    - tts
+    - stt
+    - providers
+    - dogfood
+    - custom-gateway
+title: Live-verify Custom STT + Custom TTS against a real OpenAI-compatible gateway (dogfood)
+updated_at: "2026-08-17T05:25:04Z"
+---
+After B174 (Custom STT) and B182 (Custom TTS) land, verify both clients end-to-end against a live OpenAI-compatible audio gateway using a Consumer Bearer key.
+
+## Steps
+1. Pick base (probe /models with the host key on both public CF and mesh origins; pin whichever returns 200 — keys are origin-scoped, never overwrite a host key with another's).
+2. Custom STT: set stt.provider=custom, custom_base_url, key (prefer non-inline: api_key_file or api_key_command), custom_model for /audio/transcriptions (or custom_path=/stt dual-mount where model is optional). Generate a test WAV (speech, not silence — a 440Hz tone returns empty text but 200; use real or TTS-generated speech), run hark listen / hark ask, assert non-empty transcript + provider=custom.
+3. Custom TTS: set tts.provider=custom, custom_base_url, key, custom_model + voice, run hark tts 'hello world', assert audible playback / mp3 bytes written, provider=custom.
+4. Record evidence: HTTP codes, transcript text, audio byte counts, provider names in any output.
+5. Classify gateway 503 control_plane_unavailable as transient (retry ~2min) — not a client bug. READY only after both surfaces return 2xx with real payloads.
+
+## Acceptance
+- Both providers return real payloads (non-empty transcript; >0 audio bytes with audio content-type) with provider=custom reported.
+- No secret printed in logs/output — key from file/command source, never echoed.

@@ -1,0 +1,24 @@
+---
+complexity: medium
+created_at: "2026-08-17T05:25:05Z"
+depends_on: []
+estimate_hours: 10
+id: I011
+priority: medium
+status: pending
+tags:
+    - tts
+    - llmp
+    - streaming
+    - idea
+title: Evaluate LLMP WS streaming TTS (/ws/v1/t2a_v2) as low-latency Custom TTS transport
+updated_at: "2026-08-17T05:25:05Z"
+---
+LLMP exposes MiniMax T2A WebSocket streaming TTS sessions (GET {origin}/ws/v1/t2a_v2 with WS upgrade; B129) plus OpenAI/Codex realtime WS cousins. Hark TTS is batch REST today (synthesize whole clip, then play). For long utterances TTFA (time-to-first-audio) is dominated by full-clip synthesis.
+
+Evaluate: a Custom TTS streaming transport that opens the WS session, sends text, plays PCM chunks as they arrive (matching hark's existing chunked playback pipeline), cutting TTFA to roughly first-chunk latency. Considerations:
+- B179 (playback starts mid-utterance) interacts with streaming start; B181 (80-120s block before Gemini timeout) shows timeout discipline matters — bound WS connect + first-chunk + idle timeouts.
+- Auth: same Consumer Bearer (query param or header per WS handshake).
+- Chunk pacing vs hark playback_speed / espeak fallback ordering.
+- Fallback: if WS handshake fails, fall back to batch custom TTS (B182 path).
+Scope as its own backlog item after B182+B176 land; requires upstream contract notes (minimax_t2a_ws.rs) and a hark-side WS client (websockets lib already used for radio?). Capture decision + contract notes here; implement only if dogfood shows TTFA pain.

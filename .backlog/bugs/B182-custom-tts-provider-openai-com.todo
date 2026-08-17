@@ -1,0 +1,37 @@
+---
+complexity: medium
+created_at: "2026-08-17T05:24:44Z"
+depends_on: []
+estimate_hours: 1
+id: B182
+priority: high
+status: pending
+tags:
+    - tts
+    - providers
+    - custom-gateway
+title: Custom TTS provider (OpenAI-compatible gateway, mirror of B174 Custom STT)
+updated_at: "2026-08-17T05:24:44Z"
+---
+Hark has Custom STT (B174, provider="custom") but no Custom TTS — TTS resolves only xai|openai|minimax|google|anthropic. Add an explicit-pin Custom TTS provider for any OpenAI-compatible audio/speech gateway (product name: Custom TTS; never name specific gateways in user-facing docs/config).
+
+## Spec (mirror B174 semantics)
+
+- tts.provider = "custom" (aliases custom_tts / custom-tts normalize to custom). Explicit pin only — NEVER selected by auto.
+- Wire format: POST {base_url}{custom_path}, Authorization: Bearer <key>, JSON body {model, input, voice} → raw audio bytes (content-type from response header).
+  - Default path /audio/speech (OpenAI surface; model REQUIRED).
+  - Alternate path /tts (native dual-mount; same JSON body — input/voice required server-side, model optional/ignored).
+- Config keys ([tts] section + KNOWN_SECTION_KEYS): custom_base_url, custom_api_key, custom_api_key_file, custom_api_key_command, custom_model, custom_voice, custom_path.
+- Env: HARK_TTS_CUSTOM_BASE_URL, HARK_TTS_CUSTOM_MODEL, HARK_TTS_CUSTOM_VOICE, HARK_TTS_CUSTOM_PATH, HARK_STT-equivalents for keys: HARK_TTS_CUSTOM_API_KEY / HARK_TTS_CUSTOM_API_KEY_FILE / HARK_TTS_CUSTOM_API_KEY_COMMAND. Precedence: env over config (match load_config pattern); key resolution literal → file → command (reuse resolve_custom_api_key, parameterize error label custom STT/custom TTS).
+- Voice: resolve order voice param (CLI/config tts.voice) → custom_voice → "alloy" (OpenAI parity). Voice always sent non-empty.
+- New src/hark/providers/custom_tts.py: CustomTts class (name="custom", synthesize() → SynthResult(audio, provider, content_type, voice)), plus custom_tts_status() readiness helper (base_url + key + model-when-/audio/speech required; no live probe) mirroring custom_stt_status.
+- resolve_tts(): handle name=="custom" (reject-if-disabled parity), explicit-only.
+- config_to_dict(): custom_api_key_configured bool only — never the secret (parity with stt redaction).
+- doctor.py + cli.py cmd_providers: readiness row(s) for Custom TTS.
+- docs/PROVIDERS.md: § Custom TTS with client contract table + curl examples + env table; CHANGELOG entry.
+- Tests: mirror tests/test_custom_stt.py coverage — key resolution (literal/file/command precedence, error labels), path normalization, join URL, model-required for /audio/speech, status readiness states, resolve_ttts pin + disabled + never-in-auto, redaction in config_to_dict, httpx MockTransport synthesize success (parses audio bytes + content-type) and error paths (401, >=400).
+
+## Acceptance
+- pytest green on new + existing tests.
+- hark providers / hark doctor show Custom TTS readiness.
+- tts.provider=custom + base/key/model pins synthesize real audio end-to-end (covered by B176 dogfood).

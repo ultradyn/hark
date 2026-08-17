@@ -180,3 +180,4 @@ bugs:
     - file: B179-tts-playback-often-starts-mid.todo
     - file: B180-hark-tts-double-free-or-corrup.todo
     - file: B181-hark-tts-can-block-for-80-120s.todo
+    - file: B182-custom-tts-provider-openai-com.todo

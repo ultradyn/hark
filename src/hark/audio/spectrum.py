@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -24,6 +26,15 @@ DEFAULT_N_BANDS = 32
 DEFAULT_MAX_HZ = 6000.0
 DEFAULT_WINDOW_MS = 40
 SPECTRUM_FILENAME = "spectrum.latest"
+
+# One throttle for every capture read loop (:class:`SpectrumTap`). Listen used
+# 16 ms and ambient 32 ms; at the 20 ms frame cadence the first published every
+# single frame, so the "throttle" only ever throttled ambient. ~31 Hz is well
+# inside what the dashboard can render and halves the state-file write rate.
+TAP_INTERVAL_S = 0.032
+# Bounded handoff to the publish worker. Small on purpose: this is a
+# latest-frame display, so a slow disk should cost intermediate frames.
+TAP_QUEUE_FRAMES = 2
 
 _local_publish: Callable[[dict[str, Any]], None] | None = None
 _local_lock = threading.Lock()
@@ -227,3 +238,145 @@ def clear_spectrum(
     except Exception:
         pass
     return payload
+
+
+class SpectrumTap:
+    """Publish spectrum frames for a capture read loop, off the audio thread.
+
+    The read loops (``capture_utterance`` and ``ContinuousMicStream.read_for``,
+    via :class:`hark.audio.frames.MicFrameSource`) hand every 20 ms frame to
+    :meth:`__call__`, which only throttles and copies it into a bounded queue.
+    The FFT, the window concatenation and the ``spectrum.latest`` write all run
+    on this tap's worker, so a slow disk drops frames instead of stalling
+    capture — the file write used to be synchronous on the audio thread at up
+    to 50 Hz against a 50 Hz read cadence.
+
+    One tap per open stream: build it when the stream opens, :meth:`close` it
+    when the stream closes (the join matters — a detached worker would write the
+    state file after its caller is gone).
+    """
+
+    def __init__(
+        self,
+        *,
+        sample_rate: int = 16000,
+        source: str | None = None,
+        recording: bool = True,
+        interval_s: float = TAP_INTERVAL_S,
+        window_s: float = DEFAULT_WINDOW_MS / 1000.0,
+        n_bands: int = DEFAULT_N_BANDS,
+        max_hz: float = DEFAULT_MAX_HZ,
+        root: Path | None = None,
+        queue_frames: int = TAP_QUEUE_FRAMES,
+    ) -> None:
+        self.sample_rate = int(sample_rate)
+        self.source = source
+        self.recording = bool(recording)
+        self.interval_s = max(0.0, float(interval_s))
+        self.n_bands = int(n_bands)
+        self.max_hz = float(max_hz)
+        self._root = root
+        # ~40 ms FFT window at the 20 ms frame cadence == 2 frames.
+        frame_s = 0.02
+        self._ring_frames = max(1, int(round(max(frame_s, float(window_s)) / frame_s)))
+        self._queue: queue.Queue[np.ndarray | None] = queue.Queue(
+            maxsize=max(1, int(queue_frames))
+        )
+        self._last_pub = 0.0
+        self._dropped = 0
+        self._closed = False
+        self._thread = threading.Thread(
+            target=self._run, name="hark-spectrum-tap", daemon=True
+        )
+        self._thread.start()
+
+    # -- audio thread ------------------------------------------------------
+
+    def __call__(self, samples: np.ndarray) -> None:
+        """Offer one frame. Never blocks, never raises."""
+        if self._closed:
+            return
+        now = time.monotonic()
+        if now - self._last_pub < self.interval_s:
+            return
+        self._last_pub = now
+        try:
+            frame = np.asarray(samples, dtype=np.float32).reshape(-1).copy()
+        except Exception:
+            return
+        self._offer(frame)
+
+    def _offer(self, frame: np.ndarray) -> None:
+        try:
+            self._queue.put_nowait(frame)
+            return
+        except queue.Full:
+            pass
+        # Evict the oldest, not the newest: the dashboard shows the latest frame,
+        # so a backlog should cost history rather than freshness. Single producer,
+        # so this get/put pair cannot lose the slot to a competing writer.
+        try:
+            self._queue.get_nowait()
+            self._dropped += 1
+        except queue.Empty:
+            pass
+        try:
+            self._queue.put_nowait(frame)
+        except queue.Full:
+            self._dropped += 1
+
+    @property
+    def dropped(self) -> int:
+        """Frames the bounded queue discarded (slow disk / slow worker)."""
+        return self._dropped
+
+    @property
+    def alive(self) -> bool:
+        return self._thread.is_alive()
+
+    def close(self, *, timeout_s: float = 1.0) -> None:
+        """Stop accepting frames and join the worker; safe to call twice."""
+        if self._closed:
+            return
+        self._closed = True
+        # Make room for the sentinel: a queued frame is worth less than a joined
+        # worker, which is what keeps the state file inside the caller's lifetime.
+        for _ in range(self._queue.maxsize + 1):
+            try:
+                self._queue.put_nowait(None)
+                break
+            except queue.Full:
+                try:
+                    self._queue.get_nowait()
+                    self._dropped += 1
+                except queue.Empty:
+                    pass
+        thread = self._thread
+        if thread is not threading.current_thread():
+            thread.join(timeout=max(0.0, float(timeout_s)))
+
+    # -- worker thread -----------------------------------------------------
+
+    def _run(self) -> None:
+        ring: deque[np.ndarray] = deque(maxlen=self._ring_frames)
+        while True:
+            frame = self._queue.get()
+            if frame is None:
+                return
+            try:
+                ring.append(frame)
+                window = (
+                    np.concatenate(list(ring)) if len(ring) > 1 else frame
+                )
+                publish_spectrum(
+                    window,
+                    sample_rate=self.sample_rate,
+                    recording=self.recording,
+                    n_bands=self.n_bands,
+                    max_hz=self.max_hz,
+                    source=self.source,
+                    root=self._root,
+                )
+            except Exception:
+                # best-effort telemetry; never let it kill the worker
+                pass

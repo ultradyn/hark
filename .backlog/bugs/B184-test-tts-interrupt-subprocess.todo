@@ -36,3 +36,10 @@ Investigation while landing the architecture-review candidates separated the var
 **(b) Load-sensitive subprocess budgets.** Separate from (a). `test_outer_pidfd_is_owned_before_delivered_sigint` is gated on `sys.platform` only (line 1428), always runs, passes standalone in 0.15s, and failed only in a full suite under concurrent CPU load. Same family: `test_tts_play_queue.py::test_claim_lock_timeout_reports_owner_and_queue` failed once with `subprocess.TimeoutExpired ... after 2.0 seconds` and passes standalone (30 passed).
 
 **(c) Not a mechanism, but a trap that looks like one.** A fresh git worktree venv holds only runtime deps, so `uv run pytest` falls back to a system interpreter and the `[sys.executable, "-m", "hark.tts_worker"]` spawn at src/hark/tts_worker.py:1159 cannot import hark. Fix with `uv sync --extra dev` in the worktree. Also note a fresh worktree venv lacks the `wake` / `smart-turn` extras that the main checkout has, which shifts skip counts by ~28 — so never compare skip totals across checkouts.
+
+
+## 2026-08-23: third instance, signal-handling timing
+
+`tests/test_ask_interrupt.py::test_capture_sigint_aborts_stream_and_restores_handlers` fails roughly 1 in 12 runs when run as a single item, measured 12x on two different trees: master (1/12) and the arch/audio-seams refactor branch (1/12). Equal rates, so it is NOT caused by the frame-source refactor — it is another pre-existing timing flake, this one in SIGINT delivery / handler restoration rather than a subprocess budget.
+
+Method note for whoever picks this up: single runs mislead here. The first probe showed "fails on the branch, passes on master" and reversed on re-run; only a repeat count separated them. Measure a rate, do not compare one run to one run.

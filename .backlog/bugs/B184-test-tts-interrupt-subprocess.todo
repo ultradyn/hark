@@ -64,3 +64,31 @@ than to a state the child has actually reached.
 
 Method note (repeat of the lesson in the entry above): single runs mislead here.
 Every claim in this entry is 15 runs per tree.
+
+2026-08-23 (post-merge, master @ ee6e541): the family is WIDER than this bug's
+title says — it is not confined to tests/test_tts_interrupt.py.
+
+Two back-to-back full-suite runs on the same checkout, same commit, 2 failed
+each, with **disjoint** failure sets:
+
+  run 1: test_ask_interrupt.py::test_signal_after_worker_start_upgrades_before_native_cleanup
+         test_tts_interrupt.py::test_cli_pending_sigint_during_boundary_install_is_typed_and_traceback_free
+  run 2: test_tts_interrupt.py::test_long_lived_caller_delegates_next_sigint_after_synth_finishes
+         test_tts_interrupt.py::test_pipe_creation_publishes_both_fds_before_delivered_sigint
+
+Zero overlap between runs is the signature of a load race, not a regression: a
+regression fails the same test every time. Seven distinct tests have now been
+seen failing across all runs, spanning BOTH interrupt test files. Retitle to
+cover test_ask_interrupt.py as well.
+
+Rate, measured on this machine, main checkout: pre-merge master (216s) 1 failed;
+post-merge master (295s, 305s) 2 failed, 2 failed. The rate tracks suite
+duration, which is the expected shape if the cause is CPU contention — the
+longer the run, the more chances each signal race has to lose. 30s of that
+duration was one test spending real wall clock on the discard cap; fixed in
+b8ea44b, so re-measure the rate against the shorter suite before assuming the
+merge itself raised it.
+
+Practical consequence worth stating plainly: the full suite does not currently
+go green on an unloaded run of this machine either. Anyone treating "0 failed"
+as the merge gate will be blocked by this bug, not by their own change.

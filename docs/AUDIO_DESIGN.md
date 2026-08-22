@@ -65,7 +65,8 @@ derived once from `AnswerWindowPolicy` by
 they do not restate `abs_open_db` / `open_margin_db` / `initial_timeout_s` /
 `pre_roll_ms` / `mute_edge_pad_ms` one keyword at a time. Radio narrows the
 shared spec per segment (`max_s`, `initial_timeout_s`) because one
-`max_listen_s` window spans many segments (B074).
+`max_listen_s` window spans many segments (B074). Wake enrollment
+(`wake_enroll.py`) has no policy, so it constructs its spec directly.
 
 Three things stay explicit rather than folded into the spec by the builder:
 
@@ -100,6 +101,16 @@ and ambient's `no_open` / `conversation_idle` classification uses it. The
 message text survives for logs only. `CaptureTimeout` also carries `peak_db`,
 `peak_rms` and `open_thresh_db`, so `speech.no_open` gets the numbers capture
 already had instead of regexing them back out of an f-string.
+
+Radio's post-speech idle finish (B074) stays an **exception** path deliberately,
+even though it is a happy path: that segment produced no audio, and
+`CaptureResult`'s "`pcm16` is real audio" invariant is what lets both loops call
+`cap.wav` / `cap.duration_ms` / `pad_pcm16_silence` without a per-call emptiness
+check. Returning an empty result to signal it would turn one hard failure mode
+into a soft one everywhere. Its `except TimeoutError` also needs no reason test:
+it separates idle-finish from no-open by `pieces` / `speech_opened_once`, never
+by text, and a `discard_timeout` can only fire on the first segment — when
+`pieces` is still empty — so it already falls through to the re-raise.
 
 ### Spectrum telemetry is a tap (B087)
 

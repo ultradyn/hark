@@ -14,7 +14,11 @@ from __future__ import annotations
 from dataclasses import replace
 
 from hark.answer_window.deps import AnswerWindowDeps
-from hark.answer_window.policy import AnswerWindowPolicy, effective_radio_idle_s
+from hark.answer_window.policy import (
+    AnswerWindowPolicy,
+    effective_radio_idle_s,
+    gate_spec_from_policy,
+)
 from hark.answer_window.radio import RadioSession
 from hark.answer_window.result import ListenResult
 from hark.answer_window.silence import (
@@ -25,10 +29,7 @@ from hark.answer_window.silence import (
     _echo_overlap,
     is_no_open_timeout as _is_no_open_timeout,
 )
-from hark.audio.capture import (
-    clamp_pre_roll_ms,
-    effective_radio_segment_pad_ms,
-)
+from hark.audio.capture import effective_radio_segment_pad_ms
 from hark.endpointing import EndpointStrategy
 from hark.listen_end import EndMode
 from hark.partial import new_stream_id
@@ -136,10 +137,7 @@ def open_answer_window(
     lead_in_ms = int(policy.lead_in_ms or 0)
 
     gate_abs_open = float(policy.abs_open_db)
-    gate_open_margin = float(policy.open_margin_db)
     gate_timeout_s = float(policy.initial_timeout_s)
-    gate_pre_roll_ms = clamp_pre_roll_ms(policy.pre_roll_ms)
-    gate_mute_pad_ms = int(policy.mute_edge_pad_ms or 0)
     radio_overlap_ms = int(policy.radio_segment_overlap_ms or 0)
     nudge_no_open_text = policy.no_open_nudge_text or NO_OPEN_NUDGE_TEXT
 
@@ -153,6 +151,10 @@ def open_answer_window(
         if mode is EndMode.SILENCE
         else float(policy.radio_partial_silence_s)
     )
+    # Gate facts derived once, passed whole. `end_silence` is stated explicitly
+    # because the two modes mean different things by it: for silence the
+    # utterance ended, for radio a segment gets cut.
+    gate_spec = gate_spec_from_policy(policy, end_silence_s=end_silence)
     ambient_streaming = bool(policy.streaming)
     radio_idle_end = effective_radio_idle_s(policy)
 
@@ -406,23 +408,14 @@ def open_answer_window(
                             else _cue_start_once
                         )
                         cap = capture_utterance(
-                            max_s=max_listen,
-                            end_silence_s=end_silence,
-                            post_tts_guard_s=0,
+                            spec=gate_spec,
                             on_opened=on_open,
                             on_voice=lambda: touch_voice_activity(stream_id=stream),
                             should_stop=_agent_wants_stop,
                             discard_leading_ms=lead_discard,
                             audio_ok_after=lead_ok,
                             endpoint_strategy=endpoint_strategy,
-                            endpoint_probe_silence_s=policy.endpoint_probe_silence_s,
-                            endpoint_max_silence_s=policy.endpoint_max_silence_s,
                             on_endpoint_event=_endpoint_event,
-                            abs_open_db=gate_abs_open,
-                            open_margin_db=gate_open_margin,
-                            initial_timeout_s=gate_timeout_s,
-                            preroll_ms=gate_pre_roll_ms,
-                            mute_edge_pad_ms=gate_mute_pad_ms,
                         )
                     except TimeoutError as exc:
                         # Reload mid-wait (before speech / empty capture) → clean cancel
@@ -437,10 +430,15 @@ def open_answer_window(
                             error=err_s[:200],
                         )
                         if _is_no_open_timeout(exc):
+                            # Peaks come off the typed timeout, not a regex over
+                            # its message (which may carry none at all).
                             decision = silence_sess.on_no_open(
                                 after_tts=after_tts,
                                 error=err_s,
                                 abs_open_db=gate_abs_open,
+                                peak_db=exc.peak_db,
+                                peak_rms=exc.peak_rms,
+                                open_thresh=exc.open_thresh_db,
                             )
                             if decision.action is SilenceEvent.RETRY:
                                 settle = max(
@@ -691,10 +689,13 @@ def open_answer_window(
                     else:
                         seg_timeout = min(gate_timeout_s, remaining)
                     cap = capture_utterance(
-                        max_s=min(remaining, max_listen),
-                        end_silence_s=end_silence,
-                        initial_timeout_s=seg_timeout,
-                        post_tts_guard_s=0,
+                        # Radio spends one max_listen window over many segments,
+                        # so each segment narrows the shared spec (B074).
+                        spec=replace(
+                            gate_spec,
+                            max_s=min(remaining, max_listen),
+                            initial_timeout_s=seg_timeout,
+                        ),
                         on_opened=_on_speech_opened,
                         on_voice=lambda: touch_voice_activity(stream_id=stream),
                         should_stop=lambda *_a: (
@@ -702,10 +703,6 @@ def open_answer_window(
                         ),
                         discard_leading_ms=seg_discard,
                         audio_ok_after=seg_ok_after,
-                        abs_open_db=gate_abs_open,
-                        open_margin_db=gate_open_margin,
-                        preroll_ms=gate_pre_roll_ms,
-                        mute_edge_pad_ms=gate_mute_pad_ms,
                     )
                 except TimeoutError:
                     if _reload_abort():

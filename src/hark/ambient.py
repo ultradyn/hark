@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, TextIO
 
+from hark.answer_window.silence import is_no_open_timeout
 from hark.audio.capture import (
     ContinuousMicStream,
     MicBusyError,
@@ -634,12 +635,10 @@ def _single_post_wake_listen(
             partial_kind="ambient.partial",
         )
     except Exception as exc:
-        rendered_error, error_text, _error_type = _safe_exception_details(exc)
+        _, error_text, _error_type = _safe_exception_details(exc)
         err_s = error_text[:_EXCEPTION_DETAIL_MAX_CHARS]
-        is_no_open = rendered_error is not None and (
-            "no speech detected" in rendered_error.lower()
-            or "no speech captured" in rendered_error.lower()
-        )
+        # Typed capture verdict, not a substring of the rendered message.
+        is_no_open = is_no_open_timeout(exc)
         syslog(
             "ambient.error",
             component="ambient",
@@ -815,12 +814,10 @@ def _conversation_after_wake(
         try:
             listened = run_listen(cfg, policy=pol)
         except Exception as exc:
-            rendered_error, error_text, error_type = _safe_exception_details(exc)
+            _, error_text, error_type = _safe_exception_details(exc)
             err_s = error_text[:_EXCEPTION_DETAIL_MAX_CHARS]
-            is_no_open = rendered_error is not None and (
-                "no speech detected" in rendered_error.lower()
-                or "no speech captured" in rendered_error.lower()
-            )
+            # Typed capture verdict, not a substring of the rendered message.
+            is_no_open = is_no_open_timeout(exc)
             if is_first:
                 event_id = new_event_id()
                 syslog(
@@ -857,8 +854,9 @@ def _conversation_after_wake(
             # Later turns only become idle for the timeout raised when the
             # silence gate genuinely expires.  A provider, microphone, or
             # internal failure must remain distinguishable to operators and
-            # HEP consumers.
-            is_conversation_idle = isinstance(exc, TimeoutError) and is_no_open
+            # HEP consumers — `is_no_open` is already a CaptureTimeout verdict,
+            # so no extra TimeoutError test is needed.
+            is_conversation_idle = is_no_open
             if isinstance(exc, ProviderError):
                 end_reason = "listen_provider_error"
             elif isinstance(exc, MicBusyError):

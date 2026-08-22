@@ -23,7 +23,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, TextIO
 
-from hark.audio.capture import MicLease, capture_utterance, write_wav_bytes
+from hark.audio.capture import (
+    CaptureGateSpec,
+    MicLease,
+    capture_utterance,
+    write_wav_bytes,
+)
 from hark.audio.cues import (
     configure_cues_from_config,
     play_enroll_accept,
@@ -313,13 +318,16 @@ def run_wake_enroll(
 
                 try:
                     cap = _capture(
-                        sample_rate=16000,
-                        max_s=max_utter_s,
-                        end_silence_s=end_silence_s,
-                        min_speech_s=0.2,
-                        preroll_ms=300,
-                        initial_timeout_s=initial_timeout_s,
-                        post_tts_guard_s=0.0,
+                        spec=CaptureGateSpec(
+                            # Enrollment records one wake phrase, so the gate is
+                            # a little quicker to confirm than a full answer.
+                            sample_rate=16000,
+                            max_s=max_utter_s,
+                            end_silence_s=end_silence_s,
+                            min_speech_s=0.2,
+                            preroll_ms=300,
+                            initial_timeout_s=initial_timeout_s,
+                        )
                     )
                 except TimeoutError:
                     rejected += 1

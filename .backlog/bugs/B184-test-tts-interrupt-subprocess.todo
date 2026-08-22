@@ -1,0 +1,27 @@
+---
+complexity: medium
+created_at: "2026-08-22T21:57:04Z"
+depends_on: []
+estimate_hours: 1
+id: B184
+priority: high
+status: pending
+tags:
+    - test
+    - flake
+title: test_tts_interrupt subprocess/pidfd tests flake under full-suite CPU load
+updated_at: "2026-08-22T21:57:04Z"
+---
+Three different tests in tests/test_tts_interrupt.py failed across four full-suite runs on 2026-08-23, each passing alone and with its whole file (268 passed, 14 skipped):
+
+- test_portable_result_eof_retains_authority_through_supervisor_atexit
+- test_direct_children_open_publishes_before_delivered_sigint
+- test_outer_pidfd_is_owned_before_delivered_sigint
+
+They spawn real subprocesses and wait on short budgets (e.g. proc.communicate(timeout=2.0) at tests/test_tts_interrupt.py:2658) plus pidfd ownership races, so they lose under concurrent CPU load.
+
+Not caused by any src change: reproduced on master both before and after the arch/compact-once merge, and the same candidate-1 code produced a fully green run (6042 passed, 102 skipped) in its own worktree.
+
+Fix direction: make the waits condition-based rather than fixed short timeouts, or widen the budgets when the machine is loaded. Do not paper over it with retries.
+
+Distinct from a second, environmental failure mode seen the same day: a fresh git worktree venv has only runtime deps, so `uv run pytest` falls back to a system interpreter and the `[sys.executable, "-m", "hark.tts_worker"]` spawn at src/hark/tts_worker.py:1159 cannot import hark. `uv sync --extra dev` in the worktree fixes that one.

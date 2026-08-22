@@ -182,3 +182,4 @@ bugs:
     - file: B181-hark-tts-can-block-for-80-120s.todo
     - file: B182-custom-tts-provider-openai-com.todo
     - file: B183-live-verify-custom-stt-custom.todo
+    - file: B184-test-tts-interrupt-subprocess.todo

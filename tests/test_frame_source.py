@@ -435,3 +435,177 @@ def test_mute_freeze_gate_ignores_an_absent_hold(monkeypatch):
     gate = MuteFreezeGate(budget_s=30.0)
     assert gate.freezing() is False
     assert gate.capped is False
+
+
+# ---------------------------------------------------------------------------
+# Capture-level: what the seam must not have changed
+# ---------------------------------------------------------------------------
+
+class _GateOpensThenQuiet:
+    """Two loud blocks open the gate, then quiet blocks reach end_silence_s.
+
+    ``loud_after`` shifts the loud pair past a discard phase that would
+    otherwise swallow it.
+    """
+
+    def __init__(self, *, loud_after: int = 0) -> None:
+        self.reads = 0
+        self.loud_after = int(loud_after)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self, block: int):
+        self.reads += 1
+        loud = self.loud_after < self.reads <= self.loud_after + 2
+        samples = np.full(block, 0.5 if loud else 0.0, dtype=np.float32)
+        return samples.reshape(-1, 1), False
+
+
+def _fake_sd(monkeypatch, stream):
+    from types import SimpleNamespace
+
+    from hark.audio import capture as cap_mod
+
+    monkeypatch.setattr(cap_mod, "_require_sd", lambda: None)
+    monkeypatch.setattr(
+        cap_mod, "sd", SimpleNamespace(InputStream=lambda **kwargs: stream)
+    )
+    return cap_mod
+
+
+def test_capture_clears_the_spectrum_after_joining_its_tap(monkeypatch):
+    """``clear_spectrum`` on exit must be the last frame the webui sees.
+
+    The tap runs off-thread now, so a publish racing past the clear would leave
+    the dashboard stuck showing a recording frame after capture ended.
+    """
+    from hark.audio import spectrum as spec_mod
+
+    monkeypatch.setattr(spec_mod, "TAP_INTERVAL_S", 0.0)
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        spec_mod, "_write_latest", lambda path, payload: seen.append(payload)
+    )
+
+    stream = _GateOpensThenQuiet()
+    cap_mod = _fake_sd(monkeypatch, stream)
+    result = cap_mod.capture_utterance(
+        max_s=1.0,
+        end_silence_s=0.1,
+        min_speech_s=0.04,
+        open_confirm_blocks=2,
+        initial_timeout_s=1.0,
+        post_tts_guard_s=0,
+    )
+
+    assert result.duration_ms > 0
+    assert any(p["recording"] for p in seen), "tap never published a live frame"
+    assert seen[-1]["recording"] is False
+    assert seen[-1]["source"] == "listen"
+
+
+def test_capture_builds_its_tap_only_after_the_discard_phase(monkeypatch):
+    """Phase 0 must not paint the TTS tail onto the live webui (B087)."""
+    discard_blocks = 4
+    stream = _GateOpensThenQuiet(loud_after=discard_blocks)
+    cap_mod = _fake_sd(monkeypatch, stream)
+
+    calls = {"n": 0}
+
+    def audio_ok_after():
+        calls["n"] += 1
+        # None == "TTS still playing"; then a deadline already in the past.
+        return None if calls["n"] <= discard_blocks else time.monotonic() - 1.0
+
+    reads_at_tap_build: list[int] = []
+
+    def spy(**kwargs):
+        reads_at_tap_build.append(stream.reads)
+        return None  # telemetry absent is a supported configuration
+
+    monkeypatch.setattr(cap_mod, "_make_spectrum_tap", spy)
+    cap_mod.capture_utterance(
+        max_s=1.0,
+        end_silence_s=0.1,
+        min_speech_s=0.04,
+        open_confirm_blocks=2,
+        initial_timeout_s=1.0,
+        post_tts_guard_s=0,
+        audio_ok_after=audio_ok_after,
+    )
+
+    assert reads_at_tap_build == [discard_blocks]
+
+
+def test_capture_still_bounds_the_discard_phase(monkeypatch):
+    """``discard_max_s`` keeps a never-usable overlap window from hanging."""
+    stream = _GateOpensThenQuiet()
+    cap_mod = _fake_sd(monkeypatch, stream)
+
+    # discard_max_s = max(30.0, initial_timeout_s); wind the clock instead of
+    # burning 30 s of wall time.
+    real_monotonic = time.monotonic
+    ticks = {"n": 0}
+
+    def fast_monotonic():
+        ticks["n"] += 1
+        return real_monotonic() + ticks["n"] * 5.0
+
+    monkeypatch.setattr(cap_mod.time, "monotonic", fast_monotonic)
+    with pytest.raises(TimeoutError, match="overlap discard window exceeded"):
+        cap_mod.capture_utterance(
+            max_s=1.0,
+            initial_timeout_s=1.0,
+            post_tts_guard_s=0,
+            audio_ok_after=lambda: None,
+        )
+
+
+def test_continuous_mic_stream_joins_its_tap_on_close(monkeypatch):
+    """No ambient publish may outlive the stream that produced it."""
+    from types import SimpleNamespace
+
+    from hark.audio import spectrum as spec_mod
+    from hark.audio.capture import ContinuousMicStream
+    from hark.audio import capture as cap_mod
+
+    monkeypatch.setattr(spec_mod, "TAP_INTERVAL_S", 0.0)
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        spec_mod, "_write_latest", lambda path, payload: seen.append(payload)
+    )
+
+    class FakeInput:
+        def __init__(self, **kw):
+            self.n = 0
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+        def read(self, block):
+            self.n += 1
+            return np.full(block, 0.2, dtype=np.float32).reshape(-1, 1), False
+
+    monkeypatch.setattr(cap_mod, "_require_sd", lambda: None)
+    monkeypatch.setattr(cap_mod, "sd", SimpleNamespace(InputStream=FakeInput))
+
+    mic = ContinuousMicStream(sample_rate=16000, ring_s=1.0, block_ms=20.0)
+    with mic:
+        mic.read_for(0.02)
+    published = len(seen)
+    assert published > 0
+    assert all(p["recording"] is False for p in seen)
+    assert all(p["source"] == "ambient" for p in seen)
+    # Worker joined by close(): nothing lands after the stream is gone.
+    time.sleep(0.05)
+    assert len(seen) == published

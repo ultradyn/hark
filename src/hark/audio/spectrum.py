@@ -262,7 +262,7 @@ class SpectrumTap:
         sample_rate: int = 16000,
         source: str | None = None,
         recording: bool = True,
-        interval_s: float = TAP_INTERVAL_S,
+        interval_s: float | None = None,
         window_s: float = DEFAULT_WINDOW_MS / 1000.0,
         n_bands: int = DEFAULT_N_BANDS,
         max_hz: float = DEFAULT_MAX_HZ,
@@ -272,7 +272,10 @@ class SpectrumTap:
         self.sample_rate = int(sample_rate)
         self.source = source
         self.recording = bool(recording)
-        self.interval_s = max(0.0, float(interval_s))
+        # Read the module constant at call time so one throttle stays one knob.
+        self.interval_s = (
+            TAP_INTERVAL_S if interval_s is None else max(0.0, float(interval_s))
+        )
         self.n_bands = int(n_bands)
         self.max_hz = float(max_hz)
         self._root = root

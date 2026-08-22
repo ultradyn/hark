@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from hark.audio.capture import CaptureGateSpec
 from hark.listen_end import (
     DEFAULT_CANCEL_PHRASES,
     DEFAULT_END_PHRASES,
@@ -122,6 +123,48 @@ def effective_radio_idle_s(policy: AnswerWindowPolicy) -> float:
     return min(idle, floor) if idle > 0 else floor
 
 
+def gate_spec_from_policy(
+    policy: AnswerWindowPolicy,
+    *,
+    end_silence_s: float | None = None,
+    max_s: float | None = None,
+    initial_timeout_s: float | None = None,
+) -> CaptureGateSpec:
+    """Derive the capture gate facts from the policy, once, for one attempt.
+
+    The session loops pass the result whole to ``capture_utterance`` instead of
+    restating scalars the frozen policy already holds. The three overrides are
+    the only per-attempt narrowings either loop makes:
+
+    * ``end_silence_s`` — deliberately **not** one value: for silence it means
+      "the utterance ended", for radio "cut this segment"
+      (``radio_partial_silence_s``). Splitting that pair is its own problem;
+      this seam must not merge them, so the caller states which it means.
+    * ``max_s`` / ``initial_timeout_s`` — radio spends one window across many
+      segments, so each segment gets what is left of it (B074).
+
+    ``pre_roll_ms`` is forwarded verbatim: the B079 clamp (and the 0-disables
+    rule) belongs to capture alone.
+    """
+    return CaptureGateSpec(
+        max_s=float(policy.max_listen_s if max_s is None else max_s),
+        end_silence_s=float(
+            policy.end_silence_s if end_silence_s is None else end_silence_s
+        ),
+        abs_open_db=float(policy.abs_open_db),
+        open_margin_db=float(policy.open_margin_db),
+        initial_timeout_s=float(
+            policy.initial_timeout_s
+            if initial_timeout_s is None
+            else initial_timeout_s
+        ),
+        preroll_ms=int(policy.pre_roll_ms or 0),
+        mute_edge_pad_ms=int(policy.mute_edge_pad_ms or 0),
+        endpoint_probe_silence_s=policy.endpoint_probe_silence_s,
+        endpoint_max_silence_s=policy.endpoint_max_silence_s,
+    )
+
+
 def _profile_streaming_default(
     profile: AnswerWindowProfile, ambient_streaming: bool
 ) -> bool:
@@ -165,6 +208,7 @@ def policy_from_config(
     soft = _g(listen, "soft_end_phrases", DEFAULT_SOFT_END_PHRASES)
     if soft is None:
         soft = DEFAULT_SOFT_END_PHRASES
+    _pre_roll = _g(listen, "pre_roll_ms", 300)
 
     base = AnswerWindowPolicy(
         profile=profile,
@@ -174,7 +218,9 @@ def policy_from_config(
         abs_open_db=float(_g(listen, "abs_open_db", -48.0)),
         open_margin_db=float(_g(listen, "open_margin_db", 8.0)),
         initial_timeout_s=float(_g(listen, "initial_timeout_s", 45.0)),
-        pre_roll_ms=int(_g(listen, "pre_roll_ms", 300) or 300),
+        # `or 300` here would have made an explicit 0 (disable pre-roll)
+        # unreachable; only a missing key takes the B079 default.
+        pre_roll_ms=int(_pre_roll if _pre_roll is not None else 300),
         mute_edge_pad_ms=int(_g(audio, "mute_edge_pad_ms", 300) or 300),
         no_open_retry=bool(_g(listen, "no_open_retry", True)),
         no_open_nudge=bool(_g(listen, "no_open_nudge", True)),

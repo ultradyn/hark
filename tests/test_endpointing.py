@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import sys
+import threading
 from types import ModuleType, SimpleNamespace
 
 import numpy as np
@@ -85,12 +86,6 @@ def test_capture_energy_path_keeps_legacy_condition_and_avoids_per_block_concat(
             return samples.reshape(-1, 1), False
 
     stream = FakeStream()
-    # B087 publishes a ~40 ms spectrum window per block for the live webui, and
-    # that concatenation is wall-clock throttled (16 ms) — counting it would tie
-    # this assertion to how fast the machine drains the fake stream. It is not
-    # endpointing work, so drop the publisher: the counter then sees the capture
-    # path only. `_publish_spec` imports it lazily and swallows the ImportError.
-    monkeypatch.setitem(sys.modules, "hark.audio.spectrum", None)
     monkeypatch.setattr(cap_mod, "_require_sd", lambda: None)
     monkeypatch.setattr(
         cap_mod,
@@ -98,11 +93,21 @@ def test_capture_energy_path_keeps_legacy_condition_and_avoids_per_block_concat(
         SimpleNamespace(InputStream=lambda **kwargs: stream),
     )
     real_concatenate = np.concatenate
+    audio_thread = threading.current_thread()
     concatenate_calls = 0
+    off_thread_calls = 0
 
     def counting_concatenate(parts):
-        nonlocal concatenate_calls
-        concatenate_calls += 1
+        # B087 publishes a ~40 ms spectrum window for the live webui, but since
+        # the publisher became a tap that work happens on the tap's own worker.
+        # Attributing calls by thread is what makes this assertion meaningful:
+        # it pins "no per-block work on the *audio* thread" rather than being
+        # tied to how fast the machine drains the fake stream.
+        nonlocal concatenate_calls, off_thread_calls
+        if threading.current_thread() is audio_thread:
+            concatenate_calls += 1
+        else:
+            off_thread_calls += 1
         return real_concatenate(parts)
 
     monkeypatch.setattr(cap_mod.np, "concatenate", counting_concatenate)
@@ -117,14 +122,28 @@ def test_capture_energy_path_keeps_legacy_condition_and_avoids_per_block_concat(
 
     assert result.duration_ms > 0
     assert stream.reads == 7
-    # Only finalization concatenates. A default turn never builds an endpoint frame.
-    assert concatenate_calls == 1, f"unexpected per-block concat (n={concatenate_calls})"
+    # Only finalization concatenates on the audio thread. A default turn never
+    # builds an endpoint frame, and telemetry never touches this thread.
+    assert concatenate_calls == 1, (
+        f"unexpected per-block concat on the audio thread (n={concatenate_calls}; "
+        f"{off_thread_calls} off-thread)"
+    )
     source = inspect.getsource(cap_mod.capture_utterance)
     # Legacy energy-gate end condition stays inline (not only via SilenceEndpointer).
     # Indentation may shift with hang (B108) / mute-hold (B112); match the predicate.
     assert "silent_blocks >= end_silence_blocks" in source
     assert "speech_blocks >= min_speech_blocks" in source
     assert "endpointer is None" in source
+    # The default path does no per-block telemetry work of its own: the read
+    # loop only offers frames to the tap (which may publish nothing at all if
+    # the throttle swallows this short turn).
+    assert "publish_spectrum" not in source
+    assert "np.concatenate" not in source.split("if endpointer is None")[0]
+    # The gate spec is unbundled once *above* the read loop, so the default path
+    # still pays no per-frame attribute lookup that the old scalar signature
+    # avoided. Any `spec.` inside the loop is per-frame work on the audio thread.
+    loop = source.split("while blocks_used < max_blocks:", 1)[1]
+    assert "spec." not in loop, "gate facts must be locals by the time the loop runs"
 
 
 # ---------------------------------------------------------------------------
@@ -523,8 +542,9 @@ def test_silence_mode_builds_and_wires_the_configured_endpoint_strategy(monkeypa
     assert builds[0]["smart_turn_threshold"] == 0.7
     assert callable(builds[0]["on_warn"])
     assert captures[0]["endpoint_strategy"] is strategy
-    assert captures[0]["endpoint_probe_silence_s"] == 0.4
-    assert captures[0]["endpoint_max_silence_s"] == 3.0
+    # Endpointing windows ride the gate spec, not loose kwargs.
+    assert captures[0]["spec"].endpoint_probe_silence_s == 0.4
+    assert captures[0]["spec"].endpoint_max_silence_s == 3.0
     assert callable(captures[0]["on_endpoint_event"])
 
 

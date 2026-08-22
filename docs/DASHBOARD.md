@@ -280,8 +280,11 @@ This is the unbound path; routing stays with the orchestrator.
 While the host mic is capturing (listen / ask / ambient / host dictation), the
 capture path computes short-window FFT band magnitudes and publishes the
 **latest frame only** to `spectrum.latest` under the state dir (no JSONL
-history, no disk growth). `hark serve` coalesces that frame onto the existing
-SSE stream as:
+history, no disk growth). The compute and the write run on a `SpectrumTap`
+worker, never on the audio thread — the read loop only offers frames to a
+bounded queue, so a slow disk drops frames instead of stalling capture (see
+[AUDIO_DESIGN.md](AUDIO_DESIGN.md) § Spectrum telemetry is a tap). `hark serve`
+coalesces that frame onto the existing SSE stream as:
 
 ```json
 {
@@ -305,8 +308,9 @@ SSE stream as:
   feed uses `recording: false` so the panel can stay live without looking hot.
 - Spectrum frames **do not** advance the composite cursor and **must not** be
   appended to the events timeline (webui treats them as a dedicated signal).
-- Target cadence is ~60 fps on the SSE loop (latest-frame coalesce; slow
-  clients drop intermediate frames).
+- Publish cadence is one throttle for every read loop
+  (`spectrum.TAP_INTERVAL_S`, 32 ms / ~31 Hz). Target cadence is ~60 fps on the
+  SSE loop (latest-frame coalesce; slow clients drop intermediate frames).
 - Webui: collapsible spectrum strip under the topbar; auto-expands while
   `recording` unless the operator collapsed it during a recording period
   (preference in `localStorage`).

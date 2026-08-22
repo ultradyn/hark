@@ -13,6 +13,16 @@ from hark.audio.capture import radio_stt_window_pcm
 from hark.config import HarkConfig, config_to_dict, load_config
 
 
+def _held_hold():
+    """A fresh (non-stale) TTS mute lease, as ``run_tts`` would have taken it."""
+    from hark.audio import mic_mute
+
+    return mic_mute.MuteHold(
+        state=mic_mute.MuteState(source="src0", was_muted=False, applied=True),
+        depth=1,
+    )
+
+
 def test_tts_mute_depth_nestable():
     from hark.audio import mic_mute
 
@@ -31,8 +41,8 @@ def test_capture_freezes_timeout_while_tts_muted(monkeypatch):
 
     state = {"i": 0, "muted": True}
 
-    def fake_depth():
-        return 1 if state["muted"] else 0
+    def fake_hold():
+        return _held_hold() if state["muted"] else None
 
     class FakeStream:
         def __enter__(self):
@@ -57,7 +67,7 @@ def test_capture_freezes_timeout_while_tts_muted(monkeypatch):
 
     monkeypatch.setattr(cap, "sd", SimpleNamespace(InputStream=lambda **k: FakeStream()))
     monkeypatch.setattr(cap, "_require_sd", lambda: None)
-    monkeypatch.setattr("hark.audio.mic_mute.tts_mute_depth", fake_depth)
+    monkeypatch.setattr("hark.audio.mic_mute.current_tts_mute_hold", fake_hold)
 
     # short timeout: if mute burned clock, would fail before speech
     result = cap.capture_utterance(
@@ -84,8 +94,8 @@ def test_capture_freezes_max_s_while_tts_muted(monkeypatch):
     quiet = np.ones(block, dtype=np.float32) * 0.0001
     state = {"i": 0, "muted": True}
 
-    def fake_depth():
-        return 1 if state["muted"] else 0
+    def fake_hold():
+        return _held_hold() if state["muted"] else None
 
     class FakeStream:
         def __enter__(self):
@@ -110,7 +120,7 @@ def test_capture_freezes_max_s_while_tts_muted(monkeypatch):
 
     monkeypatch.setattr(cap, "sd", SimpleNamespace(InputStream=lambda **k: FakeStream()))
     monkeypatch.setattr(cap, "_require_sd", lambda: None)
-    monkeypatch.setattr("hark.audio.mic_mute.tts_mute_depth", fake_depth)
+    monkeypatch.setattr("hark.audio.mic_mute.current_tts_mute_hold", fake_hold)
 
     result = cap.capture_utterance(
         sample_rate=16000,
@@ -144,9 +154,9 @@ def test_mute_freezes_silence_counter_while_opened(monkeypatch):
     )
     state = {"i": 0}
 
-    def fake_depth():
+    def fake_hold():
         # mute during plan indices 13..32
-        return 1 if 13 <= state["i"] < 33 else 0
+        return _held_hold() if 13 <= state["i"] < 33 else None
 
     class FakeStream:
         def __enter__(self):
@@ -162,7 +172,7 @@ def test_mute_freezes_silence_counter_while_opened(monkeypatch):
 
     monkeypatch.setattr(cap, "sd", SimpleNamespace(InputStream=lambda **k: FakeStream()))
     monkeypatch.setattr(cap, "_require_sd", lambda: None)
-    monkeypatch.setattr("hark.audio.mic_mute.tts_mute_depth", fake_depth)
+    monkeypatch.setattr("hark.audio.mic_mute.current_tts_mute_hold", fake_hold)
 
     result = cap.capture_utterance(
         sample_rate=16000,
@@ -203,8 +213,8 @@ def test_mute_preserves_silence_progress_for_finalize(monkeypatch):
     state = {"i": 0}
     mute_from, mute_to = 16, 31  # after 8 loud + 8 quiet
 
-    def fake_depth():
-        return 1 if mute_from <= state["i"] < mute_to else 0
+    def fake_hold():
+        return _held_hold() if mute_from <= state["i"] < mute_to else None
 
     class FakeStream:
         def __enter__(self):
@@ -220,7 +230,7 @@ def test_mute_preserves_silence_progress_for_finalize(monkeypatch):
 
     monkeypatch.setattr(cap, "sd", SimpleNamespace(InputStream=lambda **k: FakeStream()))
     monkeypatch.setattr(cap, "_require_sd", lambda: None)
-    monkeypatch.setattr("hark.audio.mic_mute.tts_mute_depth", fake_depth)
+    monkeypatch.setattr("hark.audio.mic_mute.current_tts_mute_hold", fake_hold)
 
     result = cap.capture_utterance(
         sample_rate=16000,
@@ -256,8 +266,8 @@ def test_speech_during_mute_resets_silence_and_logs(monkeypatch):
     state = {"i": 0}
     logs: list[tuple[str, dict]] = []
 
-    def fake_depth():
-        return 1 if 16 <= state["i"] < 26 else 0
+    def fake_hold():
+        return _held_hold() if 16 <= state["i"] < 26 else None
 
     class FakeStream:
         def __enter__(self):
@@ -273,7 +283,7 @@ def test_speech_during_mute_resets_silence_and_logs(monkeypatch):
 
     monkeypatch.setattr(cap, "sd", SimpleNamespace(InputStream=lambda **k: FakeStream()))
     monkeypatch.setattr(cap, "_require_sd", lambda: None)
-    monkeypatch.setattr("hark.audio.mic_mute.tts_mute_depth", fake_depth)
+    monkeypatch.setattr("hark.audio.mic_mute.current_tts_mute_hold", fake_hold)
     monkeypatch.setattr(
         "hark.syslog.log",
         lambda event, **data: logs.append((event, data)),

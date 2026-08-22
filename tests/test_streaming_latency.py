@@ -136,7 +136,7 @@ def test_radio_streaming_uses_clamped_idle_timeout(monkeypatch):
     assert result.end_phrase == "radio_idle"
     assert len(calls) >= 2
     # Second segment (post-open) must use clamped ~2.1s, not 6.3s
-    assert calls[1]["initial_timeout_s"] == pytest.approx(2.1)
+    assert calls[1]["spec"].initial_timeout_s == pytest.approx(2.1)
     clamp_logs = [d for e, d in logs if e == "listen.streaming_idle_clamp"]
     assert clamp_logs
     assert clamp_logs[0]["idle_s"] == pytest.approx(2.1)

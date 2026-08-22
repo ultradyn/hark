@@ -140,7 +140,7 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
         "endpoint_max_silence_s",
         "smart_turn_model_path",
         "smart_turn_threshold",
-        # Pre-speech lead-in from capture ring (B079); 250–500 ms
+        # Pre-speech lead-in from capture ring (B079); 250–500 ms, or 0 to disable
         "pre_roll_ms",
     }),
     "ambient": frozenset({
@@ -423,7 +423,8 @@ class ListenConfig:
     smart_turn_model_path: str | None = None
     # Completion probability at/above which smart turn ends the turn.
     smart_turn_threshold: float = 0.5
-    # Pre-speech PCM kept when the energy gate opens (B079). Clamped 250–500 ms.
+    # Pre-speech PCM kept when the energy gate opens (B079). Clamped 250–500 ms;
+    # 0 disables pre-roll outright.
     pre_roll_ms: int = 300
 
 
@@ -735,7 +736,7 @@ open_margin_db = 8.0         # dB above adaptive noise floor
 initial_timeout_s = 45       # wait for speech open before timeout (answer windows)
 no_open_retry = true         # re-listen once if gate never opens
 no_open_nudge = true         # TTS then re-listen once more on no-open
-# Pre-speech lead-in when the gate opens (B079). Clamped 250–500 ms.
+# Pre-speech lead-in when the gate opens (B079). Clamped 250–500 ms; 0 disables.
 pre_roll_ms = 300
 
 # Ambient: when NOT replying to a blocked agent question
@@ -927,13 +928,19 @@ def _as_list_str(value: Any, default: list[str]) -> list[str]:
 
 
 def _clamp_pre_roll_ms(value: Any, *, default: int = 300) -> int:
-    """Clamp listen.pre_roll_ms to the B079 range (250–500 ms)."""
+    """Clamp listen.pre_roll_ms to the B079 range (250–500 ms).
+
+    ``0`` is an explicit "no pre-roll" and passes through; the final say still
+    belongs to ``hark.audio.capture.clamp_pre_roll_ms`` inside the gate.
+    """
     if value is None:
         return default
     try:
         v = int(value)
     except (TypeError, ValueError):
         return default
+    if v <= 0:
+        return 0
     return max(250, min(500, v))
 
 

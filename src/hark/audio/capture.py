@@ -12,11 +12,14 @@ import time
 import wave
 from collections import deque
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from enum import Enum
 from typing import Any, Callable, Iterator
 
 import numpy as np
 
+from hark.audio.frames import FramePhase, MicFrameSource, MuteFreezeGate
+from hark.audio.mic_mute import mute_freeze_budget_s
 from hark.endpointing import EndpointFrame, EndpointStrategy, SilenceEndpointer
 from hark.paths import state_dir
 
@@ -332,25 +335,25 @@ class _CaptureReadDeadline:
                 pass
 
 
-def _read_input_block(
-    stream: Any,
-    block_size: int,
-    deadline: _CaptureReadDeadline | None,
-) -> tuple[Any, Any]:
-    """Read one capture frame, surfacing wall-clock gate/discard timeouts."""
-    if deadline is not None:
-        deadline.check()
+def _make_spectrum_tap(
+    *, sample_rate: int, source: str, recording: bool
+) -> Any | None:
+    """Live-webui spectrum publisher for one read loop, or None (B087).
+
+    Both read loops go through here, so there is one throttle and one publish
+    path instead of the 16 ms / 32 ms pair they each used to carry inline. The
+    tap does its FFT and its ``spectrum.latest`` write on its own worker, so a
+    slow disk can never stall a frame read. Telemetry stays optional: capture
+    must work with the dashboard absent, so an import failure is not an error.
+    """
     try:
-        data, overflowed = stream.read(block_size)
-    except BaseException as exc:
-        if deadline is not None:
-            mapped = deadline.map_error(exc)
-            if mapped is not exc:
-                raise mapped from exc
-        raise
-    if deadline is not None:
-        deadline.check()
-    return data, overflowed
+        from hark.audio.spectrum import SpectrumTap
+
+        return SpectrumTap(
+            sample_rate=sample_rate, source=source, recording=recording
+        )
+    except Exception:
+        return None
 
 
 def _proc_parent_and_start(pid: int) -> tuple[int, str]:
@@ -1359,6 +1362,7 @@ class ContinuousMicStream:
         self._block = max(1, int(self.sample_rate * (block_ms / 1000.0)))
         self._lease: MicLease | None = None
         self._stream: Any = None
+        self._frames: MicFrameSource | None = None
         self._open = False
 
     @property
@@ -1389,15 +1393,29 @@ class ContinuousMicStream:
             raise
         self._lease = lease
         self._stream = stream
+        # Ambient spectrum: non-recording feed so the webui can stay live (B087).
+        # One tap per open stream — the read loop only offers frames to it.
+        self._frames = MicFrameSource(
+            stream,
+            block=self._block,
+            tap=_make_spectrum_tap(
+                sample_rate=self.sample_rate, source="ambient", recording=False
+            ),
+        )
         self._open = True
         return self
 
     def close(self) -> None:
+        frames = self._frames
+        self._frames = None
         stream = self._stream
         self._stream = None
         lease = self._lease
         self._lease = None
         self._open = False
+        if frames is not None:
+            # Joins the tap worker, so no publish outlives this stream.
+            frames.close()
         if stream is not None:
             try:
                 stream.stop()
@@ -1430,35 +1448,19 @@ class ContinuousMicStream:
         Returns False if ``should_stop`` became true before the full duration
         (caller should check pause/shutdown). Raises if the stream is closed.
         """
-        if not self._open or self._stream is None:
+        frames = self._frames
+        if not self._open or frames is None:
             raise RuntimeError("ContinuousMicStream is not open")
         duration_s = max(0.0, float(duration_s))
         if duration_s <= 0:
             return True
         deadline = time.monotonic() + duration_s
-        # Ambient spectrum: non-recording feed so the webui can stay live (B087)
-        last_spec = 0.0
+        # Ring filling is all this loop owns: acquisition and the spectrum tap
+        # belong to the frame source, shared with the listen loop.
         while time.monotonic() < deadline:
             if should_stop is not None and should_stop():
                 return False
-            data, overflowed = self._stream.read(self._block)
-            del overflowed
-            samples = data.reshape(-1)
-            self.ring.write_float32(samples)
-            now = time.monotonic()
-            if now - last_spec >= 0.032:  # ~30 fps ambient (cheaper than listen)
-                last_spec = now
-                try:
-                    from hark.audio.spectrum import publish_spectrum
-
-                    publish_spectrum(
-                        samples,
-                        sample_rate=self.sample_rate,
-                        recording=False,
-                        source="ambient",
-                    )
-                except Exception:
-                    pass
+            self.ring.write_float32(frames.read().samples)
         return True
 
     def window_pcm16(self, duration_s: float, *, end_offset_s: float = 0.0) -> bytes:
@@ -1469,6 +1471,59 @@ class ContinuousMicStream:
 
     def tail(self, duration_s: float) -> bytes:
         return self.ring.tail(duration_s)
+
+
+class CaptureReason(str, Enum):
+    """Why one :func:`capture_utterance` attempt stopped.
+
+    Typed so callers branch on a verdict instead of matching the English text of
+    a ``TimeoutError``. The first three ride on :class:`CaptureResult` (capture
+    produced audio); the last two on :class:`CaptureTimeout` (it did not).
+    """
+
+    # Endpointer — or the legacy fixed-silence gate (B007) — ended the turn.
+    SILENCE = "silence"
+    # ``should_stop`` asked to end (agent listen-end, config reload).
+    AGENT_STOP = "agent_stop"
+    # ``max_s`` exhausted with audio already buffered.
+    MAX_DURATION = "max_duration"
+    # Energy gate never confirmed speech, so there is nothing to transcribe.
+    NO_OPEN = "no_open"
+    # Overlap pre-arm discard outlasted its own bound (TTS never handed over).
+    DISCARD_TIMEOUT = "discard_timeout"
+
+
+class CaptureTimeout(TimeoutError):
+    """Capture ended with no audio; ``reason`` says why.
+
+    Stays a ``TimeoutError`` subclass so every existing ``except TimeoutError``
+    (radio idle finish, ask exit-code mapping, ambient error path) keeps working
+    unchanged — but the recovery *decision* reads :attr:`reason`, never
+    ``str(exc)``. The peaks capture already had as locals travel with it so the
+    ``speech.no_open`` metric does not have to parse them back out.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: CaptureReason = CaptureReason.NO_OPEN,
+        peak_db: float = -120.0,
+        peak_rms: float = 0.0,
+        open_thresh_db: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.peak_db = float(peak_db)
+        self.peak_rms = float(peak_rms)
+        self.open_thresh_db = (
+            None if open_thresh_db is None else float(open_thresh_db)
+        )
+
+    @property
+    def no_open(self) -> bool:
+        """Energy gate never opened (vs any other reason capture produced none)."""
+        return self.reason is CaptureReason.NO_OPEN
 
 
 @dataclass
@@ -1482,10 +1537,55 @@ class CaptureResult:
     # Peak energy while capture was armed (helps diagnose residual TTS / mute races)
     peak_rms: float = 0.0
     peak_db: float = -120.0
+    # Why the read loop stopped (SILENCE / AGENT_STOP / MAX_DURATION)
+    reason: CaptureReason = CaptureReason.SILENCE
 
     @property
     def wav(self) -> bytes:
         return write_wav_bytes(self.pcm16, self.sample_rate)
+
+
+@dataclass(frozen=True)
+class CaptureGateSpec:
+    """Every gate fact for one capture attempt, derived once by the caller.
+
+    The answer window builds this from :class:`~hark.answer_window.policy.AnswerWindowPolicy`
+    via :func:`~hark.answer_window.policy.gate_spec_from_policy` and passes it
+    whole, so session loops never re-assemble scalars — nor re-apply invariants
+    that belong here (see ``preroll_ms``).
+
+    The second block has no config key at all: production runs on these defaults
+    and only tests move them, which is what ``capture_utterance(**overrides)``
+    is for.
+    """
+
+    max_s: float = 120.0
+    end_silence_s: float = 2.1
+    abs_open_db: float = -48.0
+    open_margin_db: float = 8.0
+    initial_timeout_s: float = 45.0
+    # B079: ≥250 ms of pre-speech audio so word onsets are not clipped when the
+    # gate lags. Clamped to 250–500 **here in capture** (0 disables entirely) —
+    # callers must forward what config said, never pre-clamp it.
+    preroll_ms: int = 300
+    # B084: after the TTS mute releases, discard this many ms and keep clocks frozen
+    mute_edge_pad_ms: int = 300
+    # Pluggable endpointing windows (B007); None keeps the strategy's own defaults
+    endpoint_probe_silence_s: float | None = None
+    endpoint_max_silence_s: float | None = None
+
+    # --- tuning: no config key; product uses these, tests override them ------
+    sample_rate: int = 16000
+    min_speech_s: float = 0.25
+    open_confirm_blocks: int = 4  # ~80 ms
+    # B108: hang hysteresis / relative-to-peak drop for high-gain robustness
+    hang_margin_db: float = 4.0
+    speech_drop_db: float = 18.0
+    peak_gate_slack_db: float = 12.0
+    device: int | str | None = None
+    # The real post-TTS guard sleeps at the answer-window call seam; capture only
+    # keeps this so interrupt tests can block inside the decorated attempt.
+    post_tts_guard_s: float = 0.0
 
 
 def _still_discarding(
@@ -1512,42 +1612,27 @@ def _still_discarding(
 @capture_attempt()
 def capture_utterance(
     *,
-    sample_rate: int = 16000,
-    max_s: float = 120.0,
-    end_silence_s: float = 2.1,
-    min_speech_s: float = 0.25,
-    open_margin_db: float = 8.0,
-    # Absolute floor: speech louder than this opens even if relative margin fails
-    abs_open_db: float = -48.0,
-    open_confirm_blocks: int = 4,  # ~80 ms
-    # Keep this much audio immediately before speech open (trims long leading silence).
-    # B079: default ≥250 ms so word onsets are not clipped when the gate lags.
-    # Values outside 250–500 are clamped (except 0 which disables pre-roll).
-    preroll_ms: int = 300,
-    # B084: after TTS mute releases, discard this many ms and freeze silence clocks
-    mute_edge_pad_ms: int = 300,
-    initial_timeout_s: float = 45.0,
-    device: int | str | None = None,
+    spec: CaptureGateSpec | None = None,
     should_stop: Callable[[bytes, float], bool] | None = None,
     on_opened: Callable[[], None] | None = None,
     # B105: called (throttled ≈10 Hz) while speech energy is present so TTS can
     # measure operator quiet for streaming acks. Optional; ignore if None.
     on_voice: Callable[[], None] | None = None,
-    post_tts_guard_s: float = 0.0,
     # Drop leading frames (fixed window from open and/or until audio_ok_after)
     discard_leading_ms: int = 0,
     audio_ok_after: Callable[[], float | None] | None = None,
     # Pluggable endpointing (B007). None strategy == legacy fixed-silence gate.
     endpoint_strategy: EndpointStrategy | None = None,
-    endpoint_probe_silence_s: float | None = None,
-    endpoint_max_silence_s: float | None = None,
     on_endpoint_event: Callable[[str, dict], None] | None = None,
-    # B108: hang hysteresis / relative-to-peak drop for high-gain robustness
-    hang_margin_db: float = 4.0,
-    speech_drop_db: float = 18.0,
-    peak_gate_slack_db: float = 12.0,
+    **gate: Any,
 ) -> CaptureResult:
     """Energy-gated capture until turn end or should_stop or max.
+
+    ``spec`` carries every gate fact (:class:`CaptureGateSpec`); the remaining
+    parameters are this attempt's runtime seams — callbacks, the overlap discard
+    handshake, the endpointing strategy. ``**gate`` are field overrides applied
+    to ``spec`` via :func:`dataclasses.replace`: the test-facing way to move
+    tuning that has no config key, and a ``TypeError`` on any unknown name.
 
     The turn-end decision is delegated to :class:`~hark.endpointing.SilenceEndpointer`.
     With ``endpoint_strategy=None`` this is exactly the legacy fixed-silence gate
@@ -1571,10 +1656,32 @@ def capture_utterance(
     loud close-talk), frames must also stay within ``speech_drop_db`` of that peak
     to count as continued speech — otherwise elevated room noise that never falls
     below a frozen low ``abs_open_db`` hang floor would keep the stream open forever.
+
+    Returns a :class:`CaptureResult` whose ``reason`` says which of silence /
+    agent stop / max duration ended the turn; raises :class:`CaptureTimeout`
+    (a ``TimeoutError``) carrying the same typed ``reason`` when there is no
+    audio at all. Callers must never read the message text to decide.
     """
     _require_sd()
-    if post_tts_guard_s > 0:
-        time.sleep(post_tts_guard_s)
+    spec = spec if spec is not None else CaptureGateSpec()
+    if gate:
+        spec = replace(spec, **gate)
+    if spec.post_tts_guard_s > 0:
+        time.sleep(spec.post_tts_guard_s)
+
+    # Gate facts the read loop touches per frame become locals here, once — the
+    # audio thread must not pay attribute lookups (nor, on the legacy B007 path,
+    # do any work the old scalar signature did not).
+    sample_rate = spec.sample_rate
+    abs_open_db = spec.abs_open_db
+    open_margin_db = spec.open_margin_db
+    open_confirm_blocks = spec.open_confirm_blocks
+    hang_margin_db = spec.hang_margin_db
+    speech_drop_db = spec.speech_drop_db
+    peak_gate_slack_db = spec.peak_gate_slack_db
+    end_silence_s = spec.end_silence_s
+    min_speech_s = spec.min_speech_s
+    initial_timeout_s = spec.initial_timeout_s
 
     block = int(sample_rate * 0.02)  # 20 ms
     noise_floor = 1e-4
@@ -1589,20 +1696,28 @@ def capture_utterance(
             end_silence_s=end_silence_s,
             min_speech_s=min_speech_s,
             strategy=endpoint_strategy,
-            probe_silence_s=endpoint_probe_silence_s,
-            max_silence_s=endpoint_max_silence_s,
+            probe_silence_s=spec.endpoint_probe_silence_s,
+            max_silence_s=spec.endpoint_max_silence_s,
             on_event=on_endpoint_event,
         )
         if endpoint_strategy is not None
         else None
     )
-    max_blocks = int(max_s / 0.02)
+    max_blocks = int(spec.max_s / 0.02)
     timeout_blocks = int(initial_timeout_s / 0.02)
-    # 0 disables; otherwise clamp to B079 range so config mistakes stay safe
-    effective_preroll = 0 if preroll_ms <= 0 else clamp_pre_roll_ms(preroll_ms)
+    # Capture owns the B079 invariant: 0 disables pre-roll, anything else is
+    # clamped into 250–500 ms so a config mistake stays safe. No caller may
+    # pre-clamp — that made `listen.pre_roll_ms = 0` unreachable.
+    effective_preroll = (
+        0 if spec.preroll_ms <= 0 else clamp_pre_roll_ms(spec.preroll_ms)
+    )
     preroll_blocks = max(1, int(effective_preroll / 20.0)) if effective_preroll > 0 else 0
     peak_db = -120.0
     peak_rms = 0.0
+    # Overwritten at each break; the while-loop falling through means max_s.
+    reason = CaptureReason.MAX_DURATION
+    # Which typed reason a fired wall-clock read deadline (B145) stands for.
+    deadline_reason = CaptureReason.NO_OPEN
 
     chunks: list[np.ndarray] = []
     # Short ring of recent frames while waiting for speech (discarded if timeout)
@@ -1610,36 +1725,6 @@ def capture_utterance(
     wait_speech_ms = 0
     # Safety cap for discard phase (TTS tail + residual + long mute)
     discard_max_s = max(30.0, initial_timeout_s)
-    # Spectrum window: ~40 ms of recent blocks for FFT (B087 live webui)
-    spec_blocks = max(1, int(0.04 / 0.02))
-    spec_ring: deque[np.ndarray] = deque(maxlen=spec_blocks)
-    # Throttle file writes a bit when local publisher is absent (still ~50 fps)
-    last_spec_pub = 0.0
-    spec_interval_s = 0.016
-
-    def _publish_spec(samples_block: np.ndarray) -> None:
-        nonlocal last_spec_pub
-        now = time.monotonic()
-        if now - last_spec_pub < spec_interval_s:
-            return
-        last_spec_pub = now
-        try:
-            from hark.audio.spectrum import publish_spectrum
-
-            spec_ring.append(samples_block)
-            window = (
-                np.concatenate(list(spec_ring))
-                if len(spec_ring) > 1
-                else samples_block
-            )
-            publish_spectrum(
-                window,
-                sample_rate=sample_rate,
-                recording=True,
-                source="listen",
-            )
-        except Exception:
-            pass
 
     try:
         stream_owner = sd.InputStream(
@@ -1647,11 +1732,11 @@ def capture_utterance(
             channels=1,
             dtype="float32",
             blocksize=block,
-            device=device,
+            device=spec.device,
         )
         stream = stream_owner
         fallback_exit: Callable[[], Any] | None = None
-        read_deadline: _CaptureReadDeadline | None = None
+        frames: MicFrameSource | None = None
         try:
             start = getattr(stream_owner, "start", None)
             if callable(start):
@@ -1671,7 +1756,12 @@ def capture_utterance(
             _request_stream_cancel(stream_owner)
             raise
 
-        read_deadline = _CaptureReadDeadline(stream)
+        # Bare source: acquisition + the wall-clock read deadline only. Phase 0
+        # discard therefore publishes no telemetry and burns no freeze budget;
+        # `frames.attach` switches both on once the gate clock starts.
+        frames = MicFrameSource(
+            stream, block=block, deadline=_CaptureReadDeadline(stream)
+        )
         discard_timeout_msg = (
             "overlap discard window exceeded before audio became usable"
         )
@@ -1689,27 +1779,27 @@ def capture_utterance(
                 open_mono = time.monotonic()
                 # Phase 0: drop leading audio (overlap pre-arm / fixed discard window)
                 if discard_leading_ms > 0 or audio_ok_after is not None:
-                    read_deadline.arm(discard_max_s, discard_timeout_msg)
+                    deadline_reason = CaptureReason.DISCARD_TIMEOUT
+                    frames.arm_deadline(discard_max_s, discard_timeout_msg)
                     while _still_discarding(
                         open_mono=open_mono,
                         discard_leading_ms=discard_leading_ms,
                         audio_ok_after=audio_ok_after,
                     ):
                         if time.monotonic() - open_mono > discard_max_s:
-                            raise TimeoutError(discard_timeout_msg)
-                        data, overflowed = _read_input_block(
-                            stream, block, read_deadline
-                        )
-                        del overflowed, data
+                            raise CaptureTimeout(
+                                discard_timeout_msg,
+                                reason=CaptureReason.DISCARD_TIMEOUT,
+                            )
+                        frames.read()
 
                 # Gate clock starts only after discard so TTS tail does not burn timeout
                 start = time.monotonic()
-                read_deadline.arm(initial_timeout_s, gate_deadline_msg)
+                deadline_reason = CaptureReason.NO_OPEN
+                frames.arm_deadline(initial_timeout_s, gate_deadline_msg)
                 wait_blocks = 0  # only counts when not muted (B084)
                 blocks_used = 0  # non-mute blocks against max_s (B084 freezes max too)
-                mute_pad_blocks = 0
-                was_tts_muted = False
-                edge_pad_blocks = max(0, int(float(mute_edge_pad_ms) / 20.0))
+                edge_pad_blocks = max(0, int(float(spec.mute_edge_pad_ms) / 20.0))
                 last_voice_cb = 0.0  # monotonic; throttle on_voice (B105)
 
                 def _emit_voice() -> None:
@@ -1725,13 +1815,20 @@ def capture_utterance(
                     except Exception:
                         pass
 
-                def _tts_muted() -> bool:
-                    try:
-                        from hark.audio.mic_mute import tts_mute_depth
-
-                        return tts_mute_depth() > 0
-                    except Exception:
-                        return False
+                # From here the frame source owns the shared per-frame concerns:
+                # the B084 freeze consultation (bounded by the mute *lease*, same
+                # shape as discard_max_s), the edge pad, the wall-clock gate
+                # budget it pauses, and the B087 spectrum tap. This loop keeps
+                # only the energy-gate / endpointing policy.
+                frames.attach(
+                    tap=_make_spectrum_tap(
+                        sample_rate=sample_rate, source="listen", recording=True
+                    ),
+                    mute_gate=MuteFreezeGate(
+                        mute_freeze_budget_s(initial_timeout_s)
+                    ),
+                    edge_pad_frames=edge_pad_blocks,
+                )
 
                 # While-loop so TTS mute / edge-pad do not burn max_s or initial_timeout
                 speech_during_mute = False
@@ -1793,23 +1890,15 @@ def capture_utterance(
                     )
 
                 while blocks_used < max_blocks:
-                    data, overflowed = _read_input_block(
-                        stream, block, read_deadline
-                    )
-                    del overflowed
-                    samples = data.reshape(-1)
-                    _publish_spec(samples)
+                    frame = frames.read()
+                    samples = frame.samples
 
                     # B084 / B112: while Hark holds TTS mute, *freeze* open/silence/max
                     # clocks (do not advance). Do **not** unconditionally reset the
                     # silence counter — streaming TTS acks mid-listen used to wipe
                     # silence progress and delay ambient.prompt until max/agent end.
                     # Only reset when operator energy is observed during the hold.
-                    muted_now = _tts_muted()
-                    if muted_now:
-                        was_tts_muted = True
-                        # B084: freeze wall-clock gate budget while TTS mute holds.
-                        read_deadline.pause()
+                    if frame.phase is FramePhase.FROZEN:
                         _rms_m, db_m = _block_energy(samples)
                         if opened:
                             _note_speech_during_hold(db_m, phase="mute")
@@ -1820,17 +1909,13 @@ def capture_utterance(
                             ) - 6:
                                 preroll.append(samples.copy())
                         continue
-                    if was_tts_muted:
-                        was_tts_muted = False
-                        mute_pad_blocks = edge_pad_blocks
+                    if frame.mute_released:
                         if opened and speech_during_mute:
                             silent_blocks = 0
                             if endpointer is not None:
                                 endpointer.on_speech()
-                    if mute_pad_blocks > 0:
+                    if frame.phase is FramePhase.EDGE_PAD:
                         # Edge pad is part of the mute hold freeze (B084).
-                        read_deadline.pause()
-                        mute_pad_blocks -= 1
                         _rms_p, db_p = _block_energy(samples)
                         if opened:
                             _note_speech_during_hold(db_p, phase="mute_edge_pad")
@@ -1842,7 +1927,6 @@ def capture_utterance(
                         continue
                     # Hold ended cleanly: keep prior silent_blocks (true freeze).
                     # speech_during_mute already forced a reset above when needed.
-                    read_deadline.resume()
                     if speech_during_mute and opened:
                         # Fresh speech after hold — treat as active talk turn
                         silent_blocks = 0
@@ -1870,7 +1954,7 @@ def capture_utterance(
                                 silent_blocks = 0
                                 # Gate satisfied — stop the no-speech wall clock.
                                 # max_s is still enforced by blocks_used below.
-                                read_deadline.disarm()
+                                frames.disarm_deadline()
                                 # Seed buffer with short pre-roll only (not full leading silence)
                                 if preroll_blocks > 0:
                                     chunks.extend(preroll)
@@ -1888,7 +1972,13 @@ def capture_utterance(
                             speech_blocks = max(0, speech_blocks - 1)
                         wait_blocks += 1
                         if wait_blocks >= timeout_blocks and not opened:
-                            raise TimeoutError(_gate_timeout_message())
+                            raise CaptureTimeout(
+                                _gate_timeout_message(),
+                                reason=CaptureReason.NO_OPEN,
+                                peak_db=peak_db,
+                                peak_rms=peak_rms,
+                                open_thresh_db=open_thresh,
+                            )
                     else:
                         chunks.append(samples.copy())
                         # Classic hysteresis hang floor (open_thresh freezes at open).
@@ -1922,6 +2012,7 @@ def capture_utterance(
                                     silent_blocks >= end_silence_blocks
                                     and speech_blocks >= min_speech_blocks
                                 ):
+                                    reason = CaptureReason.SILENCE
                                     break
                             else:
                                 def _endpoint_frame() -> EndpointFrame:
@@ -1942,6 +2033,7 @@ def capture_utterance(
                                     speech_blocks=speech_blocks,
                                     audio_fn=_endpoint_frame,
                                 ):
+                                    reason = CaptureReason.SILENCE
                                     break
 
                     if should_stop is not None:
@@ -1949,6 +2041,7 @@ def capture_utterance(
                             pcm16_mono_bytes(np.concatenate(chunks)) if chunks else b""
                         )
                         if should_stop(pcm, time.monotonic() - start):
+                            reason = CaptureReason.AGENT_STOP
                             break
 
                 # Publish normal teardown ownership before the registered stream is
@@ -1964,8 +2057,12 @@ def capture_utterance(
             _wait_stream_cleanup(cleanup_worker)
 
             if not chunks:
-                raise TimeoutError(
-                    f"no speech captured (peak_db={peak_db:.1f} peak_rms={peak_rms:.5f})"
+                raise CaptureTimeout(
+                    f"no speech captured (peak_db={peak_db:.1f} peak_rms={peak_rms:.5f})",
+                    reason=CaptureReason.NO_OPEN,
+                    peak_db=peak_db,
+                    peak_rms=peak_rms,
+                    open_thresh_db=open_thresh,
                 )
 
             all_s = np.concatenate(chunks)
@@ -1980,16 +2077,35 @@ def capture_utterance(
                 wait_speech_ms=wait_speech_ms,
                 peak_rms=float(peak_rms),
                 peak_db=float(peak_db),
+                reason=reason,
             )
+        except TimeoutError as exc:
+            # The wall-clock read deadline (B145) lives in the frame source and
+            # raises a bare TimeoutError from inside the read. Re-raise it typed
+            # so no caller has to tell the discard window from the gate by text.
+            fired = frames.deadline_fired() if frames is not None else None
+            if fired is not None:
+                deadline_forced_exit = True
+                if not isinstance(exc, CaptureTimeout):
+                    raise CaptureTimeout(
+                        fired,
+                        reason=deadline_reason,
+                        peak_db=peak_db,
+                        peak_rms=peak_rms,
+                        open_thresh_db=open_thresh,
+                    ) from exc
+            raise
         except BaseException:
-            if read_deadline is not None and read_deadline.fired_message() is not None:
+            if frames is not None and frames.deadline_fired() is not None:
                 deadline_forced_exit = True
             raise
         finally:
-            if read_deadline is not None:
-                if read_deadline.fired_message() is not None:
+            if frames is not None:
+                if frames.deadline_fired() is not None:
                     deadline_forced_exit = True
-                read_deadline.close()
+                # Stops the deadline watchdog and joins the spectrum tap worker,
+                # so no telemetry write outlives this capture.
+                frames.close()
             # Cancel teardown aborts/closes native streams but skips legacy
             # context-manager __exit__ unless fallback was published on the
             # cleanup owner. Deadline timeouts never publish that owner before

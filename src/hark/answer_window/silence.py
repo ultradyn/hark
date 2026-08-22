@@ -11,11 +11,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, TypeGuard
 
 from hark.answer_window.deps import AnswerWindowDeps
 from hark.answer_window.policy import AnswerWindowPolicy
 from hark.answer_window.result import ListenResult
+from hark.audio.capture import CaptureTimeout
 from hark.endpointing import EndpointStrategy, build_endpoint_strategy
 from hark.listen_end import EndMode
 
@@ -109,10 +110,16 @@ def silence_transition(state: SilenceState, event: SilenceEvent) -> SilenceState
     return _SILENCE_TRANSITIONS[key]
 
 
-def is_no_open_timeout(exc: BaseException) -> bool:
-    """True when energy gate never opened (vs empty STT after open)."""
-    msg = str(exc).lower()
-    return "no speech detected" in msg or "no speech captured" in msg
+def is_no_open_timeout(exc: BaseException) -> TypeGuard[CaptureTimeout]:
+    """True when the energy gate never opened (vs empty STT after open).
+
+    Reads the typed :class:`~hark.audio.capture.CaptureReason` capture attached
+    to its own timeout — never the message text, which used to make every
+    recovery decision hostage to an f-string. Narrows to
+    :class:`~hark.audio.capture.CaptureTimeout`, so callers may read ``peak_db``
+    / ``peak_rms`` / ``open_thresh_db`` off it directly.
+    """
+    return isinstance(exc, CaptureTimeout) and exc.no_open
 
 
 def _default_syslog(event: str, **data: Any) -> None:

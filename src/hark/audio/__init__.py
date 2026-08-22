@@ -1,6 +1,10 @@
 """Local DSP: capture, gate, playback (no local neural dictation)."""
 
 from hark.audio.capture import (
+    CaptureGateSpec,
+    CaptureReason,
+    CaptureResult,
+    CaptureTimeout,
     ContinuousMicStream,
     MicLease,
     PcmRingBuffer,
@@ -20,6 +24,10 @@ from hark.audio.media import (
 from hark.audio.playback import play_wav_bytes, write_wav
 
 __all__ = [
+    "CaptureGateSpec",
+    "CaptureReason",
+    "CaptureResult",
+    "CaptureTimeout",
     "ContinuousMicStream",
     "DuckState",
     "MicLease",

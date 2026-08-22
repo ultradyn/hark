@@ -58,7 +58,7 @@ def test_high_gain_room_noise_still_silence_finalizes(monkeypatch):
         cap, "sd", SimpleNamespace(InputStream=lambda **k: _fake_stream(plan, state)())
     )
     monkeypatch.setattr(cap, "_require_sd", lambda: None)
-    monkeypatch.setattr("hark.audio.mic_mute.tts_mute_depth", lambda: 0)
+    monkeypatch.setattr("hark.audio.mic_mute.current_tts_mute_hold", lambda: None)
 
     result = cap.capture_utterance(
         sample_rate=16000,
@@ -98,7 +98,7 @@ def test_soft_speech_near_threshold_still_ends(monkeypatch):
         cap, "sd", SimpleNamespace(InputStream=lambda **k: _fake_stream(plan, state)())
     )
     monkeypatch.setattr(cap, "_require_sd", lambda: None)
-    monkeypatch.setattr("hark.audio.mic_mute.tts_mute_depth", lambda: 0)
+    monkeypatch.setattr("hark.audio.mic_mute.current_tts_mute_hold", lambda: None)
 
     result = cap.capture_utterance(
         sample_rate=16000,

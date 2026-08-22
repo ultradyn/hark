@@ -26,9 +26,110 @@ device
   → resample to 16 kHz mono PCM16
   → adaptive noise-floor (gate closed only)
   → energy gate + hangover
-  → pre-roll (≥250 ms from capture ring; listen.pre_roll_ms)
+  → pre-roll (≥250 ms from capture ring; listen.pre_roll_ms, 0 = off)
   → utterance → cloud STT
 ```
+
+### One frame source under both read loops
+
+Two loops read the mic: `capture_utterance` (one-shot answer window) and
+`ContinuousMicStream.read_for` (ambient wake). Both pull 20 ms frames from
+`audio/frames.py`'s `MicFrameSource`, which owns everything neither loop's
+policy cares about:
+
+- **acquisition** — one `stream.read` per frame, reshaped to mono float32;
+- **the read deadline** (`_CaptureReadDeadline`) — a wall-clock abort for a hung
+  `Pa_ReadStream`, armed per phase (`discard_max_s`, then `initial_timeout_s`)
+  and disarmed when the gate opens. The deadline class stays in `capture.py`
+  because it aborts through the process-global stream-cancel registry that
+  B143/B145 cancellation ownership depends on;
+- **the mute freeze** — `MuteFreezeGate` asks the `MuteHold` lease once per
+  frame and pauses the deadline to match (see *Mute clock freeze* below);
+- **the spectrum tap** — B087 telemetry, off the audio thread (below).
+
+Each frame arrives already classified as `live` / `frozen` / `edge_pad`, plus a
+`mute_released` edge flag. So `capture_utterance` keeps only the energy gate and
+the endpointing decision, and `read_for` keeps only ring filling. The B007
+default path (`endpoint_strategy = None`) still runs the legacy fixed-silence
+predicate inline and does **zero** per-block audio work.
+
+A source starts bare: the overlap discard phase (phase 0) reads frames with no
+tap and no freeze gate, so a TTS tail neither reaches the dashboard nor burns
+freeze budget. `frames.attach(...)` switches both on when the gate clock starts.
+
+### One gate spec in, one typed outcome out
+
+`capture_utterance` takes the gate facts as a single frozen `CaptureGateSpec`,
+derived once from `AnswerWindowPolicy` by
+`answer_window.policy.gate_spec_from_policy`. Both session loops pass it whole —
+they do not restate `abs_open_db` / `open_margin_db` / `initial_timeout_s` /
+`pre_roll_ms` / `mute_edge_pad_ms` one keyword at a time. Radio narrows the
+shared spec per segment (`max_s`, `initial_timeout_s`) because one
+`max_listen_s` window spans many segments (B074). Wake enrollment
+(`wake_enroll.py`) has no policy, so it constructs its spec directly.
+
+Three things stay explicit rather than folded into the spec by the builder:
+
+- **`end_silence_s`** — the caller states which meaning it wants. For silence it
+  is "the utterance ended"; for radio it is `radio_partial_silence_s`, "cut this
+  segment". The seam must not merge the pair.
+- **Runtime seams** — `should_stop` / `on_opened` / `on_voice` /
+  `on_endpoint_event`, the overlap discard handshake, the endpointing strategy.
+  These are this attempt's wiring, not policy.
+- **Tuning with no config key** — `sample_rate`, `min_speech_s`,
+  `open_confirm_blocks`, `device`, the B108 `hang_margin_db` /
+  `speech_drop_db` / `peak_gate_slack_db`, `post_tts_guard_s`. Production runs
+  on the spec defaults; tests move them with `capture_utterance(**overrides)`,
+  which is `dataclasses.replace` on the spec (so a typo is still a `TypeError`).
+
+Why a capture stopped is a typed `CaptureReason`, never the English text of an
+exception:
+
+| Reason | Where | Meaning |
+|--------|-------|---------|
+| `silence` | `CaptureResult.reason` | Endpointer, or the legacy fixed-silence gate (B007), ended the turn |
+| `agent_stop` | `CaptureResult.reason` | `should_stop` asked to end (agent listen-end, config reload) |
+| `max_duration` | `CaptureResult.reason` | `max_s` exhausted with audio buffered |
+| `no_open` | `CaptureTimeout.reason` | Energy gate never confirmed speech — nothing to transcribe |
+| `discard_timeout` | `CaptureTimeout.reason` | Overlap pre-arm discard outlasted `discard_max_s` |
+
+`CaptureTimeout` subclasses `TimeoutError`, so every existing
+`except TimeoutError` (radio idle finish, ask exit-code mapping, ambient error
+path) is unchanged — but the *recovery decision* reads `reason`.
+`answer_window.silence.is_no_open_timeout` is one `isinstance` + reason test,
+and ambient's `no_open` / `conversation_idle` classification uses it. The
+message text survives for logs only. `CaptureTimeout` also carries `peak_db`,
+`peak_rms` and `open_thresh_db`, so `speech.no_open` gets the numbers capture
+already had instead of regexing them back out of an f-string.
+
+Radio's post-speech idle finish (B074) stays an **exception** path deliberately,
+even though it is a happy path: that segment produced no audio, and
+`CaptureResult`'s "`pcm16` is real audio" invariant is what lets both loops call
+`cap.wav` / `cap.duration_ms` / `pad_pcm16_silence` without a per-call emptiness
+check. Returning an empty result to signal it would turn one hard failure mode
+into a soft one everywhere. Its `except TimeoutError` also needs no reason test:
+it separates idle-finish from no-open by `pieces` / `speech_opened_once`, never
+by text, and a `discard_timeout` can only fire on the first segment — when
+`pieces` is still empty — so it already falls through to the re-raise.
+
+### Spectrum telemetry is a tap (B087)
+
+The live-webui spectrum used to be published **synchronously on the audio
+thread** — FFT, window concat, `json.dumps`, `open`/`write`/`os.replace` — from
+two inline implementations with two throttles (16 ms in listen, 32 ms in
+ambient; at the 20 ms frame cadence the first published every single frame).
+
+It is now one `spectrum.SpectrumTap` per open stream, built by
+`capture._make_spectrum_tap`. The read loop only throttles and copies a frame
+into a bounded 2-frame queue; the FFT and the `spectrum.latest` write happen on
+the tap's worker. A slow disk therefore drops frames instead of stalling
+capture, and a full queue evicts the **oldest** frame — this is a latest-frame
+display, so a backlog should cost history, not freshness. One throttle now:
+`spectrum.TAP_INTERVAL_S` (32 ms, ~31 Hz) for both loops.
+
+`close()` joins the worker, so no publish outlives its stream: capture joins the
+tap before the `clear_spectrum(source="listen")` in its outer `finally`, which
+stays the last frame the dashboard sees.
 
 ### Arm / start and stop cues (record beeps)
 
@@ -84,8 +185,12 @@ device (held open while armed)
 
 Answer/ask still takes an **exclusive** lease (pause ambient → open listen
 capture). Listen builds its own short ring while waiting for speech open and
-seeds the utterance with `listen.pre_roll_ms` (default 300, clamped 250–500)
-when the gate fires — no cold open at the first phoneme. Sharing the ambient
+seeds the utterance with `listen.pre_roll_ms` (default 300, clamped 250–500;
+**0 disables pre-roll**) when the gate fires — no cold open at the first
+phoneme. The clamp is applied **once, inside `capture_utterance`** — callers
+forward what config said. Until this was fixed the answer window re-clamped on
+the way in, so `pre_roll_ms = 0` silently became 250 ms and capture's documented
+"0 disables pre-roll" branch was unreachable from production. Sharing the ambient
 ring into a same-process answer buffer is a future refinement; exclusive
 re-open with local pre-roll is the v1 path.
 
@@ -252,12 +357,25 @@ duplicate head/tail tokens from overlap.
 
 #### Mute clock freeze (B084 + B112)
 
-While Hark holds the mic muted for half-duplex TTS (`mic_muted_during_tts` /
-`tts_mute_depth > 0`), listen clocks **do not advance** (true freeze):
+While Hark holds the mic muted for half-duplex TTS, listen clocks **do not
+advance** (true freeze):
 
 - `initial_timeout_s` / no-open wait
 - segment / end silence counters (radio partial + idle auto-end)
 - `max_s` capture budget
+
+The hold is a **bounded lease**, not a counter. `mic_muted_during_tts` yields a
+`MuteHold`; nested holders share it (depth up, deadline unchanged), and
+`MuteHold.freezing(budget_s=...)` is the single authority for "may clocks stay
+frozen right now". `frames.MuteFreezeGate` consults `current_tts_mute_hold()`
+once per 20 ms frame on capture's behalf and passes
+`mute_freeze_budget_s(initial_timeout_s)` = `max(30 s, initial_timeout_s)`
+— the same shape as the overlap `discard_max_s` bound.
+
+Past that budget the freeze **stops** (the mute itself stands: only the hold's
+owner unmutes). Clocks resume, so a `run_tts` that died before its `finally`
+ends as a bounded listen timeout instead of an open mic held forever. Capture
+logs `listen.mute_freeze_capped` once per capture when the cap trips.
 
 Silence progress is **preserved** across a clean mute (no operator energy).
 Conversation-mode TTS mid-listen therefore no longer wipes a nearly-complete quiet
@@ -281,8 +399,9 @@ interrupted TTS, failed `pactl` unmute, or hardware unmute mid-hold.
 | Mechanism | Behavior |
 |-----------|----------|
 | Outermost `mic_muted_during_tts` exit | Unmutes **Pulse and ALSA** when Hark applied mute |
-| `ensure_unmuted` / `hark mute-sync` | Force-unmutes OS+ALSA **and clears** `tts_mute_depth` (so B084 clocks unfreeze) |
-| `release_tts_mute_hold` / `force_clear_tts_mute_hold` | Full hold drop + unmute |
+| `ensure_unmuted` / `hark mute-sync` | Force-unmutes OS+ALSA **and drops the lease** (so B084 clocks unfreeze) |
+| `force_clear_tts_mute_hold` | Full hold drop + unmute; later `mic_muted_during_tts` exits match on hold identity and become no-ops |
+| Freeze budget elapsed | Clocks resume (mute untouched); logs `listen.mute_freeze_capped` |
 | Post-`run_tts` `repair_tts_mute_after_play` | Asserts depth 0; if source still muted after we applied mute, unmutes + logs `mic.mute_desync` |
 
 Recovery CLI: `hark mute-sync` (one-shot ensure) or `--watch` for HW unmute edges.
@@ -380,7 +499,8 @@ surface_timeouts = true
 # emit_timeout_events = true  # alias of surface_timeouts
 
 [listen]
-# Pre-speech lead-in when the energy gate opens (B079). Clamped 250–500 ms.
+# Pre-speech lead-in when the energy gate opens (B079). Clamped 250–500 ms;
+# set 0 to disable pre-roll outright.
 pre_roll_ms = 300
 ```
 
@@ -407,7 +527,7 @@ names/phrases on config reload. Vosk remains default until dogfood. Operator gui
 | `streaming` | `false` | Conversation mode when true (see § Ambient conversation / streaming). |
 | `streaming_ack_min_quiet_s` | `2.0` | Quiet that ends a conversation turn + TTS play gate (B105). |
 | `streaming_conversation_idle_s` | `45` | Re-arm wake after this idle between turns (**only when `streaming=true`**). |
-| `listen.pre_roll_ms` | `300` | PCM kept from before speech-open on answer/post-wake capture (clamped **250–500**). Complements radio **post-cut** segment pad (B075). |
+| `listen.pre_roll_ms` | `300` | PCM kept from before speech-open on answer/post-wake capture (clamped **250–500**; **`0` disables pre-roll**). Clamp lives in `capture_utterance`, not its callers. Complements radio **post-cut** segment pad (B075). |
 
 CLI: `hark ambient --once` runs a single wake+listen cycle then exits. Bare
 `hark ambient` is the continuous handsfree loop (default `--loop`).

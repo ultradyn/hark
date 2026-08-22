@@ -81,6 +81,15 @@ Key properties:
   condition remains byte-for-byte intact, and no per-block audio concatenation
   occurs on this path. Covered by `tests/test_endpointing.py::test_default_*`
   and `test_capture_energy_path_keeps_legacy_condition_and_avoids_per_block_concat`.
+- **Parameters arrive as one spec.** `endpoint_probe_silence_s` /
+  `endpoint_max_silence_s` (and every other gate fact) reach the capture loop on
+  the frozen `CaptureGateSpec` built by
+  `answer_window.policy.gate_spec_from_policy`, not as loose keywords — see
+  [AUDIO_DESIGN.md](AUDIO_DESIGN.md) § One gate spec in, one typed outcome out.
+  `endpoint_strategy` itself stays a separate runtime seam because it is an
+  object the session resolves, not a policy scalar. Which condition ended a turn
+  is readable afterwards as `CaptureResult.reason` (`silence` on either
+  endpointing path, vs `agent_stop` / `max_duration`).
 - **Fail safe.** A strategy that raises is disabled for the rest of that capture
   and endpointing defers to the fixed silence; an `endpoint.strategy_error`
   event is emitted once.

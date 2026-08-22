@@ -6,6 +6,26 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- refactor(audio, B007/B079/B084): `capture_utterance` now takes the gate facts
+  as one frozen `CaptureGateSpec` (built once by
+  `answer_window.policy.gate_spec_from_policy`, 24 keyword params → spec +
+  runtime seams) and returns a typed `CaptureReason` — on `CaptureResult.reason`
+  or on `CaptureTimeout` (a `TimeoutError` also carrying `peak_db` / `peak_rms` /
+  `open_thresh_db`), so no caller decides anything by matching the exception
+  text. **Behaviour change:** the answer window no longer re-clamps pre-roll on
+  the way in, so `listen.pre_roll_ms = 0` now genuinely disables pre-roll
+  instead of silently becoming 250 ms (`docs/AUDIO_DESIGN.md` § pre-roll).
+- refactor(audio, B084/B087): both mic read loops now pull 20 ms frames from one
+  `audio/frames.py` `MicFrameSource` (acquisition + read deadline + mute-freeze
+  gate + telemetry tap), and the spectrum publisher became an off-thread
+  `SpectrumTap` with **one** throttle (`TAP_INTERVAL_S`, was 16 ms listen /
+  32 ms ambient) — the `spectrum.latest` write no longer happens on the audio
+  thread, so a slow disk drops frames instead of stalling capture.
+- fix(audio, B084): the TTS mute hold is now a bounded **lease** (`MuteHold`) —
+  capture asks the hold, not a process-global depth, and a hold older than
+  `max(30s, initial_timeout_s)` stops freezing listen clocks (logged as
+  `listen.mute_freeze_capped`), so a crashed `run_tts` can no longer hold the
+  mic open forever. `release_tts_mute_hold` (no callers) removed.
 - fix(watch, dashboard): compact once, at the monitor read edge — `hark start`'s
   watch worker no longer passes `--for-monitor`, so `watch.jsonl` holds full HEP
   and the dashboard's pending-question panel + register-on-demand answering stop

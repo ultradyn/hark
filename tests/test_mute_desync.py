@@ -11,15 +11,35 @@ from hark.audio import mic_mute as mm
 from hark.config import HarkConfig
 
 
+# Live contexts from _leak_hold: dropping the last reference would let GC close
+# the generator, which runs the finally we are trying to skip.
+_LEAKED: list = []
+
+
 @pytest.fixture(autouse=True)
-def _reset_mute_state():
-    mm._depth = 0
-    mm._saved = None
-    mm._user_unmuted_override = False
+def _reset_mute_state(monkeypatch):
+    _LEAKED.clear()
+    _drop_hold(monkeypatch)
     yield
-    mm._depth = 0
-    mm._saved = None
-    mm._user_unmuted_override = False
+    _LEAKED.clear()
+    _drop_hold(monkeypatch)
+
+
+def _drop_hold(monkeypatch) -> None:
+    """Clear any lease without shelling out to pactl/amixer on the host."""
+    with monkeypatch.context() as m:
+        m.setattr(mm, "_which", lambda n: False)
+        m.setattr(mm, "find_wave_alsa_card", lambda: None)
+        mm.force_clear_tts_mute_hold(reason="test_reset")
+
+
+def _leak_hold(depth: int = 1) -> None:
+    """Crashed run_tts: the hold is entered ``depth`` deep and never exits."""
+    for _ in range(depth):
+        held = mm.mic_muted_during_tts(enabled=True)
+        held.__enter__()
+        _LEAKED.append(held)
+    assert mm.tts_mute_depth() == depth
 
 
 def test_force_clear_zeros_depth_and_unmutes(monkeypatch):
@@ -33,9 +53,9 @@ def test_force_clear_zeros_depth_and_unmutes(monkeypatch):
     )
     monkeypatch.setattr(mm, "find_wave_alsa_card", lambda: ("Wave3", 1))
     monkeypatch.setattr(mm, "default_source", lambda: "src0")
+    monkeypatch.setattr(mm, "source_is_muted", lambda s: False)
 
-    mm._depth = 2
-    mm._saved = mm.MuteState(source="src0", was_muted=False, applied=True)
+    _leak_hold(depth=2)
 
     out = mm.force_clear_tts_mute_hold(reason="test")
     assert out["cleared"] is True
@@ -45,30 +65,15 @@ def test_force_clear_zeros_depth_and_unmutes(monkeypatch):
     assert ("alsa", True) in calls
 
 
-def test_release_tts_mute_hold_clears_depth(monkeypatch):
-    monkeypatch.setattr(mm, "_which", lambda n: n == "pactl")
-    monkeypatch.setattr(mm, "set_source_mute", lambda *a, **k: True)
-    monkeypatch.setattr(mm, "set_alsa_mic_capture", lambda *a, **k: True)
-    monkeypatch.setattr(mm, "find_wave_alsa_card", lambda: None)
-    monkeypatch.setattr(mm, "default_source", lambda: "src0")
-
-    mm._depth = 1
-    mm._saved = mm.MuteState(source="src0", was_muted=False, applied=True)
-    assert mm.release_tts_mute_hold() is True
-    assert mm.tts_mute_depth() == 0
-    assert mm._saved is None
-    assert mm.release_tts_mute_hold() is False
-
-
 def test_ensure_unmuted_clears_stuck_hold(monkeypatch):
     monkeypatch.setattr(mm, "_which", lambda n: n == "pactl")
     monkeypatch.setattr(mm, "set_source_mute", lambda *a, **k: True)
     monkeypatch.setattr(mm, "set_alsa_mic_capture", lambda *a, **k: True)
     monkeypatch.setattr(mm, "find_wave_alsa_card", lambda: None)
     monkeypatch.setattr(mm, "default_source", lambda: "src0")
+    monkeypatch.setattr(mm, "source_is_muted", lambda s: False)
 
-    mm._depth = 1
-    mm._saved = mm.MuteState(source="src0", was_muted=False, applied=True)
+    _leak_hold()
     result = mm.ensure_unmuted()
     assert result["released_hark_hold"] is True
     assert mm.tts_mute_depth() == 0
@@ -143,8 +148,7 @@ def test_repair_post_tts_clears_stuck_depth(monkeypatch):
 
     monkeypatch.setattr("hark.syslog.log", fake_log)
 
-    mm._depth = 1
-    mm._saved = mm.MuteState(source="src0", was_muted=False, applied=True)
+    _leak_hold()
     rep = mm.repair_tts_mute_after_play(mute_was_enabled=True, mute_applied=True)
     assert rep["repaired"] is True
     assert "depth_nonzero" in rep["reasons"]
@@ -276,7 +280,10 @@ def test_run_tts_repairs_after_play(monkeypatch):
 
     class FakeMute:
         def __enter__(self):
-            return mm.MuteState(source="src0", was_muted=False, applied=True)
+            return mm.MuteHold(
+                state=mm.MuteState(source="src0", was_muted=False, applied=True),
+                depth=1,
+            )
 
         def __exit__(self, *a):
             return False

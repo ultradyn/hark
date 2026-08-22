@@ -747,9 +747,9 @@ def test_open_answer_window_radio_idle_auto_finish(monkeypatch):
     assert result.end_phrase == "radio_idle"
     assert "auth" in (result.text or "").lower()
     assert len(calls) >= 2
-    assert calls[0]["initial_timeout_s"] == pytest.approx(policy.initial_timeout_s)
-    assert calls[0]["end_silence_s"] == pytest.approx(0.05)
-    assert calls[1]["initial_timeout_s"] == pytest.approx(idle_s)
+    assert calls[0]["spec"].initial_timeout_s == pytest.approx(policy.initial_timeout_s)
+    assert calls[0]["spec"].end_silence_s == pytest.approx(0.05)
+    assert calls[1]["spec"].initial_timeout_s == pytest.approx(idle_s)
     idle_logs = [d for e, d in logs if e == "listen.radio_idle_end"]
     assert idle_logs
     assert idle_logs[0]["idle_s"] == pytest.approx(idle_s)
@@ -781,7 +781,7 @@ def test_open_answer_window_radio_partials_via_deps(monkeypatch):
 
     def fake_capture(**kwargs):
         capture_kwargs.append(kwargs)
-        assert kwargs["end_silence_s"] == pytest.approx(0.5)
+        assert kwargs["spec"].end_silence_s == pytest.approx(0.5)
         return _cap()
 
     result = _open_radio(
@@ -828,7 +828,7 @@ def test_open_answer_window_radio_pre_open_timeout_not_idle(monkeypatch):
             capture=fake_capture,
         )
     assert calls
-    assert calls[0]["initial_timeout_s"] == pytest.approx(0.2)
+    assert calls[0]["spec"].initial_timeout_s == pytest.approx(0.2)
 
 
 def test_open_answer_window_radio_streaming_idle_from_policy(monkeypatch):
@@ -871,7 +871,7 @@ def test_open_answer_window_radio_streaming_idle_from_policy(monkeypatch):
     assert result.end_phrase == "radio_idle"
     assert len(calls) >= 2
     # Post-open segment timeout uses streaming-clamped idle from policy
-    assert calls[1]["initial_timeout_s"] == pytest.approx(2.1)
+    assert calls[1]["spec"].initial_timeout_s == pytest.approx(2.1)
 
 
 def test_open_answer_window_radio_agent_cancel_via_deps(monkeypatch):

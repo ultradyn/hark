@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from hark.audio.capture import CaptureResult
+from hark.audio.capture import CaptureResult, CaptureTimeout
 from hark.ambient import ambient_event_line, complete_after_wake
 from hark.config import AmbientConfig, HarkConfig, ListenConfig, load_config
 from hark.speech import (
@@ -87,13 +87,20 @@ def _patch_listen_infra(monkeypatch, stt: _FakeStt, caps_or_errors: list):
     return capture_kwargs
 
 
-def test_is_no_open_timeout_detects_gate_message():
+def test_is_no_open_timeout_detects_gate_verdict():
+    from hark.audio.capture import CaptureReason, CaptureTimeout
+
     assert _is_no_open_timeout(
-        TimeoutError(
+        CaptureTimeout(
             "no speech detected (peak_db=-45.4 peak_rms=0.00537 open_thresh≈-38.0dB)"
         )
     )
-    assert _is_no_open_timeout(TimeoutError("no speech captured (peak_db=-50.0)"))
+    assert _is_no_open_timeout(CaptureTimeout("no speech captured (peak_db=-50.0)"))
+    assert not _is_no_open_timeout(
+        CaptureTimeout("...", reason=CaptureReason.DISCARD_TIMEOUT)
+    )
+    # The old substring sniff is gone: an untyped timeout is not a no-open.
+    assert not _is_no_open_timeout(TimeoutError("no speech detected (peak_db=-45.4)"))
     assert not _is_no_open_timeout(TimeoutError("heard audio but STT returned empty text"))
 
 
@@ -122,7 +129,7 @@ def test_log_no_open_parses_error_fields(monkeypatch):
 
 def test_no_open_retry_then_success(monkeypatch, tmp_path):
     stt = _FakeStt(texts=["ship the feature"])
-    no_open = TimeoutError(
+    no_open = CaptureTimeout(
         "no speech detected (peak_db=-45.4 peak_rms=0.00537 open_thresh≈-48.0dB)"
     )
     caps = _patch_listen_infra(monkeypatch, stt, [no_open, _cap()])
@@ -145,13 +152,13 @@ def test_no_open_retry_then_success(monkeypatch, tmp_path):
     assert stt.calls == 1
     assert "speech.no_open" in logs
     assert "speech.no_open_retry" in logs
-    assert caps[0]["abs_open_db"] == -48.0
-    assert caps[1]["abs_open_db"] == -48.0
+    assert caps[0]["spec"].abs_open_db == -48.0
+    assert caps[1]["spec"].abs_open_db == -48.0
 
 
 def test_no_open_nudge_then_success(monkeypatch, tmp_path):
     stt = _FakeStt(texts=["yes"])
-    no_open = TimeoutError("no speech detected (peak_db=-46.0 peak_rms=0.005 open_thresh≈-48.0dB)")
+    no_open = CaptureTimeout("no speech detected (peak_db=-46.0 peak_rms=0.005 open_thresh≈-48.0dB)")
     _patch_listen_infra(monkeypatch, stt, [no_open, _cap()])
     tts_calls: list[str] = []
     logs: list[str] = []
@@ -185,7 +192,7 @@ def test_no_open_nudge_then_success(monkeypatch, tmp_path):
 
 def test_no_open_retry_and_nudge_exhausted(monkeypatch, tmp_path):
     stt = _FakeStt(texts=[])
-    err = TimeoutError("no speech detected (peak_db=-45.4 peak_rms=0.005 open_thresh≈-48.0dB)")
+    err = CaptureTimeout("no speech detected (peak_db=-45.4 peak_rms=0.005 open_thresh≈-48.0dB)")
     _patch_listen_infra(monkeypatch, stt, [err, err, err])
     tts_calls: list[str] = []
     logs: list[tuple[str, dict]] = []
@@ -220,7 +227,7 @@ def test_no_open_retry_and_nudge_exhausted(monkeypatch, tmp_path):
 
 def test_no_open_disabled_raises_immediately(monkeypatch, tmp_path):
     stt = _FakeStt()
-    err = TimeoutError("no speech detected (peak_db=-45.4 peak_rms=0.005 open_thresh≈-48.0dB)")
+    err = CaptureTimeout("no speech detected (peak_db=-45.4 peak_rms=0.005 open_thresh≈-48.0dB)")
     _patch_listen_infra(monkeypatch, stt, [err])
     tts_calls: list[str] = []
     monkeypatch.setattr("hark.speech.syslog", lambda *a, **k: None)
@@ -275,9 +282,9 @@ def test_open_answer_window_gate_overrides(monkeypatch, tmp_path):
         arm_cue=True,
     )
     open_answer_window(policy, deps=AnswerWindowDeps(cfg=cfg))
-    assert caps[0]["abs_open_db"] == -50.0
-    assert caps[0]["open_margin_db"] == 6.0
-    assert caps[0]["initial_timeout_s"] == 12.0
+    assert caps[0]["spec"].abs_open_db == -50.0
+    assert caps[0]["spec"].open_margin_db == 6.0
+    assert caps[0]["spec"].initial_timeout_s == 12.0
     assert 0.15 in sleeps
     assert arm_cues == ["start"]
 
@@ -387,7 +394,7 @@ def test_complete_after_wake_reload_abort_marks_listen_aborted(monkeypatch):
 
 def test_complete_after_wake_no_open_error_metrics(monkeypatch):
     def boom(cfg, **kwargs):
-        raise TimeoutError(
+        raise CaptureTimeout(
             "no speech detected (peak_db=-45.4 peak_rms=0.00537 open_thresh≈-48.0dB)"
         )
 
@@ -470,8 +477,6 @@ def test_default_abs_open_softer_than_legacy():
 
 
 def test_capture_default_abs_open_matches_listen():
-    import inspect
-    from hark.audio.capture import capture_utterance
+    from hark.audio.capture import CaptureGateSpec
 
-    sig = inspect.signature(capture_utterance)
-    assert sig.parameters["abs_open_db"].default == -48.0
+    assert CaptureGateSpec().abs_open_db == -48.0

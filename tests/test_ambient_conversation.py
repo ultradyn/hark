@@ -10,6 +10,7 @@ import pytest
 import hark.ambient as ambient
 from hark.ambient import AmbientResult, complete_after_wake
 from hark.answer_window.result import ListenResult
+from hark.audio.capture import CaptureTimeout
 from hark.config import AmbientConfig, HarkConfig, ListenConfig
 from hark.providers.base import ProviderError
 from hark.wake import WakeHit
@@ -109,7 +110,7 @@ def test_streaming_conversation_no_rewake_between_turns(monkeypatch):
                 partials_emitted=0,
             )
         # Third open: no speech → conversation idle end
-        raise TimeoutError("no speech detected within timeout")
+        raise CaptureTimeout("no speech detected within timeout")
 
     out = io.StringIO()
     monkeypatch.setattr(ambient, "run_listen", fake_listen)
@@ -492,10 +493,10 @@ def test_streaming_hostile_type_fallback_is_not_idle_evidence(monkeypatch):
 
 
 def test_streaming_later_timeout_classifies_marker_after_bounded_detail(monkeypatch):
-    """Idle classification uses the full safe error text, not its event excerpt."""
+    """Idle classification is the typed capture reason, whatever the text says."""
     cfg = HarkConfig(ambient=AmbientConfig(streaming=True))
     calls = {"n": 0}
-    failure = TimeoutError("x" * 300 + " no speech detected")
+    failure = CaptureTimeout("x" * 300 + " no speech detected")
 
     def fake_listen(cfg_arg, **kwargs):
         calls["n"] += 1
@@ -524,9 +525,9 @@ def test_streaming_later_timeout_classifies_marker_after_bounded_detail(monkeypa
 
 
 def test_streaming_first_timeout_classifies_marker_after_bounded_detail(monkeypatch):
-    """First-turn no_open compatibility also uses the full safe error text."""
+    """First-turn no_open compatibility is typed too; the event text stays bounded."""
     cfg = HarkConfig(ambient=AmbientConfig(streaming=True))
-    failure = TimeoutError("x" * 300 + " no speech captured")
+    failure = CaptureTimeout("x" * 300 + " no speech captured")
     monkeypatch.setattr(
         ambient,
         "run_listen",
@@ -545,7 +546,7 @@ def test_streaming_first_timeout_classifies_marker_after_bounded_detail(monkeypa
 @pytest.mark.parametrize(
     ("failure", "reason"),
     [
-        (TimeoutError("no speech detected within timeout"), "no_open"),
+        (CaptureTimeout("no speech detected within timeout"), "no_open"),
         (ProviderError("provider unavailable"), "listen_failed"),
     ],
 )
@@ -705,7 +706,7 @@ def test_run_ambient_streaming_does_not_call_wake_between_turns(monkeypatch):
                 end_mode="silence",
                 stream_id="a1",
             )
-        raise TimeoutError("no speech detected within timeout")
+        raise CaptureTimeout("no speech detected within timeout")
 
     class Backend:
         name = "text_probe"

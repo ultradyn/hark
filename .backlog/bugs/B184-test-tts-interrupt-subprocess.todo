@@ -43,3 +43,24 @@ Investigation while landing the architecture-review candidates separated the var
 `tests/test_ask_interrupt.py::test_capture_sigint_aborts_stream_and_restores_handlers` fails roughly 1 in 12 runs when run as a single item, measured 12x on two different trees: master (1/12) and the arch/audio-seams refactor branch (1/12). Equal rates, so it is NOT caused by the frame-source refactor — it is another pre-existing timing flake, this one in SIGINT delivery / handler restoration rather than a subprocess budget.
 
 Method note for whoever picks this up: single runs mislead here. The first probe showed "fails on the branch, passes on master" and reversed on re-run; only a repeat count separated them. Measure a rate, do not compare one run to one run.
+
+2026-08-23 (later): a FOURTH test in the same file joins the set —
+test_long_lived_caller_delegates_next_sigint_after_synth_finishes
+(tests/test_tts_interrupt.py:5148). Failed once in a full-suite run on the
+arch/audio-seams branch, then 0/15 in isolation on that branch AND 0/15 in
+isolation on master, so it is the same load-dependent subprocess race, not a
+regression from the audio work. Ruled out the one plausible causal path: the
+branch changed mic_mute's TTS hold to a MuteHold lease, but src/hark/speech.py
+is byte-identical across the merge and this test calls run_tts(play=False), so
+the mute path is never entered.
+
+Its specific race is visible in the child script: it prints READY_AGAIN
+(:5181) BEFORE entering the try/except KeyboardInterrupt (:5182-5186), and the
+parent sends the second SIGINT as soon as it reads that line (:5202). A SIGINT
+landing in that window raises KeyboardInterrupt outside the handler, so the
+child dies with a traceback and the assert on returncode == 0 (:5208) fails.
+Same shape as the others: the signal is sent relative to a stdout marker rather
+than to a state the child has actually reached.
+
+Method note (repeat of the lesson in the entry above): single runs mislead here.
+Every claim in this entry is 15 runs per tree.

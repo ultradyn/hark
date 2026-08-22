@@ -1,6 +1,7 @@
 """Handsfree ambient + watch worker lifecycle (`hark start` / `stop` / `restart`).
 
-Product path for always-on workers (ambient wake + ``hark watch --for-monitor``).
+Product path for always-on workers (ambient wake + ``hark watch``). Workers
+write **full** HEP to their state files; compaction is the monitor read edge.
 Shares ``mode-a.pids`` / log paths with ``scripts/run-mode-a.sh`` and optional
 ``hark daemon start --workers``. See docs/HARKD.md.
 
@@ -649,7 +650,7 @@ def add_lifecycle_parsers(sub: Any) -> None:
     st = sub.add_parser(
         "start",
         help=(
-            "start handsfree workers (ambient + watch --for-monitor); "
+            "start handsfree workers (ambient + watch); "
             "idempotent; writes mode-a.pids"
         ),
     )

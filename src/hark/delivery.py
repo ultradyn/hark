@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from hark.events import hep_question, hep_target
 from hark.paths import state_dir
 
 # Undelivered bound events older than this are treated as stale for queue
@@ -372,8 +373,8 @@ class DeliveryStore:
         return found
 
     def register_from_hep(self, hep: dict[str, Any]) -> BoundEvent:
-        target = hep.get("target") or {}
-        question = hep.get("question") or {}
+        target = hep_target(hep)
+        question = hep_question(hep)
         ev = BoundEvent(
             event_id=str(hep.get("event_id") or uuid.uuid4().hex),
             session_id=str(

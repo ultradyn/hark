@@ -17,7 +17,7 @@ from typing import Any
 from hark.answering import answer_bound_event
 from hark.config import HarkConfig, config_to_dict
 from hark.delivery import DeliveryStore
-from hark.events import new_event_id, utc_now_iso
+from hark.events import hep_question, new_event_id, utc_now_iso
 from hark.herdr.access import HerdrSessionAccess, active_client
 from hark.herdr.client import HerdrClient, HerdrError
 from hark.herdr.tunnel import ensure_tunnel
@@ -192,7 +192,7 @@ def context_snapshot(
         if ev.get("session_id") == session_id and ev.get("pane_id") == pane_id:
             event_id = str(ev.get("event_id"))
             hep = find_hep_event(event_id)
-            question = (hep or {}).get("question") or {}
+            question = hep_question(hep or {})
             pending_question = {
                 "event_id": event_id,
                 "text": ev.get("question_text") or question.get("text"),

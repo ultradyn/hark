@@ -6,6 +6,11 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- fix(watch, dashboard): compact once, at the monitor read edge — `hark start`'s
+  watch worker no longer passes `--for-monitor`, so `watch.jsonl` holds full HEP
+  and the dashboard's pending-question panel + register-on-demand answering stop
+  raising `AttributeError` on a string `question`; legacy compact lines already
+  on disk stay readable.
 +- feat(tts, B182): **Custom TTS** provider (`tts.provider = "custom"`) —
 +  OpenAI-compatible batch `POST {base}/audio/speech` (optional
 +  `custom_path = "/tts"` dual-mount). Config/env: `custom_base_url`,

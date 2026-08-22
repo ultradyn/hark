@@ -471,6 +471,54 @@ def is_idle_like_status(status: str | None) -> bool:
     return (status or "").strip().lower() in _IDLE_LIKE
 
 
+def hep_target(event: dict[str, Any]) -> dict[str, Any]:
+    """Target object from a HEP record, tolerating compact/legacy shapes.
+
+    State files written before compaction moved to the read edge hold
+    ``monitor_profile`` output, which drops ``target`` and hoists ``pane_id`` /
+    ``agent`` / ``name`` to the top level. Recovering them keeps those records
+    answerable. Deliberately *not* used by ``monitor_profile`` itself: the
+    monitor's own legacy re-pass stays as lossy as it has always been.
+    """
+    raw = event.get("target")
+    if isinstance(raw, dict):
+        target = dict(raw)
+    elif isinstance(raw, str) and raw.strip():
+        parts = raw.split("/", 1)
+        target = (
+            {"server_instance": parts[0].strip(), "pane_id": parts[1].strip()}
+            if len(parts) == 2
+            else {"pane_id": raw.strip()}
+        )
+    else:
+        target = {}
+    for key in ("pane_id", "agent"):
+        if not target.get(key) and event.get(key):
+            target[key] = event[key]
+    if not target.get("friendly_name") and event.get("name"):
+        target["friendly_name"] = event["name"]
+    return target
+
+
+def hep_question(event: dict[str, Any]) -> dict[str, Any]:
+    """Question object from a HEP record, tolerating compact/legacy shapes.
+
+    Compact lines carry ``question`` as a plain string with ``fingerprint`` and
+    ``risk`` hoisted to the top level; rebuild the object the answer path reads.
+    """
+    raw = event.get("question")
+    if isinstance(raw, dict):
+        question = dict(raw)
+    elif isinstance(raw, str) and raw.strip():
+        question = {"text": raw}
+    else:
+        question = {}
+    for key in ("fingerprint", "risk"):
+        if not question.get(key) and event.get(key):
+            question[key] = event[key]
+    return question
+
+
 def monitor_profile(event: dict[str, Any]) -> dict[str, Any]:
     """Compact --for-monitor line: no secrets, no huge transcripts.
 

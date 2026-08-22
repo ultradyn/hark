@@ -1,19 +1,20 @@
 ---
 claimed_at: "2026-08-17T05:42:52Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-08-22T03:34:57Z"
 complexity: medium
 created_at: "2026-08-17T05:25:04Z"
 depends_on:
     - B182
+duration_minutes: 7072.08570056785
 estimate_hours: 1
 id: B183
 priority: high
 started_at: "2026-08-17T05:42:52Z"
-status: in_progress
+status: done
 tags: []
 title: Live-verify Custom STT + Custom TTS against a real OpenAI-compatible gateway (dogfood)
-updated_at: "2026-08-17T05:42:52Z"
+updated_at: "2026-08-22T03:34:57Z"
 ---
 After B174 (Custom STT) and B182 (Custom TTS) land, verify both clients end-to-end against a live OpenAI-compatible audio gateway using a Consumer Bearer key.
 

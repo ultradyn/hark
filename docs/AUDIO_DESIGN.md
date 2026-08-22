@@ -26,7 +26,7 @@ device
   → resample to 16 kHz mono PCM16
   → adaptive noise-floor (gate closed only)
   → energy gate + hangover
-  → pre-roll (≥250 ms from capture ring; listen.pre_roll_ms)
+  → pre-roll (≥250 ms from capture ring; listen.pre_roll_ms, 0 = off)
   → utterance → cloud STT
 ```
 
@@ -56,6 +56,50 @@ predicate inline and does **zero** per-block audio work.
 A source starts bare: the overlap discard phase (phase 0) reads frames with no
 tap and no freeze gate, so a TTS tail neither reaches the dashboard nor burns
 freeze budget. `frames.attach(...)` switches both on when the gate clock starts.
+
+### One gate spec in, one typed outcome out
+
+`capture_utterance` takes the gate facts as a single frozen `CaptureGateSpec`,
+derived once from `AnswerWindowPolicy` by
+`answer_window.policy.gate_spec_from_policy`. Both session loops pass it whole —
+they do not restate `abs_open_db` / `open_margin_db` / `initial_timeout_s` /
+`pre_roll_ms` / `mute_edge_pad_ms` one keyword at a time. Radio narrows the
+shared spec per segment (`max_s`, `initial_timeout_s`) because one
+`max_listen_s` window spans many segments (B074).
+
+Three things stay explicit rather than folded into the spec by the builder:
+
+- **`end_silence_s`** — the caller states which meaning it wants. For silence it
+  is "the utterance ended"; for radio it is `radio_partial_silence_s`, "cut this
+  segment". The seam must not merge the pair.
+- **Runtime seams** — `should_stop` / `on_opened` / `on_voice` /
+  `on_endpoint_event`, the overlap discard handshake, the endpointing strategy.
+  These are this attempt's wiring, not policy.
+- **Tuning with no config key** — `sample_rate`, `min_speech_s`,
+  `open_confirm_blocks`, `device`, the B108 `hang_margin_db` /
+  `speech_drop_db` / `peak_gate_slack_db`, `post_tts_guard_s`. Production runs
+  on the spec defaults; tests move them with `capture_utterance(**overrides)`,
+  which is `dataclasses.replace` on the spec (so a typo is still a `TypeError`).
+
+Why a capture stopped is a typed `CaptureReason`, never the English text of an
+exception:
+
+| Reason | Where | Meaning |
+|--------|-------|---------|
+| `silence` | `CaptureResult.reason` | Endpointer, or the legacy fixed-silence gate (B007), ended the turn |
+| `agent_stop` | `CaptureResult.reason` | `should_stop` asked to end (agent listen-end, config reload) |
+| `max_duration` | `CaptureResult.reason` | `max_s` exhausted with audio buffered |
+| `no_open` | `CaptureTimeout.reason` | Energy gate never confirmed speech — nothing to transcribe |
+| `discard_timeout` | `CaptureTimeout.reason` | Overlap pre-arm discard outlasted `discard_max_s` |
+
+`CaptureTimeout` subclasses `TimeoutError`, so every existing
+`except TimeoutError` (radio idle finish, ask exit-code mapping, ambient error
+path) is unchanged — but the *recovery decision* reads `reason`.
+`answer_window.silence.is_no_open_timeout` is one `isinstance` + reason test,
+and ambient's `no_open` / `conversation_idle` classification uses it. The
+message text survives for logs only. `CaptureTimeout` also carries `peak_db`,
+`peak_rms` and `open_thresh_db`, so `speech.no_open` gets the numbers capture
+already had instead of regexing them back out of an f-string.
 
 ### Spectrum telemetry is a tap (B087)
 
@@ -130,8 +174,12 @@ device (held open while armed)
 
 Answer/ask still takes an **exclusive** lease (pause ambient → open listen
 capture). Listen builds its own short ring while waiting for speech open and
-seeds the utterance with `listen.pre_roll_ms` (default 300, clamped 250–500)
-when the gate fires — no cold open at the first phoneme. Sharing the ambient
+seeds the utterance with `listen.pre_roll_ms` (default 300, clamped 250–500;
+**0 disables pre-roll**) when the gate fires — no cold open at the first
+phoneme. The clamp is applied **once, inside `capture_utterance`** — callers
+forward what config said. Until this was fixed the answer window re-clamped on
+the way in, so `pre_roll_ms = 0` silently became 250 ms and capture's documented
+"0 disables pre-roll" branch was unreachable from production. Sharing the ambient
 ring into a same-process answer buffer is a future refinement; exclusive
 re-open with local pre-roll is the v1 path.
 
@@ -440,7 +488,8 @@ surface_timeouts = true
 # emit_timeout_events = true  # alias of surface_timeouts
 
 [listen]
-# Pre-speech lead-in when the energy gate opens (B079). Clamped 250–500 ms.
+# Pre-speech lead-in when the energy gate opens (B079). Clamped 250–500 ms;
+# set 0 to disable pre-roll outright.
 pre_roll_ms = 300
 ```
 
@@ -467,7 +516,7 @@ names/phrases on config reload. Vosk remains default until dogfood. Operator gui
 | `streaming` | `false` | Conversation mode when true (see § Ambient conversation / streaming). |
 | `streaming_ack_min_quiet_s` | `2.0` | Quiet that ends a conversation turn + TTS play gate (B105). |
 | `streaming_conversation_idle_s` | `45` | Re-arm wake after this idle between turns (**only when `streaming=true`**). |
-| `listen.pre_roll_ms` | `300` | PCM kept from before speech-open on answer/post-wake capture (clamped **250–500**). Complements radio **post-cut** segment pad (B075). |
+| `listen.pre_roll_ms` | `300` | PCM kept from before speech-open on answer/post-wake capture (clamped **250–500**; **`0` disables pre-roll**). Clamp lives in `capture_utterance`, not its callers. Complements radio **post-cut** segment pad (B075). |
 
 CLI: `hark ambient --once` runs a single wake+listen cycle then exits. Bare
 `hark ambient` is the continuous handsfree loop (default `--loop`).

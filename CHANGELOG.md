@@ -6,6 +6,10 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- perf(audio, B007): `CaptureGateSpec.discard_max_floor_s` (default 30.0) — the
+  overlap-discard safety cap was `max(30.0, initial_timeout_s)` with the floor
+  hard-coded in the function body, so the `DISCARD_TIMEOUT` branch could only be
+  reached by spending 30 s of real wall clock. Production behaviour unchanged.
 - refactor(audio, B007/B079/B084): `capture_utterance` now takes the gate facts
   as one frozen `CaptureGateSpec` (built once by
   `answer_window.policy.gate_spec_from_policy`, 24 keyword params → spec +

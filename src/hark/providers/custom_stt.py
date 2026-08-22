@@ -23,7 +23,7 @@ _KEY_COMMAND_TIMEOUT_S = 10.0
 _KEY_COMMAND_ERR_LIMIT = 200
 
 
-def _run_custom_api_key_command(command: str) -> str | None:
+def _run_custom_api_key_command(command: str, *, label: str = "custom STT") -> str | None:
     """Run a shell command and return its stripped stdout (first non-empty line)."""
     cmd = (command or "").strip()
     if not cmd:
@@ -39,11 +39,11 @@ def _run_custom_api_key_command(command: str) -> str | None:
         )
     except subprocess.TimeoutExpired as exc:
         raise ProviderError(
-            f"custom STT api key command timed out after {_KEY_COMMAND_TIMEOUT_S:.0f}s"
+            f"{label} api key command timed out after {_KEY_COMMAND_TIMEOUT_S:.0f}s"
         ) from exc
     except OSError as exc:
         raise ProviderError(
-            f"custom STT api key command failed to start ({exc.__class__.__name__})"
+            f"{label} api key command failed to start ({exc.__class__.__name__})"
         ) from exc
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip().replace("\n", " ")
@@ -51,7 +51,7 @@ def _run_custom_api_key_command(command: str) -> str | None:
             err = err[: _KEY_COMMAND_ERR_LIMIT - 3].rstrip() + "..."
         detail = f": {err}" if err else ""
         raise ProviderError(
-            f"custom STT api key command failed (exit {proc.returncode}){detail}"
+            f"{label} api key command failed (exit {proc.returncode}){detail}"
         )
     text = (proc.stdout or "").strip()
     if not text:
@@ -68,6 +68,8 @@ def resolve_custom_api_key(
     api_key: str | None,
     api_key_file: str | None = None,
     api_key_command: str | None = None,
+    *,
+    label: str = "custom STT",
 ) -> str | None:
     """Bearer key resolution (first hit wins):
 
@@ -88,11 +90,11 @@ def resolve_custom_api_key(
             key = path.read_text(encoding="utf-8").strip()
         except OSError as exc:
             raise ProviderError(
-                f"custom STT api key file unreadable: {path} ({exc.__class__.__name__})"
+                f"{label} api key file unreadable: {path} ({exc.__class__.__name__})"
             ) from exc
         if key:
             return key
-    return _run_custom_api_key_command(api_key_command or "")
+    return _run_custom_api_key_command(api_key_command or "", label=label)
 
 
 def normalize_custom_base_url(base_url: str | None) -> str:
@@ -100,8 +102,9 @@ def normalize_custom_base_url(base_url: str | None) -> str:
     raw = (base_url or "").strip()
     if not raw:
         raise ProviderError(
-            "custom STT requires custom_base_url "
-            "(config [stt].custom_base_url or HARK_STT_CUSTOM_BASE_URL)"
+            "custom gateway requires custom_base_url "
+            "(config [stt]/[tts].custom_base_url or "
+            "HARK_STT_CUSTOM_BASE_URL / HARK_TTS_CUSTOM_BASE_URL)"
         )
     return raw.rstrip("/")
 

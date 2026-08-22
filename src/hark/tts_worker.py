@@ -640,10 +640,20 @@ def _payload_main(args: list[str]) -> int:
         from hark.providers.resolve import resolve_tts
 
         request = _read_request(sys.stdin.buffer)
+        # tts_cfg from the default config path so config-file pins (e.g.
+        # [tts] provider="custom" + custom_base_url/key) resolve in the
+        # isolated worker exactly as in-process (B182). Env already flows.
+        from hark.config import load_config
+
+        try:
+            _tts_cfg = load_config().tts
+        except Exception:
+            _tts_cfg = None
         provider = resolve_tts(
             request["provider"],
             voice=request["voice"],
             language=request.get("language"),
+            tts_cfg=_tts_cfg,
         )
         result = provider.synthesize(
             request["text"],

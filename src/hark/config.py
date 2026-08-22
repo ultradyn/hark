@@ -223,6 +223,14 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
             "print_prompt",
             # B161: desktop notification with Skip action while TTS plays
             "notify_skip",
+            # Custom TTS (B182) — OpenAI-compatible gateway, explicit pin only
+            "custom_base_url",
+            "custom_api_key",
+            "custom_api_key_file",
+            "custom_api_key_command",
+            "custom_model",
+            "custom_voice",
+            "custom_path",
         }
     ),
     "confirm": frozenset({"mode"}),
@@ -536,6 +544,15 @@ class TtsConfig:
     # Desktop notification with the full TTS text and a Skip action while TTS
     # plays (B161). Default on; silently disabled without notify-send/session bus.
     notify_skip: bool = True
+    # Custom TTS (B182) — OpenAI-compatible POST {base}/audio/speech
+    # (optional path override e.g. /tts for native dual-mount). Explicit pin only.
+    custom_base_url: str | None = None  # e.g. https://gateway.example.com/v1
+    custom_api_key: str | None = None  # prefer HARK_TTS_CUSTOM_API_KEY env
+    custom_api_key_file: str | None = None  # file holding the key (e.g. "~/.llmp")
+    custom_api_key_command: str | None = None  # shell cmd printing key on stdout
+    custom_model: str | None = None  # required for /audio/speech
+    custom_voice: str | None = None  # voice id sent when no explicit voice given
+    custom_path: str | None = None  # default /audio/speech
 
 
 @dataclass
@@ -851,7 +868,21 @@ language = "en"
 # chunk_chars = 1500           # per synth request; multi-chunk plays in full (B091)
 print_prompt = true          # print question text to terminal on ask / tts --listen (B095)
 notify_skip = true           # desktop notification with full text + Skip action while TTS plays (B161)
-# Env: HARK_TTS_DISABLED, HARK_TTS_MINIMAX_OK=1
+# Custom TTS (B182) — OpenAI-compatible gateway (explicit pin; never via auto).
+# provider = "custom"
+# custom_base_url = "https://gateway.example.com/v1"
+# custom_model = "gpt-4o-mini-tts"          # or gateway model id (required on /audio/speech)
+# custom_voice = "alloy"                     # default voice when none given explicitly
+# custom_path = "/audio/speech"              # or "/tts" for native dual-mount
+# Key (first hit): env HARK_TTS_CUSTOM_API_KEY > custom_api_key >
+#   custom_api_key_file / HARK_TTS_CUSTOM_API_KEY_FILE >
+#   custom_api_key_command / HARK_TTS_CUSTOM_API_KEY_COMMAND
+# custom_api_key_file = "~/.llmp"            # file holding the key
+# custom_api_key_command = "cat ~/.llmp"     # shell cmd; stdout first line = key
+# Env: HARK_TTS_DISABLED, HARK_TTS_MINIMAX_OK=1,
+#      HARK_TTS_CUSTOM_BASE_URL, HARK_TTS_CUSTOM_MODEL, HARK_TTS_CUSTOM_VOICE,
+#      HARK_TTS_CUSTOM_PATH, HARK_TTS_CUSTOM_API_KEY,
+#      HARK_TTS_CUSTOM_API_KEY_FILE, HARK_TTS_CUSTOM_API_KEY_COMMAND
 
 [confirm]
 mode = "auto"
@@ -1266,7 +1297,8 @@ def load_config(path: Path | None = None) -> HarkConfig:
     listen_raw = raw.get("listen") if isinstance(raw.get("listen"), dict) else {}
     ambient_raw = raw.get("ambient") if isinstance(raw.get("ambient"), dict) else {}
     stt_raw = raw.get("stt") if isinstance(raw.get("stt"), dict) else {}
-    tts_raw = raw.get("tts") if isinstance(raw.get("tts"), dict) else {}
+    _tts_section = raw.get("tts")
+    tts_raw: dict = _tts_section if isinstance(_tts_section, dict) else {}
     confirm_raw = raw.get("confirm") if isinstance(raw.get("confirm"), dict) else {}
     safety_raw = raw.get("safety") if isinstance(raw.get("safety"), dict) else {}
     dashboard_raw = raw.get("dashboard") if isinstance(raw.get("dashboard"), dict) else {}
@@ -1355,7 +1387,30 @@ def load_config(path: Path | None = None) -> HarkConfig:
     env_stt_disabled = os.environ.get("HARK_STT_DISABLED")
     if env_stt_disabled is not None:
         stt_disabled = _as_list_str(env_stt_disabled, stt_disabled)
-    tts_provider = str(tts_raw.get("provider", "auto"))
+    tts_provider = os.environ.get("HARK_TTS_PROVIDER") or str(
+        tts_raw.get("provider", "auto")
+    )
+
+    def _env_or_cfg_str(env_key: str, raw_key: str) -> str | None:
+        """Env literal wins over config value; empty-after-strip → None."""
+        val = os.environ.get(env_key) or (
+            str(tts_raw[raw_key]).strip() if tts_raw.get(raw_key) else None
+        )
+        if val is not None and not str(val).strip():
+            val = None
+        return val
+
+    tts_custom_base_url = _env_or_cfg_str("HARK_TTS_CUSTOM_BASE_URL", "custom_base_url")
+    tts_custom_api_key = _env_or_cfg_str("HARK_TTS_CUSTOM_API_KEY", "custom_api_key")
+    tts_custom_api_key_file = _env_or_cfg_str(
+        "HARK_TTS_CUSTOM_API_KEY_FILE", "custom_api_key_file"
+    )
+    tts_custom_api_key_command = _env_or_cfg_str(
+        "HARK_TTS_CUSTOM_API_KEY_COMMAND", "custom_api_key_command"
+    )
+    tts_custom_model = _env_or_cfg_str("HARK_TTS_CUSTOM_MODEL", "custom_model")
+    tts_custom_voice = _env_or_cfg_str("HARK_TTS_CUSTOM_VOICE", "custom_voice")
+    tts_custom_path = _env_or_cfg_str("HARK_TTS_CUSTOM_PATH", "custom_path")
     tts_disabled = _as_list_str(tts_raw.get("disabled"), [])
     env_tts_disabled = os.environ.get("HARK_TTS_DISABLED")
     if env_tts_disabled is not None:
@@ -1622,6 +1677,13 @@ def load_config(path: Path | None = None) -> HarkConfig:
             allow_espeak_fallback=bool(tts_raw.get("allow_espeak_fallback", False)),
             print_prompt=_as_bool(tts_raw.get("print_prompt"), default=True),
             notify_skip=_as_bool(tts_raw.get("notify_skip"), default=True),
+            custom_base_url=tts_custom_base_url,
+            custom_api_key=tts_custom_api_key,
+            custom_api_key_file=tts_custom_api_key_file,
+            custom_api_key_command=tts_custom_api_key_command,
+            custom_model=tts_custom_model,
+            custom_voice=tts_custom_voice,
+            custom_path=tts_custom_path,
         ),
         confirm=ConfirmConfig(mode=str(confirm_raw.get("mode", "auto"))),
         safety=SafetyConfig(
@@ -1881,6 +1943,18 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "playback_speed": cfg.tts.playback_speed,
             "print_prompt": cfg.tts.print_prompt,
             "notify_skip": cfg.tts.notify_skip,
+            "custom_base_url": cfg.tts.custom_base_url,
+            # never the secret itself (parity with stt redaction)
+            "custom_api_key_configured": bool(
+                cfg.tts.custom_api_key
+                or cfg.tts.custom_api_key_file
+                or cfg.tts.custom_api_key_command
+            ),
+            "custom_api_key_file": cfg.tts.custom_api_key_file,
+            "custom_api_key_command": cfg.tts.custom_api_key_command,
+            "custom_model": cfg.tts.custom_model,
+            "custom_voice": cfg.tts.custom_voice,
+            "custom_path": cfg.tts.custom_path,
         },
         "confirm": {"mode": cfg.confirm.mode},
         "dashboard": {

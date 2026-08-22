@@ -2088,6 +2088,31 @@ def cmd_providers(args: argparse.Namespace) -> int:
         )
     except Exception:
         pass
+    # Custom TTS readiness (B182) — config/env presence only
+    try:
+        from hark.config import load_config
+        from hark.providers.custom_tts import custom_tts_status
+
+        cfg = load_config()
+        ctt = custom_tts_status(
+            base_url=getattr(cfg.tts, "custom_base_url", None),
+            api_key=getattr(cfg.tts, "custom_api_key", None),
+            api_key_file=getattr(cfg.tts, "custom_api_key_file", None),
+            api_key_command=getattr(cfg.tts, "custom_api_key_command", None),
+            model=getattr(cfg.tts, "custom_model", None),
+            voice=getattr(cfg.tts, "custom_voice", None),
+            path=getattr(cfg.tts, "custom_path", None),
+        )
+        rows.append(
+            {
+                "name": "custom_tts",
+                "available": ctt.available,
+                "source": "config" if ctt.available else None,
+                "detail": ctt.detail,
+            }
+        )
+    except Exception:
+        pass
     if args.test_name:
         name = args.test_name.lower().replace("-", "_")
         rows = [

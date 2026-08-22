@@ -1,4 +1,7 @@
 ---
+claimed_at: "2026-08-17T05:42:52Z"
+claimed_by: cli-user
+completed_at: null
 complexity: medium
 created_at: "2026-08-17T05:25:04Z"
 depends_on:
@@ -6,15 +9,11 @@ depends_on:
 estimate_hours: 1
 id: B183
 priority: high
-status: pending
-tags:
-    - tts
-    - stt
-    - providers
-    - dogfood
-    - custom-gateway
+started_at: "2026-08-17T05:42:52Z"
+status: in_progress
+tags: []
 title: Live-verify Custom STT + Custom TTS against a real OpenAI-compatible gateway (dogfood)
-updated_at: "2026-08-17T05:25:04Z"
+updated_at: "2026-08-17T05:42:52Z"
 ---
 After B174 (Custom STT) and B182 (Custom TTS) land, verify both clients end-to-end against a live OpenAI-compatible audio gateway using a Consumer Bearer key.
 
@@ -28,3 +27,14 @@ After B174 (Custom STT) and B182 (Custom TTS) land, verify both clients end-to-e
 ## Acceptance
 - Both providers return real payloads (non-empty transcript; >0 audio bytes with audio content-type) with provider=custom reported.
 - No secret printed in logs/output — key from file/command source, never echoed.
+
+Live dogfood evidence (2026-08-17):
+
+- Gateway: https://omni-dyn-00.amaroolabs.com/v1, key via ~/.llmp (file source, never printed).
+- Custom STT (existing B174 pin in user config): resolved CustomStt -> POST /v1/audio/transcriptions, model=grok-stt. Transcribed a 5.4s TTS-generated WAV: 'The quick brown fox jumps over the lazy dog. Testing custom speech to text.' — exact match, provider=custom, HTTP 200.
+- Custom TTS (B182, env pin HARK_TTS_PROVIDER=custom + HARK_TTS_CUSTOM_* + key file): resolved CustomTts -> POST /v1/audio/speech, model=grok-4.6, voice=eve. 117120 bytes audio/mpeg (7.32s mp3, ffprobe-verified). provider=custom. Real CLI path 'hark tts --no-play' -> ok:true provider:custom latency 1818ms.
+- Round trip: CustomTts('Round trip verification: hark speaks, then hark listens.') -> ffmpeg wav -> CustomStt -> 'Round trip verification: Hark speaks, then hark listens.' Both providers=custom.
+- Note: default voice 'alloy' 404s on this gateway ('Voice alloy not found') — expected; operator sets custom_voice (OpenAI-default parity kept intentionally). Documented in B182.
+- 503 control_plane_unavailable: not encountered during verification.
+
+READY: both surfaces 2xx with real payloads.

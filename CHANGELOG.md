@@ -6,7 +6,15 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
-- feat(stt): Custom STT key sources — `custom_api_key` / env,
++- feat(tts, B182): **Custom TTS** provider (`tts.provider = "custom"`) —
++  OpenAI-compatible batch `POST {base}/audio/speech` (optional
++  `custom_path = "/tts"` dual-mount). Config/env: `custom_base_url`,
++  `custom_model`, `custom_voice`, `custom_path`, `custom_api_key_file`,
++  `custom_api_key_command` / `HARK_TTS_CUSTOM_*` (secret never dumped).
++  Voice order: explicit → `custom_voice` → `alloy`. Explicit pin only —
++  never selected by `auto`. Also: `HARK_TTS_PROVIDER` env now pins the TTS
++  provider (parity with `HARK_STT_PROVIDER`).
++- feat(stt): Custom STT key sources — `custom_api_key` / env,
   `custom_api_key_file` / `HARK_STT_CUSTOM_API_KEY_FILE`, and
   `custom_api_key_command` / `HARK_STT_CUSTOM_API_KEY_COMMAND` (shell
   stdout, first non-empty line). Precedence: literal → file → command.

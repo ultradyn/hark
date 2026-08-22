@@ -794,10 +794,16 @@ def run_tts(
     do_mute = cfg.audio.mute_mic_during_tts if mute_mic is None else mute_mic
     store = UsageStore()
     t0 = time.monotonic()
-    voice_id = voice or cfg.tts.voice or "eve"
+    # Voice order: explicit param → custom_voice (when TTS pins custom) →
+    # tts.voice (provider-generic default) → "eve" fallback.
+    _requested = provider or cfg.tts.provider
+    _req_norm = (_requested or "auto").lower().strip()
+    if _req_norm in ("custom", "custom_tts", "custom-tts"):
+        voice_id = voice or getattr(cfg.tts, "custom_voice", None) or cfg.tts.voice or "eve"
+    else:
+        voice_id = voice or cfg.tts.voice or "eve"
     # Resolve once in the parent (TTY MiniMax consent + disabled list) so the
     # isolated synth worker receives a concrete provider name.
-    _requested = provider or cfg.tts.provider
     _chosen = resolve_tts(
         _requested,
         voice=voice_id,

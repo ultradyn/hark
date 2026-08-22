@@ -264,16 +264,63 @@ def run_doctor(
     except Exception as exc:  # pragma: no cover - defensive
         report["custom_stt_error"] = str(exc)
 
+    # Custom TTS (B182) — soft readiness (base_url + key + model); never auto-selected
+    try:
+        from hark.providers.custom_tts import custom_tts_status
+
+        ctt = custom_tts_status(
+            base_url=getattr(cfg.tts, "custom_base_url", None),
+            api_key=getattr(cfg.tts, "custom_api_key", None),
+            api_key_file=getattr(cfg.tts, "custom_api_key_file", None),
+            api_key_command=getattr(cfg.tts, "custom_api_key_command", None),
+            model=getattr(cfg.tts, "custom_model", None),
+            voice=getattr(cfg.tts, "custom_voice", None),
+            path=getattr(cfg.tts, "custom_path", None),
+        )
+        report["custom_tts"] = {
+            "name": ctt.name,
+            "available": ctt.available,
+            "detail": ctt.detail,
+            "base_url": ctt.base_url,
+            "path": ctt.path,
+            "model": ctt.model,
+            "voice": ctt.voice,
+        }
+        report["providers"].append(
+            {
+                "name": "custom_tts",
+                "available": ctt.available,
+                "source": "config" if ctt.available else None,
+                "detail": ctt.detail,
+            }
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        report["custom_tts_error"] = str(exc)
+
     # Primary speech path
     xai = next((p for p in report["providers"] if p["name"] == "xai"), None)
     pinned = (report.get("stt_provider") or "auto").lower().strip()
     custom_ready = bool((report.get("custom_stt") or {}).get("available"))
+    tts_pinned = (report.get("tts_provider") or "auto").lower().strip()
+    custom_tts_ready = bool((report.get("custom_tts") or {}).get("available"))
+    tts_custom_pinned = tts_pinned in ("custom", "custom_tts", "custom-tts")
     if pinned in ("custom", "custom_stt", "custom-stt"):
         report["speech_ok"] = custom_ready
         if not custom_ready:
             report["speech_hint"] = (
                 "custom STT incomplete — set custom_base_url + "
                 "HARK_STT_CUSTOM_API_KEY (+ custom_model for /audio/transcriptions)"
+            )
+        else:
+            report.pop("speech_hint", None)
+    elif tts_custom_pinned:
+        # TTS pinned to Custom: STT follows its own policy (xai/cloud/…);
+        # a missing xAI key must not degrade speech when TTS needs no xAI.
+        report["speech_ok"] = custom_tts_ready
+        if not custom_tts_ready:
+            report["speech_hint"] = (
+                "custom TTS incomplete — set [tts].custom_base_url + "
+                "HARK_TTS_CUSTOM_API_KEY (+ custom_model for /audio/speech)"
             )
         else:
             report.pop("speech_hint", None)

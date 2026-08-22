@@ -310,6 +310,56 @@ def _try_custom_stt(opts: dict) -> SttProvider:
     )
 
 
+def _custom_tts_opts(tts_cfg: TtsConfig | None) -> dict:
+    """Resolve Custom TTS settings from config (and env already folded into cfg)."""
+    from hark.providers.custom_stt import resolve_custom_api_key
+
+    if tts_cfg is None:
+        return {
+            "base_url": os.environ.get("HARK_TTS_CUSTOM_BASE_URL"),
+            "api_key": resolve_custom_api_key(
+                os.environ.get("HARK_TTS_CUSTOM_API_KEY"),
+                os.environ.get("HARK_TTS_CUSTOM_API_KEY_FILE"),
+                os.environ.get("HARK_TTS_CUSTOM_API_KEY_COMMAND"),
+                label="custom TTS",
+            ),
+            "model": os.environ.get("HARK_TTS_CUSTOM_MODEL"),
+            "voice": os.environ.get("HARK_TTS_CUSTOM_VOICE"),
+            "path": os.environ.get("HARK_TTS_CUSTOM_PATH"),
+        }
+    return {
+        "base_url": getattr(tts_cfg, "custom_base_url", None)
+        or os.environ.get("HARK_TTS_CUSTOM_BASE_URL"),
+        "api_key": resolve_custom_api_key(
+            getattr(tts_cfg, "custom_api_key", None)
+            or os.environ.get("HARK_TTS_CUSTOM_API_KEY"),
+            getattr(tts_cfg, "custom_api_key_file", None)
+            or os.environ.get("HARK_TTS_CUSTOM_API_KEY_FILE"),
+            getattr(tts_cfg, "custom_api_key_command", None)
+            or os.environ.get("HARK_TTS_CUSTOM_API_KEY_COMMAND"),
+            label="custom TTS",
+        ),
+        "model": getattr(tts_cfg, "custom_model", None)
+        or os.environ.get("HARK_TTS_CUSTOM_MODEL"),
+        "voice": getattr(tts_cfg, "custom_voice", None)
+        or os.environ.get("HARK_TTS_CUSTOM_VOICE"),
+        "path": getattr(tts_cfg, "custom_path", None)
+        or os.environ.get("HARK_TTS_CUSTOM_PATH"),
+    }
+
+
+def _try_custom_tts(opts: dict, *, voice: str | None = None) -> TtsProvider:
+    from hark.providers.custom_tts import CustomTts
+
+    return CustomTts(
+        base_url=opts.get("base_url") or "",
+        api_key=opts.get("api_key") or "",
+        model=opts.get("model"),
+        voice=voice or opts.get("voice"),
+        path=opts.get("path"),
+    )
+
+
 def resolve_stt(
     name: str = "auto",
     *,
@@ -398,6 +448,9 @@ def resolve_tts(
     if name in ("google", "gemini"):
         _reject_if_disabled("google", disabled, kind="tts")
         return GoogleTts()
+    if name in ("custom", "custom_tts", "custom-tts"):
+        _reject_if_disabled("custom", disabled, kind="tts")
+        return _try_custom_tts(_custom_tts_opts(tts_cfg), voice=voice)
     if name != "auto":
         raise ProviderError(f"unknown TTS provider: {name}")
 

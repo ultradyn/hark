@@ -20,6 +20,7 @@ from hark.answer_window import (
     resolve_endpoint_strategy,
     silence_transition,
 )
+from hark.audio.capture import CaptureTimeout
 from hark.endpointing import EndpointFrame, SmartTurnStrategy
 from hark.listen_end import EndMode
 
@@ -192,10 +193,19 @@ def test_on_empty_stt_respects_disabled_recovery():
 
 
 def test_is_no_open_timeout_helper():
+    """Typed reason decides — the message text is for humans only."""
+    from hark.audio.capture import CaptureReason, CaptureTimeout
+
     assert is_no_open_timeout(
+        CaptureTimeout("no speech detected (peak_db=-45.4 peak_rms=0.005)")
+    )
+    assert is_no_open_timeout(CaptureTimeout("gate stayed shut, no text to match"))
+    assert not is_no_open_timeout(
+        CaptureTimeout("...", reason=CaptureReason.DISCARD_TIMEOUT)
+    )
+    assert not is_no_open_timeout(
         TimeoutError("no speech detected (peak_db=-45.4 peak_rms=0.005)")
     )
-    assert is_no_open_timeout(TimeoutError("no speech captured (peak_db=-50.0)"))
     assert not is_no_open_timeout(
         TimeoutError("heard audio but STT returned empty text")
     )
@@ -580,8 +590,8 @@ def test_open_answer_window_silence_uses_end_silence_s(monkeypatch):
     )
     assert result.end_mode == "silence"
     assert result.text == "one two three"
-    assert calls[0]["end_silence_s"] == pytest.approx(2.1)
-    assert calls[0]["end_silence_s"] != pytest.approx(0.5)
+    assert calls[0]["spec"].end_silence_s == pytest.approx(2.1)
+    assert calls[0]["spec"].end_silence_s != pytest.approx(0.5)
 
 
 def test_open_answer_window_echo_reject(monkeypatch):
@@ -635,8 +645,11 @@ def test_open_answer_window_no_open_recovery(monkeypatch):
         no_open_nudge_text=NO_OPEN_NUDGE_TEXT,
     )
     logs: list[tuple[str, dict]] = []
-    err = TimeoutError(
-        "no speech detected (peak_db=-45.4 peak_rms=0.00537 open_thresh≈-38.0dB)"
+    err = CaptureTimeout(
+        "no speech detected (peak_db=-45.4 peak_rms=0.00537 open_thresh≈-38.0dB)",
+        peak_db=-45.4,
+        peak_rms=0.00537,
+        open_thresh_db=-38.0,
     )
 
     def always_timeout(**kwargs):

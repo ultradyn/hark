@@ -327,7 +327,9 @@ def test_capture_disables_pre_roll_when_the_spec_says_zero(monkeypatch):
             min_speech_s=0.05,
             open_confirm_blocks=2,
             open_margin_db=6.0,
-            abs_open_db=-60.0,
+            # Ramp (≈ -52 dB at its loudest) must stay under the floor, or the
+            # gate opens on it and there is no pre-roll question to ask.
+            abs_open_db=-40.0,
             initial_timeout_s=2.0,
             preroll_ms=0,
         )
@@ -348,7 +350,7 @@ def test_capture_clamps_a_too_small_pre_roll_itself(monkeypatch):
             min_speech_s=0.05,
             open_confirm_blocks=2,
             open_margin_db=6.0,
-            abs_open_db=-60.0,
+            abs_open_db=-40.0,
             initial_timeout_s=2.0,
             preroll_ms=100,  # below the B079 floor
         )

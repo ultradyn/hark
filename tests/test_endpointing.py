@@ -139,6 +139,11 @@ def test_capture_energy_path_keeps_legacy_condition_and_avoids_per_block_concat(
     # the throttle swallows this short turn).
     assert "publish_spectrum" not in source
     assert "np.concatenate" not in source.split("if endpointer is None")[0]
+    # The gate spec is unbundled once *above* the read loop, so the default path
+    # still pays no per-frame attribute lookup that the old scalar signature
+    # avoided. Any `spec.` inside the loop is per-frame work on the audio thread.
+    loop = source.split("while blocks_used < max_blocks:", 1)[1]
+    assert "spec." not in loop, "gate facts must be locals by the time the loop runs"
 
 
 # ---------------------------------------------------------------------------
@@ -537,8 +542,9 @@ def test_silence_mode_builds_and_wires_the_configured_endpoint_strategy(monkeypa
     assert builds[0]["smart_turn_threshold"] == 0.7
     assert callable(builds[0]["on_warn"])
     assert captures[0]["endpoint_strategy"] is strategy
-    assert captures[0]["endpoint_probe_silence_s"] == 0.4
-    assert captures[0]["endpoint_max_silence_s"] == 3.0
+    # Endpointing windows ride the gate spec, not loose kwargs.
+    assert captures[0]["spec"].endpoint_probe_silence_s == 0.4
+    assert captures[0]["spec"].endpoint_max_silence_s == 3.0
     assert callable(captures[0]["on_endpoint_event"])
 
 

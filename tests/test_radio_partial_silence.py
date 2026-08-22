@@ -107,10 +107,10 @@ def test_radio_capture_uses_partial_silence_not_end_silence(monkeypatch):
 
     result = speech.run_listen(cfg, end_mode="radio", post_tts_guard_s=0)
     assert calls
-    assert calls[0]["end_silence_s"] == 0.55
+    assert calls[0]["spec"].end_silence_s == 0.55
     # Must not use silence-mode or legacy radio hang for partial cadence
-    assert calls[0]["end_silence_s"] != cfg.listen.end_silence_s
-    assert calls[0]["end_silence_s"] != cfg.listen.radio_end_silence_s
+    assert calls[0]["spec"].end_silence_s != cfg.listen.end_silence_s
+    assert calls[0]["spec"].end_silence_s != cfg.listen.radio_end_silence_s
     assert result.end_mode == "radio"
     assert result.end_phrase  # still finalized by end phrase path
 
@@ -144,7 +144,7 @@ def test_silence_mode_still_uses_end_silence_s(monkeypatch):
 
     result = speech.run_listen(cfg, end_mode="silence", post_tts_guard_s=0)
     assert calls
-    assert calls[0]["end_silence_s"] == 2.1
+    assert calls[0]["spec"].end_silence_s == 2.1
     assert result.text == "one two three"
     assert result.end_mode == "silence"
 
@@ -170,7 +170,7 @@ def test_radio_partials_emit_before_end_phrase(monkeypatch):
     partials: list[dict] = []
 
     def fake_capture(**kwargs):
-        assert kwargs["end_silence_s"] == 0.5
+        assert kwargs["spec"].end_silence_s == 0.5
         return CaptureResult(
             pcm16=b"\0\0" * 10,
             sample_rate=16000,

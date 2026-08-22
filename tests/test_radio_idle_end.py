@@ -162,12 +162,12 @@ def test_radio_post_speech_idle_auto_finishes(monkeypatch):
     assert "auth" in (result.text or "").lower()
     # First segment: initial wait (pre-open); second: idle timeout
     assert len(calls) >= 2
-    assert calls[0]["initial_timeout_s"] == pytest.approx(
+    assert calls[0]["spec"].initial_timeout_s == pytest.approx(
         cfg.listen.initial_timeout_s
     )
-    assert calls[0]["end_silence_s"] == pytest.approx(0.05)
-    assert calls[1]["initial_timeout_s"] == pytest.approx(idle_s)
-    assert calls[1]["end_silence_s"] == pytest.approx(0.05)
+    assert calls[0]["spec"].end_silence_s == pytest.approx(0.05)
+    assert calls[1]["spec"].initial_timeout_s == pytest.approx(idle_s)
+    assert calls[1]["spec"].end_silence_s == pytest.approx(0.05)
     idle_logs = [d for e, d in logs if e == "listen.radio_idle_end"]
     assert idle_logs
     assert idle_logs[0]["idle_s"] == pytest.approx(idle_s)
@@ -213,11 +213,11 @@ def test_radio_short_pause_still_records(monkeypatch):
     assert "pull request" in (result.text or "").lower()
     # After first open, subsequent segments use idle timeout (> end_silence / short pause)
     assert len(calls) >= 2
-    assert calls[1]["initial_timeout_s"] == pytest.approx(6.3)
+    assert calls[1]["spec"].initial_timeout_s == pytest.approx(6.3)
     # Partial cadence stays short — not the idle hang
-    assert all(c["end_silence_s"] == pytest.approx(0.6) for c in calls)
+    assert all(c["spec"].end_silence_s == pytest.approx(0.6) for c in calls)
     # Idle window is longer than a normal ~2s thinking pause
-    assert calls[1]["initial_timeout_s"] > 2.0
+    assert calls[1]["spec"].initial_timeout_s > 2.0
 
 
 def test_radio_no_speech_yet_does_not_idle_finish(monkeypatch):
@@ -245,7 +245,7 @@ def test_radio_no_speech_yet_does_not_idle_finish(monkeypatch):
         speech.run_listen(cfg, end_mode="radio", post_tts_guard_s=0)
     assert calls
     # Pre-open uses initial_timeout_s, not the short idle hang
-    assert calls[0]["initial_timeout_s"] == pytest.approx(0.2)
+    assert calls[0]["spec"].initial_timeout_s == pytest.approx(0.2)
 
 
 def test_radio_soft_end_still_finishes_sooner(monkeypatch):
@@ -354,6 +354,6 @@ def test_silence_mode_ignores_radio_idle(monkeypatch):
     result = speech.run_listen(cfg, end_mode="silence", post_tts_guard_s=0)
     assert result.end_mode == "silence"
     assert result.text == "one two three"
-    assert calls[0]["end_silence_s"] == pytest.approx(2.1)
+    assert calls[0]["spec"].end_silence_s == pytest.approx(2.1)
     # Silence path does not use radio idle as capture hang
-    assert calls[0]["end_silence_s"] != pytest.approx(0.1)
+    assert calls[0]["spec"].end_silence_s != pytest.approx(0.1)

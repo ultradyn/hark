@@ -916,6 +916,9 @@ def _spawn_mode_a_workers_locked(
 
     try:
         if do_watch:
+            # No --for-monitor: this stdout is the watch.jsonl state file, which
+            # the monitor and the dashboard both read back as full HEP. Compact
+            # once, at the read edge (state_feed.present.present_for_monitor).
             _spawn(
                 "watch",
                 [
@@ -923,7 +926,6 @@ def _spawn_mode_a_workers_locked(
                     "watch",
                     "--session",
                     session,
-                    "--for-monitor",
                     "--statuses",
                     "blocked,done",
                 ],

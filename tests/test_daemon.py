@@ -801,11 +801,11 @@ def test_spawn_workers_successfully_starts_both_roles_and_closes_logs(
     children = daemon.spawn_mode_a_workers(root=state, session="lab")
 
     assert children == fake_workers
-    assert spawned[0][-6:] == [
+    # watch.jsonl is a state file: full HEP, never the compact monitor profile.
+    assert spawned[0][-5:] == [
         "watch",
         "--session",
         "lab",
-        "--for-monitor",
         "--statuses",
         "blocked,done",
     ]

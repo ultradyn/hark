@@ -170,7 +170,7 @@ uv run hark daemon start --workers --session default
 Handsfree remains:
 
 ```bash
-uv run hark start                 # ambient + watch --for-monitor (idempotent)
+uv run hark start                 # ambient + watch (full HEP state files; idempotent)
 uv run hark stop                  # SIGTERM then SIGKILL after grace
 uv run hark restart
 uv run hark start --status        # running state only

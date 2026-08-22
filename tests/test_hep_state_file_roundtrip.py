@@ -175,6 +175,12 @@ def test_monitor_compact_of_full_hep_keeps_every_answerable_field():
     assert f"{SESSION}/{PANE}" in compact["instructions"]
 
 
+def test_monitor_line_equals_the_old_write_edge_compaction():
+    """What the monitor emits now is exactly what the writer used to write."""
+    hep = _blocked_hep()
+    assert present_for_monitor(hep) == monitor_profile(hep)
+
+
 def test_legacy_compact_watch_line_still_feeds_the_monitor():
     """Files already on disk hold compact lines; keep reading them (lossily)."""
     legacy = monitor_profile(_blocked_hep())

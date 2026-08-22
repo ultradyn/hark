@@ -176,7 +176,7 @@ uv run hark config init          # optional ~/.config/hark/config.toml
 # uv run hark session-profile set … --apply   # see skill/hark/SETUP.md / docs/HERDR.md
 uv run hark status
 uv run hark providers            # STT/TTS discovery; also: hark providers voices
-uv run hark start                # ambient + watch --for-monitor (idempotent; mode-a.pids)
+uv run hark start                # ambient + watch (full HEP state files; idempotent; mode-a.pids)
 #   flags: --no-watch | --force-watch | --no-ambient | --session ID | --status
 uv run hark monitor              # primary handsfree feed (compact default)
 uv run hark restart              # stop then start (same start flags + --force / --timeout)

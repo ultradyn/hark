@@ -134,6 +134,15 @@ fields), **not** against `event-v1.schema.json`'s closed kind enum —
 `ambient.*`/`announce.*` kinds are intentionally absent there. Unknown kinds
 MUST flow through.
 
+Writers MUST append **full** HEP to `watch.jsonl` / `ambient.jsonl`; the compact
+monitor profile is applied only where a harness Monitor reads
+(`state_feed.present.present_for_monitor`). The dashboard depends on this: the
+pending-question panel and register-on-demand answering (`answer_action` →
+`find_hep_event` → `DeliveryStore.register_from_hep`) read `question.fingerprint`
+and `target.pane_id` back out of these files. Readers still tolerate compact
+lines left in files written by older versions, but recover less from them —
+`question` is a bare string there and `target` is absent.
+
 ## Authentication
 
 Two modes, decided by bind address + config:

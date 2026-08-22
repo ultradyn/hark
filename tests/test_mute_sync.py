@@ -48,20 +48,20 @@ def test_mute_sync_tick_no_edge(monkeypatch):
     assert did is False
 
 
-def test_release_tts_mute_hold(monkeypatch):
+def test_force_clear_drops_the_lease(monkeypatch):
     monkeypatch.setattr(mm, "set_source_mute", lambda *a, **k: True)
     monkeypatch.setattr(mm, "set_alsa_mic_capture", lambda *a, **k: True)
     monkeypatch.setattr(mm, "_which", lambda n: n == "pactl")
     monkeypatch.setattr(mm, "default_source", lambda: "src")
+    monkeypatch.setattr(mm, "source_is_muted", lambda s: False)
     monkeypatch.setattr(mm, "find_wave_alsa_card", lambda: None)
-    mm._depth = 1
-    mm._saved = mm.MuteState(source="src", was_muted=False, applied=True)
-    mm._user_unmuted_override = False
-    assert mm.release_tts_mute_hold() is True
-    # B086: full clear (depth 0) so listen clocks unfreeze
-    assert mm._depth == 0
-    assert mm._saved is None
-    assert mm._user_unmuted_override is False
+    held = mm.mic_muted_during_tts(enabled=True)
+    held.__enter__()  # crashed run_tts: the finally never runs
+    assert mm.tts_mute_depth() == 1
+    assert mm.force_clear_tts_mute_hold(reason="test")["cleared"] is True
+    # B086: full clear so listen clocks unfreeze
+    assert mm.current_tts_mute_hold() is None
+    assert mm.tts_mute_depth() == 0
 
 
 def test_find_wave_card_parses(monkeypatch):

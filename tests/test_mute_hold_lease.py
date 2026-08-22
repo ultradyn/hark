@@ -30,12 +30,26 @@ def _drop_hold(monkeypatch, reason: str) -> None:
         mm.force_clear_tts_mute_hold(reason=reason)
 
 
+# Live contexts from _leak_hold: dropping the last reference would let GC close
+# the generator, which runs the finally this is meant to skip.
+_LEAKED: list = []
+
+
 @pytest.fixture(autouse=True)
 def _reset_hold(monkeypatch):
-    """A leaked hold would freeze every later capture test — clear both ways."""
+    """A leaked hold would freeze every later capture test — clear it both ways."""
+    _LEAKED.clear()
     _drop_hold(monkeypatch, "test_setup")
     yield
+    _LEAKED.clear()
     _drop_hold(monkeypatch, "test_teardown")
+
+
+def _leak_hold() -> None:
+    """Crashed TTS: the hold is entered and its finally never runs."""
+    entered = mm.mic_muted_during_tts(enabled=True)
+    entered.__enter__()
+    _LEAKED.append(entered)
 
 
 def _fake_pulse(monkeypatch) -> None:
@@ -75,17 +89,14 @@ def _silent_stream(*, guard_s: float = 5.0):
 def test_capture_stops_freezing_when_hold_outlives_its_budget(monkeypatch):
     """A never-released hold must stop freezing clocks, so capture terminates."""
     _fake_pulse(monkeypatch)
-    # Keep the test fast: shrink the freeze budget floor (raising=False so the
-    # pre-lease red run still exercises the unbounded freeze it is proving).
-    monkeypatch.setattr(mm, "MUTE_FREEZE_BUDGET_MIN_S", 0.25, raising=False)
+    # Keep the test fast; the 30 s production floor is checked separately below.
+    monkeypatch.setattr(mm, "MUTE_FREEZE_BUDGET_MIN_S", 0.25)
     monkeypatch.setattr(cap, "_require_sd", lambda: None)
     monkeypatch.setattr(
         cap, "sd", SimpleNamespace(InputStream=lambda **k: _silent_stream()())
     )
 
-    # Crashed TTS: the hold is entered and its finally never runs.
-    held = mm.mic_muted_during_tts(enabled=True)
-    held.__enter__()
+    _leak_hold()
 
     with pytest.raises(TimeoutError):
         cap.capture_utterance(
@@ -105,7 +116,7 @@ def test_capture_stops_freezing_when_hold_outlives_its_budget(monkeypatch):
 def test_capped_freeze_is_logged(monkeypatch):
     """The cap must be visible in the field, not a silent behaviour change."""
     _fake_pulse(monkeypatch)
-    monkeypatch.setattr(mm, "MUTE_FREEZE_BUDGET_MIN_S", 0.25, raising=False)
+    monkeypatch.setattr(mm, "MUTE_FREEZE_BUDGET_MIN_S", 0.25)
     monkeypatch.setattr(cap, "_require_sd", lambda: None)
     monkeypatch.setattr(
         cap, "sd", SimpleNamespace(InputStream=lambda **k: _silent_stream()())
@@ -115,8 +126,7 @@ def test_capped_freeze_is_logged(monkeypatch):
         "hark.syslog.log", lambda event, **data: logs.append((event, data))
     )
 
-    held = mm.mic_muted_during_tts(enabled=True)
-    held.__enter__()
+    _leak_hold()
 
     with pytest.raises(TimeoutError):
         cap.capture_utterance(

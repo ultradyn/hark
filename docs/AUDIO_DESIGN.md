@@ -252,12 +252,24 @@ duplicate head/tail tokens from overlap.
 
 #### Mute clock freeze (B084 + B112)
 
-While Hark holds the mic muted for half-duplex TTS (`mic_muted_during_tts` /
-`tts_mute_depth > 0`), listen clocks **do not advance** (true freeze):
+While Hark holds the mic muted for half-duplex TTS, listen clocks **do not
+advance** (true freeze):
 
 - `initial_timeout_s` / no-open wait
 - segment / end silence counters (radio partial + idle auto-end)
 - `max_s` capture budget
+
+The hold is a **bounded lease**, not a counter. `mic_muted_during_tts` yields a
+`MuteHold`; nested holders share it (depth up, deadline unchanged), and
+`MuteHold.freezing(budget_s=...)` is the single authority for "may clocks stay
+frozen right now". Capture consults `current_tts_mute_hold()` each block and
+passes `mute_freeze_budget_s(initial_timeout_s)` = `max(30 s, initial_timeout_s)`
+— the same shape as the overlap `discard_max_s` bound.
+
+Past that budget the freeze **stops** (the mute itself stands: only the hold's
+owner unmutes). Clocks resume, so a `run_tts` that died before its `finally`
+ends as a bounded listen timeout instead of an open mic held forever. Capture
+logs `listen.mute_freeze_capped` once per capture when the cap trips.
 
 Silence progress is **preserved** across a clean mute (no operator energy).
 Conversation-mode TTS mid-listen therefore no longer wipes a nearly-complete quiet
@@ -281,8 +293,9 @@ interrupted TTS, failed `pactl` unmute, or hardware unmute mid-hold.
 | Mechanism | Behavior |
 |-----------|----------|
 | Outermost `mic_muted_during_tts` exit | Unmutes **Pulse and ALSA** when Hark applied mute |
-| `ensure_unmuted` / `hark mute-sync` | Force-unmutes OS+ALSA **and clears** `tts_mute_depth` (so B084 clocks unfreeze) |
-| `release_tts_mute_hold` / `force_clear_tts_mute_hold` | Full hold drop + unmute |
+| `ensure_unmuted` / `hark mute-sync` | Force-unmutes OS+ALSA **and drops the lease** (so B084 clocks unfreeze) |
+| `force_clear_tts_mute_hold` | Full hold drop + unmute; later `mic_muted_during_tts` exits match on hold identity and become no-ops |
+| Freeze budget elapsed | Clocks resume (mute untouched); logs `listen.mute_freeze_capped` |
 | Post-`run_tts` `repair_tts_mute_after_play` | Asserts depth 0; if source still muted after we applied mute, unmutes + logs `mic.mute_desync` |
 
 Recovery CLI: `hark mute-sync` (one-shot ensure) or `--watch` for HW unmute edges.

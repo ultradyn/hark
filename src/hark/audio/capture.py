@@ -17,6 +17,7 @@ from typing import Any, Callable, Iterator
 
 import numpy as np
 
+from hark.audio.mic_mute import mute_freeze_budget_s
 from hark.endpointing import EndpointFrame, EndpointStrategy, SilenceEndpointer
 from hark.paths import state_dir
 
@@ -1725,13 +1726,49 @@ def capture_utterance(
                     except Exception:
                         pass
 
-                def _tts_muted() -> bool:
-                    try:
-                        from hark.audio.mic_mute import tts_mute_depth
+                # B084 freeze authority is the TTS mute *lease*, not a raw depth
+                # count: a hold whose run_tts died never decrements, and every
+                # frozen block below advances nothing, so an uncapped freeze
+                # holds the mic open forever. Same bound shape as discard_max_s.
+                freeze_budget_s = mute_freeze_budget_s(initial_timeout_s)
+                freeze_capped = False
 
-                        return tts_mute_depth() > 0
+                def _tts_muted() -> bool:
+                    nonlocal freeze_capped
+                    try:
+                        from hark.audio.mic_mute import current_tts_mute_hold
+
+                        hold = current_tts_mute_hold()
                     except Exception:
                         return False
+                    if hold is None:
+                        return False
+                    if hold.freezing(budget_s=freeze_budget_s):
+                        return True
+                    if hold.held() and not freeze_capped:
+                        # Mute still stands (only its owner may unmute); we just
+                        # stop freezing, so this ends as a bounded listen timeout.
+                        freeze_capped = True
+                        try:
+                            from hark.syslog import log as _syslog
+
+                            _syslog(
+                                "listen.mute_freeze_capped",
+                                component="stt",
+                                level="warn",
+                                hold_age_s=round(hold.age_s(), 1),
+                                budget_s=round(freeze_budget_s, 2),
+                                depth=hold.depth,
+                                source=hold.source,
+                                message=(
+                                    "TTS mute hold outlived its freeze budget — "
+                                    "resuming listen clocks (run `hark mute-sync` "
+                                    "if the mic stays muted)"
+                                ),
+                            )
+                        except Exception:
+                            pass
+                    return False
 
                 # While-loop so TTS mute / edge-pad do not burn max_s or initial_timeout
                 speech_during_mute = False

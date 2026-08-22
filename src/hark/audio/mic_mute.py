@@ -16,7 +16,7 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterator
 
 
@@ -137,9 +137,9 @@ def set_alsa_mic_capture(on: bool, card: str | int | None = None) -> bool:
 def ensure_unmuted(*, source: str | None = None) -> dict[str, bool | None]:
     """Force OS + ALSA capture unmuted (manual/hardware unmute cascade).
 
-    Also **fully clears** any in-process TTS mute hold (depth + saved state)
-    so B084 listen clocks and future captures are not stuck thinking mute is
-    still held (B086).
+    Also **fully drops** any in-process TTS mute lease so B084 listen clocks
+    and future captures are not stuck thinking mute is still held (B086).
+    Operator escape hatch: this always wins over a live hold.
 
     Returns which steps succeeded.
     """
@@ -171,31 +171,98 @@ def ensure_unmuted(*, source: str | None = None) -> dict[str, bool | None]:
 
 
 # ---------------------------------------------------------------------------
-# Nestable TTS mute
+# Nestable TTS mute hold (bounded lease)
 # ---------------------------------------------------------------------------
 
+# B084: a hold may freeze listen clocks only this long. Mirrors capture's
+# ``discard_max_s`` floor so a crashed/leaked ``run_tts`` cannot pin the mic
+# open by freezing every gate, silence and max_s clock forever.
+MUTE_FREEZE_BUDGET_MIN_S = 30.0
+
+
+def mute_freeze_budget_s(initial_timeout_s: float) -> float:
+    """How long one hold may keep listen clocks frozen (B084 cap)."""
+    return max(MUTE_FREEZE_BUDGET_MIN_S, float(initial_timeout_s))
+
+
+@dataclass
+class MuteHold:
+    """Lease on the half-duplex TTS mic mute.
+
+    One hold exists while any ``mic_muted_during_tts`` is open; nested entries
+    share it and raise ``depth``. :meth:`freezing` is the **single authority**
+    for "may listen clocks stay frozen right now" (B084) — capture asks the
+    hold, never a bare depth count, so a hold that outlives its budget stops
+    freezing even while the OS mute it applied is still in place.
+    """
+
+    state: MuteState
+    depth: int = 0
+    acquired_mono: float = field(default_factory=time.monotonic)
+    # User (or HW button) overrode mute while we held it — do not re-mute on exit
+    user_unmuted_override: bool = False
+
+    # ``run_tts`` reads the OS-mute snapshot straight off the yielded object.
+    @property
+    def source(self) -> str | None:
+        return self.state.source
+
+    @property
+    def was_muted(self) -> bool | None:
+        return self.state.was_muted
+
+    @property
+    def applied(self) -> bool:
+        return self.state.applied
+
+    def held(self) -> bool:
+        """True while at least one holder is inside the mute context."""
+        return self.depth > 0
+
+    def age_s(self, *, now: float | None = None) -> float:
+        """Seconds since the outermost holder took the lease (nesting never extends it)."""
+        mono = time.monotonic() if now is None else now
+        return max(0.0, mono - self.acquired_mono)
+
+    def freezing(
+        self, *, budget_s: float | None = None, now: float | None = None
+    ) -> bool:
+        """True while this hold may keep listen clocks frozen (B084).
+
+        ``budget_s`` is the caller's freeze budget (see :func:`mute_freeze_budget_s`);
+        past it the mute still stands but clocks resume, so a leaked hold ends as
+        a bounded listen timeout instead of an open mic.
+        """
+        if self.depth <= 0:
+            return False
+        budget = MUTE_FREEZE_BUDGET_MIN_S if budget_s is None else max(0.0, budget_s)
+        return self.age_s(now=now) <= budget
+
+
 _lock = threading.Lock()
-_depth = 0
-_saved: MuteState | None = None
-# User (or HW button) overrode mute while we held it — do not re-mute on exit
-_user_unmuted_override = False
+_hold: MuteHold | None = None
+
+
+def current_tts_mute_hold() -> MuteHold | None:
+    """The live TTS mute lease, or None when nothing holds the mic muted."""
+    with _lock:
+        return _hold
 
 
 def force_clear_tts_mute_hold(*, reason: str = "force") -> dict[str, object]:
-    """Fully drop Hark TTS mute hold (depth + saved) and unmute OS+ALSA.
+    """Fully drop the Hark TTS mute lease and unmute OS+ALSA.
 
     Used for desync recovery and ``ensure_unmuted``. Nested ``mic_muted_during_tts``
-    finally blocks become no-ops once depth/saved are cleared.
+    finally blocks become no-ops once the hold is gone (they match on identity).
     """
-    global _depth, _saved, _user_unmuted_override
+    global _hold
     with _lock:
-        had_hold = _depth > 0 or _saved is not None
-        depth_before = _depth
-        src = _saved.source if _saved else None
-        applied = bool(_saved.applied) if _saved else False
-        _depth = 0
-        _saved = None
-        _user_unmuted_override = False
+        hold = _hold
+        _hold = None
+    had_hold = hold is not None
+    depth_before = hold.depth if hold is not None else 0
+    src = hold.source if hold is not None else None
+    applied = bool(hold.applied) if hold is not None else False
     if not src:
         src = default_source()
     pulse_ok: bool | None = None
@@ -225,24 +292,16 @@ def force_clear_tts_mute_hold(*, reason: str = "force") -> dict[str, object]:
     return out
 
 
-def release_tts_mute_hold() -> bool:
-    """Cancel intentional TTS mute hold (user unmuted for a demo).
-
-    Clears depth fully (B086) so listen no longer freezes on ``tts_mute_depth``.
-    """
-    result = force_clear_tts_mute_hold(reason="release_hold")
-    return bool(result.get("cleared"))
-
-
 def tts_mute_depth() -> int:
+    """Nesting depth of the live hold (diagnostics; capture uses the lease)."""
     with _lock:
-        return _depth
+        return _hold.depth if _hold is not None else 0
 
 
 def tts_mute_hold_active() -> bool:
-    """True if depth or saved mute state is still held (B086 diagnostics)."""
+    """True while a hold exists at all (B086 diagnostics)."""
     with _lock:
-        return _depth > 0 or _saved is not None
+        return _hold is not None
 
 
 def _unmute_after_tts(saved: MuteState, *, reason: str) -> None:
@@ -329,74 +388,61 @@ def repair_tts_mute_after_play(
 
 
 @contextmanager
-def mic_muted_during_tts(*, enabled: bool = True) -> Iterator[MuteState]:
+def mic_muted_during_tts(*, enabled: bool = True) -> Iterator[MuteHold]:
     """Nestable: mute default capture source while TTS plays; restore after.
 
-    Only mutes if we are the first nested holder and the source was unmuted
-    (or unknown). Always restores to pre-TTS state when the outermost exits,
-    unless the user/hardware unmutes mid-hold (override / force-clear).
+    Yields the :class:`MuteHold` lease (B084 freeze authority). Only mutes if we
+    are the first nested holder and the source was unmuted (or unknown). Always
+    restores to pre-TTS state when the outermost exits, unless the user/hardware
+    unmutes mid-hold (override / force-clear).
     """
-    state = MuteState(source=None, was_muted=None, applied=False)
     if not enabled or not _which("pactl"):
-        yield state
+        # Nothing held: an inert lease, so callers still get one shape back.
+        yield MuteHold(state=MuteState(source=None, was_muted=None, applied=False))
         return
 
-    global _depth, _saved, _user_unmuted_override
+    global _hold
     with _lock:
-        _depth += 1
-        if _depth == 1:
-            _user_unmuted_override = False
+        if _hold is None:
             src = default_source()
-            state.source = src
+            state = MuteState(source=src, was_muted=None, applied=False)
             if src:
-                was = source_is_muted(src)
-                state.was_muted = was
-                if was is not True:
-                    if set_source_mute(src, True):
-                        state.applied = True
-                _saved = MuteState(
-                    source=src, was_muted=was, applied=state.applied
-                )
-            else:
-                _saved = state
+                state.was_muted = source_is_muted(src)
+                if state.was_muted is not True and set_source_mute(src, True):
+                    state.applied = True
+            _hold = MuteHold(state=state, depth=1)
         else:
-            # nested: report outer state
-            if _saved:
-                state = MuteState(
-                    source=_saved.source,
-                    was_muted=_saved.was_muted,
-                    applied=_saved.applied,
-                )
+            # nested: share the outer lease (depth up, deadline unchanged)
+            _hold.depth += 1
+        hold = _hold
 
     try:
-        if state.applied:
+        if hold.applied:
             try:
                 from hark.syslog import log
 
                 log(
                     "mic.muted",
                     component="audio",
-                    source=state.source,
-                    was_muted=state.was_muted,
+                    source=hold.source,
+                    was_muted=hold.was_muted,
                 )
             except Exception:
                 pass
-        yield state
+        yield hold
     finally:
         with _lock:
-            # force_clear may have already zeroed depth/saved — still safe
-            if _depth > 0:
-                _depth -= 1
-            else:
-                _depth = 0
-            if _depth == 0 and _saved is not None:
-                saved = _saved
-                override = _user_unmuted_override
-                _saved = None
-                _user_unmuted_override = False
-            else:
-                saved = None
-                override = False
+            saved: MuteState | None = None
+            override = False
+            # Identity match: force_clear (or a later hold) means this exit owns
+            # nothing and must not decrement someone else's lease.
+            if _hold is hold:
+                if hold.depth > 0:
+                    hold.depth -= 1
+                if hold.depth == 0:
+                    saved = hold.state
+                    override = hold.user_unmuted_override
+                    _hold = None
         if saved is not None:
             if override:
                 _unmute_after_tts(saved, reason="user_override")

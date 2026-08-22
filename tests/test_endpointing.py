@@ -85,6 +85,12 @@ def test_capture_energy_path_keeps_legacy_condition_and_avoids_per_block_concat(
             return samples.reshape(-1, 1), False
 
     stream = FakeStream()
+    # B087 publishes a ~40 ms spectrum window per block for the live webui, and
+    # that concatenation is wall-clock throttled (16 ms) — counting it would tie
+    # this assertion to how fast the machine drains the fake stream. It is not
+    # endpointing work, so drop the publisher: the counter then sees the capture
+    # path only. `_publish_spec` imports it lazily and swallows the ImportError.
+    monkeypatch.setitem(sys.modules, "hark.audio.spectrum", None)
     monkeypatch.setattr(cap_mod, "_require_sd", lambda: None)
     monkeypatch.setattr(
         cap_mod,
@@ -112,7 +118,7 @@ def test_capture_energy_path_keeps_legacy_condition_and_avoids_per_block_concat(
     assert result.duration_ms > 0
     assert stream.reads == 7
     # Only finalization concatenates. A default turn never builds an endpoint frame.
-    assert concatenate_calls == 1
+    assert concatenate_calls == 1, f"unexpected per-block concat (n={concatenate_calls})"
     source = inspect.getsource(cap_mod.capture_utterance)
     # Legacy energy-gate end condition stays inline (not only via SilenceEndpointer).
     # Indentation may shift with hang (B108) / mute-hold (B112); match the predicate.

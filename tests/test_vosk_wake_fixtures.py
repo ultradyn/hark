@@ -1,4 +1,8 @@
-"""Optional offline Vosk re-decode of live wake fixture WAVs (B008).
+"""Optional offline Vosk re-decode of wake fixture WAVs (B008).
+
+Covers the audio rows of ``fixtures/voice/wake/cases.jsonl`` only — text-only
+rows carry no ``wav`` (see fixtures/voice/README.md); their ``match_activation``
+parity is covered by tests/test_wake_eval_harness.py.
 
 Skips when vosk is not installed or the small en-us model is missing.
 Does not require network — uses the local model under XDG data home.
@@ -29,6 +33,11 @@ def _load_jsonl(path: Path) -> list[dict]:
             continue
         rows.append(json.loads(line))
     return rows
+
+
+def _audio_cases() -> list[dict]:
+    """Audio rows only — text-only rows have no ``wav`` to re-decode."""
+    return [c for c in _load_jsonl(CASES_PATH) if c.get("wav")]
 
 
 def _vosk_available() -> bool:
@@ -70,7 +79,7 @@ def vosk_backend() -> VoskWakeBackend:
 @requires_vosk
 @pytest.mark.parametrize(
     "case",
-    _load_jsonl(CASES_PATH),
+    _audio_cases(),
     ids=lambda c: c["id"],
 )
 def test_offline_vosk_redecode_wake_fixture(
@@ -93,10 +102,22 @@ def test_offline_vosk_redecode_wake_fixture(
         )
         return
 
-    assert hit is not None, (
-        f"{case['id']}: expected match for decoded {text!r} "
-        f"(rms={vosk_backend.last_rms:.4f})"
-    )
+    # Derived rows inherit expect_match / vosk_text from their clean parent
+    # (scripts/gen-wake-eval-fixtures.py) — nothing re-decodes the degraded
+    # audio, so noise / gain / pad variants may legitimately lose the phrase
+    # (a quiet copy can even fall under the energy floor and decode to ""). Hit
+    # rate over those is measured in tests/test_wake_eval_harness.py; here a
+    # degraded row only has to avoid matching the *wrong* wake word.
+    degraded = "derived" in (case.get("tags") or [])
+    if hit is None:
+        assert degraded, (
+            f"{case['id']}: expected match for decoded {text!r} "
+            f"(rms={vosk_backend.last_rms:.4f})"
+        )
+        pytest.skip(
+            f"{case['id']}: degraded decode {text!r} lost the phrase "
+            f"(rms={vosk_backend.last_rms:.4f})"
+        )
     if "expect_phrase_contains" in case:
         assert case["expect_phrase_contains"] in hit.phrase, (
             f"{case['id']}: phrase {hit.phrase!r} missing "

@@ -11,6 +11,7 @@ from __future__ import annotations
 import inspect
 import threading
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -466,8 +467,6 @@ class _GateOpensThenQuiet:
 
 
 def _fake_sd(monkeypatch, stream):
-    from types import SimpleNamespace
-
     from hark.audio import capture as cap_mod
 
     monkeypatch.setattr(cap_mod, "_require_sd", lambda: None)
@@ -546,8 +545,9 @@ def test_capture_still_bounds_the_discard_phase(monkeypatch):
     stream = _GateOpensThenQuiet()
     cap_mod = _fake_sd(monkeypatch, stream)
 
-    # discard_max_s = max(30.0, initial_timeout_s); wind the clock instead of
-    # burning 30 s of wall time.
+    # discard_max_s = max(30.0, initial_timeout_s); wind capture's clock rather
+    # than burn 30 s of wall time. Shim only capture's `time` global — patching
+    # the real module would skew every other thread in the process.
     real_monotonic = time.monotonic
     ticks = {"n": 0}
 
@@ -555,7 +555,11 @@ def test_capture_still_bounds_the_discard_phase(monkeypatch):
         ticks["n"] += 1
         return real_monotonic() + ticks["n"] * 5.0
 
-    monkeypatch.setattr(cap_mod.time, "monotonic", fast_monotonic)
+    monkeypatch.setattr(
+        cap_mod,
+        "time",
+        SimpleNamespace(monotonic=fast_monotonic, sleep=lambda _s: None),
+    )
     with pytest.raises(TimeoutError, match="overlap discard window exceeded"):
         cap_mod.capture_utterance(
             max_s=1.0,
@@ -567,8 +571,6 @@ def test_capture_still_bounds_the_discard_phase(monkeypatch):
 
 def test_continuous_mic_stream_joins_its_tap_on_close(monkeypatch):
     """No ambient publish may outlive the stream that produced it."""
-    from types import SimpleNamespace
-
     from hark.audio import spectrum as spec_mod
     from hark.audio.capture import ContinuousMicStream
     from hark.audio import capture as cap_mod

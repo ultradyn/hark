@@ -30,6 +30,52 @@ device
   → utterance → cloud STT
 ```
 
+### One frame source under both read loops
+
+Two loops read the mic: `capture_utterance` (one-shot answer window) and
+`ContinuousMicStream.read_for` (ambient wake). Both pull 20 ms frames from
+`audio/frames.py`'s `MicFrameSource`, which owns everything neither loop's
+policy cares about:
+
+- **acquisition** — one `stream.read` per frame, reshaped to mono float32;
+- **the read deadline** (`_CaptureReadDeadline`) — a wall-clock abort for a hung
+  `Pa_ReadStream`, armed per phase (`discard_max_s`, then `initial_timeout_s`)
+  and disarmed when the gate opens. The deadline class stays in `capture.py`
+  because it aborts through the process-global stream-cancel registry that
+  B143/B145 cancellation ownership depends on;
+- **the mute freeze** — `MuteFreezeGate` asks the `MuteHold` lease once per
+  frame and pauses the deadline to match (see *Mute clock freeze* below);
+- **the spectrum tap** — B087 telemetry, off the audio thread (below).
+
+Each frame arrives already classified as `live` / `frozen` / `edge_pad`, plus a
+`mute_released` edge flag. So `capture_utterance` keeps only the energy gate and
+the endpointing decision, and `read_for` keeps only ring filling. The B007
+default path (`endpoint_strategy = None`) still runs the legacy fixed-silence
+predicate inline and does **zero** per-block audio work.
+
+A source starts bare: the overlap discard phase (phase 0) reads frames with no
+tap and no freeze gate, so a TTS tail neither reaches the dashboard nor burns
+freeze budget. `frames.attach(...)` switches both on when the gate clock starts.
+
+### Spectrum telemetry is a tap (B087)
+
+The live-webui spectrum used to be published **synchronously on the audio
+thread** — FFT, window concat, `json.dumps`, `open`/`write`/`os.replace` — from
+two inline implementations with two throttles (16 ms in listen, 32 ms in
+ambient; at the 20 ms frame cadence the first published every single frame).
+
+It is now one `spectrum.SpectrumTap` per open stream, built by
+`capture._make_spectrum_tap`. The read loop only throttles and copies a frame
+into a bounded 2-frame queue; the FFT and the `spectrum.latest` write happen on
+the tap's worker. A slow disk therefore drops frames instead of stalling
+capture, and a full queue evicts the **oldest** frame — this is a latest-frame
+display, so a backlog should cost history, not freshness. One throttle now:
+`spectrum.TAP_INTERVAL_S` (32 ms, ~31 Hz) for both loops.
+
+`close()` joins the worker, so no publish outlives its stream: capture joins the
+tap before the `clear_spectrum(source="listen")` in its outer `finally`, which
+stays the last frame the dashboard sees.
+
 ### Arm / start and stop cues (record beeps)
 
 **Start (arm):** After TTS for `hark ask` / `tts --listen` / confirm, **and** after
@@ -262,8 +308,9 @@ advance** (true freeze):
 The hold is a **bounded lease**, not a counter. `mic_muted_during_tts` yields a
 `MuteHold`; nested holders share it (depth up, deadline unchanged), and
 `MuteHold.freezing(budget_s=...)` is the single authority for "may clocks stay
-frozen right now". Capture consults `current_tts_mute_hold()` each block and
-passes `mute_freeze_budget_s(initial_timeout_s)` = `max(30 s, initial_timeout_s)`
+frozen right now". `frames.MuteFreezeGate` consults `current_tts_mute_hold()`
+once per 20 ms frame on capture's behalf and passes
+`mute_freeze_budget_s(initial_timeout_s)` = `max(30 s, initial_timeout_s)`
 — the same shape as the overlap `discard_max_s` bound.
 
 Past that budget the freeze **stops** (the mute itself stands: only the hold's

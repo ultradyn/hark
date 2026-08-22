@@ -177,6 +177,25 @@ def test_nested_holds_share_one_lease(monkeypatch):
     assert mm.current_tts_mute_hold() is None
 
 
+def test_ensure_unmuted_beats_a_live_hold(monkeypatch):
+    """Operator escape hatch: mid-hold `hark mute-sync` drops the lease (B086)."""
+    _fake_pulse(monkeypatch)
+    unmutes: list[bool] = []
+    monkeypatch.setattr(
+        mm, "set_source_mute", lambda s, mute: unmutes.append(mute) or True
+    )
+    with mm.mic_muted_during_tts(enabled=True) as hold:
+        assert mm.current_tts_mute_hold() is hold
+        assert mm.ensure_unmuted()["released_hark_hold"] is True
+        # Lease gone: capture unfreezes at once, mid-play, without waiting out
+        # the budget.
+        assert mm.current_tts_mute_hold() is None
+        assert hold.freezing(budget_s=30.0) is False
+        assert unmutes[-1] is False
+    # The stale context exit owns nothing now — it must not re-mute on the way out.
+    assert unmutes[-1] is False
+
+
 def test_disabled_hold_never_freezes():
     with mm.mic_muted_during_tts(enabled=False) as hold:
         assert hold.held() is False

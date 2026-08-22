@@ -219,6 +219,15 @@ class MuteHold:
         """True while at least one holder is inside the mute context."""
         return self.depth > 0
 
+    def release(self) -> int:
+        """Drop every holder at once (force-clear); returns the prior depth.
+
+        The object itself must stop claiming the mic, not just be detached from
+        the module: anyone still holding a reference has to see the release too.
+        """
+        prior, self.depth = self.depth, 0
+        return prior
+
     def age_s(self, *, now: float | None = None) -> float:
         """Seconds since the outermost holder took the lease (nesting never extends it)."""
         mono = time.monotonic() if now is None else now
@@ -259,8 +268,8 @@ def force_clear_tts_mute_hold(*, reason: str = "force") -> dict[str, object]:
     with _lock:
         hold = _hold
         _hold = None
+        depth_before = hold.release() if hold is not None else 0
     had_hold = hold is not None
-    depth_before = hold.depth if hold is not None else 0
     src = hold.source if hold is not None else None
     applied = bool(hold.applied) if hold is not None else False
     if not src:

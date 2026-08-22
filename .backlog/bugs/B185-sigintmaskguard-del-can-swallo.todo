@@ -1,0 +1,44 @@
+---
+complexity: medium
+created_at: "2026-08-22T22:28:05Z"
+depends_on: []
+estimate_hours: 1
+id: B185
+priority: high
+status: pending
+tags:
+    - audio
+    - signals
+    - interrupt
+title: SigintMaskGuard.__del__ can swallow a genuine KeyboardInterrupt (late SIGINT delivery)
+updated_at: "2026-08-22T22:28:05Z"
+---
+Found while landing the architecture-review candidates (2026-08-23). Production code, not just a test issue.
+
+## Mechanism
+
+`SigintMaskGuard` (src/hark/signal_safety.py) blocks SIGINT, then `restore()` (:46-66) reinstalls the prior mask with `SIG_SETMASK`. The kernel delivers a pending SIGINT at that point, but CPython runs the *Python-level* handler only at the next eval-loop check. The existing code handles the case where the handler raises inside `restore()` — see the comment at :53-58, which is correct as far as it goes.
+
+The uncovered case is delivery that lands AFTER `restore()` has returned and already cleared `_active`. The KeyboardInterrupt then raises at an arbitrary later bytecode boundary. If the frame executing at that moment is `__del__` (:85), it goes through `restore_suppressing()` (:76-81), whose bare `except BaseException: pass` swallows it. Python reports it as `PytestUnraisableExceptionWarning: Exception ignored in: <function SigintMaskGuard.__del__>` and the interrupt is lost.
+
+The suppression is deliberate for a failed mask transition ("__del__ makes one more idempotent attempt after injected post-syscall failures") but it cannot distinguish that from an unrelated KeyboardInterrupt arriving in the same frame.
+
+## Impact
+
+Narrow but real: an operator Ctrl-C during a guarded window can be reported as an ignored exception instead of interrupting. For a voice tool where Ctrl-C is the way out of TTS or capture, a dropped interrupt is user-visible.
+
+## Observed as
+
+`tests/test_tts_interrupt.py::test_outer_pidfd_is_owned_before_delivered_sigint` fails `DID NOT RAISE KeyboardInterrupt` (tests/test_tts_interrupt.py:7585) roughly 2 in 4 full-suite runs under load, with the interrupt surfacing later in `__del__`. The test masks SIGINT, sends `os.kill(os.getpid(), SIGINT)` to itself from inside a fake `pidfd_open` (:7573), and expects delivery at unmask.
+
+Confirmed NOT caused by the frame-source refactor: reproduced on the pre-change tree with capture.py/spectrum.py restored and the new files deleted. Only fails behind ~6000 preceding tests; the three suspect tests run 5x in isolation pass every time.
+
+Distinct from the environmental `/usr/bin/python` failure mode (fixed by `uv sync --extra dev` in a worktree) and from the subprocess-budget flakes in B184.
+
+## Fix direction
+
+Don't widen the suppression. Either force a synchronous delivery point inside the guarded transition (query `sigpending` and run one interrupt check before `restore()` returns, so the handler fires while the guard still owns the frame), or narrow `restore_suppressing` so it only swallows exceptions raised by the mask syscall itself and re-raises anything else. The second is smaller and testable.
+
+## Note for whoever picks this up
+
+tests/test_tts_interrupt.py:7576 monkeypatches `isolation.os.pidfd_open` with `raising=False`, and `isolation.os` IS the shared `os` module — so this file is a second installer of that attribute alongside tests/test_ask_interrupt.py:1315. Relevant to the run-vs-skip flip recorded in B184 note (a), whose trigger is still unpinned.

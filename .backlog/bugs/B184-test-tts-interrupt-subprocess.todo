@@ -1,14 +1,14 @@
 ---
+completed_at: null
 complexity: medium
 created_at: "2026-08-22T21:57:04Z"
 depends_on: []
 estimate_hours: 1
 id: B184
 priority: high
+started_at: null
 status: pending
-tags:
-    - test
-    - flake
+tags: []
 title: test_tts_interrupt subprocess/pidfd tests flake under full-suite CPU load
 updated_at: "2026-08-22T21:57:04Z"
 ---
@@ -25,3 +25,14 @@ Not caused by any src change: reproduced on master both before and after the arc
 Fix direction: make the waits condition-based rather than fixed short timeouts, or widen the budgets when the machine is loaded. Do not paper over it with retries.
 
 Distinct from a second, environmental failure mode seen the same day: a fresh git worktree venv has only runtime deps, so `uv run pytest` falls back to a system interpreter and the `[sys.executable, "-m", "hark.tts_worker"]` spawn at src/hark/tts_worker.py:1159 cannot import hark. `uv sync --extra dev` in the worktree fixes that one.
+
+
+## 2026-08-23 follow-up: two distinct mechanisms, not one
+
+Investigation while landing the architecture-review candidates separated the variance into two independent causes. Do not treat them as one bug.
+
+**(a) 14 hasattr-gated pidfd tests flip between run and skip.** `os.pidfd_open` does NOT exist in this uv-managed CPython 3.13.11 (`python -c "import os; print(hasattr(os,'pidfd_open'))"` -> False), so `@pytest.mark.skipif(not hasattr(os, "pidfd_open"))` at tests/test_tts_interrupt.py:1523,1566 should always skip. `skipif` is evaluated per item at SETUP, and tests/test_ask_interrupt.py:1315 installs `pidfd_open` onto `capture_mod.os` (the shared `os` module) with `raising=False`. Whether that attribute is present when a later item's setup runs decides run-vs-skip. Evidence: the same tree gave `6053 passed / 88 skipped` and `6040 passed / 102 skipped` on consecutive full runs — a delta of exactly 14. NOTE: running `test_ask_interrupt.py` then `test_tts_interrupt.py` in one process does NOT reproduce it (324 passed, 14 skipped), so the leak trigger is some other file or a fixture, not that simple ordering. Still to be pinned.
+
+**(b) Load-sensitive subprocess budgets.** Separate from (a). `test_outer_pidfd_is_owned_before_delivered_sigint` is gated on `sys.platform` only (line 1428), always runs, passes standalone in 0.15s, and failed only in a full suite under concurrent CPU load. Same family: `test_tts_play_queue.py::test_claim_lock_timeout_reports_owner_and_queue` failed once with `subprocess.TimeoutExpired ... after 2.0 seconds` and passes standalone (30 passed).
+
+**(c) Not a mechanism, but a trap that looks like one.** A fresh git worktree venv holds only runtime deps, so `uv run pytest` falls back to a system interpreter and the `[sys.executable, "-m", "hark.tts_worker"]` spawn at src/hark/tts_worker.py:1159 cannot import hark. Fix with `uv sync --extra dev` in the worktree. Also note a fresh worktree venv lacks the `wake` / `smart-turn` extras that the main checkout has, which shifts skip counts by ~28 — so never compare skip totals across checkouts.

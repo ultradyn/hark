@@ -519,7 +519,14 @@ def test_discard_timeout_is_typed_and_is_not_a_no_open(monkeypatch):
 
     with pytest.raises(CaptureTimeout) as excinfo:
         cap_mod.capture_utterance(
-            spec=CaptureGateSpec(max_s=1.0, initial_timeout_s=0.05, preroll_ms=0),
+            spec=CaptureGateSpec(
+                max_s=1.0,
+                initial_timeout_s=0.05,
+                preroll_ms=0,
+                # Without this the cap floors at 30 s and the test spends 30 s of
+                # real wall clock reaching the branch it is asserting on.
+                discard_max_floor_s=0.05,
+            ),
             audio_ok_after=lambda: None,
         )
     exc = excinfo.value

@@ -1586,6 +1586,10 @@ class CaptureGateSpec:
     # The real post-TTS guard sleeps at the answer-window call seam; capture only
     # keeps this so interrupt tests can block inside the decorated attempt.
     post_tts_guard_s: float = 0.0
+    # Floor for the overlap-discard safety cap (TTS tail + residual + long mute).
+    # The cap itself is max(this, initial_timeout_s). It lives on the spec so the
+    # DISCARD_TIMEOUT branch is reachable without spending 30 s of wall clock.
+    discard_max_floor_s: float = 30.0
 
 
 def _still_discarding(
@@ -1724,7 +1728,7 @@ def capture_utterance(
     preroll: deque[np.ndarray] = deque(maxlen=max(1, preroll_blocks))
     wait_speech_ms = 0
     # Safety cap for discard phase (TTS tail + residual + long mute)
-    discard_max_s = max(30.0, initial_timeout_s)
+    discard_max_s = max(spec.discard_max_floor_s, initial_timeout_s)
 
     try:
         stream_owner = sd.InputStream(

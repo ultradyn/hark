@@ -26,9 +26,6 @@ from typing import Any, Callable, Protocol, runtime_checkable
 
 import numpy as np
 
-# 20 ms capture frame (matches hark.endpointing.BLOCK_S).
-FRAME_S = 0.02
-
 
 @runtime_checkable
 class ReadDeadline(Protocol):
@@ -71,11 +68,6 @@ class Frame:
     # True on the first frame after a TTS mute hold released (B084 edge). The
     # release frame is itself the first edge-pad frame when a pad is configured.
     mute_released: bool = False
-
-    @property
-    def frozen(self) -> bool:
-        """True while this frame must not advance any listen clock."""
-        return self.phase is not FramePhase.LIVE
 
 
 class MuteFreezeGate:

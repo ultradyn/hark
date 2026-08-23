@@ -1,10 +1,12 @@
 ---
+completed_at: null
 complexity: medium
 created_at: "2026-08-11T12:22:03Z"
 depends_on: []
 estimate_hours: 1
 id: B177
 priority: high
+started_at: null
 status: pending
 tags: []
 title: 'hark ask intermittently fails before listen with Gemini TTS HTTP 400: model tried to generate text but should only be used for TTS. Ordinary planning questions trigger it under provider=auto/google; retrying a shorter prompt often works. Need provider fallback/retry so ask remains usable.'
@@ -12,3 +14,21 @@ updated_at: "2026-08-11T12:22:03Z"
 ---
 
 hark ask intermittently fails before listen with Gemini TTS HTTP 400: model tried to generate text but should only be used for TTS. Ordinary planning questions trigger it under provider=auto/google; retrying a shorter prompt often works. Need provider fallback/retry so ask remains usable.
+
+GitHub: https://github.com/ultradyn/hark/issues/9 (this bl item and that issue are the same bug — B177 was filed locally, #9 upstream).
+
+Current state verified 2026-08-23: still unfixed. No TTS provider fallback exists in src/hark/speech.py (no fallback / next_provider / try_next logic on the TTS path).
+
+Repro from #9: [tts] provider="auto", disabled=["xai","openai"], then
+  hark tts --no-play --standalone "Quick question about the diagram. Should the main message be that every chain is protected by the whole network?"
+-> HTTP 400 "Model tried to generate text, but it should only be used for TTS". Reproduced consistently 2026-08-17. Plain statements ("Testing one two three.") synthesize fine; nearly any substantive QUESTION fails. Content-dependent and nondeterministic — the very first question of a session succeeded, then 6+ consecutive failures.
+
+Impact: with xai/openai disabled in config, auto lands on google and `hark ask` becomes unusable for its core purpose — asking questions. That session had to hand-switch to minimax, which then hit B187/gh-10.
+
+DESIGN DECISION (coordinator, 2026-08-23): fix BOTH halves, and treat the fallback as the load-bearing one.
+1. Provider fallback (required): on a TTS error of this class, retry once, then fall back to the next enabled provider, rather than failing the whole ask with exit 4 while the operator is already waiting. The fallback must be observable — say which provider actually spoke, in the JSON and in the logs, so a silent downgrade never looks like a success.
+2. Model/request hardening (best-effort): pin a TTS-only Gemini model or shape the request so the model cannot "answer" instead of speaking. Do this if it is cheap, but do not let it substitute for (1) — a content-dependent, nondeterministic upstream 400 will find a new trigger.
+
+Sequencing: land AFTER B187/gh-10 (split --tts-provider / --stt-provider). Both touch provider resolution, and having a clean per-leg provider first means the fallback only has to walk the TTS chain.
+
+Do not add a blanket retry-on-any-error: scope the retry to this error class so a real auth or quota failure still fails fast (cf. B175, doctor reporting ready on a bad token).

@@ -6,6 +6,13 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- change(skill): **startup infers instead of interviewing** — `hark`/`handsfree` skills
+  derive scope, mode, role and voice level from context and config, announce them in one
+  TTS line, and ask nothing (was 4 spoken questions, B125). Voice level now follows the
+  phase: vocal while planning, quiet while executing except blocker/decision/done. The
+  daemon is **by exception** — `hark ask`/`hark tts` need no workers, so `hark start` +
+  Monitor arm only for `herdr` scope or wake-word input. SKILL.md 605 → 491 lines; the
+  interview mandate lived in 5 places and now lives in 1.
 - docs(providers): Custom STT/TTS gained a **Gateway-side prerequisites** table
   (`501 not_supported` / `404` model-not-routed / `401` no-fallthrough) and a
   warning that voice ids are the gateway's, not OpenAI's — the `alloy` default

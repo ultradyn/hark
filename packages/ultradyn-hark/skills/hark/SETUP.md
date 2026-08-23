@@ -5,7 +5,7 @@ Two separate flows — do not conflate them:
 | Flow | When | What |
 |------|------|------|
 | **A. First-run `hark setup`** | Missing/stale `setup-complete.json`, empty sessions, or `--force` | CLI question order below (sessions → persona → TTS → wake). Writes config + flag. |
-| **B. Every `/hark` skill start** | Always, before arming | B125 structured interview (scope → autonomy → role → mode) + `session-profile set … --apply`; sessions only if `scope=herdr`; persona/wake only if setup incomplete. See [SKILL.md](SKILL.md) **Session + voice bootstrap**. |
+| **B. Every `/hark` skill start** | Always | **Infer** scope/mode/role/voice, `session-profile set … --apply`, announce in one TTS line. No interview. Sessions only if `scope=herdr`; persona/wake only if setup incomplete. See [SKILL.md](SKILL.md) **Start**. |
 
 CLI: `hark setup` (flags: `--yes`, `--force`, `--persona`, `--wake-engine`, `--voice`, `--names`, `--sessions`, `--skip-doctor`, `--skip-download`).  
 Flag file: `~/.local/state/hark/setup-complete.json` (includes **`hark_version`**).
@@ -24,11 +24,11 @@ Related: [POST_INSTALL.md](POST_INSTALL.md) (CLI + Python/system deps after `npx
 | `setup_schema_version` older than current | Re-run setup (**today: full Flow A**; future may ask only new keys) |
 | Empty / missing `answers.sessions` | Re-ask **Herdr sessions** (local / SSH / mix); `hark doctor` warns |
 | Operator asks to reconfigure | Full or partial; use `--force` on CLI |
-| Already complete, same schema | Skip Flow A. On each `/hark` start still run **Flow B** (B125 interview + `session-profile set --apply`); ask sessions only if `scope=herdr`; persona/wake only if setup incomplete |
+| Already complete, same schema | Skip Flow A. On each `/hark` start still run **Flow B** (infer + `session-profile set --apply`); sessions only if `scope=herdr`; persona/wake only if setup incomplete |
 
 Schema version lives in code as `SETUP_SCHEMA_VERSION` (`hark.setup_flow`).
 
-**Agent hard rule (B116 + B125):** on every `/hark` or `/handsfree` skill start, **before** ambient/watch/monitor, run Flow B. Do not arm with silent defaults. See SKILL.md **Session + voice bootstrap** and **Structured startup interview**.
+**Agent hard rule (B116 + B125):** on every `/hark` or `/handsfree` skill start run Flow B, and arm workers only when SKILL.md **Daemon by exception** says to. Infer rather than interview; announce what you inferred.
 
 ---
 
@@ -109,9 +109,9 @@ If `hark start` is “invalid choice”, reinstall editable before debugging Mod
 
 ---
 
-## Flow B — Session profile + start (every skill start)
+## Flow B — Session profile (every skill start)
 
-Persist the B125 interview, then start workers. Deep tables live in SKILL.md; this is the minimum SETUP agents must not miss.
+Persist the inferred profile. Start workers only if SKILL.md **Daemon by exception** applies. Deep tables live in SKILL.md.
 
 ```bash
 hark session-profile set \
@@ -125,6 +125,8 @@ hark session-profile show   # path: ~/.local/state/hark/session_profile.json
 ```
 
 Defaults when no profile file: `herdr` + `blocked_only` + `radio`.
+**Mismatch to know:** that CLI default is `herdr` (watch on), while the skill's inference
+default is `session_local`. Always `set --scope` explicitly so the two never disagree.
 
 ```bash
 hark start                  # watch + ambient per profile / flags

@@ -1,27 +1,26 @@
 ---
 name: handsfree
 description: >
-  Alias of the hark skill (identical handsfree voice bridge). After load, communicate
-  primarily via TTS; watch blocked/done, speak questions, cloud STT/TTS, reply with
-  text or menu keys. Use when operator says handsfree, hark, or voice bridge.
-  Requires `hark` CLI and Herdr ≥ 0.7.1.
+  Alias of the hark skill (identical handsfree voice bridge). Voice Q&A with you,
+  or watch Herdr agents and speak their blocked questions. After load, communicate
+  primarily via TTS; cloud STT/TTS; reply with text or menu keys.
+  Use when operator says handsfree, hark, or voice bridge. Requires `hark` CLI.
 ---
 
 # Handsfree — alias for Hark
 
-> **This skill is an alias of [`hark`](../hark/SKILL.md).** Same product, CLI (`hark`), TTS mode, and loop. Install either or both names.
+> Alias of [`hark`](../hark/SKILL.md). Same product, CLI, TTS mode, loop.
 
-Follow **all** instructions in [`../hark/SKILL.md`](../hark/SKILL.md), including:
+Follow **all** of [`../hark/SKILL.md`](../hark/SKILL.md). It is the only source of truth — this file adds nothing.
 
-- **Post-install:** if `hark` CLI is missing, follow [`../hark/POST_INSTALL.md`](../hark/POST_INSTALL.md) first (`npx skills` does not install Python)
-- **TTS mode** after skill start (prefer `hark tts --listen` / `hark ask` for operator communication)
-- **Session + voice bootstrap (hard rule, B116 + B125):** before ambient/watch/monitor, run the **structured startup interview** (scope, autonomy, role, mode) and pass through with `hark session-profile set … --apply`; if scope is herdr, also voice-ask which sessions; if setup incomplete, also persona/voice/wake. See SKILL.md + [`SETUP.md`](../hark/SETUP.md). Do not arm with silent defaults.
-- Question → listen → act loop
-- **Required unified Monitor** on skill start: **one** `hark monitor --for-monitor` (`persistent: true`). Do not arm a second if one is already live (CLI singleflight refuses). Ambient-only or watch-only is incomplete. **Only after** session bootstrap.
-- **Never pipe interactive hark to `| tail`** (B109) — hides live listen/monitor state; use Monitor tool or bare `hark monitor --for-monitor`
-- **Antigravity (`agy`):** experimental — no native Monitor; use `hark agentapi register` + `hark agentapi deliver --follow-monitor` (see `docs/AGY.md` and the **Antigravity** section in `skill/hark/SKILL.md`).
-- Radio **partials**: **must** `hark listen-end` when partial clearly ends with a done signal (`over`, `okay hark send`, `that's all`, …); **must** `hark listen-end --cancel` when unrelated conversation / TTS bleed is being forwarded; remind operators to say over / okay hark send
-- Safe targeting / confirm rules
-- **Dogfooding:** every friction → session todo + `bl bug`; fix now or later, never silent forget
+Do not re-derive the startup from memory. The parts agents most often get wrong:
+
+- **Start** — infer scope/mode/role/voice and announce in one TTS line. No interview, no questions.
+- **Daemon by exception** — `hark ask` / `hark tts` need no workers. Arm `hark start` + one Monitor only for `herdr` scope or wake-word input.
+- **Voice follows phase** — vocal while planning, quiet while executing except blocker / decision / done.
+- **B141** — emit the question verbatim in visible chat *before* the blocking call.
+- **CLI missing?** [`../hark/POST_INSTALL.md`](../hark/POST_INSTALL.md) — `npx skills` does not install Python.
+- Never pipe interactive `hark` to `| tail` (B109). Safe targeting: prefer `hark answer <event_id>`.
+- Dogfood: every friction → `bl bug`, never a silent workaround.
 
 Do not invent answers. Speak, listen, deliver.

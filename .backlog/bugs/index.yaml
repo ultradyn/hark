@@ -190,3 +190,4 @@ bugs:
     - file: B189-syslog-tail-lines-0-returns-th.todo
     - file: B190-tests-can-synthesize-and-play.todo
     - file: B191-confirm-turn-readback-discards.todo
+    - file: B192-ask-confirm-turn-readback-disc.todo

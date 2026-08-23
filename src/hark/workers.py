@@ -579,7 +579,9 @@ def cmd_start(args: Any) -> int:
 
             do_watch = should_start_watch()
         except Exception:
-            do_watch = True
+            # Match the no-profile default: a failed profile read is even less
+            # of a signal than an absent one, so do not start fleet watching.
+            do_watch = False
     do_ambient = not bool(getattr(args, "no_ambient", False))
     if not do_watch and not do_ambient:
         print(
@@ -626,7 +628,9 @@ def cmd_restart(args: Any) -> int:
 
             do_watch = should_start_watch()
         except Exception:
-            do_watch = True
+            # Match the no-profile default: a failed profile read is even less
+            # of a signal than an absent one, so do not start fleet watching.
+            do_watch = False
     do_ambient = not bool(getattr(args, "no_ambient", False))
     if not do_watch and not do_ambient:
         print(

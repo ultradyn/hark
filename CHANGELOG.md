@@ -6,6 +6,14 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- **breaking**(session-profile, B125): **no profile now defaults to `session_local`**, was
+  `herdr`. An absent profile no longer starts the Herdr watch worker, so `hark start` with
+  no profile is voice-for-this-session only. Fleet watching is opt-in: `scope=herdr` or
+  `hark start --force-watch`. Removes a trap where the CLI default (watch on) disagreed with
+  the skill's inference default (session-local).
+- change(skill): conversation mode is documented as **daemon-required** (it is an ambient
+  mode), and with no daemon the agent must tell the operator the mic is shut — anything that
+  is not an answer to a question has to be typed, with the wake word offered as the fix.
 - change(skill): **startup infers instead of interviewing** — `hark`/`handsfree` skills
   derive scope, mode, role and voice level from context and config, announce them in one
   TTS line, and ask nothing (was 4 spoken questions, B125). Voice level now follows the

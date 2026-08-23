@@ -97,7 +97,8 @@ hark session-profile set --scope … --autonomy proactive|blocked_only --role "�
 
 Then **one** TTS line — mode, scope, when you'll speak. Offer the change; don't ask for it.
 
-> "Radio mode, session-local. Vocal through planning, quiet during execution. Say the word to change any of it."
+> "Radio mode, session-local. Vocal through planning, quiet during execution. I only hear you when
+> I ask something — type anything else, or ask me for the wake word. Say the word to change any of it."
 
 Ask only if inference genuinely fails — that one question, not four. Per B141, emit it in
 visible chat first, then:
@@ -111,17 +112,25 @@ hark ask --confirm never "Should I watch your other agents, or just work with yo
 **Daemon by exception.** `hark start` + Monitor **only** when scope is `herdr`, or the operator must talk unprompted (wake word — they ask, or they are away from the keyboard / hands busy). Otherwise no workers, no monitor: `hark ask "…"` asks and listens, `hark tts "…"` speaks, `hark tts --listen "…"` speaks then records — all work with nothing running. Session-local Q&A is the common case: **no daemon**.
 When the daemon *is* running: `hark status` (+ `hark queue --announce` if `herdr`) before the ready line, then arm **one** Monitor. Ambient auto-pauses for `listen`/`ask` (mic lease yield) — never kill it by hand.
 
-| Mode | Config | Behaviour |
-|------|--------|-----------|
-| auto_end | `streaming=false`, `end_mode=silence` | wake → speak → auto-finish on pause / Smart Turn |
-| radio | `streaming=false`, `end_mode=radio` | HOLD; finish with over / okay hark send |
-| conversation | `streaming=true`, `end_mode=radio` | stays open after first wake; full TTS per turn; no re-wake |
+| Mode | Config | Behaviour | Daemon |
+|------|--------|-----------|--------|
+| auto_end | `streaming=false`, `end_mode=silence` | auto-finish on pause / Smart Turn; wake needs ambient | end half works without |
+| radio | `streaming=false`, `end_mode=radio` | HOLD; finish with over / okay hark send | end half works without |
+| conversation | `streaming=true`, `end_mode=radio` | stays open after first wake; full TTS per turn; no re-wake | **required** — it is an ambient mode |
 
 `hark ask` / `tts --listen` read `end_mode` from config themselves — **never pass `--end-mode`**.
-With no daemon only the end half of the mode is live (wake and stay-open need ambient), so announce
-how their answer ends, not wake behaviour.
+With no daemon only the end half of the mode is live: it decides how *their answer* finishes.
+Wake and stay-open need ambient, so **conversation mode means nothing without the daemon** — if
+config says conversation and you are not running one, announce the end behaviour and say
+conversation resumes when they want the wake word.
 
-Scope `session_local` skips the Herdr watch worker (`hark start --force-watch` overrides).
+**Tell them the mic is shut.** With no daemon you only hear them inside a `hark ask` /
+`tts --listen` window. Say so once, in the opening line: anything that is not an answer to a
+question — a correction, a new instruction, "stop" — has to be **typed**. Offer the wake word as
+the fix. Never leave them talking to a mic that is not listening.
+
+Scope `session_local` skips the Herdr watch worker; it is also the default when no profile is
+saved. Fleet watching is opt-in (`scope=herdr`, or `hark start --force-watch`).
 CLI: `hark session-profile show|set|apply|clear`, `hark setup`, [SETUP.md](SETUP.md).
 
 Mic mutes automatically during TTS. Record beep plays when listen is **ready** (`answer_arm_cue`), not when speech opens; leading silence is trimmed.

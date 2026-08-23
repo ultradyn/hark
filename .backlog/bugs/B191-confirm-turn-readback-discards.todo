@@ -29,3 +29,13 @@ Fix: thread the readback result out so its `fallback` / `provider` reach the ask
 Documented as a known gap in docs/PROVIDERS.md under the "A downgrade is never silent" section - keep the doc and the fix in sync when this lands.
 
 B192 is a duplicate of this item, filed concurrently by the implementation agent on 2026-08-23 while the coordinator filed this one. B192 has been marked blocked-as-duplicate pointing here. docs/PROVIDERS.md references B191. Fold in anything unique to B192 before closing it.
+
+FOLDED IN FROM B192 (the concurrent duplicate) — the phrase-cache trap, recorded because the wrong fix looks like the obvious one:
+
+WHILE YOU ARE HERE, do not "simplify" the phrase-cache guard in speech.py::_synth_one to a provider-name equality check. It looks like the obvious form and it is wrong: tests/test_tts_interrupt.py::test_exec_worker_result_and_exception_mapping[--test-success-ok] uses a fake synth worker that reports provider="test-worker" while resolve_tts returns a real provider name, so ANY name-equality gate skips the cache write that test asserts. The committed guard keys off whether a `fallback` step occurred plus whether an earlier chunk handed over, which is name-free and also covers the multi-chunk case a name check misses.
+
+Provenance of that note: the B187/B177 review sub-agent proposed the name-equality form, the implementation agent found the counterexample and rejected the suggestion on evidence. Worth knowing that the reviewer was wrong here, so nobody re-applies its suggestion from the review transcript.
+
+Also from B192, on the fix shape: the discarded call at ask.py:146 sits INSIDE the try/except that maps ProviderError/TimeoutError, which is why threading a result out was held out of scope rather than being a one-liner.
+
+B192 can now be closed; nothing unique remains in it.

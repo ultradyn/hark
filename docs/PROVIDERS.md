@@ -79,6 +79,34 @@ Optional Custom TTS gateway (explicit only — never via `auto`):
 
 ---
 
+## Per-leg provider selection (B187)
+
+A speak-then-listen turn has **two independent legs**, and no single provider name describes both: MiniMax is TTS-only, Custom STT and Custom TTS are separate gateways, and `[stt]` / `[tts]` already carry their own `provider` keys. So `hark tts --listen` and `hark ask` take a provider per leg:
+
+| Flag | Leg | Commands |
+|------|-----|----------|
+| `--tts-provider` | TTS only | `tts`, `ask` |
+| `--stt-provider` | STT only | `tts` (the `--listen` leg), `listen`, `ask` |
+| `--provider` | **both legs** (backwards-compatible shorthand) | `tts`, `listen`, `ask` |
+
+**Precedence:** a specific flag wins for its own leg, independent of command-line order. `--provider` was deliberately **not** narrowed to TTS — that would have changed the meaning of existing invocations with no error.
+
+`listen` is STT-only, so `--provider` and `--stt-provider` name the same leg there; giving both is **not** a usage error (the specific flag still wins).
+
+```bash
+# The case that used to fail: MiniMax speaks, the configured STT hears.
+hark ask --tts-provider minimax "Should the diagram lead with the security claim?"
+
+# Equivalent when [stt].provider is not what you want for this turn:
+hark ask --provider minimax --stt-provider custom "…"
+```
+
+Before B187 the single `--provider` drove both legs, so `hark ask --provider minimax` spoke the question and then failed the listen with `minimax STT unsupported`.
+
+Library parity: `run_ask()` and `speak_and_listen()` take `provider=` (both legs) plus `tts_provider=` / `stt_provider=`. The per-leg values also apply to the confirm turn — readback TTS uses the TTS leg, confirm capture uses the STT leg.
+
+---
+
 ## Optional local full-STT (B072)
 
 For **offline** or **privacy-local** utterance transcription (answer windows / post-wake prompt body). **Cloud remains the product default.** Install is opt-in:

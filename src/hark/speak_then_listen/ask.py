@@ -14,6 +14,7 @@ from hark.config import HarkConfig
 from hark.confirm_lexicon import classify_confirm_reply
 from hark.exitcodes import ABORT, OK, TIMEOUT
 from hark.providers.base import ProviderError, safe_provider_failure
+from hark.providers.legs import split_leg_providers
 from hark.risk import classify_question, confirm_required
 
 
@@ -67,22 +68,34 @@ def _run_ask(
     confirm: str | None = None,
     end_mode: str | None = None,
     provider: str | None = None,
+    tts_provider: str | None = None,
+    stt_provider: str | None = None,
     risk_hint: str | None = None,
 ) -> dict[str, Any]:
     """Speak prompt (mic muted), then listen ASAP — optional pre-arm before TTS ends.
 
     Late-binds ``speak_and_listen`` / ``run_tts`` / ``run_listen`` via
     :mod:`hark.speech` so test monkeypatches on ``hark.speech.*`` still apply.
+
+    Providers (B187): ``provider`` covers both legs; ``tts_provider`` /
+    ``stt_provider`` win for their own leg, including the confirm turn's
+    readback TTS and confirm listen.
     """
     from hark import speech as speech_mod
 
+    legs = split_leg_providers(
+        provider=provider,
+        tts_provider=tts_provider,
+        stt_provider=stt_provider,
+    )
     explicit_confirm = confirm is not None
     confirm_mode = confirm if explicit_confirm else cfg.confirm.mode
     try:
         tts_info, listened = speech_mod.speak_and_listen(
             cfg,
             prompt,
-            provider=provider,
+            tts_provider=legs.tts,
+            stt_provider=legs.stt,
             end_mode=end_mode,
         )
     except ProviderError as exc:
@@ -130,11 +143,11 @@ def _run_ask(
         # Confirming: readback TTS + silence Answer Window + lexicon (HandoffState.CONFIRMING).
         readback = f"I heard: {listened.text}. Say yes to send, or cancel."
         try:
-            speech_mod.run_tts(cfg, readback, provider=provider, play=True)
+            speech_mod.run_tts(cfg, readback, provider=legs.tts, play=True)
             conf = speech_mod.run_listen(
                 cfg,
                 profile="confirm",
-                provider=provider,
+                provider=legs.stt,
                 end_mode="silence",
                 last_tts=readback,
             )
@@ -223,6 +236,8 @@ def run_ask(
     confirm: str | None = None,
     end_mode: str | None = None,
     provider: str | None = None,
+    tts_provider: str | None = None,
+    stt_provider: str | None = None,
     risk_hint: str | None = None,
 ) -> dict[str, Any]:
     """Run an ask turn and translate process interruption into cancellation."""
@@ -236,6 +251,8 @@ def run_ask(
                 confirm=confirm,
                 end_mode=end_mode,
                 provider=provider,
+                tts_provider=tts_provider,
+                stt_provider=stt_provider,
                 risk_hint=risk_hint,
             )
     except KeyboardInterrupt as exc:

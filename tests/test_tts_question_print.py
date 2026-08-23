@@ -245,7 +245,16 @@ def test_cmd_ask_uses_run_ask_print_path(monkeypatch, capsys):
     code = cli.cmd_ask(args, HarkConfig())
     assert code == OK
     assert printed
-    assert seen_kwargs == [{"confirm": "never", "end_mode": None, "provider": None}]
+    # B187: the CLI folds --provider / --tts-provider / --stt-provider into one
+    # provider per leg before calling run_ask.
+    assert seen_kwargs == [
+        {
+            "confirm": "never",
+            "end_mode": None,
+            "tts_provider": None,
+            "stt_provider": None,
+        }
+    ]
     captured = capsys.readouterr()
     assert "hark question" in captured.err
     assert '"ok": true' in captured.out.lower() or '"ok": true' in captured.out

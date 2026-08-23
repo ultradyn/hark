@@ -6,6 +6,15 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- fix(providers, B187/gh-10): `--provider` no longer forces one provider onto **both**
+  speech legs. New `--tts-provider` / `--stt-provider` on `tts` / `listen` / `ask` (and
+  `tts_provider=` / `stt_provider=` on `run_ask()` / `speak_and_listen()`) pick a provider
+  per leg; the specific flag wins over `--provider`, order-independently. `--provider` keeps
+  its both-legs meaning for backwards compatibility. `hark ask --tts-provider minimax "…"`
+  now speaks with a TTS-only provider and still hears with the configured STT, instead of
+  failing the listen with `minimax STT unsupported`. Per-leg selection also covers the
+  confirm turn (readback TTS / confirm capture). See `docs/PROVIDERS.md`
+  § Per-leg provider selection.
 - **breaking**(session-profile, B125): **no profile now defaults to `session_local`**, was
   `herdr`. An absent profile no longer starts the Herdr watch worker, so `hark start` with
   no profile is voice-for-this-session only. Fleet watching is opt-in: `scope=herdr` or

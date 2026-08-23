@@ -326,3 +326,5 @@ Merging anyway: test-only, three mechanisms genuinely root-caused with determini
 3. tests/test_ask_capture_deadline.py has the same fixed-budget shape and was never touched.
 4. test_daemon.py::test_terminate_children... is a different class (readiness race on worker identity publication, timeout_s is an argument to the code under test - do NOT widen it).
 5. test_dashboard_server.py rest_to_stream handoff is a threaded SSE race, unrelated; give it its own item.
+
+Post-merge full-suite evidence on master (quiet box): run 1 = 2 failed / 6319 passed (test_repeated_sigint_reaps_setsid_double_fork_provider_tree_and_pipes, test_deceptive_worker_argv_cannot_authorize_unknown_pid_hard_exit); run 2 = 6321 passed / 0 failed. So the merged suite varies 0-2, consistent with the residual documented above and not a regression from the merge. Both runs on 2026-08-23 with no other agents running.

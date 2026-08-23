@@ -42,6 +42,10 @@ class AnswerWindowPolicy:
     stream_id: str | None = None
     partial_kind: str = "ambient.partial"
     stt_provider: str | None = None
+    # B187: the window's nudges SPEAK, so they need the TTS leg. Reusing
+    # stt_provider here made an STT-only pin (custom / faster_whisper) either
+    # route the nudge into a different service or drop it silently.
+    tts_provider: str | None = None
 
     # Half-duplex / echo
     last_tts: str | None = None
@@ -188,6 +192,7 @@ def policy_from_config(
     audio = getattr(cfg, "audio", None)
     ambient = getattr(cfg, "ambient", None)
     stt = getattr(cfg, "stt", None)
+    tts = getattr(cfg, "tts", None)
 
     end_mode_raw = overrides.pop("end_mode", None)
     if end_mode_raw is None:
@@ -215,6 +220,7 @@ def policy_from_config(
         end_mode=end_mode,
         max_listen_s=float(_g(listen, "max_listen_s", 120.0)),
         stt_provider=getattr(stt, "provider", None) if stt else None,
+        tts_provider=getattr(tts, "provider", None) if tts else None,
         abs_open_db=float(_g(listen, "abs_open_db", -48.0)),
         open_margin_db=float(_g(listen, "open_margin_db", 8.0)),
         initial_timeout_s=float(_g(listen, "initial_timeout_s", 45.0)),

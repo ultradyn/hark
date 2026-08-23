@@ -76,6 +76,30 @@ def _pick(payload: dict[str, Any], key: str) -> Any:
     return None
 
 
+def _spoke(payload: dict[str, Any]) -> tuple[Any, Any]:
+    """(provider that actually spoke, provider originally asked if it differs).
+
+    B177: TTS can fall back mid-turn, so the requested provider is not
+    necessarily the one the operator heard. A transcript that recorded the
+    request would misreport the turn — and this log is a diagnostic people
+    trust — so the spoken provider is recorded, plus the requested one whenever
+    a fallback moved it.
+    """
+    tts = payload.get("tts")
+    if not isinstance(tts, dict):
+        return None, None
+    spoke = tts.get("provider")
+    if spoke is None:
+        # Never record a "fell back from X" with no "to": a half-populated
+        # provenance pair is worse than none for whoever reads the log later.
+        return None, None
+    fallback = tts.get("fallback")
+    requested = fallback.get("requested") if isinstance(fallback, dict) else None
+    if requested == spoke:
+        requested = None
+    return spoke, requested
+
+
 def _preview(text: str, limit: int) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else text[:limit] + "…"
@@ -92,6 +116,7 @@ def build_record(
     if not isinstance(text, str) or not text.strip():
         return None
     now = time.time()
+    tts_provider, tts_fallback_from = _spoke(payload)
     rec: dict[str, Any] = {
         "ts": now,
         "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
@@ -101,6 +126,9 @@ def build_record(
         "chars": len(text),
         "words": len([w for w in text.split() if w]),
         "provider": _pick(payload, "provider"),
+        # The heard leg is `provider`; these are the spoken one (B177).
+        "tts_provider": tts_provider,
+        "tts_fallback_from": tts_fallback_from,
         "duration_ms": _pick(payload, "duration_ms"),
         "end_mode": _pick(payload, "end_mode"),
         "end_phrase": _pick(payload, "end_phrase"),

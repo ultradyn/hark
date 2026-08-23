@@ -103,3 +103,9 @@ Ruled out B186 (the merge that immediately preceded the run) with a controlled e
 3. 5 of the 6 passed in isolation immediately after the full run.
 
 Also note for whoever fixes this: one failure mode in this batch is NOT a timeout. tests/test_tts_interrupt.py:7588 failed with "DID NOT RAISE OSError", and :5271 with an assertion on Popen returncode -2 (SIGINT). So widening timeouts alone will not fix the family - some members are asserting on a specific signal/errno outcome that load reorders, which is further evidence for the marker-vs-state root cause rather than for a budget that is merely too tight.
+
+NEW CANDIDATE, second independent sighting 2026-08-23: tests/test_dashboard_server.py::test_rest_to_stream_handoff_captures_rotation_after_snapshot. Reported independently by the B186 agent and the B187/B177 agent, on different branches and different runs. Passes alone and passes with its whole 66-test file. Neither agent could have caused it: it references neither hark.cli / hark.transcripts (B186) nor provider / present_for_monitor (B187/B177).
+
+Significant because it is the FIRST candidate outside the interrupt files. If the root cause is marker-vs-state signalling in the interrupt harness, this one should NOT be in the family - a threaded SSE handoff race is a different mechanism that merely shares the trigger (load). Treat it as a separate bug that happens to have the same precondition, and do not let a fix for the interrupt family be judged on whether it fixes this. Worth its own bl item once the interrupt family is closed.
+
+Count now: at least 11 in test_tts_interrupt.py / test_ask_interrupt.py, plus test_ask_capture_deadline.py (one sighting) and this dashboard test (two sightings).

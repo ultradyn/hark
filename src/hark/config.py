@@ -223,6 +223,8 @@ KNOWN_SECTION_KEYS: dict[str, frozenset[str]] = {
             "print_prompt",
             # B161: desktop notification with Skip action while TTS plays
             "notify_skip",
+            # B177: scoped TTS retry + provider fallback
+            "fallback_on_error",
             # Custom TTS (B182) — OpenAI-compatible gateway, explicit pin only
             "custom_base_url",
             "custom_api_key",
@@ -545,6 +547,11 @@ class TtsConfig:
     # Desktop notification with the full TTS text and a Skip action while TTS
     # plays (B161). Default on; silently disabled without notify-send/session bus.
     notify_skip: bool = True
+    # B177: on a content-shaped TTS failure (the provider generated text
+    # instead of audio), retry once then walk the `auto` order. Scoped to that
+    # error class only — auth/quota failures still fail fast. Set false to make
+    # a pinned provider's failure terminal.
+    fallback_on_error: bool = True
     # Custom TTS (B182) — OpenAI-compatible POST {base}/audio/speech
     # (optional path override e.g. /tts for native dual-mount). Explicit pin only.
     custom_base_url: str | None = None  # e.g. https://gateway.example.com/v1
@@ -869,6 +876,7 @@ language = "en"
 # chunk_chars = 1500           # per synth request; multi-chunk plays in full (B091)
 print_prompt = true          # print question text to terminal on ask / tts --listen (B095)
 notify_skip = true           # desktop notification with full text + Skip action while TTS plays (B161)
+fallback_on_error = true     # on a content-shaped TTS error, retry once then walk auto order (B177)
 # Custom TTS (B182) — OpenAI-compatible gateway (explicit pin; never via auto).
 # provider = "custom"
 # custom_base_url = "https://gateway.example.com/v1"
@@ -1684,6 +1692,9 @@ def load_config(path: Path | None = None) -> HarkConfig:
             allow_espeak_fallback=bool(tts_raw.get("allow_espeak_fallback", False)),
             print_prompt=_as_bool(tts_raw.get("print_prompt"), default=True),
             notify_skip=_as_bool(tts_raw.get("notify_skip"), default=True),
+            fallback_on_error=_as_bool(
+                tts_raw.get("fallback_on_error"), default=True
+            ),
             custom_base_url=tts_custom_base_url,
             custom_api_key=tts_custom_api_key,
             custom_api_key_file=tts_custom_api_key_file,
@@ -1950,6 +1961,7 @@ def config_to_dict(cfg: HarkConfig) -> dict[str, Any]:
             "playback_speed": cfg.tts.playback_speed,
             "print_prompt": cfg.tts.print_prompt,
             "notify_skip": cfg.tts.notify_skip,
+            "fallback_on_error": cfg.tts.fallback_on_error,
             "custom_base_url": cfg.tts.custom_base_url,
             # never the secret itself (parity with stt redaction)
             "custom_api_key_configured": bool(

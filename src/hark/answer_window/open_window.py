@@ -142,6 +142,8 @@ def open_answer_window(
     nudge_no_open_text = policy.no_open_nudge_text or NO_OPEN_NUDGE_TEXT
 
     provider = policy.stt_provider
+    # B187: nudges are SPOKEN, so they take the TTS leg, never the STT pin.
+    nudge_tts_provider = policy.tts_provider
     stt = deps.stt if deps.stt is not None else resolve_stt(
         provider or cfg.stt.provider, stt_cfg=cfg.stt
     )
@@ -450,7 +452,7 @@ def open_answer_window(
                                     run_tts(
                                         cfg,
                                         decision.nudge_text or nudge_no_open_text,
-                                        provider=provider,
+                                        provider=nudge_tts_provider,
                                         play=True,
                                         mute_mic=cfg.audio.mute_mic_during_tts,
                                     )
@@ -530,7 +532,7 @@ def open_answer_window(
                                 run_tts(
                                     cfg,
                                     decision.nudge_text or EMPTY_STT_NUDGE_TEXT,
-                                    provider=provider,
+                                    provider=nudge_tts_provider,
                                     play=True,
                                     mute_mic=cfg.audio.mute_mic_during_tts,
                                 )

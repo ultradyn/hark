@@ -1,0 +1,55 @@
+---
+completed_at: null
+complexity: low
+created_at: "2026-08-23T08:06:47Z"
+depends_on: []
+estimate_hours: 1
+id: B192
+priority: medium
+started_at: null
+status: blocked
+tags: []
+title: ask confirm-turn readback discards its run_tts result, so a B177 TTS fallback during the readback reaches no JSON and no transcript
+updated_at: "2026-08-23T08:07:13Z"
+---
+Found while implementing B177 (scoped TTS retry + provider fallback), confirmed by the parent review gate.
+
+WHERE: src/hark/speak_then_listen/ask.py:146
+
+    speech_mod.run_tts(cfg, readback, provider=legs.tts, play=True)
+
+The return value is dropped. Every other run_tts call on the ask path keeps its
+result and surfaces it (the question's TTS becomes result["tts"]).
+
+WHAT BREAKS: B177 gives run_tts a provider fallback whose whole point is that a
+silent downgrade must never read as a clean success — the run reports a
+`fallback` block (requested / spoke / steps) and the transcript records
+tts_provider / tts_fallback_from. None of that can happen for the confirm
+readback, because the dict carrying it is thrown away. A fallback there is
+visible ONLY in the tts.provider_fallback HEP event and the stderr line.
+
+So on a confirming ask (ADR-005 R2/R3, or --confirm always), "which provider
+spoke" is answered for the question and unanswered for the readback. B177 is
+what makes this load-bearing: before it, run_tts had no fallback, so the
+discarded result held nothing that could differ from what was requested.
+
+FIX SHAPE: capture the readback result and either merge it into the ask result
+(e.g. result["confirm_tts"]) or at minimum propagate its `fallback` key. Note
+the call sits inside a try/except that maps ProviderError and TimeoutError to
+failure results, so the happy-path return value needs threading out without
+disturbing that mapping — which is why it was left out of B177's scope rather
+than fixed inline.
+
+WHILE YOU ARE HERE, do not "simplify" the phrase-cache guard in
+speech.py::_synth_one to a provider-name equality check. It looks like the
+obvious form and it is wrong: tests/test_tts_interrupt.py's
+test_exec_worker_result_and_exception_mapping[--test-success-ok] uses a fake
+synth worker that reports provider="test-worker" while resolve_tts returns a
+real provider name, so ANY name-equality gate skips the cache write that test
+asserts. The committed guard keys off whether a `fallback` step occurred plus
+whether an earlier chunk handed over, which is name-free and also covers the
+multi-chunk case a name check misses.
+
+DUPLICATE of B191 — do not work this one. Both were filed within minutes of each other on 2026-08-23: the B187/B177 implementation agent filed B192 and the coordinator filed B191, for the same defect at src/hark/speak_then_listen/ask.py:146. B191 is the surviving item; it carries the extra design note about the readback needing its own JSON key rather than overwriting the question TTS block, and docs/PROVIDERS.md references B191. Anything unique to B192 should be folded into B191 before B192 is closed.
+
+Fold-in complete 2026-08-23: the phrase-cache trap note and the fix-shape note are now in B191. Nothing unique remains here. Closing as a duplicate — the work, if any, happens on B191.

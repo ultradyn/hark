@@ -134,6 +134,26 @@ _MUTATING: dict[str, tuple[str, ...]] = {
 }
 
 
+#: Binaries that make audible sound. ``ffmpeg`` is deliberately absent: Hark
+#: uses it to *convert* audio (playback.py:1300, :1395, :1430), which is silent,
+#: and blanket-blocking it would break MP3 handling. Only the players belong
+#: here.
+_PLAYERS = frozenset({"ffplay", "paplay", "aplay", "pw-play", "mpv"})
+
+
+def is_audio_playback_argv(argv: list[str] | tuple[str, ...]) -> bool:
+    """True when ``argv`` would make audible sound on the operator's machine.
+
+    Separate from :func:`is_mutating_argv` because the two failures differ: a
+    mutating command changes state the operator has to notice and undo, while a
+    playback command just makes noise at them. Both are unacceptable from a
+    test; only the first is something a production caller might want gated.
+    """
+    if not argv:
+        return False
+    return os.path.basename(str(argv[0])) in _PLAYERS
+
+
 def is_mutating_argv(argv: list[str] | tuple[str, ...]) -> bool:
     """True when ``argv`` would change audio state outside Hark.
 

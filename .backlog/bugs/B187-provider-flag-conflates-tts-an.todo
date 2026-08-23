@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-08-23T04:54:00Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-08-23T08:10:58Z"
 complexity: medium
 created_at: "2026-08-23T04:52:28Z"
 depends_on: []
+duration_minutes: 196.97139962905
 estimate_hours: 2
 id: B187
 priority: high
 started_at: "2026-08-23T04:54:00Z"
-status: in_progress
+status: done
 tags: []
 title: 'provider flag conflates TTS and STT: minimax TTS cannot pair with the configured default STT in ask / tts --listen'
-updated_at: "2026-08-23T04:54:00Z"
+updated_at: "2026-08-23T08:10:58Z"
 ---
 GitHub: https://github.com/ultradyn/hark/issues/10
 

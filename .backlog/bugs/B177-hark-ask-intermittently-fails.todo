@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-08-23T04:54:00Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-08-23T08:10:58Z"
 complexity: medium
 created_at: "2026-08-11T12:22:03Z"
 depends_on: []
+duration_minutes: 196.9729352851
 estimate_hours: 1
 id: B177
 priority: high
 started_at: "2026-08-23T04:54:00Z"
-status: in_progress
+status: done
 tags: []
 title: 'hark ask intermittently fails before listen with Gemini TTS HTTP 400: model tried to generate text but should only be used for TTS. Ordinary planning questions trigger it under provider=auto/google; retrying a shorter prompt often works. Need provider fallback/retry so ask remains usable.'
-updated_at: "2026-08-23T04:54:00Z"
+updated_at: "2026-08-23T08:10:58Z"
 ---
 
 hark ask intermittently fails before listen with Gemini TTS HTTP 400: model tried to generate text but should only be used for TTS. Ordinary planning questions trigger it under provider=auto/google; retrying a shorter prompt often works. Need provider fallback/retry so ask remains usable.

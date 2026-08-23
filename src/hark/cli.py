@@ -28,9 +28,31 @@ from hark.herdr.client import HerdrClient, HerdrError, NamedSessionInfo
 from hark.herdr.tunnel import ensure_tunnel
 from hark.paths import default_config_path, state_dir
 from hark.providers.base import ProviderError, safe_provider_failure
+from hark.providers.legs import LegProviders, split_leg_providers
 from hark.targets import parse_target
 from hark.transcripts import record_turn
 from hark.watch import run_watch
+
+# B187: --provider stayed a both-legs shorthand so existing invocations keep
+# their meaning; the per-leg flags win for their own leg.
+_PROVIDER_BOTH_HELP = (
+    "speech provider for BOTH legs (TTS and STT); --tts-provider / "
+    "--stt-provider win for their own leg when given"
+)
+_TTS_PROVIDER_HELP = "TTS provider for this run (wins over --provider)"
+
+
+def _arg_legs(args: argparse.Namespace) -> LegProviders:
+    """Per-leg provider selection from ``--provider`` + the split flags (B187).
+
+    Reads with ``getattr`` so hand-built ``argparse.Namespace`` objects (tests,
+    library callers) do not have to carry every flag.
+    """
+    return split_leg_providers(
+        provider=getattr(args, "provider", None),
+        tts_provider=getattr(args, "tts_provider", None),
+        stt_provider=getattr(args, "stt_provider", None),
+    )
 
 
 def _scoped_herdr(func):
@@ -365,7 +387,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     tts = sub.add_parser("tts", help="text-to-speech")
     tts.add_argument("text", nargs="+")
-    tts.add_argument("--provider")
+    tts.add_argument("--provider", help=_PROVIDER_BOTH_HELP)
+    tts.add_argument("--tts-provider", help=_TTS_PROVIDER_HELP)
+    tts.add_argument(
+        "--stt-provider",
+        help="STT provider for the --listen leg (wins over --provider)",
+    )
     tts.add_argument("--voice")
     tts.add_argument("--no-play", action="store_true")
     tts.add_argument("--out", type=Path)
@@ -404,7 +431,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     li = sub.add_parser("listen", help="speech-to-text")
-    li.add_argument("--provider")
+    li.add_argument(
+        "--provider",
+        help="STT provider for this run (listen is STT-only, so this and "
+        "--stt-provider name the same leg; giving both is not an error)",
+    )
+    li.add_argument(
+        "--stt-provider",
+        help="STT provider for this run (wins over --provider)",
+    )
     li.add_argument("--end-mode", choices=("silence", "radio"))
     _add_output_format_flags(li)
     li.add_argument(
@@ -430,7 +465,12 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("text", nargs="+")
     ask.add_argument("--confirm", choices=("auto", "always", "never"))
     ask.add_argument("--end-mode", choices=("silence", "radio"))
-    ask.add_argument("--provider")
+    ask.add_argument("--provider", help=_PROVIDER_BOTH_HELP)
+    ask.add_argument("--tts-provider", help=_TTS_PROVIDER_HELP)
+    ask.add_argument(
+        "--stt-provider",
+        help="STT provider for the listen leg (wins over --provider)",
+    )
     _add_output_format_flags(ask)
     ask.add_argument(
         "--event-id",
@@ -1826,6 +1866,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
     from hark.speech import run_tts, speak_and_listen
 
     text = " ".join(args.text)
+    legs = _arg_legs(args)
     want_listen = bool(getattr(args, "listen", False))
     standalone = bool(getattr(args, "standalone", False))
     if want_listen and args.no_play:
@@ -1843,7 +1884,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
         result = run_tts(
             cfg,
             text,
-            provider=args.provider,
+            provider=legs.tts,
             voice=args.voice,
             play=not args.no_play,
             out=args.out,
@@ -1856,6 +1897,13 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
                     {
                         "ok": True,
                         "provider": result["provider"],
+                        # B177: a provider downgrade must be visible on the
+                        # default line too, not only under --json.
+                        **(
+                            {"fallback": result["fallback"]}
+                            if result.get("fallback")
+                            else {}
+                        ),
                         **_standalone_fields(),
                     }
                 )
@@ -1867,7 +1915,8 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
         result, listened = speak_and_listen(
             cfg,
             text,
-            provider=args.provider,
+            provider=legs.tts,
+            stt_provider=legs.stt,
             voice=args.voice,
             end_mode=args.end_mode,
             out=args.out,
@@ -1936,7 +1985,7 @@ def cmd_listen(args: argparse.Namespace, cfg) -> int:
     result = run_listen(
         cfg,
         profile="bound_answer",
-        provider=args.provider,
+        provider=_arg_legs(args).stt,
         end_mode=args.end_mode,
     )
     if result.cancelled:
@@ -1990,6 +2039,7 @@ def cmd_ask(args: argparse.Namespace, cfg) -> int:
     from hark.speak_then_listen.ask import interrupted_ask_result
 
     prompt = " ".join(args.text)
+    legs = _arg_legs(args)
     try:
         with capture_interrupt_signals():
             result = run_ask(
@@ -1997,7 +2047,8 @@ def cmd_ask(args: argparse.Namespace, cfg) -> int:
                 prompt,
                 confirm=args.confirm,
                 end_mode=args.end_mode,
-                provider=args.provider,
+                tts_provider=legs.tts,
+                stt_provider=legs.stt,
             )
     except KeyboardInterrupt as exc:
         # Covers handler installation/restoration and the interval after

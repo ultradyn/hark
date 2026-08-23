@@ -57,10 +57,18 @@ from hark.mic_coord import (
     user_capture_active,
     wait_until_tts_play_allowed,
 )
-from hark.providers.base import ProviderError
+from hark.providers.base import ProviderError, safe_exception_detail
 from hark.providers.resolve import (
     resolve_stt,  # noqa: F401 — open_answer_window / test monkeypatch seam
     resolve_tts,
+)
+from hark.providers.tts_fallback import (
+    TEXT_INSTEAD_OF_AUDIO,
+    FallbackStep,
+    classify_tts_error,
+    fallback_provider_chain,
+    synthesize_with_fallback,
+    tts_error_http_status,
 )
 from hark.signal_safety import SigintMaskGuard
 from hark.syslog import log as syslog
@@ -829,26 +837,164 @@ def run_tts(
     user_skipped = False
     near = near_end_ms if near_end_ms is not None else int(cfg.audio.listen_pre_arm_ms)
     do_duck = bool(getattr(cfg.audio, "duck_media_during_tts", True))
+    # B177 fallback state. `speaking_provider` is who the *next* chunk asks
+    # first; chunks may synthesize concurrently (the no-play branch), so the
+    # lock guards the handover and the step log.
+    fallback_lock = threading.Lock()
+    speaking_provider = resolved_provider
+    fallback_chain: list[str] | None = None
+    fallback_steps: list[dict[str, Any]] = []
 
-    def _synth_one(piece: str) -> tuple[bytes, str, str, str, bool]:
-        """Return (audio, provider, content_type, voice, from_cache)."""
-        cached = lookup_cached_tts(voice_id, piece) if use_cache else None
-        if cached is not None:
-            return cached, "cache", "audio/mpeg", voice_id, True
+    def _transport_synth(prov: str, piece_text: str) -> Any:
         owner = _CURRENT_SYNTH_OWNER.get()
         if owner is None:
             raise RuntimeError("missing synth process owner")
         transport = _synth_transport_factory(owner)
-        result = transport.synthesize(
+        return transport.synthesize(
             SynthRequest(
-                provider=resolved_provider,
-                voice=voice_id,
+                provider=prov,
+                # Voice ids are per-provider namespaces, not a shared vocabulary:
+                # "eve" is xAI's and OpenAI / MiniMax reject it outright, while
+                # Google ignores the field entirely. Carrying the requested id
+                # onto a fallback rung would turn a content-shaped 400 into a
+                # voice-not-found 400 — in the gh-9 configuration that was the
+                # only rung available. Blank it so the new provider uses its own
+                # default; the result reports whatever voice actually spoke.
+                voice=voice_id if prov == resolved_provider else "",
                 language=cfg.tts.language,
-                text=piece,
+                text=piece_text,
             )
         )
-        if use_cache and len(piece) <= 120:
+
+    def _fallback_chain() -> list[str]:
+        """Resolve the fallback walk once, on first eligible failure only."""
+        nonlocal fallback_chain
+        with fallback_lock:
+            if fallback_chain is None:
+                try:
+                    fallback_chain = fallback_provider_chain(
+                        speaking_provider,
+                        voice=voice_id,
+                        language=cfg.tts.language,
+                        tts_cfg=cfg.tts,
+                        config_path=cfg.path,
+                    )
+                except Exception:
+                    fallback_chain = []
+            return list(fallback_chain)
+
+    def _on_fallback_step(step: FallbackStep, piece: str) -> None:
+        """Make a downgrade loud: HEP + syslog + one operator-visible line."""
+        with fallback_lock:
+            fallback_steps.append(step.as_meta())
+        # Keep the usage/audit trail complete: the failed attempt cost a
+        # request even though it produced no audio.
+        _record_synth_fail(piece, step.error, provider=step.from_provider)
+        if step.error_class == TEXT_INSTEAD_OF_AUDIO:
+            why = "failed on a content-shaped provider error"
+        else:
+            why = (
+                "was resolvable but not usable (its credentials are present "
+                "but the call failed), so it is skipped as a fallback target"
+            )
+        surface_tts_event(
+            "tts.provider_fallback",
+            **step.as_meta(),
+            instructions=(
+                f"TTS provider {step.from_provider!r} {why}; Hark is "
+                f"continuing with {step.to_provider!r} (B177). The voice the "
+                "operator hears may differ from the configured provider — "
+                "report which provider spoke, never a plain success."
+            ),
+        )
+        try:
+            print(
+                # Not "hark tts:" — this fires under ask / ambient too.
+                f"hark: TTS {step.from_provider} failed ({step.error_class}); "
+                f"{step.step} with {step.to_provider}",
+                file=sys.stderr,
+                flush=True,
+            )
+        except Exception:
+            # Never fail speech because the terminal write failed.
+            pass
+
+    def _log_fallback_declined(exc: BaseException) -> None:
+        """Surface the classifier saying NO to a 4xx (B177).
+
+        The eligible class is matched on substrings of an upstream response
+        body. If Google rewords its 400, the fallback silently stops applying
+        and `ask` dead-ends again with nothing to indicate anything changed.
+        Publishing the refusal turns a reworded body into a diagnosable event
+        instead of a regression rediscovered by an operator who cannot ask a
+        question. This does NOT widen the classifier — a declined error still
+        fails fast.
+        """
+        status = tts_error_http_status(exc)
+        if status is None or not (400 <= status < 500):
+            return
+        surface_tts_event(
+            "tts.fallback_declined",
+            provider=resolved_provider,
+            http_status=status,
+            error_class="none",
+            error=safe_exception_detail(exc),
+            instructions=(
+                f"A {status} from {resolved_provider!r} was NOT classified as "
+                "fallback-eligible, so TTS failed fast (B177). Correct for an "
+                "auth or quota problem. If this is the Gemini 'tried to "
+                "generate text' 400 with reworded text, the classifier in "
+                "hark/providers/tts_fallback.py needs the new wording — check "
+                "the error field against _TEXT_NOT_AUDIO_MARKERS."
+            ),
+        )
+
+    def _synth_one(piece: str) -> tuple[bytes, str, str, str, bool]:
+        """Return (audio, provider, content_type, voice, from_cache)."""
+        nonlocal speaking_provider
+        cached = lookup_cached_tts(voice_id, piece) if use_cache else None
+        if cached is not None:
+            return cached, "cache", "audio/mpeg", voice_id, True
+        with fallback_lock:
+            start_provider = speaking_provider
+        # B177: one retry then the auto walk, scoped to content-shaped errors
+        # (a bad token still fails fast). Later chunks start from whoever
+        # succeeded, so a long reply does not re-fail on every chunk.
+        try:
+            result, steps = synthesize_with_fallback(
+                provider=start_provider,
+                text=piece,
+                call=_transport_synth,
+                chain=_fallback_chain,
+                on_step=lambda step: _on_fallback_step(step, piece),
+                enabled=bool(getattr(cfg.tts, "fallback_on_error", True)),
+                language=cfg.tts.language,
+            )
+        except BaseException as exc:
+            if classify_tts_error(exc) is None:
+                # Only a refusal is news: an eligible error that exhausted the
+                # ladder is already reported hop by hop.
+                _log_fallback_declined(exc)
+            raise
+        switched = any(step.step == "fallback" for step in steps)
+        if switched and result.provider:
+            # Only a real provider switch hands over. A same-provider retry
+            # leaves the chosen provider in place.
+            with fallback_lock:
+                speaking_provider = result.provider
+        # The phrase cache keys on (voice, text) with no provider, so storing a
+        # fallback provider's audio would make every later run replay it as
+        # provider="cache" with no fallback record — a silent downgrade that
+        # reads as a clean success. Cache only what the CHOSEN provider spoke:
+        # no switch in this chunk, and no earlier chunk already handed over
+        # (a later chunk starts straight on the fallback and takes no step of
+        # its own). A hardened retry that the chosen provider answered is still
+        # its own audio, so it caches normally.
+        chosen_spoke = not switched and start_provider == resolved_provider
+        if use_cache and len(piece) <= 120 and chosen_spoke:
             try:
+                # Cache under the ORIGINAL piece: a hardened retry changes the
+                # request, never what the operator asked to be spoken.
                 store_cached_tts(result.voice or voice_id, piece, result.audio)
             except Exception:
                 pass
@@ -864,10 +1010,18 @@ def run_tts(
     # First chunk is synthesized *before* taking the speaker lock so a second
     # `hark tts` started in quick succession can hit xAI while we still play.
     # Multi-chunk: start synth(i+1) while playing chunk i (pipeline).
-    def _record_synth_fail(piece: str, exc: BaseException) -> None:
+    def _record_synth_fail(
+        piece: str,
+        exc: BaseException | str,
+        *,
+        provider: str | None = None,
+    ) -> None:
+        # The ladder attaches the provider it asked last; without it a fallback
+        # exhaustion would be filed against the originally requested provider.
+        attributed = provider or getattr(exc, "tts_last_provider", None)
         store.record_tts(
             text=piece,
-            provider=resolved_provider,
+            provider=attributed or resolved_provider,
             voice=voice_id,
             ok=False,
             error=str(exc)[:200],
@@ -1211,6 +1365,14 @@ def run_tts(
         result["user_skipped"] = True
     if mute_repair is not None and mute_repair.get("repaired"):
         result["mute_repaired"] = mute_repair
+    if fallback_steps:
+        # B177: a silent downgrade must never read as a clean success. Present
+        # who was asked, who actually spoke, and every hop in between.
+        result["fallback"] = {
+            "requested": resolved_provider,
+            "spoke": provider_name,
+            "steps": list(fallback_steps),
+        }
     return result
 
 
@@ -1477,6 +1639,7 @@ def run_listen(
     cfg: HarkConfig,
     *,
     provider: str | None = None,
+    tts_provider: str | None = None,
     end_mode: str | None = None,
     max_s: float | None = None,
     last_tts: str | None = None,
@@ -1505,6 +1668,10 @@ def run_listen(
 
     Empty STT / no-open recovery (silence mode) and overlap pre-arm
     (``audio_ok_after`` / ``discard_leading_ms``) are unchanged.
+
+    ``provider`` is the STT leg. ``tts_provider`` (B187) is only used by the
+    window's spoken nudges; it defaults to the configured TTS provider so an
+    STT-only pin can never end up driving a synth call.
     """
 
     # Thin facade (P1.M1.E4 / P1.M6): build policy + deps, open answer window.
@@ -1548,6 +1715,9 @@ def run_listen(
         "discard_leading_ms": int(discard_leading_ms or 0),
         "stt_provider": provider,
     }
+    if tts_provider is not None:
+        # The window's nudges speak; keep them on the TTS leg (B187).
+        overrides["tts_provider"] = tts_provider
     if end_mode is not None:
         overrides["end_mode"] = end_mode
     if streaming is not None:

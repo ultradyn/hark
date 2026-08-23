@@ -697,3 +697,67 @@ def test_a_minimax_shaped_fallback_reports_its_own_voice(synth) -> None:
 
     assert result["provider"] == "minimax"
     assert result["voice"] == "English_expressive_narrator"
+
+
+def test_the_transcript_log_records_the_provider_that_actually_spoke() -> None:
+    """B186's transcripts.jsonl is a diagnostic people trust (B177).
+
+    Recording the requested provider would make it misreport the turn: the
+    operator heard xai, not the google that was asked.
+    """
+    from hark.transcripts import build_record
+
+    payload = {
+        "ok": True,
+        "text": "yes please",
+        "provider": "custom",  # the HEARD leg
+        "duration_ms": 400,
+        "tts": {
+            "ok": True,
+            "provider": "xai",  # who actually SPOKE
+            "fallback": {
+                "requested": "google",
+                "spoke": "xai",
+                "steps": [
+                    {
+                        "from_provider": "google",
+                        "to_provider": "xai",
+                        "step": "fallback",
+                        "hardened": False,
+                        "error_class": "text_instead_of_audio",
+                        "error": GEMINI_400,
+                    }
+                ],
+            },
+        },
+    }
+    rec = build_record(payload, kind="ask", prompt=QUESTION)
+    assert rec is not None
+    assert rec["provider"] == "custom"
+    assert rec["tts_provider"] == "xai"
+    assert rec["tts_fallback_from"] == "google"
+
+
+def test_a_clean_turn_records_no_fallback_provenance() -> None:
+    from hark.transcripts import build_record
+
+    rec = build_record(
+        {
+            "ok": True,
+            "text": "yes",
+            "provider": "xai",
+            "tts": {"ok": True, "provider": "xai"},
+        },
+        kind="ask",
+    )
+    assert rec is not None
+    assert rec["tts_provider"] == "xai"
+    assert "tts_fallback_from" not in rec  # None keys are dropped
+
+
+def test_a_listen_only_turn_has_no_spoken_provider() -> None:
+    from hark.transcripts import build_record
+
+    rec = build_record({"ok": True, "text": "yes", "provider": "custom"}, kind="listen")
+    assert rec is not None
+    assert "tts_provider" not in rec

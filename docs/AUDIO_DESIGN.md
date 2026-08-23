@@ -731,6 +731,41 @@ Env defaults when the TOML key is **absent** (explicit TOML wins):
 `HARK_DUCK_MEDIA_DURING_STT`, `HARK_PAUSE_MEDIA_DURING_STT`, `HARK_DUCK_LEVEL`,
 `HARK_MEDIA_CHECK_MPRIS`.
 
+### `HARK_MEDIA_CONTROL` — the external-audio gate (B188)
+
+Ducking a sink volume, pausing an MPRIS player and muting the capture source all
+reach into the operator's desktop, so they pass through one gate:
+`hark.audio.external_audio.media_control_blocked()`. Read-only probes
+(`pactl list sink-inputs`, `playerctl status`, `arecord -l`) are never gated.
+
+| `HARK_MEDIA_CONTROL` | Effect |
+| --- | --- |
+| unset | Allowed — production behaviour is unchanged |
+| `0` / `false` / `no` / `off` | Blocked; mutating calls return failure (fail-open, same as "no pactl") |
+| `1` / `true` / `yes` / `on` | Allowed, **even under pytest** |
+| anything else | Blocked, and the reason says the value was unrecognised |
+
+With the var unset, an in-process pytest is detected and blocks by default.
+
+**Why the env var and not a monkeypatch.** The case that actually bit us is a
+*spawned* `hark` child: the suite starts a real `hark ask`, which loads config
+where `duck_media_during_stt` and `pause_media_during_stt` both default to
+`true`, and ducks for real. That child inherits the environment and nothing
+else — no in-process patch can reach it. `tests/conftest.py` therefore sets the
+var via `monkeypatch.setenv` (which writes `os.environ`) rather than patching
+the gate.
+
+A test that must drive the real path opts in with
+`monkeypatch.setenv("HARK_MEDIA_CONTROL", "1")` and is then responsible for
+stubbing `subprocess.run` itself.
+
+A second layer catches call sites that forget the gate: an autouse tripwire in
+`tests/conftest.py` fails any test whose `subprocess.run` receives a mutating
+audio argv (`pactl set-…`, `playerctl pause`, `amixer sset`, `wpctl set-…`).
+It is in-process only — spawned children are covered by the env var — and
+`@pytest.mark.allow_media_control` opts out. Adding a new mutating command means
+adding its verb to `_MUTATING` in `hark/audio/external_audio.py`.
+
 Example (`hark config init` / `DEFAULT_CONFIG_TOML`):
 
 ```toml

@@ -92,3 +92,14 @@ merge itself raised it.
 Practical consequence worth stating plainly: the full suite does not currently
 go green on an unloaded run of this machine either. Anyone treating "0 failed"
 as the merge gate will be blocked by this bug, not by their own change.
+
+LOAD ATTRIBUTION EVENT, 2026-08-23 (coordinator). A full-suite run on master immediately after the B186 merge produced SIX failures at once, all in tests/test_tts_interrupt.py: test_pre_submit_interrupt_does_not_strand_false_running_state, test_public_interrupt_is_bounded_when_procfs_fails_after_payload_spawn, test_procfs_loss_with_adopted_descendant_is_bounded_and_orphan_free, test_already_exited_payload_still_cleans_adopted_descendant, test_pipe_creation_publishes_both_fds_before_delivered_sigint, test_outer_pidfd_is_owned_before_delivered_sigint. Result line: 6 failed, 6211 passed, 74 skipped in 348.79s.
+
+Machine state during that run: load average 199, FOUR concurrent pytest processes from other agent worktrees. This is the largest simultaneous failure count recorded for this family so far, and it lines up with the heaviest concurrent load recorded so far. Two new family members here (pre_submit_interrupt, pipe_creation_publishes_both_fds) bring the known count to at least 11 distinct tests.
+
+Ruled out B186 (the merge that immediately preceded the run) with a controlled experiment rather than by assumption:
+1. tests/test_tts_interrupt.py contains zero references to record_turn / _emit_turn / transcripts, so it never reaches the new code.
+2. 8 isolated runs of the one test that still failed alone: transcript log ON = 7 pass / 1 fail; transcript log OFF via HARK_NO_TRANSCRIPT_LOG=1 (which disables B186 new file write in the ask path entirely) = 6 pass / 2 fail. Disabling the new write did not help and if anything hurt, so the new write is not the mechanism.
+3. 5 of the 6 passed in isolation immediately after the full run.
+
+Also note for whoever fixes this: one failure mode in this batch is NOT a timeout. tests/test_tts_interrupt.py:7588 failed with "DID NOT RAISE OSError", and :5271 with an assertion on Popen returncode -2 (SIGINT). So widening timeouts alone will not fix the family - some members are asserting on a specific signal/errno outcome that load reorders, which is further evidence for the marker-vs-state root cause rather than for a budget that is merely too tight.

@@ -7,7 +7,7 @@ import functools
 import json
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from hark import __version__
 from hark.config import config_to_dict, eprint, load_config, write_default_config
@@ -30,6 +30,7 @@ from hark.paths import default_config_path, state_dir
 from hark.providers.base import ProviderError, safe_provider_failure
 from hark.providers.legs import LegProviders, split_leg_providers
 from hark.targets import parse_target
+from hark.transcripts import record_turn
 from hark.watch import run_watch
 
 # B187: --provider stayed a both-legs shorthand so existing invocations keep
@@ -67,6 +68,89 @@ def _scoped_herdr(func):
             return func(args, cfg)
 
     return wrapped
+
+
+_TEXT_FORMAT_HELP = (
+    "stdout format (default: json). 'text' prints only the captured "
+    "transcript and a newline, so answer=$(hark ask --format text '...') "
+    "captures the answer and nothing else. Anything that is not a plain "
+    "answer -- error, cancellation, meta_command, empty transcript{extra} -- "
+    "still prints the full JSON, with the same exit code, so failures stay "
+    "diagnosable. Cannot be combined with --json."
+)
+
+
+def _add_output_format_flags(
+    parser: argparse.ArgumentParser,
+    *,
+    extra_json_case: str = "",
+) -> None:
+    """--json | --format {json,text} | --text for transcript commands (B186).
+
+    ``--json`` keeps its existing meaning ("pretty-print the JSON"), so the
+    format choice is a separate, mutually exclusive flag. ``--format`` is
+    declared before its ``--text`` alias: argparse applies per-action defaults
+    in declaration order, and only the first action for a shared dest wins.
+    """
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--json", action="store_true", help="pretty-print the JSON payload"
+    )
+    group.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="json",
+        help=_TEXT_FORMAT_HELP.format(extra=extra_json_case),
+    )
+    group.add_argument(
+        "--text",
+        dest="format",
+        action="store_const",
+        const="text",
+        help="alias of --format text",
+    )
+
+
+def _wants_text_output(args: argparse.Namespace) -> bool:
+    """True when text output was requested via --format text / --text."""
+    return getattr(args, "format", None) == "text"
+
+
+def _text_mode_transcript(payload: dict[str, Any]) -> str | None:
+    """The transcript to print under --format text, or None to keep JSON.
+
+    Text mode exists so a caller can capture the spoken answer without parsing
+    (or truncating) telemetry, so it prints only when there *is* a plain
+    answer. A failure, a cancellation, a meta-command (control, not an answer)
+    and an empty transcript all keep the full JSON: a lone blank line would
+    leave the caller with neither an answer nor a diagnosis.
+    """
+    if not payload.get("ok") or payload.get("cancelled") or payload.get("meta_command"):
+        return None
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return text
+
+
+def _emit_turn(
+    payload: dict[str, Any],
+    args: argparse.Namespace,
+    *,
+    kind: str,
+    prompt: str | None = None,
+) -> None:
+    """Persist the transcript, then print the result in the requested format.
+
+    Persisting first is the point: a caller whose stdout is broken or
+    truncated can still recover the answer with ``hark transcripts`` (B186).
+    """
+    record_turn(payload, kind=kind, prompt=prompt)
+    text = _text_mode_transcript(payload) if _wants_text_output(args) else None
+    if text is None:
+        print(json.dumps(payload, indent=2 if getattr(args, "json", False) else None))
+    else:
+        print(text)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -312,7 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
     tts.add_argument("--voice")
     tts.add_argument("--no-play", action="store_true")
     tts.add_argument("--out", type=Path)
-    tts.add_argument("--json", action="store_true")
+    _add_output_format_flags(tts, extra_json_case=", or no --listen")
     tts.add_argument(
         "--listen",
         action="store_true",
@@ -357,7 +441,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="STT provider for this run (wins over --provider)",
     )
     li.add_argument("--end-mode", choices=("silence", "radio"))
-    li.add_argument("--json", action="store_true")
+    _add_output_format_flags(li)
     li.add_argument(
         "--event-id",
         default=None,
@@ -387,7 +471,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--stt-provider",
         help="STT provider for the listen leg (wins over --provider)",
     )
-    ask.add_argument("--json", action="store_true")
+    _add_output_format_flags(ask)
     ask.add_argument(
         "--event-id",
         default=None,
@@ -522,6 +606,23 @@ def build_parser() -> argparse.ArgumentParser:
     stt_stats = sub.add_parser("stats", help="TTS/STT usage stats")
     stt_stats.add_argument("--json", action="store_true")
     stt_stats.add_argument("--reset", action="store_true", help="delete usage log")
+
+    tr = sub.add_parser(
+        "transcripts",
+        help="recent captured transcripts (recover an answer lost from stdout)",
+    )
+    tr.add_argument("-n", "--lines", type=int, default=5)
+    tr.add_argument(
+        "--last",
+        action="store_true",
+        help="print only the most recent transcript, bare (recovery one-liner)",
+    )
+    tr.add_argument(
+        "--json",
+        action="store_true",
+        help="print records as JSONL (one compact object per line)",
+    )
+    tr.add_argument("--path", action="store_true", help="print log path only")
 
     logs = sub.add_parser("logs", help="unified system log (ambient+tts+stt+…); raw follow with -f")
     logs.add_argument("-n", "--lines", type=int, default=40)
@@ -866,11 +967,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     result.get("exit"), fallback=ERROR
                 )
                 result["for_event"] = getattr(args, "event_id", None)
-                print(
-                    json.dumps(
-                        result,
-                        indent=2 if getattr(args, "json", False) else None,
-                    )
+                _emit_turn(
+                    result,
+                    args,
+                    kind="ask",
+                    prompt=" ".join(getattr(args, "text", None) or []),
                 )
                 return int(result.get("exit", ABORT))
             return ABORT
@@ -986,6 +1087,8 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
         return cmd_mute_sync(args)
     if cmd == "stats":
         return cmd_stats(args)
+    if cmd == "transcripts":
+        return cmd_transcripts(args)
     if cmd == "logs":
         return cmd_logs(args)
     if cmd == "watch-logs":
@@ -1443,6 +1546,48 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return OK
 
 
+def cmd_transcripts(args: argparse.Namespace) -> int:
+    """Read back captured transcripts (B186 recovery path).
+
+    ``--last`` prints the newest transcript bare so a caller that lost its own
+    stdout can recover with ``answer=$(hark transcripts --last)`` instead of
+    asking the operator to repeat themselves.
+    """
+    from hark.transcripts import tail_records, transcript_log_path
+
+    path = transcript_log_path()
+    if args.path:
+        print(path)
+        return OK
+    rows = tail_records(1 if args.last else max(0, args.lines))
+    if not rows:
+        eprint(f"hark transcripts: empty or missing ({path})")
+        return OK
+    if args.json:
+        for rec in rows:
+            print(json.dumps(rec, separators=(",", ":")))
+        return OK
+    if args.last:
+        print(rows[-1].get("text", ""))
+        return OK
+    for rec in rows:
+        head = [
+            str(rec.get("iso") or rec.get("ts")),
+            str(rec.get("kind") or "?"),
+            "ok" if rec.get("ok") else ("cancelled" if rec.get("cancelled") else "err"),
+        ]
+        for key in ("provider", "meta_command", "for_event"):
+            if rec.get(key):
+                head.append(f"{key}={rec[key]}")
+        head.append(f"{rec.get('words', 0)} words")
+        print("  ".join(head))
+        if rec.get("prompt"):
+            print(f"  Q: {rec['prompt']}")
+        for line in str(rec.get("text", "")).splitlines() or [""]:
+            print(f"  {line}")
+    return OK
+
+
 def cmd_logs(args: argparse.Namespace) -> int:
     from hark.syslog import system_log_path, tail_lines
 
@@ -1793,19 +1938,24 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
 
     if listened.cancelled:
         eprint(f"cancelled via {listened.end_phrase!r}")
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "cancelled": True,
-                    "text": listened.text,
-                    "tts": result,
-                    "stream_id": listened.stream_id,
-                    **_standalone_fields(),
-                },
-                indent=2 if args.json else None,
-            )
+        cancelled = {
+            "ok": False,
+            "cancelled": True,
+            "text": listened.text,
+            "tts": result,
+            "stream_id": listened.stream_id,
+            **_standalone_fields(),
+        }
+        record_turn(
+            {
+                **cancelled,
+                "provider": listened.provider,
+                "end_phrase": listened.end_phrase,
+            },
+            kind="tts_listen",
+            prompt=text,
         )
+        print(json.dumps(cancelled, indent=2 if args.json else None))
         return ABORT
 
     out = {
@@ -1823,7 +1973,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
             "stream_id": listened.stream_id,
         },
     }
-    print(json.dumps(out, indent=2 if args.json else None))
+    _emit_turn(out, args, kind="tts_listen", prompt=text)
     return OK
 
 
@@ -1840,7 +1990,12 @@ def cmd_listen(args: argparse.Namespace, cfg) -> int:
     )
     if result.cancelled:
         eprint(f"cancelled via {result.end_phrase!r}")
-        print(json.dumps({"ok": False, "cancelled": True, "text": result.text}))
+        cancelled = {"ok": False, "cancelled": True, "text": result.text}
+        record_turn(
+            {**cancelled, "provider": result.provider, "stream_id": result.stream_id},
+            kind="listen",
+        )
+        print(json.dumps(cancelled))
         return ABORT
     if result.meta_command is None:
         result.meta_command = classify_meta_command(result.text)
@@ -1855,7 +2010,7 @@ def cmd_listen(args: argparse.Namespace, cfg) -> int:
         "end_phrase": result.end_phrase,
         "stream_id": result.stream_id,
     }
-    print(json.dumps(payload, indent=2 if args.json else None))
+    _emit_turn(payload, args, kind="listen")
     return OK
 
 
@@ -1902,7 +2057,7 @@ def cmd_ask(args: argparse.Namespace, cfg) -> int:
     if not result.get("ok"):
         result["exit"] = normalize_failure_exit(result.get("exit"), fallback=ERROR)
     result["for_event"] = getattr(args, "event_id", None)
-    print(json.dumps(result, indent=2 if args.json else None))
+    _emit_turn(result, args, kind="ask", prompt=prompt)
     return int(result.get("exit", OK if result.get("ok") else ERROR))
 
 

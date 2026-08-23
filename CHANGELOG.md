@@ -32,6 +32,23 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   previously synthesized through `policy.stt_provider` — so an STT-only pin (`custom`,
   `faster_whisper`) either routed the nudge into a different service or dropped it silently.
   See `docs/PROVIDERS.md` § Per-leg provider selection.
+- feat(cli, B186): **`transcripts.jsonl`** in the state dir + **`hark transcripts`**
+  (`-n`, `--last`, `--json`, `--path`) — every `ask` / `listen` / `tts --listen` turn
+  that produced a transcript is persisted verbatim *before* stdout is written, so a
+  caller that truncates or breaks its own stdout recovers with
+  `answer=$(hark transcripts --last)` instead of asking the operator to repeat
+  themselves (`usage.jsonl` kept only chars/words counts for STT). Cancelled turns
+  keep their partial. Created `0600` (verbatim operator speech), rotated at
+  `HARK_TRANSCRIPT_MAX_BYTES` (4 MiB) keeping one `.1` generation, path override
+  `HARK_TRANSCRIPT_LOG`, opt out with `HARK_NO_TRANSCRIPT_LOG=1`. Not a dashboard /
+  `watch-logs` source by design.
+- feat(cli, B186): **`--format {json,text}`** (alias `--text`) on `ask`, `listen` and
+  `tts --listen` — success prints *only* the transcript, so `answer=$(hark ask --format
+  text "…")` is clean (the pipe warning is on stderr). Error, cancellation,
+  `meta_command` and empty transcripts keep the full JSON and the same exit codes.
+  Mutually exclusive with `--json`, which still means "pretty-print". Fixes a
+  deterministic data-loss trap: `text` is the *second* payload key and the ~20-key
+  `tts` object is *last*, so `| tail -c N` kept telemetry and destroyed the answer.
 - **breaking**(session-profile, B125): **no profile now defaults to `session_local`**, was
   `herdr`. An absent profile no longer starts the Herdr watch worker, so `hark start` with
   no profile is voice-for-this-session only. Fleet watching is opt-in: `scope=herdr` or

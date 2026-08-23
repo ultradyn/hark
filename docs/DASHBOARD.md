@@ -129,6 +129,11 @@ new event acknowledgement.
 | `delivery` | `{type:"bound", …BoundEvent}` or `{type:"outcome", event_id, status, ts, …}` | `events.jsonl`, `deliveries.jsonl` |
 | `serve` | `{kind:"serve.*", …}` server meta: hello, dictation state, live spectrum | in-process |
 
+Note: `transcripts.jsonl` (B186) is deliberately **not** a dashboard or
+`watch-logs` source. It holds verbatim operator speech and is written `0600`
+for local recovery via `hark transcripts`; streaming it over the dashboard's
+REST/SSE surface would widen its exposure well past that. Read it with the CLI.
+
 Note: HEP payloads are validated structurally (envelope + required HEP core
 fields), **not** against `event-v1.schema.json`'s closed kind enum —
 `ambient.*`/`announce.*` kinds are intentionally absent there. Unknown kinds

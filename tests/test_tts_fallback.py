@@ -460,6 +460,7 @@ def test_a_stale_key_on_a_later_rung_does_not_truncate_the_chain() -> None:
         TEXT_INSTEAD_OF_AUDIO,
         "not_retryable",
     ]
+    assert (steps[2].from_provider, steps[2].to_provider) == ("openai", "minimax")
     assert "401" in steps[2].error
 
 

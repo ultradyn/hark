@@ -19,6 +19,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Iterator
 
+from hark.audio.external_audio import media_control_blocked, note_blocked
+
 
 @dataclass
 class MuteState:
@@ -31,6 +33,26 @@ def _run(args: list[str], *, timeout: float = 5.0) -> subprocess.CompletedProces
     return subprocess.run(
         args, capture_output=True, text=True, check=False, timeout=timeout
     )
+
+
+def _run_mutating(
+    args: list[str], *, timeout: float = 5.0
+) -> subprocess.CompletedProcess[str]:
+    """``_run`` for argvs that change the operator's audio state (B188).
+
+    Muting the capture source is not a Hark-internal act — it flips the mute
+    light on the operator's microphone. Gated via
+    :mod:`hark.audio.external_audio`; a blocked call returns a non-zero result,
+    which every caller already reads as "could not apply".
+
+    Read-only probes (``pactl get-source-mute``, ``amixer sget``, ``arecord
+    -l``) keep using plain :func:`_run` — they observe without touching.
+    """
+    reason = media_control_blocked()
+    if reason:
+        note_blocked(args, reason)
+        return subprocess.CompletedProcess(args, 1, "", f"blocked: {reason}")
+    return _run(args, timeout=timeout)
 
 
 def _which(bin_name: str) -> bool:
@@ -62,7 +84,7 @@ def source_is_muted(source: str) -> bool | None:
 
 
 def set_source_mute(source: str, mute: bool) -> bool:
-    p = _run(["pactl", "set-source-mute", source, "1" if mute else "0"])
+    p = _run_mutating(["pactl", "set-source-mute", source, "1" if mute else "0"])
     return p.returncode == 0
 
 
@@ -124,11 +146,11 @@ def set_alsa_mic_capture(on: bool, card: str | int | None = None) -> bool:
         card = found[0]
     # 'cap' / 'nocap' or unmute/mute for cswitch
     arg = "cap" if on else "nocap"
-    p = _run(["amixer", "-c", str(card), "-q", "sset", "Mic", arg])
+    p = _run_mutating(["amixer", "-c", str(card), "-q", "sset", "Mic", arg])
     if p.returncode == 0:
         return True
     # fallback wording
-    p2 = _run(
+    p2 = _run_mutating(
         ["amixer", "-c", str(card), "-q", "sset", "Mic", "unmute" if on else "mute"]
     )
     return p2.returncode == 0

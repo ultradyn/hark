@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from shutil import which
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator
 
+from hark.audio.external_audio import media_control_blocked, note_blocked
+
 if TYPE_CHECKING:
     from hark.config import AudioConfig, HarkConfig
 
@@ -647,7 +649,18 @@ def _run_pactl_cmd(
     *,
     timeout: float = 3.0,
 ) -> bool:
-    """Run a pactl/playerctl argv; True when exit code 0. Never raises."""
+    """Run a pactl/playerctl argv; True when exit code 0. Never raises.
+
+    This is the single mutating actuator for external audio: every volume duck,
+    MPRIS pause and resume funnels through here. It is therefore also the one
+    place the B188 gate has to hold — see :mod:`hark.audio.external_audio`.
+    A blocked call returns False, which every caller already treats as
+    "ducking unavailable" (fail-open).
+    """
+    reason = media_control_blocked()
+    if reason:
+        note_blocked(args, reason)
+        return False
     try:
         p = subprocess.run(
             args,

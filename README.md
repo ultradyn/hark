@@ -187,6 +187,9 @@ uv run hark ask "What color?"
 answer=$(uv run hark ask --format text "What color?")   # transcript only on stdout
 #   --format text (alias --text) on ask / listen / tts --listen: success prints
 #   just the transcript; error, cancel, meta_command still print the full JSON.
+uv run hark transcripts          # last few captured transcripts (state dir, 0600)
+uv run hark transcripts --last   # bare newest transcript — recover a lost stdout
+#   opt out with HARK_NO_TRANSCRIPT_LOG=1
 uv run hark mute                 # system default mic (pactl)
 uv run hark unmute
 uv run hark mute-sync            # hardware unmute → OS (--once or --watch)

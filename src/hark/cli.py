@@ -29,6 +29,7 @@ from hark.herdr.tunnel import ensure_tunnel
 from hark.paths import default_config_path, state_dir
 from hark.providers.base import ProviderError, safe_provider_failure
 from hark.targets import parse_target
+from hark.transcripts import record_turn
 from hark.watch import run_watch
 
 
@@ -110,8 +111,19 @@ def _text_mode_transcript(payload: dict[str, Any]) -> str | None:
     return text
 
 
-def _emit_turn(payload: dict[str, Any], args: argparse.Namespace) -> None:
-    """Print one listen / ask / tts --listen result in the requested format."""
+def _emit_turn(
+    payload: dict[str, Any],
+    args: argparse.Namespace,
+    *,
+    kind: str,
+    prompt: str | None = None,
+) -> None:
+    """Persist the transcript, then print the result in the requested format.
+
+    Persisting first is the point: a caller whose stdout is broken or
+    truncated can still recover the answer with ``hark transcripts`` (B186).
+    """
+    record_turn(payload, kind=kind, prompt=prompt)
     text = _text_mode_transcript(payload) if _wants_text_output(args) else None
     if text is None:
         print(json.dumps(payload, indent=2 if getattr(args, "json", False) else None))
@@ -555,6 +567,23 @@ def build_parser() -> argparse.ArgumentParser:
     stt_stats.add_argument("--json", action="store_true")
     stt_stats.add_argument("--reset", action="store_true", help="delete usage log")
 
+    tr = sub.add_parser(
+        "transcripts",
+        help="recent captured transcripts (recover an answer lost from stdout)",
+    )
+    tr.add_argument("-n", "--lines", type=int, default=5)
+    tr.add_argument(
+        "--last",
+        action="store_true",
+        help="print only the most recent transcript, bare (recovery one-liner)",
+    )
+    tr.add_argument(
+        "--json",
+        action="store_true",
+        help="print records as JSONL (one compact object per line)",
+    )
+    tr.add_argument("--path", action="store_true", help="print log path only")
+
     logs = sub.add_parser("logs", help="unified system log (ambient+tts+stt+…); raw follow with -f")
     logs.add_argument("-n", "--lines", type=int, default=40)
     logs.add_argument("--json", action="store_true")
@@ -898,7 +927,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     result.get("exit"), fallback=ERROR
                 )
                 result["for_event"] = getattr(args, "event_id", None)
-                _emit_turn(result, args)
+                _emit_turn(
+                    result,
+                    args,
+                    kind="ask",
+                    prompt=" ".join(getattr(args, "text", None) or []),
+                )
                 return int(result.get("exit", ABORT))
             return ABORT
         raise
@@ -1013,6 +1047,8 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
         return cmd_mute_sync(args)
     if cmd == "stats":
         return cmd_stats(args)
+    if cmd == "transcripts":
+        return cmd_transcripts(args)
     if cmd == "logs":
         return cmd_logs(args)
     if cmd == "watch-logs":
@@ -1470,6 +1506,48 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return OK
 
 
+def cmd_transcripts(args: argparse.Namespace) -> int:
+    """Read back captured transcripts (B186 recovery path).
+
+    ``--last`` prints the newest transcript bare so a caller that lost its own
+    stdout can recover with ``answer=$(hark transcripts --last)`` instead of
+    asking the operator to repeat themselves.
+    """
+    from hark.transcripts import tail_records, transcript_log_path
+
+    path = transcript_log_path()
+    if args.path:
+        print(path)
+        return OK
+    rows = tail_records(1 if args.last else max(0, args.lines))
+    if not rows:
+        eprint(f"hark transcripts: empty or missing ({path})")
+        return OK
+    if args.json:
+        for rec in rows:
+            print(json.dumps(rec, separators=(",", ":")))
+        return OK
+    if args.last:
+        print(rows[-1].get("text", ""))
+        return OK
+    for rec in rows:
+        head = [
+            str(rec.get("iso") or rec.get("ts")),
+            str(rec.get("kind") or "?"),
+            "ok" if rec.get("ok") else ("cancelled" if rec.get("cancelled") else "err"),
+        ]
+        for key in ("provider", "meta_command", "for_event"):
+            if rec.get(key):
+                head.append(f"{key}={rec[key]}")
+        head.append(f"{rec.get('words', 0)} words")
+        print("  ".join(head))
+        if rec.get("prompt"):
+            print(f"  Q: {rec['prompt']}")
+        for line in str(rec.get("text", "")).splitlines() or [""]:
+            print(f"  {line}")
+    return OK
+
+
 def cmd_logs(args: argparse.Namespace) -> int:
     from hark.syslog import system_log_path, tail_lines
 
@@ -1811,19 +1889,24 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
 
     if listened.cancelled:
         eprint(f"cancelled via {listened.end_phrase!r}")
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "cancelled": True,
-                    "text": listened.text,
-                    "tts": result,
-                    "stream_id": listened.stream_id,
-                    **_standalone_fields(),
-                },
-                indent=2 if args.json else None,
-            )
+        cancelled = {
+            "ok": False,
+            "cancelled": True,
+            "text": listened.text,
+            "tts": result,
+            "stream_id": listened.stream_id,
+            **_standalone_fields(),
+        }
+        record_turn(
+            {
+                **cancelled,
+                "provider": listened.provider,
+                "end_phrase": listened.end_phrase,
+            },
+            kind="tts_listen",
+            prompt=text,
         )
+        print(json.dumps(cancelled, indent=2 if args.json else None))
         return ABORT
 
     out = {
@@ -1841,7 +1924,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
             "stream_id": listened.stream_id,
         },
     }
-    _emit_turn(out, args)
+    _emit_turn(out, args, kind="tts_listen", prompt=text)
     return OK
 
 
@@ -1858,7 +1941,12 @@ def cmd_listen(args: argparse.Namespace, cfg) -> int:
     )
     if result.cancelled:
         eprint(f"cancelled via {result.end_phrase!r}")
-        print(json.dumps({"ok": False, "cancelled": True, "text": result.text}))
+        cancelled = {"ok": False, "cancelled": True, "text": result.text}
+        record_turn(
+            {**cancelled, "provider": result.provider, "stream_id": result.stream_id},
+            kind="listen",
+        )
+        print(json.dumps(cancelled))
         return ABORT
     if result.meta_command is None:
         result.meta_command = classify_meta_command(result.text)
@@ -1873,7 +1961,7 @@ def cmd_listen(args: argparse.Namespace, cfg) -> int:
         "end_phrase": result.end_phrase,
         "stream_id": result.stream_id,
     }
-    _emit_turn(payload, args)
+    _emit_turn(payload, args, kind="listen")
     return OK
 
 
@@ -1918,7 +2006,7 @@ def cmd_ask(args: argparse.Namespace, cfg) -> int:
     if not result.get("ok"):
         result["exit"] = normalize_failure_exit(result.get("exit"), fallback=ERROR)
     result["for_event"] = getattr(args, "event_id", None)
-    _emit_turn(result, args)
+    _emit_turn(result, args, kind="ask", prompt=prompt)
     return int(result.get("exit", OK if result.get("ok") else ERROR))
 
 

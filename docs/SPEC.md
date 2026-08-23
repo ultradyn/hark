@@ -83,6 +83,7 @@ hark mute | unmute | mute-sync
 hark devices
 hark providers [test NAME]
 hark stats                          # TTS/STT usage stats
+hark transcripts [-n N] [--last] [--json] [--path]   # captured transcripts (0600)
 hark logs | watch-logs              # unified / live human-readable logs
 
 # Dashboard (aliases)

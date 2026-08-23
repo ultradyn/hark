@@ -177,6 +177,20 @@ curl -sS -X POST "$BASE/stt" \
   -F "model=grok-stt"
 ```
 
+### Gateway-side prerequisites
+
+Hark is only the client. Gateways typically gate audio **per upstream provider
+and per model id**, so a working chat key does not imply working speech:
+
+| Response | Meaning | Fix |
+|----------|---------|-----|
+| `501 not_supported` | route reached; that upstream has the audio capability disabled | operator enables STT/TTS on the provider |
+| `404` provider/model not found | `custom_model` matched no configured route (or the id is not granted) | use a model id the gateway documents |
+| `401` / `403` | key rejected — Hark does **not** fall through to another provider (B164) | check the key source |
+
+Model-routed gateways may also expose synthetic ids for their dual-mount paths
+(e.g. an STT default injected when `model` is omitted on `/stt`).
+
 ### Config / env
 
 ```toml
@@ -231,6 +245,11 @@ Hark is a client. The gateway must accept:
 
 Voice resolution order: explicit `--voice` / `tts.voice` → `custom_voice` → `alloy` (OpenAI parity).
 
+**Voice ids belong to the gateway, not to OpenAI.** The `alloy` default is kept
+for OpenAI parity, and a gateway fronting a different upstream will reject it
+(e.g. `404 Voice alloy not found`). Set `custom_voice` to an id that gateway
+documents whenever the upstream is not OpenAI.
+
 Example request shape (equivalent to what Hark sends):
 
 ```bash
@@ -249,6 +268,20 @@ curl -sS -X POST "$BASE/tts" \
   -H "Content-Type: application/json" \
   -d '{"input":"hello world","voice":"eve"}'
 ```
+
+### Gateway-side prerequisites
+
+Hark is only the client. Gateways typically gate audio **per upstream provider
+and per model id**, so a working chat key does not imply working speech:
+
+| Response | Meaning | Fix |
+|----------|---------|-----|
+| `501 not_supported` | route reached; that upstream has the audio capability disabled | operator enables STT/TTS on the provider |
+| `404` provider/model not found | `custom_model` matched no configured route (or the id is not granted) | use a model id the gateway documents |
+| `401` / `403` | key rejected — Hark does **not** fall through to another provider (B164) | check the key source |
+
+Model-routed gateways may also expose synthetic ids for their dual-mount paths
+(e.g. an STT default injected when `model` is omitted on `/stt`).
 
 ### Config / env
 

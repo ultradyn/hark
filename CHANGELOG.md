@@ -6,6 +6,11 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- docs(providers): Custom STT/TTS gained a **Gateway-side prerequisites** table
+  (`501 not_supported` / `404` model-not-routed / `401` no-fallthrough) and a
+  warning that voice ids are the gateway's, not OpenAI's — the `alloy` default
+  404s on non-OpenAI upstreams (B183 dogfood finding, previously only in the
+  backlog). Client contract unchanged.
 - perf(audio, B007): `CaptureGateSpec.discard_max_floor_s` (default 30.0) — the
   overlap-discard safety cap was `max(30.0, initial_timeout_s)` with the floor
   hard-coded in the function body, so the `DISCARD_TIMEOUT` branch could only be

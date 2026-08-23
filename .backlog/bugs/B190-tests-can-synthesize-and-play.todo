@@ -36,3 +36,14 @@ Recommended shape, mirroring B188 so there is one idiom rather than three:
 - separately (larger, decide scope first): fail a test that opens an outbound HTTP connection to a provider unless it opts in, so accidental live synthesis is a red test rather than a line item. Live-dogfood tests like B183 must be able to opt in.
 
 The playback half is cheap and test-only. The spend half needs a decision about how live-verify tasks opt in.
+
+PARTIALLY DONE 2026-08-23 (f46a42a). The PLAYBACK half is landed: conftest tripwires fail any test that spawns ffplay/paplay/aplay or reaches sounddevice.play; external_audio.is_audio_playback_argv() classifies players; ffmpeg is explicitly excluded (it converts, silently) and a test pins that so nobody folds it into the player set later. Test-only, no production behaviour change. Suite 6230 passed / 0 failed.
+
+STILL OPEN - the PROVIDER SPEND half. A test can still reach a live TTS/STT endpoint and bill it: src/hark/speech.py:684 run_tts and the provider HTTP path under src/hark/providers/. There is no test-time network guard; conftest only disables the GitHub update check (B088).
+
+Blocked on a decision, not on effort: live-dogfood tasks (see B183, live-verify Custom STT + Custom TTS against a real gateway) MUST be able to reach the network, so any guard needs an opt-in that those tasks use deliberately. Options, in rough order of preference:
+1. Block outbound connections at the socket layer under pytest, opt in via a marker plus an env var. Strongest and catches paths nobody predicted; needs care not to break localhost fixtures (dashboard server tests bind sockets).
+2. Guard only the provider layer (a check inside the HTTP helper in src/hark/providers/). Narrower, cannot catch a new code path that builds its own request, but zero risk to socket-using tests.
+3. Do nothing and rely on stubbing discipline. Rejected in spirit by this whole task - the B186 incident is exactly what discipline alone gives you.
+
+Recommend 2 first (cheap, no collateral), then 1 if accidental live calls recur. Do not start either without confirming how B183-style live verification opts in.

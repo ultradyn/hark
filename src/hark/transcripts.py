@@ -89,6 +89,10 @@ def _spoke(payload: dict[str, Any]) -> tuple[Any, Any]:
     if not isinstance(tts, dict):
         return None, None
     spoke = tts.get("provider")
+    if spoke is None:
+        # Never record a "fell back from X" with no "to": a half-populated
+        # provenance pair is worse than none for whoever reads the log later.
+        return None, None
     fallback = tts.get("fallback")
     requested = fallback.get("requested") if isinstance(fallback, dict) else None
     if requested == spoke:

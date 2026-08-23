@@ -946,3 +946,22 @@ def test_a_tts_listen_turn_records_the_spoken_provider() -> None:
     assert rec["provider"] == "custom"      # heard, from the nested block
     assert rec["tts_provider"] == "xai"     # spoke
     assert rec["tts_fallback_from"] == "google"
+
+
+def test_fallback_provenance_is_never_half_populated() -> None:
+    """A "fell back from X" with no "to" is incoherent for a later reader."""
+    from hark.transcripts import build_record
+
+    rec = build_record(
+        {
+            "ok": True,
+            "text": "yes",
+            # `run_tts` never emits this shape, but the record must not invent
+            # provenance if anything else ever does.
+            "tts": {"ok": True, "fallback": {"requested": "google"}},
+        },
+        kind="ask",
+    )
+    assert rec is not None
+    assert "tts_provider" not in rec
+    assert "tts_fallback_from" not in rec

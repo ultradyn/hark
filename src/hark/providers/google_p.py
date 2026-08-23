@@ -12,6 +12,20 @@ from hark.providers.base import ProviderError, SynthResult, Transcript, provider
 
 GEMINI = "https://generativelanguage.googleapis.com/v1beta"
 
+# B177 / gh-9: this model is **already TTS-only** — the 400 "Model tried to
+# generate text, but it should only be used for TTS" comes from the model
+# choosing to answer question-shaped input rather than speak it, not from a
+# general-purpose model being used by mistake. So model pinning is not the fix
+# (see hark.providers.tts_fallback); the pin is named here only so it cannot be
+# casually swapped for a non-TTS model, and is overridable for an operator who
+# has a TTS model that behaves better on their account.
+_DEFAULT_TTS_MODEL = "gemini-2.5-flash-preview-tts"
+
+
+def gemini_tts_model() -> str:
+    """TTS-only Gemini model; ``GEMINI_TTS_MODEL`` pins a different one."""
+    return (os.environ.get("GEMINI_TTS_MODEL") or "").strip() or _DEFAULT_TTS_MODEL
+
 
 def _key_and_headers() -> tuple[str, dict[str, str]]:
     token, detail = auth.resolve_google_token()
@@ -74,7 +88,7 @@ class GoogleTts:
     def synthesize(self, text: str, *, voice: str | None = None) -> SynthResult:
         # Gemini TTS is model/version sensitive; try audio generation if available
         key_param, headers = _key_and_headers()
-        model = "gemini-2.5-flash-preview-tts"
+        model = gemini_tts_model()
         url = f"{GEMINI}/models/{model}:generateContent{key_param}"
         body = {
             "contents": [{"parts": [{"text": text}]}],
@@ -88,7 +102,8 @@ class GoogleTts:
             if r.status_code >= 400:
                 raise ProviderError(
                     f"Gemini TTS HTTP {r.status_code}: {r.text[:300]} "
-                    "(pin a TTS-capable model or use xai/openai/minimax)"
+                    f"(model={model}; pin another TTS model with GEMINI_TTS_MODEL, "
+                    "or use xai/openai/minimax)"
                 )
             payload = r.json()
         try:

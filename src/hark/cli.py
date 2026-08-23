@@ -1752,6 +1752,13 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
                     {
                         "ok": True,
                         "provider": result["provider"],
+                        # B177: a provider downgrade must be visible on the
+                        # default line too, not only under --json.
+                        **(
+                            {"fallback": result["fallback"]}
+                            if result.get("fallback")
+                            else {}
+                        ),
                         **_standalone_fields(),
                     }
                 )

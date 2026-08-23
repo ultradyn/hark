@@ -6,6 +6,21 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- fix(providers, B177/gh-9): **TTS no longer dead-ends when a provider answers instead of
+  speaking.** Gemini TTS returns HTTP 400 `Model tried to generate text, but it should only
+  be used for TTS` on question-shaped text, content-dependently and nondeterministically, so
+  with `xai`/`openai` disabled `hark ask` became unusable for asking questions (exit 4 with
+  the operator already waiting). `run_tts` now retries once on the same provider — shaping
+  the request where a lever exists — then walks the `auto` order, and later chunks continue
+  on whichever provider worked. **Scoped to that one error class:** auth (401/403), quota
+  (429), `ProviderUnsupported`, and everything else still fail fast on the first attempt, so
+  a bad token is never masked as a working setup (auth fallback stays open as B164). Every
+  hop is observable — a `fallback` key in the `tts` / `ask` JSON (`requested` / `spoke` /
+  `steps`), a `tts.provider_fallback` HEP event visible to `hark monitor`, syslog, and one
+  stderr line — so a downgrade cannot read as a clean success, and a fallback provider's
+  audio is kept out of the phrase cache so a later run cannot replay it unmarked. New `[tts]
+  fallback_on_error` (default `true`) makes it optional; `GEMINI_TTS_MODEL` repoints the
+  (already TTS-only) Gemini model pin. See `docs/PROVIDERS.md` § Scoped TTS retry.
 - fix(providers, B187/gh-10): `--provider` no longer forces one provider onto **both**
   speech legs. New `--tts-provider` / `--stt-provider` on `tts` / `listen` / `ask` (and
   `tts_provider=` / `stt_provider=` on `run_ask()` / `speak_and_listen()`) pick a provider
@@ -13,8 +28,10 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   its both-legs meaning for backwards compatibility. `hark ask --tts-provider minimax "…"`
   now speaks with a TTS-only provider and still hears with the configured STT, instead of
   failing the listen with `minimax STT unsupported`. Per-leg selection also covers the
-  confirm turn (readback TTS / confirm capture). See `docs/PROVIDERS.md`
-  § Per-leg provider selection.
+  confirm turn (readback TTS / confirm capture) and the answer window's spoken nudges, which
+  previously synthesized through `policy.stt_provider` — so an STT-only pin (`custom`,
+  `faster_whisper`) either routed the nudge into a different service or dropped it silently.
+  See `docs/PROVIDERS.md` § Per-leg provider selection.
 - **breaking**(session-profile, B125): **no profile now defaults to `session_local`**, was
   `herdr`. An absent profile no longer starts the Herdr watch worker, so `hark start` with
   no profile is voice-for-this-session only. Fleet watching is opt-in: `scope=herdr` or

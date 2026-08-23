@@ -98,5 +98,9 @@ class MinimaxTts:
             audio=audio,
             provider=self.name,
             content_type="audio/mpeg",
-            voice=voice,
+            # Report the voice actually used, not the (possibly blank) request
+            # — parity with OpenAI / Custom TTS. A B177 fallback rung is asked
+            # with no voice so it takes its own default; echoing the request
+            # back would let the result claim the caller's voice id spoke.
+            voice=body["voice_setting"]["voice_id"],
         )

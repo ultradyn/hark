@@ -148,6 +148,7 @@ def _run_ask(
                 cfg,
                 profile="confirm",
                 provider=legs.stt,
+                tts_provider=legs.tts,
                 end_mode="silence",
                 last_tts=readback,
             )

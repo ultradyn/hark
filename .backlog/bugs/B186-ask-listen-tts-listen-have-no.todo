@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-08-23T04:54:00Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-08-23T05:41:29Z"
 complexity: medium
 created_at: "2026-08-23T04:52:05Z"
 depends_on: []
+duration_minutes: 47.4904009281
 estimate_hours: 2
 id: B186
 priority: high
 started_at: "2026-08-23T04:54:00Z"
-status: in_progress
+status: done
 tags: []
 title: ask/listen/tts --listen have no plain-text output mode; JSON-only stdout loses transcripts to naive truncation
-updated_at: "2026-08-23T04:54:00Z"
+updated_at: "2026-08-23T05:41:29Z"
 ---
 GitHub: https://github.com/ultradyn/hark/issues/11
 

@@ -193,3 +193,4 @@ bugs:
     - file: B192-ask-confirm-turn-readback-disc.todo
     - file: B193-answer-window-nudge-tts-failur.todo
     - file: B194-install-signal-handlers-perman.todo
+    - file: B195-os-pidfd-open-is-absent-from-t.todo

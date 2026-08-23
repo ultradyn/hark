@@ -1,0 +1,37 @@
+---
+complexity: medium
+created_at: "2026-08-23T09:07:55Z"
+depends_on: []
+estimate_hours: 2
+id: B195
+priority: high
+status: pending
+tags:
+    - providers
+    - lifecycle
+    - pidfd
+    - testing
+title: os.pidfd_open is absent from this interpreter, so hark's production pidfd path never runs and its test coverage is illusory
+updated_at: "2026-08-23T09:07:55Z"
+---
+Found while root-causing B184. Confirmed independently by the coordinator 2026-08-23.
+
+    $ uv run python -c "import os,sys; print(sys.version); print(hasattr(os,\"pidfd_open\"))"
+    3.13.11 (main, Jan 28 2026, 00:01:45) [Clang 21.1.4]
+    False
+
+os.pidfd_open does not exist in the uv-managed CPython used for this project (python-build-standalone, Clang build). It is a Linux-only CPython API added in 3.9 and it is genuinely missing here, not merely unusable.
+
+Why this matters more than it looks:
+1. Every pidfd code path in hark falls to its non-pidfd fallback on this machine, always. The pidfd branch has never executed here.
+2. Therefore the pidfd-named tests in tests/test_tts_interrupt.py (test_outer_pidfd_is_owned_before_delivered_sigint, test_pipe_creation_publishes_both_fds_before_delivered_sigint, and the pidfd ownership family generally) are NOT exercising the pidfd implementation. Whatever they assert, they assert about the fallback. Coverage that reads as "pidfd is tested" is illusory.
+3. This is B184 mechanism (a)-adjacent: part of why that family behaves oddly is that its subject does not exist in this interpreter.
+
+To decide (this is why it is filed rather than fixed):
+- Is the pidfd path meant to be reachable in production at all? If deployments use a distro CPython that HAS pidfd_open, then hark ships a path that is live for users and untested everywhere it is developed - the worse of the two cases.
+- If so, the pidfd tests need to be either skipped explicitly with a reason (so the gap is visible rather than silently passing against the fallback), or run against an interpreter that has the symbol - a CI matrix entry, or a distro python.
+- If not - if the fallback is the only path that ever runs - then the pidfd code should go, along with the tests naming it.
+
+Either answer is fine. The current state, where the tests pass and nobody knows they are testing the fallback, is not.
+
+Check before assuming: verify on the deployment target as well as here. `python -c "import os; print(hasattr(os, \"pidfd_open\"))"` on a distro CPython 3.13 will likely print True, which is exactly the mismatch that makes this worth resolving.

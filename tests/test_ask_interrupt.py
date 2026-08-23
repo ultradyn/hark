@@ -27,6 +27,24 @@ from hark.exitcodes import ABORT
 from hark.listen_end import EndMode
 from hark.speech import run_ask, speak_and_listen
 
+# B184: every positive wait in this file is a hang guard, not a latency
+# assertion. The suite shares a machine, so a child that reaches its state in
+# 200ms unloaded can need seconds under contention, and the old 1-5s caps
+# turned that contention into failures. A passing test returns the moment its
+# condition holds, so a generous cap costs no suite time -- only a genuine
+# hang pays it.
+_WAIT_S = float(os.environ.get("HARK_TEST_WAIT_S", "30"))
+
+
+def _wait_until(predicate, *, what: str, timeout_s: float | None = None) -> bool:
+    """Poll ``predicate`` until it holds; return False if it never does."""
+    deadline = time.monotonic() + (_WAIT_S if timeout_s is None else timeout_s)
+    while not predicate():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.001)
+    return True
+
 
 class _BlockingStream:
     def __init__(self) -> None:
@@ -45,7 +63,7 @@ class _BlockingStream:
 
     def read(self, _block):
         self.reading.set()
-        self.released.wait(timeout=5.0)
+        self.released.wait(timeout=_WAIT_S)
         raise RuntimeError("aborted blocking read")
 
     def abort(self) -> None:
@@ -65,7 +83,7 @@ def test_capture_sigint_aborts_stream_and_restores_handlers(monkeypatch):
     old_sigterm = signal.getsignal(signal.SIGTERM)
 
     def interrupt_when_reading() -> None:
-        assert stream.reading.wait(timeout=2.0)
+        assert stream.reading.wait(timeout=_WAIT_S)
         os.kill(os.getpid(), signal.SIGINT)
 
     interrupter = threading.Thread(target=interrupt_when_reading, daemon=True)
@@ -78,11 +96,11 @@ def test_capture_sigint_aborts_stream_and_restores_handlers(monkeypatch):
                 initial_timeout_s=30.0,
                 post_tts_guard_s=0.0,
             )
-    interrupter.join(timeout=2.0)
+    interrupter.join(timeout=_WAIT_S)
 
     assert time.monotonic() - started < 2.0
     assert caught.value.signal_name == "SIGINT"
-    deadline = time.monotonic() + 1.0
+    deadline = time.monotonic() + _WAIT_S
     while stream.aborted == 0 and time.monotonic() < deadline:
         time.sleep(0.01)
     assert stream.aborted >= 1
@@ -361,16 +379,28 @@ def test_sigterm_during_pre_stream_guard_is_structured_and_releases_attempt(
         ),
     )
 
+    # B184: signal once the capture scope actually owns SIGTERM, not after a
+    # fixed sleep. Under load the sleep expired before the scope installed its
+    # handler, and the SIGTERM then hit the ambient disposition instead.
+    ambient_sigterm = signal.getsignal(signal.SIGTERM)
+    scope_owned_sigterm = False
+
     def interrupt_guard() -> None:
-        time.sleep(0.05)
-        os.kill(os.getpid(), signal.SIGTERM)
+        nonlocal scope_owned_sigterm
+        scope_owned_sigterm = _wait_until(
+            lambda: signal.getsignal(signal.SIGTERM) is not ambient_sigterm,
+            what="capture scope to own SIGTERM",
+        )
+        if scope_owned_sigterm:
+            os.kill(os.getpid(), signal.SIGTERM)
 
     interrupter = threading.Thread(target=interrupt_guard, daemon=True)
     interrupter.start()
     with pytest.raises(capture_mod.CaptureInterrupted) as caught:
         with capture_mod.capture_interrupt_signals():
             capture_mod.capture_utterance(post_tts_guard_s=5.0)
-    interrupter.join(timeout=1.0)
+    interrupter.join(timeout=_WAIT_S)
+    assert scope_owned_sigterm, "capture scope never installed a SIGTERM handler"
 
     assert caught.value.signal_name == "SIGTERM"
     assert capture_mod.capture_in_progress() is False
@@ -418,7 +448,7 @@ def test_cancel_active_capture_reports_abort_failure_and_closes():
         with capture_mod._registered_input_stream(stream):
             assert capture_mod.cancel_active_capture(signal.SIGINT) is True
 
-    deadline = time.monotonic() + 1.0
+    deadline = time.monotonic() + _WAIT_S
     while stream.close_calls == 0 and time.monotonic() < deadline:
         time.sleep(0.01)
 
@@ -469,7 +499,7 @@ def test_repeated_signal_during_cleanup_thread_start_is_reentrant(monkeypatch):
         with capture_mod._registered_input_stream(stream):
             assert capture_mod.cancel_active_capture(signal.SIGINT) is True
 
-    deadline = time.monotonic() + 1.0
+    deadline = time.monotonic() + _WAIT_S
     while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
         time.sleep(0.01)
     assert starts == 1
@@ -535,7 +565,7 @@ def test_postlaunch_start_interrupt_retains_single_cleanup_owner(monkeypatch):
             starts += 1
 
             def delayed_target() -> None:
-                assert allow_target.wait(timeout=2.0)
+                assert allow_target.wait(timeout=_WAIT_S)
                 self._target()
 
             self._inner = real_thread(target=delayed_target, daemon=True)
@@ -555,8 +585,8 @@ def test_postlaunch_start_interrupt_retains_single_cleanup_owner(monkeypatch):
     assert capture_mod.capture_in_progress() is True
 
     allow_target.set()
-    assert target_finished.wait(timeout=1.0)
-    deadline = time.monotonic() + 1.0
+    assert target_finished.wait(timeout=_WAIT_S)
+    deadline = time.monotonic() + _WAIT_S
     while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
         time.sleep(0.01)
     assert capture_mod._stream_cancel_workers == {}
@@ -626,7 +656,7 @@ def test_signal_at_normal_cleanup_transfer_never_loses_stream_owner(monkeypatch,
                 should_stop=lambda *_args: True,
             )
 
-    deadline = time.monotonic() + 1.0
+    deadline = time.monotonic() + _WAIT_S
     while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
         time.sleep(0.01)
     assert calls == {"abort": 1, "stop": 0, "close": 1}
@@ -662,7 +692,7 @@ def test_ordinary_capture_exception_transfers_exactly_one_cleanup_owner(monkeypa
     with pytest.raises(RuntimeError, match="capture backend failed"):
         capture_mod.capture_utterance(post_tts_guard_s=0.0)
 
-    deadline = time.monotonic() + 1.0
+    deadline = time.monotonic() + _WAIT_S
     while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
         time.sleep(0.01)
     assert calls == {"abort": 1, "close": 1}
@@ -716,7 +746,7 @@ def test_signal_after_normal_detach_starts_and_upgrades_reserved_owner(monkeypat
                 should_stop=lambda *_args: True,
             )
 
-    deadline = time.monotonic() + 1.0
+    deadline = time.monotonic() + _WAIT_S
     while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
         time.sleep(0.01)
     assert calls == {"abort": 1, "stop": 0, "close": 1}
@@ -762,7 +792,7 @@ def test_signal_after_exception_detach_starts_reserved_owner(monkeypatch):
             capture_mod.capture_utterance(post_tts_guard_s=0.0)
 
     assert caught.value.signal_name == "SIGTERM"
-    deadline = time.monotonic() + 1.0
+    deadline = time.monotonic() + _WAIT_S
     while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
         time.sleep(0.01)
     assert calls == {"abort": 1, "close": 1}
@@ -797,13 +827,13 @@ def test_signal_after_worker_start_upgrades_before_native_cleanup(monkeypatch):
     def gated_perform(owner):
         owner_box["owner"] = owner
         before_native.set()
-        assert allow_native.wait(timeout=2.0)
+        assert allow_native.wait(timeout=_WAIT_S)
         real_perform(owner)
 
     def interrupt_worker() -> None:
-        assert before_native.wait(timeout=2.0)
+        assert before_native.wait(timeout=_WAIT_S)
         os.kill(os.getpid(), signal.SIGINT)
-        deadline = time.monotonic() + 1.0
+        deadline = time.monotonic() + _WAIT_S
         while time.monotonic() < deadline:
             with capture_mod._stream_cancel_lock:
                 if owner_box["owner"].cancel_requested:
@@ -830,8 +860,8 @@ def test_signal_after_worker_start_upgrades_before_native_cleanup(monkeypatch):
                 should_stop=lambda *_args: True,
             )
 
-    interrupter.join(timeout=1.0)
-    deadline = time.monotonic() + 1.0
+    interrupter.join(timeout=_WAIT_S)
+    deadline = time.monotonic() + _WAIT_S
     while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
         time.sleep(0.01)
     assert calls == {"abort": 1, "stop": 0, "close": 1}
@@ -885,7 +915,7 @@ def test_pending_signal_is_delivered_only_after_cleanup_worker_start(monkeypatch
             return self._inner.is_alive()
 
     def gated_perform(owner):
-        assert allow_native.wait(timeout=2.0)
+        assert allow_native.wait(timeout=_WAIT_S)
         real_perform(owner)
 
     monkeypatch.setattr(capture_mod, "_require_sd", lambda: None)
@@ -918,7 +948,7 @@ def test_pending_signal_is_delivered_only_after_cleanup_worker_start(monkeypatch
     assert owner.worker.is_alive() is True
     assert owner.cancel_requested is True
     allow_native.set()
-    deadline = time.monotonic() + 1.0
+    deadline = time.monotonic() + _WAIT_S
     while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
         time.sleep(0.01)
     assert calls == {"abort": 1, "stop": 0, "close": 1}
@@ -962,7 +992,7 @@ def test_signal_after_start_claim_cannot_leave_unstarted_cleanup_owner(monkeypat
         with capture_mod.capture_interrupt_signals():
             capture_mod._start_stream_cleanup(owner)
 
-    deadline = time.monotonic() + 1.0
+    deadline = time.monotonic() + _WAIT_S
     while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
         time.sleep(0.01)
     assert calls == {"abort": 1, "close": 1}
@@ -1010,7 +1040,7 @@ def test_signal_while_blocking_cleanup_signals_restores_original_mask(monkeypatc
         with capture_mod.capture_interrupt_signals():
             capture_mod._start_stream_cleanup(owner)
 
-    deadline = time.monotonic() + 1.0
+    deadline = time.monotonic() + _WAIT_S
     while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
         time.sleep(0.01)
     assert current_mask == set()
@@ -1063,7 +1093,7 @@ def test_nonreturning_native_abort_cannot_block_structured_parent_exit(monkeypat
     class HangingAbortStream:
         def abort(self) -> None:
             abort_started.set()
-            assert release_abort.wait(timeout=2.0)
+            assert release_abort.wait(timeout=_WAIT_S)
             release_read.set()
 
         def close(self) -> None:
@@ -1075,18 +1105,18 @@ def test_nonreturning_native_abort_cannot_block_structured_parent_exit(monkeypat
         try:
             with capture_mod._registered_input_stream(stream):
                 entered.set()
-                assert release_read.wait(timeout=2.0)
+                assert release_read.wait(timeout=_WAIT_S)
                 capture_mod.raise_if_capture_cancelled()
         finally:
             worker_finished.set()
 
     def fake_tts(_cfg, _text, **kwargs):
         kwargs["on_near_end"]()
-        assert entered.wait(timeout=2.0)
+        assert entered.wait(timeout=_WAIT_S)
         return {"ok": True, "provider": "mock"}
 
     def interrupt_join() -> None:
-        assert entered.wait(timeout=2.0)
+        assert entered.wait(timeout=_WAIT_S)
         time.sleep(0.02)
         os.kill(os.getpid(), signal.SIGINT)
 
@@ -1103,7 +1133,7 @@ def test_nonreturning_native_abort_cannot_block_structured_parent_exit(monkeypat
     assert time.monotonic() - started < 0.5
     assert result["cancelled"] is True
     assert result["signal"] == "SIGINT"
-    assert abort_started.wait(timeout=1.0)
+    assert abort_started.wait(timeout=_WAIT_S)
     assert capture_mod._active_input_stream is None
     assert capture_mod.cancel_active_capture(signal.SIGTERM) is True
     assert len(capture_mod._stream_cancel_workers) == 1
@@ -1111,9 +1141,9 @@ def test_nonreturning_native_abort_cannot_block_structured_parent_exit(monkeypat
     assert worker_finished.is_set() is False
 
     release_abort.set()
-    assert worker_finished.wait(timeout=1.0)
-    interrupter.join(timeout=1.0)
-    deadline = time.monotonic() + 1.0
+    assert worker_finished.wait(timeout=_WAIT_S)
+    interrupter.join(timeout=_WAIT_S)
+    deadline = time.monotonic() + _WAIT_S
     while capture_mod._stream_cancel_workers and time.monotonic() < deadline:
         time.sleep(0.01)
     assert capture_mod._stream_cancel_workers == {}
@@ -1515,11 +1545,11 @@ def test_overlap_join_interrupt_aborts_worker_capture(monkeypatch):
 
     def fake_tts(_cfg, _text, **kwargs):
         kwargs["on_near_end"]()
-        assert worker_started.wait(timeout=2.0)
+        assert worker_started.wait(timeout=_WAIT_S)
         return {"ok": True, "provider": "mock"}
 
     def interrupt_wait() -> None:
-        assert worker_started.wait(timeout=2.0)
+        assert worker_started.wait(timeout=_WAIT_S)
         time.sleep(0.02)
         os.kill(os.getpid(), signal.SIGINT)
 
@@ -1531,7 +1561,7 @@ def test_overlap_join_interrupt_aborts_worker_capture(monkeypatch):
 
     with pytest.raises(capture_mod.CaptureInterrupted) as caught:
         speak_and_listen(cfg, "Still there?")
-    interrupter.join(timeout=1.0)
+    interrupter.join(timeout=_WAIT_S)
 
     assert caught.value.signal_name == "SIGINT"
     assert worker_released.is_set()
@@ -1557,11 +1587,11 @@ def test_overlap_interrupt_during_thread_start_waits_for_publication(monkeypatch
 
         def start(self) -> None:
             start_entered.set()
-            assert allow_start.wait(timeout=2.0)
+            assert allow_start.wait(timeout=_WAIT_S)
             self._target()
 
     def release_start() -> None:
-        assert start_entered.wait(timeout=2.0)
+        assert start_entered.wait(timeout=_WAIT_S)
         time.sleep(0.05)
         allow_start.set()
 
@@ -1573,7 +1603,7 @@ def test_overlap_interrupt_during_thread_start_waits_for_publication(monkeypatch
                 callback_done.set()
 
         real_thread(target=invoke_callback, daemon=True).start()
-        assert start_entered.wait(timeout=2.0)
+        assert start_entered.wait(timeout=_WAIT_S)
         raise primary
 
     monkeypatch.setattr(
@@ -1587,10 +1617,10 @@ def test_overlap_interrupt_during_thread_start_waits_for_publication(monkeypatch
 
     with pytest.raises(capture_mod.CaptureInterrupted) as caught:
         speak_and_listen(cfg, "Still there?")
-    releaser.join(timeout=1.0)
+    releaser.join(timeout=_WAIT_S)
 
     assert caught.value is primary
-    assert callback_done.wait(timeout=1.0)
+    assert callback_done.wait(timeout=_WAIT_S)
     assert not late_capture.is_set()
 
 
@@ -1612,7 +1642,7 @@ def test_overlap_start_exception_after_launch_keeps_handle_for_cleanup(monkeypat
 
         def start(self) -> None:
             def delayed_bootstrap() -> None:
-                assert allow_bootstrap.wait(timeout=2.0)
+                assert allow_bootstrap.wait(timeout=_WAIT_S)
                 self._target()
                 worker_done.set()
 
@@ -1636,7 +1666,7 @@ def test_overlap_start_exception_after_launch_keeps_handle_for_cleanup(monkeypat
 
     assert caught.value is primary
     allow_bootstrap.set()
-    assert worker_done.wait(timeout=1.0)
+    assert worker_done.wait(timeout=_WAIT_S)
     assert not late_capture.is_set()
 
 
@@ -1653,7 +1683,7 @@ def test_overlap_cancel_cleanup_has_fixed_deadline(monkeypatch):
 
     def stuck_listen(*_args, **_kwargs):
         worker_started.set()
-        assert allow_terminal.wait(timeout=2.0)
+        assert allow_terminal.wait(timeout=_WAIT_S)
         worker_terminal.set()
         return ListenResult(
             text="owned",
@@ -1665,7 +1695,7 @@ def test_overlap_cancel_cleanup_has_fixed_deadline(monkeypatch):
 
     def fake_tts(_cfg, _text, **kwargs):
         kwargs["on_near_end"]()
-        assert worker_started.wait(timeout=2.0)
+        assert worker_started.wait(timeout=_WAIT_S)
         raise primary
 
     monkeypatch.setattr(handoff_mod, "_OVERLAP_CANCEL_JOIN_S", 0.02)
@@ -1684,7 +1714,7 @@ def test_overlap_cancel_cleanup_has_fixed_deadline(monkeypatch):
     finally:
         allow_terminal.set()
 
-    assert worker_terminal.wait(timeout=1.0)
+    assert worker_terminal.wait(timeout=_WAIT_S)
 
 
 def test_delayed_overlap_worker_retains_cancel_token_after_parent_returns(
@@ -1702,7 +1732,7 @@ def test_delayed_overlap_worker_retains_cancel_token_after_parent_returns(
     def delayed_listen(*_args, **_kwargs):
         entered.set()
         try:
-            assert release.wait(timeout=2.0)
+            assert release.wait(timeout=_WAIT_S)
             try:
                 capture_mod.raise_if_capture_cancelled()
             except capture_mod.CaptureInterrupted:
@@ -1715,11 +1745,11 @@ def test_delayed_overlap_worker_retains_cancel_token_after_parent_returns(
 
     def fake_tts(_cfg, _text, **kwargs):
         kwargs["on_near_end"]()
-        assert entered.wait(timeout=2.0)
+        assert entered.wait(timeout=_WAIT_S)
         return {"ok": True, "provider": "mock"}
 
     def interrupt_join() -> None:
-        assert entered.wait(timeout=2.0)
+        assert entered.wait(timeout=_WAIT_S)
         time.sleep(0.02)
         os.kill(os.getpid(), signal.SIGINT)
 
@@ -1737,8 +1767,8 @@ def test_delayed_overlap_worker_retains_cancel_token_after_parent_returns(
     assert finished.is_set() is False
 
     release.set()
-    assert finished.wait(timeout=1.0)
-    interrupter.join(timeout=1.0)
+    assert finished.wait(timeout=_WAIT_S)
+    interrupter.join(timeout=_WAIT_S)
     assert cancelled.is_set()
     assert proceeded.is_set() is False
     assert capture_mod._active_input_stream is None
@@ -1767,12 +1797,12 @@ def test_overlap_sigint_during_first_join_waits_for_worker_terminal(
 
     def fake_tts(_cfg, _text, **kwargs):
         kwargs["on_near_end"]()
-        assert worker_started.wait(timeout=2.0)
+        assert worker_started.wait(timeout=_WAIT_S)
         tts_returned.set()
         return {"ok": True, "provider": "mock"}
 
     def interrupt_first_join() -> None:
-        assert tts_returned.wait(timeout=2.0)
+        assert tts_returned.wait(timeout=_WAIT_S)
         time.sleep(0.05)
         os.kill(os.getpid(), signal.SIGINT)
 
@@ -1785,7 +1815,7 @@ def test_overlap_sigint_during_first_join_waits_for_worker_terminal(
     scope = capture_mod.capture_interrupt_signals() if outer_scope else nullcontext()
     with scope:
         result = run_ask(cfg, "Still there?", confirm="never")
-    interrupter.join(timeout=2.0)
+    interrupter.join(timeout=_WAIT_S)
 
     assert result["ok"] is False
     assert result["cancelled"] is True
@@ -1832,7 +1862,7 @@ def test_overlap_interrupt_during_remaining_tts_waits_for_pause_release(monkeypa
 
     def interrupting_tts(_cfg, _text, **kwargs):
         kwargs["on_near_end"]()
-        assert waiting.wait(timeout=2.0)
+        assert waiting.wait(timeout=_WAIT_S)
         raise capture_mod.CaptureInterrupted(signal.SIGINT)
 
     monkeypatch.setattr("hark.speech.run_listen", blocked_listen)
@@ -1926,7 +1956,7 @@ raise SystemExit(cli.main(["ask", "--confirm", "never", "--json", "Still there?"
         env=env,
     )
     try:
-        deadline = time.monotonic() + 5.0
+        deadline = time.monotonic() + _WAIT_S
         while (
             not ready.exists()
             and process.poll() is None
@@ -1936,15 +1966,15 @@ raise SystemExit(cli.main(["ask", "--confirm", "never", "--json", "Still there?"
         if not ready.exists():
             if process.poll() is None:
                 process.kill()
-            stdout, stderr = process.communicate(timeout=2.0)
+            stdout, stderr = process.communicate(timeout=_WAIT_S)
             pytest.fail(f"capture did not start: stdout={stdout!r} stderr={stderr!r}")
 
         process.send_signal(sent_signal)
-        stdout, stderr = process.communicate(timeout=5.0)
+        stdout, stderr = process.communicate(timeout=_WAIT_S)
     finally:
         if process.poll() is None:
             process.kill()
-            process.communicate(timeout=2.0)
+            process.communicate(timeout=_WAIT_S)
 
     assert process.returncode == ABORT
     result = json.loads(stdout)
@@ -2000,7 +2030,7 @@ def test_orchestrator_disappearance_without_signal_cancels_and_preserves_workers
         env=worker_env,
     )
     worker_record = None
-    worker_deadline = time.monotonic() + 2.0
+    worker_deadline = time.monotonic() + _WAIT_S
     while worker_record is None and time.monotonic() < worker_deadline:
         worker_record = worker_process.inspect_worker(
             worker.pid,
@@ -2011,7 +2041,7 @@ def test_orchestrator_disappearance_without_signal_cancels_and_preserves_workers
             time.sleep(0.01)
     if worker_record is None:
         os.killpg(worker.pid, signal.SIGKILL)
-        worker.wait(timeout=2.0)
+        worker.wait(timeout=_WAIT_S)
         pytest.fail("marker-scoped worker did not become ready")
     pidfile.write_text(worker_record.to_json() + "\n", encoding="utf-8")
 
@@ -2180,8 +2210,8 @@ os.replace(result_tmp, result_path)
     child_pid: int | None = None
     intermediary_pid: int | None = None
     try:
-        launcher.wait(timeout=5.0)
-        deadline = time.monotonic() + 5.0
+        launcher.wait(timeout=_WAIT_S)
+        deadline = time.monotonic() + _WAIT_S
         while not result_path.exists() and time.monotonic() < deadline:
             if child_pid is None and child_pid_path.exists():
                 child_pid = int(child_pid_path.read_text(encoding="utf-8"))
@@ -2202,13 +2232,13 @@ os.replace(result_tmp, result_path)
                 pass
         if launcher.poll() is None:
             launcher.kill()
-            launcher.wait(timeout=2.0)
+            launcher.wait(timeout=_WAIT_S)
         if worker.poll() is None:
             try:
                 os.killpg(worker.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            worker.wait(timeout=2.0)
+            worker.wait(timeout=_WAIT_S)
 
     ask = result["ask"]
     assert result["exit_code"] == ABORT
@@ -2304,7 +2334,7 @@ raise SystemExit(cli.main(["ask", "--confirm", "never", "--json", "Still there?"
         env=env,
     )
     try:
-        deadline = time.monotonic() + 5.0
+        deadline = time.monotonic() + _WAIT_S
         while (
             not ready.exists()
             and process.poll() is None
@@ -2315,11 +2345,11 @@ raise SystemExit(cli.main(["ask", "--confirm", "never", "--json", "Still there?"
         assert process.stdin is not None
         process.stdin.write(b"\x03")
         process.stdin.flush()
-        stdout, stderr = process.communicate(timeout=5.0)
+        stdout, stderr = process.communicate(timeout=_WAIT_S)
     finally:
         if process.poll() is None:
             process.kill()
-            process.communicate(timeout=2.0)
+            process.communicate(timeout=_WAIT_S)
 
     rendered = stdout.decode(errors="replace")
     json_start = rendered.find("{")

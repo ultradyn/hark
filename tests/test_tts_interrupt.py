@@ -22,6 +22,39 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# B184: every positive wait in this file is a hang guard, not a latency
+# assertion. These tests spawn real interpreters that import hark before they
+# reach the state under test, so a child that is ready in 200ms unloaded can
+# need seconds when the suite shares a machine -- and the old 2-3s caps turned
+# that contention into failures. A passing test returns the moment its child
+# reports, so a generous cap costs no suite time; only a genuine hang pays it.
+_WAIT_S = float(os.environ.get("HARK_TEST_WAIT_S", "30"))
+# Waits that prove something does NOT finish stay small on purpose: overrunning
+# them only slows the suite, and they must not inherit the hang-guard budget.
+_HANG_PROOF_S = 1.0
+
+
+def _assert_fd_released(fd: int, identity: os.stat_result) -> None:
+    """Assert this test no longer owns ``fd``: closed, or already reclaimed.
+
+    B184: probing a bare descriptor number with ``os.fstat`` and expecting
+    EBADF is a race, not an assertion. POSIX hands out the lowest free
+    descriptor, so any unrelated ``open`` in this process -- pytest's own
+    capture files, a spawned child's pipes -- takes back the number production
+    just closed, ``os.fstat`` then succeeds, and the test reports "DID NOT
+    RAISE OSError" as though the descriptor had leaked. Compare identity
+    rather than validity: a different ``(st_dev, st_ino)`` means our descriptor
+    is gone, which is what these tests are really asserting.
+    """
+    try:
+        current = os.fstat(fd)
+    except OSError as exc:
+        assert exc.errno == errno.EBADF
+        return
+    assert (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino), (
+        f"fd {fd} still refers to the descriptor this test opened"
+    )
+
 
 def _linux_pidfd_open(pid: int) -> int:
     libc = ctypes.CDLL(None, use_errno=True)
@@ -50,7 +83,7 @@ def _isolated_env(tmp_path: Path) -> dict[str, str]:
     return env
 
 
-def _read_ready(proc: subprocess.Popen[str], timeout_s: float = 2.0) -> str:
+def _read_ready(proc: subprocess.Popen[str], timeout_s: float = _WAIT_S) -> str:
     assert proc.stdout is not None
     selector = selectors.DefaultSelector()
     try:
@@ -64,7 +97,7 @@ def _read_ready(proc: subprocess.Popen[str], timeout_s: float = 2.0) -> str:
 def _terminate(proc: subprocess.Popen[str]) -> tuple[str, str]:
     if proc.poll() is None:
         proc.kill()
-    return proc.communicate(timeout=2.0)
+    return proc.communicate(timeout=_WAIT_S)
 
 
 def _hung_tts_child(
@@ -577,8 +610,11 @@ def _library_hung_tts_child() -> str:
             print("FIRST_CAUGHT", flush=True)
 
         time.sleep(0.05)
-        print("READY_SECOND", flush=True)
+        # B184: the parent signals as soon as it reads this marker, so publish
+        # it from inside the handler's reach. Printed before the try, a SIGINT
+        # landing in the gap killed the child instead of being caught.
         try:
+            print("READY_SECOND", flush=True)
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
@@ -628,8 +664,10 @@ def _library_preclaim_race_child() -> str:
         except speech.TtsSynthesisInterrupted:
             print("FIRST_CAUGHT", flush=True)
 
-        print("READY_SECOND", flush=True)
+        # B184: marker inside the try, so the parent's signal cannot land in a
+        # gap where KeyboardInterrupt is uncaught.
         try:
+            print("READY_SECOND", flush=True)
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
@@ -1353,7 +1391,7 @@ def _saturated_output_tts_child(
 
 def _read_markers(proc: subprocess.Popen[str], expected: set[str]) -> dict[str, int]:
     found: dict[str, int] = {}
-    deadline = time.monotonic() + 3.0
+    deadline = time.monotonic() + _WAIT_S
     while set(found) != expected:
         remaining = deadline - time.monotonic()
         assert remaining > 0, f"missing markers: {expected - set(found)}"
@@ -1393,7 +1431,7 @@ def test_shutdown_wait_false_alone_still_hangs_at_interpreter_exit(tmp_path):
     try:
         assert _read_ready(proc) == "READY"
         with pytest.raises(subprocess.TimeoutExpired):
-            proc.wait(timeout=0.2)
+            proc.wait(timeout=_HANG_PROOF_S)
     finally:
         _terminate(proc)
 
@@ -1413,7 +1451,7 @@ def test_sigint_during_waiting_shutdown_retains_repeated_exit_handler(tmp_path):
         assert proc.poll() is None
 
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -1444,7 +1482,7 @@ def test_gil_holding_provider_has_os_independent_repeated_exit(tmp_path):
         for _ in range(3):
             os.kill(proc.pid, signal.SIGINT)
             time.sleep(0.15)
-        stdout, stderr = proc.communicate(timeout=1.25)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -1493,7 +1531,7 @@ def test_rapid_third_sigint_waits_for_provider_tree_and_pipe_cleanup(
         # communicate returning proves every inherited parent-facing pipe has
         # reached EOF; pidfds below prove both cleanup supervisor and provider
         # payload are gone without relying on reusable numeric PID lookups.
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -1547,7 +1585,7 @@ def test_repeated_sigint_kills_worker_hung_before_python_main_and_closes_pipes(
         assert proc.poll() is None
         os.kill(proc.pid, signal.SIGINT)
         # communicate returning is the inherited stdout/stderr pipe EOF proof.
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -1587,7 +1625,7 @@ def test_repeated_sigint_kills_unreaped_child_in_popen_to_pidfd_gap(tmp_path):
         time.sleep(0.15)
         assert proc.poll() is None
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -1627,7 +1665,7 @@ def test_process_group_sigint_during_startup_has_no_worker_traceback(tmp_path):
 
         os.killpg(proc.pid, signal.SIGINT)
         release_path.touch()
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         release_path.touch(exist_ok=True)
         if proc.poll() is None:
@@ -1675,7 +1713,7 @@ def test_repeated_sigint_reaps_setsid_double_fork_provider_tree_and_pipes(tmp_pa
         time.sleep(0.15)
         assert proc.poll() is None
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -1726,7 +1764,7 @@ def test_cli_sigint_before_pool_handler_install_is_typed_and_traceback_free(tmp_
     try:
         assert _read_ready(proc) == "BEFORE_POOL_INSTALL"
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -1768,7 +1806,7 @@ def test_cli_pending_sigint_during_boundary_install_is_typed_and_traceback_free(
         [sys.executable, "-c", child],
         capture_output=True,
         text=True,
-        timeout=2.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -1806,8 +1844,13 @@ def test_pool_pending_sigint_during_handler_install_restores_publication_truth(
         try:
             pool.__enter__()
             # CPython may run the Python handler either inside the unmask call
-            # or at the next bytecode checkpoint after it returns.
-            time.sleep(0.05)
+            # or at the next bytecode checkpoint after it returns. B184: keep
+            # offering checkpoints until it does -- a fixed 50ms of them was
+            # not enough on a loaded machine, and the miss read as "the pool
+            # never surfaced the pending signal".
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                time.sleep(0.001)
         except speech.TtsSynthesisInterrupted:
             caught = True
         finally:
@@ -1829,7 +1872,7 @@ def test_pool_pending_sigint_during_handler_install_restores_publication_truth(
         [sys.executable, "-c", child],
         capture_output=True,
         text=True,
-        timeout=2.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -1877,7 +1920,7 @@ def test_pool_handler_install_post_effect_raise_rolls_back_actual_handler(tmp_pa
         [sys.executable, "-c", child],
         capture_output=True,
         text=True,
-        timeout=2.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -1931,7 +1974,7 @@ def test_pool_restore_post_effect_raise_preserves_first_handler_exception(tmp_pa
         [sys.executable, "-c", child],
         capture_output=True,
         text=True,
-        timeout=2.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -1979,7 +2022,7 @@ def test_cli_handler_install_post_effect_raise_rolls_back_actual_handler(tmp_pat
         [sys.executable, "-c", child],
         capture_output=True,
         text=True,
-        timeout=2.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -2067,7 +2110,7 @@ def test_cli_outer_reactivation_repairs_externally_reset_sigint_handler(tmp_path
         [sys.executable, "-c", child],
         capture_output=True,
         text=True,
-        timeout=2.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -2142,7 +2185,7 @@ def test_cli_reused_controller_getsignal_interrupt_uses_only_live_handler(
         [sys.executable, "-c", child],
         capture_output=True,
         text=True,
-        timeout=2.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -2213,7 +2256,7 @@ def test_cli_pre_mask_real_sigint_uses_published_live_handler_truth(
         [sys.executable, "-c", child],
         capture_output=True,
         text=True,
-        timeout=2.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -2263,7 +2306,7 @@ def test_cli_mask_post_effect_raise_restores_mask_and_controller_truth(tmp_path)
         [sys.executable, "-c", child],
         capture_output=True,
         text=True,
-        timeout=2.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -2317,7 +2360,7 @@ def test_pool_restore_mask_post_effect_raise_keeps_handler_truth(tmp_path):
         [sys.executable, "-c", child],
         capture_output=True,
         text=True,
-        timeout=2.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -2369,7 +2412,7 @@ def test_cli_sigint_after_pool_handler_restore_is_typed_and_traceback_free(tmp_p
     try:
         assert _read_ready(proc) == "AFTER_POOL_RESTORE"
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -2396,7 +2439,7 @@ def test_hung_library_caller_repeat_cancels_without_process_death(tmp_path):
         assert _read_ready(proc) == "READY_SECOND"
 
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -2424,7 +2467,7 @@ def test_library_terminalization_rejects_preclaim_race_without_spawning(tmp_path
         assert proc.stdout is not None
         assert proc.stdout.readline().strip() == "READY_SECOND"
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -2456,7 +2499,7 @@ def test_nested_sigint_resumes_term_wait_until_worker_reaped(tmp_path):
         os.kill(proc.pid, signal.SIGINT)
         assert _read_ready(proc, timeout_s=1.5) == "TERM_WAIT"
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -2483,7 +2526,7 @@ def test_repeated_sigint_does_not_wait_on_post_real_popen_spawn_lock(tmp_path):
         os.kill(proc.pid, signal.SIGINT)
         time.sleep(0.1)
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -2512,7 +2555,7 @@ def test_repeated_sigint_fails_closed_before_real_popen_initialization(tmp_path)
         time.sleep(0.2)
         assert proc.poll() is None
         release_file.touch()
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         release_file.touch(exist_ok=True)
         if proc.poll() is None:
@@ -2536,7 +2579,7 @@ def test_exact_pre_main_worker_under_subreaper_fails_closed_without_pid(tmp_path
         [sys.executable, "-c", child],
         capture_output=True,
         text=True,
-        timeout=6.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -2572,7 +2615,7 @@ def test_deceptive_worker_argv_cannot_authorize_unknown_pid_hard_exit(tmp_path):
             assert proc.poll() is None
 
         release_file.touch()
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
         completed = True
     finally:
         release_file.touch(exist_ok=True)
@@ -2611,7 +2654,7 @@ def test_parent_without_pidfd_repeated_cancel_is_bounded_and_clean(tmp_path):
         time.sleep(0.15)
         assert proc.poll() is None
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -2655,7 +2698,7 @@ def test_portable_result_eof_retains_authority_through_supervisor_atexit(tmp_pat
         os.kill(proc.pid, signal.SIGINT)
         time.sleep(0.1)
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             if supervisor_pid is not None:
@@ -2692,7 +2735,7 @@ def test_portable_detached_descendant_is_killed_and_cannot_hold_pipes(tmp_path):
         time.sleep(0.1)
         started = time.monotonic()
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=1.5)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
         elapsed = time.monotonic() - started
 
         assert proc.returncode == 130
@@ -2733,7 +2776,7 @@ def test_saturated_stdout_stderr_cannot_block_repeated_interrupt_cleanup(tmp_pat
     supervisor_pidfd = None
     payload_pidfd = None
     try:
-        deadline = time.monotonic() + 3.0
+        deadline = time.monotonic() + _WAIT_S
         while time.monotonic() < deadline:
             if supervisor_file.exists() and payload_file.exists():
                 break
@@ -2752,7 +2795,7 @@ def test_saturated_stdout_stderr_cannot_block_repeated_interrupt_cleanup(tmp_pat
         os.kill(proc.pid, signal.SIGINT)
         time.sleep(0.02)
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=1.5)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
         elapsed = time.monotonic() - started
     finally:
         if proc.poll() is None:
@@ -3355,7 +3398,7 @@ def test_cleanup_baseexception_preserves_first_interrupt_and_terminal_gate(
         else:
             assert _read_ready(proc) == "REPAIR_MUTE"
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -3378,7 +3421,7 @@ def test_append_failure_keeps_started_worker_owned_for_repeated_exit(tmp_path):
         for _ in range(3):
             os.kill(proc.pid, signal.SIGINT)
             time.sleep(0.15)
-        stdout, stderr = proc.communicate(timeout=1.25)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -3637,7 +3680,7 @@ def test_unregister_failure_does_not_replace_provider_error_or_leave_child():
         def cancel_synth_process(self, process):
             if process.poll() is None:
                 process.terminate()
-            process.wait(timeout=1.0)
+            process.wait(timeout=_WAIT_S)
             return True
 
         def close_synth_identity_if_unowned(self, process, identity):
@@ -4079,7 +4122,7 @@ def test_terminal_pidfd_cleanup_is_idempotent_and_closes_descriptor():
     finally:
         if process.poll() is None:
             process.kill()
-            process.wait(timeout=1.0)
+            process.wait(timeout=_WAIT_S)
         pool._pool.shutdown(wait=False, cancel_futures=True)
 
 
@@ -4129,7 +4172,7 @@ def test_pidfd_close_handoff_survives_nested_concurrent_finish_and_fd_reuse(
         thread.start()
     start.wait()
     for thread in threads:
-        thread.join(timeout=1.0)
+        thread.join(timeout=_WAIT_S)
         assert not thread.is_alive()
 
     try:
@@ -4190,7 +4233,7 @@ def test_pidfd_publication_interruption_has_one_close_owner_after_fd_reuse():
         os.close(source_fd)
         if process.returncode is None:
             process.kill()
-        process.wait(timeout=1.0)
+        process.wait(timeout=_WAIT_S)
 
 
 def test_borrow_cleanup_trace_interruption_cannot_wedge_authority():
@@ -4332,17 +4375,17 @@ def test_two_thread_close_race_has_one_winner_after_forced_fd_reuse(monkeypatch)
         real_close(fd)
         os.dup2(source_fd, fd)
         close_entered.set()
-        assert release_close.wait(timeout=1.0)
+        assert release_close.wait(timeout=_WAIT_S)
 
     monkeypatch.setattr(isolation, "_OS_CLOSE", held_close)
     threads = [threading.Thread(target=owner.request_close) for _ in range(2)]
     threads[0].start()
-    assert close_entered.wait(timeout=1.0)
+    assert close_entered.wait(timeout=_WAIT_S)
     threads[1].start()
-    threads[1].join(timeout=1.0)
+    threads[1].join(timeout=_WAIT_S)
     assert not threads[1].is_alive()
     release_close.set()
-    threads[0].join(timeout=1.0)
+    threads[0].join(timeout=_WAIT_S)
     assert not threads[0].is_alive()
 
     assert close_calls == [raw_pidfd]
@@ -4377,7 +4420,7 @@ def test_rejected_borrower_cannot_release_true_borrower_or_close_reused_fd(
 
     def true_borrower(fd, signum):
         borrower_entered.set()
-        assert inspect_after_rejection.wait(timeout=1.0)
+        assert inspect_after_rejection.wait(timeout=_WAIT_S)
         observed_inodes.append(os.fstat(fd).st_ino)
 
     monkeypatch.setattr(isolation, "_OS_CLOSE", close_then_reuse)
@@ -4386,7 +4429,7 @@ def test_rejected_borrower_cannot_release_true_borrower_or_close_reused_fd(
         args=(true_borrower, signal.SIGCONT),
     )
     borrower.start()
-    assert borrower_entered.wait(timeout=1.0)
+    assert borrower_entered.wait(timeout=_WAIT_S)
 
     # A owns the published lease. Closing retires future borrows but must defer
     # until A releases. B's rejected temporary lease has no release authority.
@@ -4396,7 +4439,7 @@ def test_rejected_borrower_cannot_release_true_borrower_or_close_reused_fd(
     assert close_calls == []
 
     inspect_after_rejection.set()
-    borrower.join(timeout=1.0)
+    borrower.join(timeout=_WAIT_S)
     assert not borrower.is_alive()
     assert observed_inodes == [original_inode]
     assert close_calls == [original_read]
@@ -4496,7 +4539,7 @@ def test_borrowed_pidfd_preserves_primary_and_never_closes_reused_fd(monkeypatch
         os.close(raw_pidfd)
         os.close(source_fd)
         process.kill()
-        process.wait(timeout=1.0)
+        process.wait(timeout=_WAIT_S)
 
 
 @pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
@@ -4689,7 +4732,7 @@ def test_transport_wait_cannot_reap_while_portable_sender_owns_pid_fence(
     def held_send(pid, signum):
         numeric_sends.append((pid, signum))
         sender_entered.set()
-        assert release_sender.wait(timeout=1.0)
+        assert release_sender.wait(timeout=_WAIT_S)
 
     monkeypatch.setattr(
         isolation.SynthProcessLifecycle,
@@ -4705,9 +4748,9 @@ def test_transport_wait_cannot_reap_while_portable_sender_owns_pid_fence(
 
     waiter = threading.Thread(target=wait_transport_path)
     sender.start()
-    assert sender_entered.wait(timeout=1.0)
+    assert sender_entered.wait(timeout=_WAIT_S)
     waiter.start()
-    assert waiter_started.wait(timeout=1.0)
+    assert waiter_started.wait(timeout=_WAIT_S)
     time.sleep(0.05)
 
     # This is the only transport wait/reap path. It cannot consume the child
@@ -4717,8 +4760,8 @@ def test_transport_wait_cannot_reap_while_portable_sender_owns_pid_fence(
     assert process.returncode is None
 
     release_sender.set()
-    sender.join(timeout=1.0)
-    waiter.join(timeout=1.0)
+    sender.join(timeout=_WAIT_S)
+    waiter.join(timeout=_WAIT_S)
     assert not sender.is_alive()
     assert not waiter.is_alive()
     assert outcomes == [0]
@@ -4769,7 +4812,7 @@ def test_cleanup_baseexception_retains_authority_until_retry_confirms_reap(
     finally:
         if process.poll() is None:
             process.kill()
-            process.wait(timeout=1.0)
+            process.wait(timeout=_WAIT_S)
 
 
 def test_preinit_popen_failure_releases_partial_authority_without_attribute_error(
@@ -4878,7 +4921,7 @@ def test_system_python_pidfd_authority_constructor_and_signal_gate(tmp_path):
         ["/usr/bin/python3", "-c", child],
         capture_output=True,
         text=True,
-        timeout=3.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -4937,7 +4980,7 @@ def test_spawn_return_failure_reaps_preclaimed_child_and_preserves_primary(tmp_p
         [sys.executable, "-c", child],
         capture_output=True,
         text=True,
-        timeout=3.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -4996,7 +5039,7 @@ def test_repeated_sigint_hard_exits_hung_synth_without_traceback(tmp_path, play)
         assert proc.poll() is None
 
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -5034,7 +5077,7 @@ def test_repeated_sigint_waits_for_play_cleanup_before_hard_exit(tmp_path):
         # The repeat is recorded while cleanup owns the play ticket. It must
         # not terminate the process until abandonment and mute repair finish.
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -5068,7 +5111,7 @@ def test_cli_scope_is_known_before_provider_finishes_during_unwind(tmp_path):
         time.sleep(0.1)  # provider is done; CLI has not yet caught the interrupt
 
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -5102,7 +5145,7 @@ def test_repeated_sigint_deadline_exits_when_play_cleanup_stalls(tmp_path):
 
         started = time.monotonic()
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
         elapsed = time.monotonic() - started
     finally:
         if proc.poll() is None:
@@ -5131,7 +5174,7 @@ def test_single_sigint_allows_cooperative_synth_cleanup(tmp_path, play):
     try:
         assert _read_ready(proc) == "READY"
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -5178,8 +5221,12 @@ def test_long_lived_caller_delegates_next_sigint_after_synth_finishes(tmp_path):
             print("FIRST_CAUGHT", flush=True)
 
         time.sleep(0.3)
-        print("READY_AGAIN", flush=True)
+        # B184: publish the marker from inside the handler's reach. The parent
+        # signals the moment it reads this line, so a marker printed before the
+        # try left a window where SIGINT killed the child instead of being
+        # delegated -- a race the parent could not see and could not avoid.
         try:
+            print("READY_AGAIN", flush=True)
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
@@ -5200,7 +5247,7 @@ def test_long_lived_caller_delegates_next_sigint_after_synth_finishes(tmp_path):
         assert _read_ready(proc) == "READY_AGAIN"
 
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -5243,8 +5290,10 @@ def test_pre_submit_interrupt_does_not_strand_false_running_state(tmp_path):
             signal.pthread_sigmask = real_pthread_sigmask
 
         time.sleep(0.05)
-        print("READY_AGAIN", flush=True)
+        # B184: marker inside the try, so the parent's signal cannot land in a
+        # gap where KeyboardInterrupt is uncaught.
         try:
+            print("READY_AGAIN", flush=True)
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
@@ -5263,7 +5312,7 @@ def test_pre_submit_interrupt_does_not_strand_false_running_state(tmp_path):
         assert _read_ready(proc) == "READY_AGAIN"
 
         os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
     finally:
         if proc.poll() is None:
             _terminate(proc)
@@ -6473,7 +6522,7 @@ def test_successful_run_tts_propagates_delivered_sigint_from_mute_repair(tmp_pat
         [sys.executable, "-c", child],
         capture_output=True,
         text=True,
-        timeout=3.0,
+        timeout=_WAIT_S,
         env=_isolated_env(tmp_path),
         check=False,
     )
@@ -6762,7 +6811,7 @@ def test_public_interrupt_is_bounded_when_procfs_fails_after_payload_spawn(tmp_p
         time.sleep(0.01)
         if proc.poll() is None:
             os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
 
         assert proc.returncode == 130
         assert stdout == ""
@@ -6871,7 +6920,7 @@ def test_procfs_loss_with_adopted_descendant_is_bounded_and_orphan_free(tmp_path
         time.sleep(0.01)
         if proc.poll() is None:
             os.kill(proc.pid, signal.SIGINT)
-        stdout, stderr = proc.communicate(timeout=2.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
 
         assert proc.returncode == 130
         assert stdout == ""
@@ -6978,7 +7027,7 @@ def test_already_exited_payload_still_cleans_adopted_descendant(tmp_path):
         marker = _read_ready(proc)
         assert marker.startswith("EXITED_PAYLOAD_DESCENDANT ")
         descendant_pidfd = _linux_pidfd_open(int(marker.split()[1]))
-        stdout, stderr = proc.communicate(timeout=3.0)
+        stdout, stderr = proc.communicate(timeout=_WAIT_S)
 
         assert proc.returncode != 0
         assert stdout == ""
@@ -7495,6 +7544,15 @@ def test_main_authority_cleanup_preserves_structured_primary(
     monkeypatch.setattr(worker, "_OS_CLOSE", close_with_pending_sigint)
     monkeypatch.setattr(worker, "_PTHREAD_SIGMASK", fail_first_restore)
 
+    # B184: this test plants a SIGINT while the mask blocks it, so delivery
+    # happens whenever production next restores the mask -- a point this test
+    # does not control. Own the disposition across that window. Left to
+    # pytest's default_int_handler the delivery became a KeyboardInterrupt in
+    # whichever frame happened to be running, which aborts the whole session
+    # instead of failing one test. The subject here is the structured primary
+    # surviving the hostile cleanup, not who raises the signal.
+    previous_sigint = signal.signal(signal.SIGINT, lambda _signum, _frame: None)
+
     try:
         assert worker.main(["--cleanup-primary"]) == 1
         with pytest.raises(OSError):
@@ -7512,6 +7570,8 @@ def test_main_authority_cleanup_preserves_structured_primary(
         else:
             assert block_calls >= 4
     finally:
+        if previous_sigint is not None:
+            signal.signal(signal.SIGINT, previous_sigint)
         for fd in (result_read, authority_read):
             try:
                 real_close(fd)
@@ -7529,9 +7589,14 @@ def test_pipe_creation_publishes_both_fds_before_delivered_sigint(monkeypatch):
     real_pipe = os.pipe
     opened: list[int] = []
 
+    identities: dict[int, os.stat_result] = {}
+
     def pipe_then_sigint():
         fds = real_pipe()
         opened.extend(fds)
+        # Record what each number points at now, so the later release check
+        # cannot be fooled by the number being handed back out (B184).
+        identities.update({fd: os.fstat(fd) for fd in fds})
         blocked = signal.pthread_sigmask(signal.SIG_BLOCK, set())
         assert signal.SIGINT in blocked
         os.kill(os.getpid(), signal.SIGINT)
@@ -7548,9 +7613,7 @@ def test_pipe_creation_publishes_both_fds_before_delivered_sigint(monkeypatch):
 
     assert len(opened) == 2
     for fd in opened:
-        with pytest.raises(OSError) as caught:
-            os.fstat(fd)
-        assert caught.value.errno == errno.EBADF
+        _assert_fd_released(fd, identities[fd])
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux pidfd regression")
@@ -7563,11 +7626,14 @@ def test_outer_pidfd_is_owned_before_delivered_sigint(monkeypatch):
 
     process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     opened: list[int] = []
+    identities: dict[int, os.stat_result] = {}
 
     def pidfd_then_sigint(pid, flags=0):
         assert flags == 0
         fd = _linux_pidfd_open(pid)
         opened.append(fd)
+        # See _assert_fd_released: record identity, not just the number (B184).
+        identities[fd] = os.fstat(fd)
         blocked = signal.pthread_sigmask(signal.SIG_BLOCK, set())
         assert signal.SIGINT in blocked
         os.kill(os.getpid(), signal.SIGINT)
@@ -7585,14 +7651,12 @@ def test_outer_pidfd_is_owned_before_delivered_sigint(monkeypatch):
         with pytest.raises(KeyboardInterrupt):
             isolation.SubprocessSynthTransport._open_pidfd(process)
         assert len(opened) == 1
-        with pytest.raises(OSError) as caught:
-            os.fstat(opened[0])
-        assert caught.value.errno == errno.EBADF
+        _assert_fd_released(opened[0], identities[opened[0]])
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
         if process.poll() is None:
             process.kill()
-        process.wait(timeout=1.0)
+        process.wait(timeout=_WAIT_S)
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="requires fork_exec")

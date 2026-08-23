@@ -16,6 +16,7 @@ import pytest
 from hark.audio import external_audio, media, mic_mute
 from hark.audio.external_audio import (
     ENV_FLAG,
+    is_audio_playback_argv,
     is_mutating_argv,
     media_control_blocked,
 )
@@ -226,3 +227,72 @@ def test_blocked_call_log_is_bounded() -> None:
     for i in range(external_audio._MAX_LOGGED + 20):
         external_audio.note_blocked(["pactl", "set-sink-volume", str(i)], "test")
     assert len(external_audio.blocked_calls()) == external_audio._MAX_LOGGED
+
+
+# ---------------------------------------------------------------------------
+# B190: playback must not make noise on the operator's machine either
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "/tmp/x.mp3"],
+        ["paplay", "/tmp/x.wav"],
+        ["aplay", "/tmp/x.wav"],
+        ["/usr/bin/ffplay", "/tmp/x.mp3"],
+    ],
+)
+def test_audio_players_are_recognised(argv: list[str]) -> None:
+    assert is_audio_playback_argv(argv) is True
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        # ffmpeg CONVERTS (playback.py:1300, :1395, :1430) — silent, and
+        # blocking it would break MP3 handling. It must not be treated as a
+        # player.
+        ["ffmpeg", "-y", "-i", "/tmp/a.mp3", "-ac", "1", "/tmp/a.wav"],
+        ["pactl", "list", "sink-inputs"],
+        ["git", "status"],
+        [],
+    ],
+)
+def test_non_players_are_not_playback(argv: list[str]) -> None:
+    assert is_audio_playback_argv(argv) is False
+
+
+def test_playback_and_mutation_are_separate_questions() -> None:
+    """A player changes no state; a duck makes no noise. Different failures."""
+    assert is_audio_playback_argv(["ffplay", "/tmp/x.mp3"]) is True
+    assert is_mutating_argv(["ffplay", "/tmp/x.mp3"]) is False
+    assert is_mutating_argv(["pactl", "set-sink-volume", "0", "10%"]) is True
+    assert is_audio_playback_argv(["pactl", "set-sink-volume", "0", "10%"]) is False
+
+
+def test_tripwire_fails_on_a_spawned_player() -> None:
+    with pytest.raises(AssertionError, match="B190"):
+        subprocess.run(["ffplay", "-autoexit", "/tmp/nope.mp3"], capture_output=True)
+
+
+def test_tripwire_allows_ffmpeg_conversion() -> None:
+    """Conversion is silent; blocking it would break MP3 TTS handling."""
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", "/tmp/nope.mp3", "/tmp/nope.wav"],
+            capture_output=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def test_real_audio_device_is_blocked() -> None:
+    """sd.play is the non-subprocess playback path (playback.py:1338)."""
+    from hark.audio import playback
+
+    if getattr(playback, "sd", None) is None:
+        pytest.skip("sounddevice not installed")
+    with pytest.raises(AssertionError, match="B190"):
+        playback.sd.play([0.0, 0.0], 16000)

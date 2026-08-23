@@ -1,0 +1,39 @@
+---
+claimed_at: "2026-08-23T04:54:00Z"
+claimed_by: cli-user
+completed_at: "2026-08-23T05:41:29Z"
+complexity: medium
+created_at: "2026-08-23T04:52:05Z"
+depends_on: []
+duration_minutes: 47.4904009281
+estimate_hours: 2
+id: B186
+priority: high
+started_at: "2026-08-23T04:54:00Z"
+status: done
+tags: []
+title: ask/listen/tts --listen have no plain-text output mode; JSON-only stdout loses transcripts to naive truncation
+updated_at: "2026-08-23T05:41:29Z"
+---
+GitHub: https://github.com/ultradyn/hark/issues/11
+
+All three commands print JSON unconditionally; --json only toggles pretty-printing, it does not gate the format:
+- src/hark/cli.py:1777 (tts --listen)
+- src/hark/cli.py:1809 (listen)
+- src/hark/cli.py:1854 (ask)
+
+Why it bit us: an agent piped `hark ask` through `tail -c 1200` and destroyed the operator spoken answer. Deterministic, not unlucky: the success payload is built in the order ok, text, provider, duration_ms, end_mode, end_phrase, risk, tts, exit, for_event (src/hark/speak_then_listen/ask.py:187), so `text` is the SECOND key while `tts` (the largest sub-object, ~20 keys with nested conference / media_duck / listen_defer) sits near the end. A tail keeps telemetry and throws away the answer, every time. The operator had to repeat himself because nothing on disk could recover it.
+
+Part 1 - output mode. Add a text output mode to ask, listen, tts --listen:
+- success -> print result["text"] + newline to stdout, nothing else
+- error / cancellation -> keep the existing full JSON and the existing exit codes unchanged
+- mutually exclusive with --json (argparse add_mutually_exclusive_group); --json keeps meaning "pretty-print the JSON"
+- composes cleanly: the pipe warning already goes to stderr (src/hark/stdio.py:132), so answer=$(hark ask --text "...") is clean without HARK_NO_PIPE_WARN=1
+
+DESIGN DECISION (coordinator, 2026-08-23): implement --format {json,text} as the primary flag, with --text as an alias for --format text. Two reasons the issue raised the question and one it did not: (a) --json is already on ~25 subcommands and means "pretty", not "JSON at all", so retrofitting --format later is more churn than doing it now; (b) --text is ALREADY TAKEN with a different meaning on another subcommand (src/hark/cli.py:276, an.add_argument("--text") = the text to speak), so making --text the canonical name entrenches a collision.
+Also decide and document: what a meta_command or cancelled result prints under --format text (recommend: fall back to JSON, since there is no transcript to print).
+
+Part 2 - a lost transcript is currently unrecoverable. Even with the flag, an agent that mangles its own stdout has no fallback: the transcript body is never written to disk. ~/.local/state/hark/usage.jsonl records STT turns with chars/words counts but no body (TTS records do keep a ~160-char text_preview). ~/.local/state/hark/listen/ holds only *.cmd control files. Append completed transcripts to a jsonl in the state dir so a caller that loses stdout can recover rather than re-asking a human.
+Part 2 is separable - land it as its own commit so it can be dropped if scope needs cutting.
+
+Related: #3 (piping to tail appears to hang) is the buffering side of the same rough edge. Version at filing: 2026-08-23, editable v0.1.0, git v0.1.10-365-gfc3a1b5.

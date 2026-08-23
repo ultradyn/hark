@@ -1,0 +1,32 @@
+---
+claimed_at: "2026-08-23T04:54:00Z"
+claimed_by: cli-user
+completed_at: null
+complexity: medium
+created_at: "2026-08-23T04:52:28Z"
+depends_on: []
+estimate_hours: 2
+id: B187
+priority: high
+started_at: "2026-08-23T04:54:00Z"
+status: in_progress
+tags: []
+title: 'provider flag conflates TTS and STT: minimax TTS cannot pair with the configured default STT in ask / tts --listen'
+updated_at: "2026-08-23T04:54:00Z"
+---
+GitHub: https://github.com/ultradyn/hark/issues/10
+
+What happens: `hark ask --provider minimax "..."` and `hark tts --provider minimax --listen "..."` play the TTS fine, then fail the listen leg with "minimax STT unsupported (no stable public ASR in v1); use xai|openai|google". The single --provider flag is applied to BOTH legs.
+
+Impact: MiniMax is TTS-only, so it can never be used with ask / tts --listen even though config has a perfectly good default STT (custom grok-stt endpoint). In the filing session Google TTS was rejecting question-shaped text (see B177 / gh-9), so minimax TTS + default STT was exactly the combination needed. The only workaround was two commands (hark tts --provider minimax "Q" && hark listen), which loses ask confirm/meta-command handling and event tagging.
+
+Current state verified 2026-08-23: still unfixed. src/hark/cli.py has a bare --provider on tts (:284), listen (:323) and ask (:349); there are no --tts-provider / --stt-provider flags anywhere.
+
+Expected: separate --tts-provider / --stt-provider flags, OR --provider applies to TTS only while STT uses its configured provider. STT provider selection already exists independently in config.
+
+DESIGN DECISION (coordinator, 2026-08-23): add explicit --tts-provider / --stt-provider, and keep --provider as a both-legs shorthand for backwards compatibility. Rationale: silently narrowing --provider to TTS-only would change the meaning of existing invocations without an error, which is worse than a new flag. Where --provider is given alongside a specific flag, the specific flag wins; say so in --help.
+On `listen` (STT-only) --provider and --stt-provider mean the same thing - do not error on the pair.
+
+Sequencing: land this BEFORE B177/gh-9 (TTS fallback). Both touch provider resolution; doing selection first gives the fallback work a clean per-leg provider to fall back within.
+
+Version at filing: 2026-08-17, editable v0.1.0, git v0.1.10-324-g9ea9549-dirty.

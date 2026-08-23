@@ -69,7 +69,7 @@ hark skip <event_id>
 hark reply <target> …
 hark keys <target> <key> [key…]
 
-# Speech
+# Speech  (tts/listen/ask: --json | --format json|text, --text = --format text)
 hark tts … [--standalone]
 hark listen … [--end-mode silence|radio]
 hark listen-end [--cancel] [--stream-id ID]
@@ -83,6 +83,7 @@ hark mute | unmute | mute-sync
 hark devices
 hark providers [test NAME]
 hark stats                          # TTS/STT usage stats
+hark transcripts [-n N] [--last] [--json] [--path]   # captured transcripts (0600)
 hark logs | watch-logs              # unified / live human-readable logs
 
 # Dashboard (aliases)

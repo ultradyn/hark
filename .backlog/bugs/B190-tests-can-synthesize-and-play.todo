@@ -1,0 +1,38 @@
+---
+claimed_at: "2026-08-23T05:42:53Z"
+claimed_by: cli-user
+completed_at: null
+complexity: medium
+created_at: "2026-08-23T05:42:48Z"
+depends_on: []
+estimate_hours: 2
+id: B190
+priority: high
+started_at: "2026-08-23T05:42:53Z"
+status: in_progress
+tags: []
+title: 'tests can synthesize and play real audio: B188 gates ducking but not TTS playback or provider spend'
+updated_at: "2026-08-23T05:42:53Z"
+---
+Follow-on from B188. That task gated the MUTATING media-control commands (volume duck, MPRIS pause, capture mute). It did NOT gate the two other ways a test reaches the operator: making noise, and spending money.
+
+Concrete incident 2026-08-23: the B186 implementation agent ran `hark tts --text "Ready?"` without --listen in a verification step where it had stubbed speak_and_listen but not run_tts. Result: one real provider synthesis (billable) plus one real playback on the shared desktop, and a cache write to assets/tts/eve/ready-95c05077.mp3. Self-reported, and the agent stubbed run_tts for all later checks. This is a foreseeable mistake, not a careless one - the stub surface is not obvious.
+
+Two seams:
+
+1. PLAYBACK (noise on the operator desktop)
+   - src/hark/audio/playback.py:1352-1354 spawns ffplay / paplay / aplay
+   - src/hark/audio/playback.py:1338 sd.play(samples, sample_rate) + sd.wait()
+   Note ffmpeg at :1300, :1395 and :1430 is CONVERSION, not playback - silent and harmless. Do not blanket-block ffmpeg or you break MP3 handling tests.
+
+2. PROVIDER SPEND (real money, real network)
+   - src/hark/speech.py:684 run_tts
+   - the provider HTTP path under src/hark/providers/
+   A test that reaches a live TTS/STT endpoint costs credit and is slow and flaky. There is no test-time network guard today; conftest only disables the GitHub update check (B088).
+
+Recommended shape, mirroring B188 so there is one idiom rather than three:
+- extend hark.audio.external_audio with is_audio_playback_argv() and have the conftest tripwire fail on ffplay/paplay/aplay
+- add a conftest fixture that wraps sounddevice play so a test that reaches the real device fails loudly
+- separately (larger, decide scope first): fail a test that opens an outbound HTTP connection to a provider unless it opts in, so accidental live synthesis is a red test rather than a line item. Live-dogfood tests like B183 must be able to opt in.
+
+The playback half is cheap and test-only. The spend half needs a decision about how live-verify tasks opt in.

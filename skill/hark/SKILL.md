@@ -1,12 +1,14 @@
 ---
 name: hark
 description: >
-  Hands-free voice bridge for Herdr agents (product: Hark). Run outside Herdr
-  on the local machine; watch local/remote sessions; speak blocked questions;
-  listen via cloud STT; reply with text or menu keys; stale-safe delivery.
+  Hands-free voice bridge (product: Hark). Two uses: voice Q&A with the operator
+  in this session (planning, mapping a problem — no daemon needed), or watching
+  Herdr agents to speak blocked questions and deliver answers stale-safe.
+  Infers scope/mode/voice at start instead of interviewing. Cloud STT/TTS.
   After this skill loads, communicate primarily via TTS. Use when operator says
-  hark, handsfree, voice bridge, or needs voice unblocking of Herdr agents.
-  Requires `hark` CLI and Herdr ≥ 0.7.1. Alias skill name: handsfree.
+  hark, handsfree, voice bridge, wants a spoken back-and-forth, or needs voice
+  unblocking of Herdr agents. Requires `hark` CLI; Herdr ≥ 0.7.1 for agent watch.
+  Alias skill name: handsfree.
 ---
 
 # Hark — voice bridge for Herdr
@@ -22,7 +24,7 @@ You keep the human in the loop with Herdr-hosted agents **by voice**. You do
 Once `/hark` or `/handsfree` is invoked, you enter **TTS mode**:
 
 1. **Prefer speaking over typing.** Use `hark tts "…"` for almost all operator-facing messages (status, setup questions, confirmations, errors).
-2. **Session + voice bootstrap is mandatory before arming** — see **Session + voice bootstrap (hard rule)** and **Structured startup interview (B125)** below. Do **not** start ambient/watch/monitor with silent defaults or jump to “Hark is ready” before the interview.
+2. **Run Start first** — infer scope/mode/role/voice, announce in one line. No startup interview. Don't arm workers unless **Daemon by exception** says to.
 3. **Question → record → answer loop** for every operator decision:
    - Speak the question (`hark tts` or `hark ask`)
    - Start listening (`hark listen` / `hark ask` already listens)
@@ -49,12 +51,12 @@ string, **Q**. Then perform these as two separate, ordered harness actions:
 
 Direct example — first send this visible assistant update (not a shell command):
 
-> Question: Which Herdr sessions should I watch: local, remote, or both?
+> Question: Should I watch your other agents, or just work with you here?
 
 Then, in a later tool call, invoke:
 
 ```bash
-hark ask --confirm never "Which Herdr sessions should I watch: local, remote, or both?"
+hark ask --confirm never "Should I watch your other agents, or just work with you here?"
 ```
 
 **Confirmation path:** `hark ask --confirm auto|always` can perform its spoken
@@ -78,83 +80,51 @@ another flush inside the same tool call: Codex buffers that tool call. Do not
 add the preamble to Hark stdout; stdout remains machine-parseable.
 <!-- b141-chat-question-contract:end -->
 
-## Session + voice bootstrap (hard rule — B116 + B125)
+## Start (B116/B125)
 
-**Before** `hark start` / ambient / watch workers **or** arming `hark monitor`, you **MUST** complete bootstrap **and** the **structured startup interview**. Skipping either is a skill bug. One question per TTS turn.
+`command -v hark` → missing? [POST_INSTALL.md](POST_INSTALL.md). Then `hark doctor`.
+Setup incomplete (no `setup-complete.json`, empty sessions, stale schema) → `hark setup`; it asks.
+Otherwise **ask nothing** — infer:
 
-### A. Install / doctor / Herdr sockets (B116)
-
-1. Ensure CLI exists (`command -v hark`). If not → [POST_INSTALL.md](POST_INSTALL.md). Run `hark doctor` (text OK for tools). If doctor warns **setup incomplete** / missing sessions → treat as incomplete.
-2. **If setup incomplete** (no `setup-complete.json`, empty sessions, schema stale): voice-ask persona / wake / TTS (or `hark setup` / `hark setup --force`). See [SETUP.md](SETUP.md).
-3. **Wake name:** if unclear, confirm by voice before enabling ambient.
-
-### B. Structured startup interview (B125) — required every skill start
-
-Ask by voice **one at a time**, unless the operator **already stated** that answer in this conversation. After all four core answers (plus follow-ups), **pass them through** with `hark session-profile set … --apply` **before** `hark start`.
-
-| # | Topic | Spoken question (example) | Pass-through |
-|---|--------|---------------------------|--------------|
-| 1 | **Scope** | “Should I stay session-local only, or also listen to Herdr agents?” | `session_local` vs `herdr` |
-| 2 | **Autonomy** | “How active should I be: mostly silent, speak when blocked, proactive status, or hands-on babysit?” | `silent` / `blocked_only` / `proactive` / `babysit` |
-| 3 | **Role** | “What is this handsfree session for?” (free-form) | `--role "…"` |
-| 4 | **Mode** | “Which mode: auto-end on pause, radio with end phrases, or conversation after wake?” | `auto_end` / `radio` / `conversation` |
-
-**Persist + apply (required):**
+- **scope** — task about *other agents* (watch, unblock, babysit, AFK, fleet)? `herdr`. Else `session_local`.
+- **mode** — from `hark config show`: `streaming=true` → conversation; else `end_mode=radio` → radio; else auto_end.
+- **role** — this conversation's task, few words. Re-infer every start; the saved role belongs to whatever ran last.
+- **voice** — planning/Q&A: speak every turn, ask by voice. Executing: silent except blocker, decision you need, done, stop-the-line error.
 
 ```bash
-hark session-profile set \
-  --scope session_local|herdr \
-  --autonomy silent|blocked_only|proactive|babysit \
-  --role "operator free text" \
-  --mode auto_end|radio|conversation \
-  --apply
-# --apply writes [ambient].streaming + [listen].end_mode
-hark session-profile show   # confirm; note start_watch=
+hark session-profile set --scope … --autonomy proactive|blocked_only --role "…" --mode … --apply
 ```
 
-| Mode answer | Config effect | Operator-facing behavior |
-|-------------|---------------|---------------------------|
-| **auto_end** | `streaming=false`, `end_mode=silence` | Wake → speak → auto-finish on pause / Smart Turn |
-| **radio** | `streaming=false`, `end_mode=radio` | Classic HOLD; finish with over / okay hark send |
-| **conversation** | `streaming=true`, `end_mode=radio` | After first wake, stay open; full TTS on `ambient.turn`; no re-wake; product end phrases optional |
+Then **one** TTS line — mode, scope, when you'll speak. Offer the change; don't ask for it.
 
-| Scope answer | Runtime effect |
-|--------------|----------------|
-| **session_local** | `hark start` **skips Herdr watch** (no `agent.blocked` / done noise). Ambient + monitor still run for voice. Override: `hark start --force-watch`. |
-| **herdr** | Watch starts (default product path). Then ask which sockets (below). |
+> "Radio mode, session-local. Vocal through planning, quiet during execution. Say the word to change any of it."
 
-| Autonomy | How chatty you are after ready |
-|----------|--------------------------------|
-| **silent** | TTS only for hard blocks / direct ambient asks |
-| **blocked_only** | Speak on blocked / needs_input / ambient; skip routine done |
-| **proactive** | Short status when useful (queue, meaningful completions) |
-| **babysit** | Announce blocks promptly, offer next steps; still never invent pane answers |
+Ask only if inference genuinely fails — that one question, not four. Per B141, emit it in
+visible chat first, then:
 
-**Role** biases tone and what you offer (unblock agents, pair on a feature, review-only, AFK babysit, …). Do not start coding agents if role is clearly “review only / listen only” unless they ask.
+```bash
+hark ask --confirm never "Should I watch your other agents, or just work with you here?"
+```
 
-### C. Follow-up decision tree (one question each, only when needed)
+**Phase switch.** planning → executing: one short line ("Going quiet — I'll speak up if I'm blocked") and `hark session-profile set --autonomy blocked_only`. Back to `proactive` if planning resumes.
 
-After core answers 1–4:
+**Daemon by exception.** `hark start` + Monitor **only** when scope is `herdr`, or the operator must talk unprompted (wake word — they ask, or they are away from the keyboard / hands busy). Otherwise no workers, no monitor: `hark ask "…"` asks and listens, `hark tts "…"` speaks, `hark tts --listen "…"` speaks then records — all work with nothing running. Session-local Q&A is the common case: **no daemon**.
+When the daemon *is* running: `hark status` (+ `hark queue --announce` if `herdr`) before the ready line, then arm **one** Monitor. Ambient auto-pauses for `listen`/`ask` (mic lease yield) — never kill it by hand.
 
-1. **If scope = herdr** → ask Herdr sessions (local / SSH / mix) and write `[[herdr.sessions]]` (B116). First emit the exact quoted question as a visible chat update per B141; then run:
-   ```bash
-   hark ask --confirm never "Which Herdr sessions should I watch? Local only, a remote SSH host, or both?"
-   ```
-2. **If scope = session_local** → **do not** start watch; skip session socket questions unless they volunteer remote work later.
-3. **If autonomy = babysit or proactive** → short confirm: “I’ll still always confirm risky (R2/R3) actions — OK?”
-4. **If mode = radio** → ready TTS reminds end phrases (over / okay hark send).
-5. **If mode = conversation** → ready TTS: keep talking after wake, no re-wake between turns.
-6. **If mode = auto_end** → ready TTS: finishes on a natural pause.
-7. **If role mentions review-only / no spawn** → do not offer `hark agent-start` unprompted.
-8. **If setup incomplete** (still) → persona / wake / voice questions (B116 §A).
+| Mode | Config | Behaviour |
+|------|--------|-----------|
+| auto_end | `streaming=false`, `end_mode=silence` | wake → speak → auto-finish on pause / Smart Turn |
+| radio | `streaming=false`, `end_mode=radio` | HOLD; finish with over / okay hark send |
+| conversation | `streaming=true`, `end_mode=radio` | stays open after first wake; full TTS per turn; no re-wake |
 
-### D. Arm only after A–C
+`hark ask` / `tts --listen` read `end_mode` from config themselves — **never pass `--end-mode`**.
+With no daemon only the end half of the mode is live (wake and stay-open need ambient), so announce
+how their answer ends, not wake behaviour.
 
-Never arm ambient/watch/monitor “to save time” and interview later. Order: doctor → interview → `session-profile set --apply` → sessions (if herdr) → status/queue → ready TTS (use `mode` wording) → `hark start` → **one** monitor.
+Scope `session_local` skips the Herdr watch worker (`hark start --force-watch` overrides).
+CLI: `hark session-profile show|set|apply|clear`, `hark setup`, [SETUP.md](SETUP.md).
 
-CLI: `hark session-profile show|set|apply|clear`, `hark setup`, [SETUP.md](SETUP.md), `docs/HERDR.md`.
-
-Mic mutes automatically during TTS (`mute_mic_during_tts`). After TTS/ask, the **record beep plays when listen is ready** (`answer_arm_cue`, default on) — not when speech opens. Leading silence/noise is still trimmed before content is kept.
+Mic mutes automatically during TTS. Record beep plays when listen is **ready** (`answer_arm_cue`), not when speech opens; leading silence is trimmed.
 
 ## Placement
 
@@ -166,68 +136,29 @@ Always address **`session_id/pane_id`**. Prefer bound **`event_id`** from watch 
 
 ## Herdr sessions — local, SSH, or a mix
 
-Hark is multi-session. Each `[[herdr.sessions]]` entry is one Herdr server.
-**`ssh` is optional per session** — omit it for local, set it for remote. Local and
-SSH sessions can run **together** in the same config; watch opens tunnels only
-where `ssh` is set.
+Only relevant when scope is `herdr`. One `[[herdr.sessions]]` per Herdr server;
+`ssh` optional per entry — omit for local, set for remote. Local and SSH mix freely
+in one config; watch tunnels only where `ssh` is set (no manual `ssh -L` needed).
 
-Config file: `~/.config/hark/config.toml` (or `HARK_CONFIG`). After edits, ambient
-file-watch reloads when ambient/watch are running; otherwise restart workers.
-
-### Local only
+Config: `~/.config/hark/config.toml` (or `HARK_CONFIG`). Ambient file-watch reloads
+edits while running; otherwise restart workers.
 
 ```toml
 [[herdr.sessions]]
-id = "local"
-# socket = "~/.config/herdr/herdr.sock"   # optional override
-# label = "this machine"
-```
-
-Default when unset is the usual local Herdr socket. Named local Herdr sessions
-use Herdr’s own session sockets (see `docs/HERDR.md`).
-
-### SSH remote only
-
-Hark **tunnels the remote Unix socket** (preferred) — you do not need a manual
-`ssh -L` for normal handsfree use:
-
-```toml
-[[herdr.sessions]]
-id = "work"
-ssh = "workbox"                          # or user@host
-# remote_socket = "~/.config/herdr/herdr.sock"
-# label = "work box"
-```
-
-Local tunnel path is under `~/.cache/hark/tunnels/<id>.sock`. `hark doctor`
-checks tunnels; fix SSH/`ssh workbox herdr status` if unhealthy.
-
-### Mix — local + SSH (common)
-
-```toml
-[[herdr.sessions]]
-id = "local"
+id = "local"                       # unset socket = usual local Herdr socket
 
 [[herdr.sessions]]
 id = "work"
-ssh = "workbox"
+ssh = "workbox"                    # or user@host; tunnels the remote socket
 label = "work box"
-
-[[herdr.sessions]]
-id = "lab"
-ssh = "user@lab.example"
+# remote_socket = "~/.config/herdr/herdr.sock"   # override if non-default
 ```
 
-- Events and replies are always **`(session_id, pane_id)`** — e.g.  
-  `hark reply work/w1:p6 "yes"` or `hark answer <event_id> …`  
-- `hark queue` / watch cover **all** configured sessions.  
-- Remote/tunnelled sessions are **never** treated as “self” for self-detect.  
-- Voice bootstrap: ask which sessions to watch; if they say local *and* a remote
-  host, write both `[[herdr.sessions]]` blocks (local without `ssh`, remote with).
-
-Manual tunnel (optional, if not using `ssh =`):  
-`ssh -L /tmp/herdr-work.sock:~/.config/herdr/herdr.sock workbox -N` then point
-`socket` at the local path. Prefer config-managed `ssh =` for handsfree operation.
+- Events and replies are always **`(session_id, pane_id)`** — `hark reply work/w1:p6 "yes"`, or prefer `hark answer <event_id>`.
+- `hark queue` / watch cover **all** configured sessions.
+- Tunnel path: `~/.cache/hark/tunnels/<id>.sock`. `hark doctor` checks it; if unhealthy try `ssh workbox herdr status`.
+- Remote sessions are **never** "self" for self-detect.
+- Infer the sessions from config. Ask only if config has none and scope is `herdr`.
 
 Full contract: [docs/HERDR.md](https://github.com/ultradyn/hark/blob/master/docs/HERDR.md).
 
@@ -253,7 +184,7 @@ before arming Monitor or TTS mode.
 - **R2/R3** (permissions, destructive): always confirm. **R0/R1**: confirm only when unsure.  
 - **Listen end:** default silence/Smart Turn. If `[listen] end_mode = "radio"`, keep listening through long pauses until an end phrase. **Product:** `okay hark send`, `end prompt`, `hark over`. **Soft (default on):** utterance-final prosign `over` (not phrasal `turn it over` / `take over`), `okay over` / `okay, over`, `send it`, `that's all`, `over and out`, `message done`. Soft `over` is always **finish**, never cancel. Trailing politeness (`thank you`, `thanks`, `please`) after an end phrase still auto-finishes. Cancel: `hark cancel` (not casual “cancel that”).  
 - **Partials / turns:** you may receive `ambient.partial` (radio HOLD), `ambient.turn` (conversation), with policy `warning`/`instructions`, `streaming` bool, and often **`agent_control`**. You **MUST NOT** deliver to a pane until the operator clearly asks (or `final=true` / `ambient.prompt` when bound to a finish). **Default HOLD** (`streaming=false`): do **not** TTS a full answer on partials — think privately; wait for `ambient.prompt`. **Conversation mode** (`streaming=true`): **full TTS on each `ambient.turn`** (and streaming partials) — do **not** wait for a special radio final; session stays open without re-wake. You **MUST cancel** (`listen-end --cancel`) when capture is clearly **unrelated conversation / bleed**.  
-- **Event-driven idle (hard rule) — no polling.** After you finish handling a monitor event (blocked answer delivered, ambient.prompt / ambient.turn answered by TTS, done judged, partial HOLD decision done), **stop**. Do **not** poll logs, spin `sleep`/busy-wait, re-tail files, or re-query “is there more?” in a loop. The **persistent Monitor(s)** will wake you on the next line. Between events your job is to be idle with monitors still armed — not to keep the turn alive.
+- **Event-driven idle (hard rule) — no polling.** *Daemon mode only.* After handling a monitor event (blocked answer delivered, ambient.prompt / ambient.turn answered, done judged, partial HOLD decided), **stop**: no log polling, `sleep` busy-wait, re-tailing, or “is there more?” loops. The persistent Monitor wakes you on the next line. **No daemon** (the default): nothing will wake you — do *not* idle waiting on a monitor that was never armed. Finish the turn, or ask the next question with `hark ask`.
 - **Ambient:** optional `[ambient]` wake via local short snippets; cloud STT after activation. Defaults: names **iris** / **mercury** / **hark** / **herald** (say hey/hello/yo/sup + name, or bare name). Engines: **`vosk`** (stock default) or **`sherpa_kws`** (**prefer for product names** — keyword spotting vs open ASR; see [WAKE_STT.md](WAKE_STT.md) § *Why Sherpa is better*). **Two customization styles** (pick one) — see [docs/CUSTOM_WAKE.md](https://github.com/ultradyn/hark/blob/master/docs/CUSTOM_WAKE.md):
   1. **Name-based** (default): `[ambient] wake_mode = "names"`, `names = ["iris", "mercury", "hark", "herald"]`, optional `extra_names`. Greating+name and bare name; seed mishears for hark/herald (Vosk).
   2. **Full-phrase:** `wake_mode = "phrases"`, `trigger_phrases = ["start prompt", …]` (no name fuzzy).
@@ -275,21 +206,9 @@ When you hit a problem (mic busy, missed alert, empty STT, skill gap, confusing 
 4. Prefer fixes that help the *next* Hark agent, not only this turn.
 
 **CLI must match the checkout.** A non-editable `uv tool install` freezes
-site-packages and can lag `master` (missing `start`/`stop`/`restart`, arm-cue
-fixes, …) while `uv run hark` works. **`hark doctor`** shows `install: stale|frozen`
-and a reinstall hint (B100). Prefer one of:
-
-```bash
-# from this repo (editable; git pull updates PATH hark)
-uv tool install -e . --force
-# or run without installing:
-uv run hark …
-# installer is editable by default:
-./install.sh
-```
-
-Do **not** dogfood Hark against an old global tool when validating listen/TTS handoff
-or Mode A workers. If PATH rejects `hark start`, reinstall editable before pkill.  
+site-packages and lags `master`; `hark doctor` flags `install: stale|frozen` (B100).
+Fix with `uv tool install -e . --force`, `./install.sh`, or just `uv run hark …`.
+Never validate listen/TTS handoff or Mode A workers against a stale global tool.
 
 ## Streaming / conversation mode (`[ambient].streaming`) — B098 + B105 + B112 + B121/B122
 
@@ -350,16 +269,11 @@ On **each** `ambient.partial` (HOLD radio):
 4. If still mid-radio HOLD (`partial=true`, `streaming=false`): no full TTS; wait for final.  
 5. When done: **idle** — leave monitors armed.
 
-## Arm the feed (**required**)
+## Arm the feed (only when the daemon runs)
 
-**Hard-require:** arm **one** persistent Monitor on the unified Hark feed. Do **not** invent separate `tail | grep` pipelines — those miss events (e.g. `ambient.wake_near_miss` was easy to drop).
+Not needed for `hark ask` / `hark tts` — see **Daemon by exception**. When workers do run, arm **one** persistent Monitor on the unified feed. Never hand-roll `tail | grep`; it drops events (`ambient.wake_near_miss`).
 
-**Singleflight (B102):** only **one** `hark monitor` consumer may run. A second process exits non-zero with `hark monitor already running (pid …)`. Before arming on skill start / session restart:
-
-1. If this session **already has** a live Monitor on `hark monitor`, **do not** arm another.
-2. Optional check: `hark start --status` (shows `monitor: running|not running`) or attempt arm once — refuse means one is already live; leave it.
-3. Never run parallel ambient-only / watch-only tails alongside the unified monitor.
-4. `--allow-multiple` is **debug only** (duplicates HEP wakes).
+**Singleflight (B102):** one consumer only — a second exits non-zero (`already running (pid …)`). Don't arm if this session already has one; check `hark start --status`. No parallel ambient-only / watch-only tails. `--allow-multiple` is debug only.
 
 ```text
 # REQUIRED — single Monitor for all Hark wake events (persistent)
@@ -411,7 +325,7 @@ When **you** are Google Antigravity CLI (`agy`), there is **no** native long-liv
 Monitor tool. Wake uses **agentapi inject** (same idea as c2c’s agy path):
 
 1. Install/load this skill; ensure `hark` CLI works (`hark doctor`).
-2. Start workers: `hark start` (or `./scripts/run-mode-a.sh` / ambient+watch).
+2. Start workers: `hark start` — agy wake needs the daemon, so **Daemon by exception** always applies here.
 3. **Register** inject target (shell inside agy so env is set):
    ```bash
    hark agentapi register
@@ -439,7 +353,7 @@ Constraints:
 
 If `~/.local/state/hark/setup-complete.json` is missing (or schema older than current),
 **or** doctor reports setup incomplete / empty sessions, run the guided checklist
-**before** arming handsfree (same order as **Session + voice bootstrap**):
+**before** arming handsfree (same order as **Start**):
 
 - **CLI / deps not installed yet:** [POST_INSTALL.md](POST_INSTALL.md) first
   (`npx skills` does not install Python).
@@ -450,25 +364,6 @@ If `~/.local/state/hark/setup-complete.json` is missing (or schema older than cu
 - **CLI:** `hark setup` (`--yes --persona feminine --wake-engine vosk|sherpa_kws`
   `--sessions local` or `local,work=ssh:host`).
 - **Local wake engines / models:** [WAKE_STT.md](WAKE_STT.md) (survey: `docs/plans/B069-local-stt-survey.md`).
-
-## On skill start (voice bootstrap)
-
-**Order is mandatory.** Do not arm workers/monitor before steps 2–3.
-
-1. Ensure CLI exists (`command -v hark`). If not → [POST_INSTALL.md](POST_INSTALL.md). Then `hark doctor` (text OK for tools). Note setup / sessions warnings.
-2. **Hard rule (B116 + B125):** complete **Session + voice bootstrap** including the **structured startup interview** (scope → autonomy → role → mode), then follow-ups. Persist with:
-   ```bash
-   hark session-profile set --scope … --autonomy … --role "…" --mode … --apply
-   ```
-   Write `[[herdr.sessions]]` only when scope is **herdr**. If setup incomplete, also persona/voice/wake. See [SETUP.md](SETUP.md).
-3. `hark status` + (if scope is herdr) `hark queue --announce` — announce pending by TTS when Herdr is in scope. Skip queue noise for session-local.  
-4. TTS ready line matching **mode** (and wake name). Examples: conversation → no re-wake; radio → over / okay hark send; auto_end → pause finishes. Speak a one-line ack of scope + autonomy + role.
-5. **Required:** start workers then arm **one** **`hark monitor --for-monitor`** (persistent) if not already armed.  
-   - `hark start` **honors session profile**: session_local → **no watch worker** (ambient only).  
-   - Herdr scope → ambient + watch.  
-   - Do **not** arm a second monitor; check `hark start --status` / existing Monitor first.
-6. Prefer `hark tts --listen "…"` or `hark ask` so recording arms after you speak (**beep when listen ready**, not when speech opens). **Ambient auto-pauses** for listen/ask (mic lease yield); no manual kill needed.  
-7. **Idle and wait for that Monitor** to deliver the next line. Gate chattiness by **autonomy**. Do not poll.
 
 ## On `agent.blocked` / blocked monitor line
 
@@ -573,7 +468,7 @@ Use PATH binaries only (Herdr cannot see fish functions). Overrides: `[agents]` 
 | `hark session list\|ensure` | Named Herdr sessions (voice spawn) |
 | `hark agent-start` | Start coding agent + optional kickoff prompt |
 | `hark mute` / `unmute` | System mic mute |
-| `hark session-profile set\|show\|apply\|clear` | B125 startup interview → scope/mode/autonomy/role; start skips watch when session_local |
+| `hark session-profile set\|show\|apply\|clear` | inferred scope/mode/autonomy/role; start skips watch when session_local |
 
 ## Failures
 

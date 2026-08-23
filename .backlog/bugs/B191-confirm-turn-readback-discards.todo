@@ -1,15 +1,14 @@
 ---
+completed_at: null
 complexity: medium
 created_at: "2026-08-23T08:06:41Z"
 depends_on: []
 estimate_hours: 1
 id: B191
 priority: medium
+started_at: null
 status: pending
-tags:
-    - providers
-    - observability
-    - tts
+tags: []
 title: confirm-turn readback discards its run_tts result, so a TTS fallback there reaches no JSON and no transcript
 updated_at: "2026-08-23T08:06:41Z"
 ---
@@ -28,3 +27,5 @@ Pre-existing, but it matters more now for two reasons:
 Fix: thread the readback result out so its `fallback` / `provider` reach the ask payload, and decide where it belongs in the JSON - the readback is a second TTS in the same turn, so it probably needs its own key rather than overwriting the question TTS block. That design question is why this was held out of B177 rather than bolted on.
 
 Documented as a known gap in docs/PROVIDERS.md under the "A downgrade is never silent" section - keep the doc and the fix in sync when this lands.
+
+B192 is a duplicate of this item, filed concurrently by the implementation agent on 2026-08-23 while the coordinator filed this one. B192 has been marked blocked-as-duplicate pointing here. docs/PROVIDERS.md references B191. Fold in anything unique to B192 before closing it.

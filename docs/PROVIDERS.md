@@ -46,7 +46,7 @@ Env: `HARK_STT_DISABLED`, `HARK_TTS_DISABLED` (comma-separated), `HARK_TTS_MINIM
 
 MiniMax TTS: on first interactive use when MiniMax would be selected, Hark asks for consent and persists `tts.minimax_ok = true`. Non-interactive runs fail with a clear hint until the flag is set. `hark doctor` / setup **display** `minimax_ok` but do not set it — agents pinning MiniMax must set the flag or `HARK_TTS_MINIMAX_OK=1` before non-interactive `hark tts` (B170).
 
-**Auto means credential presence at resolve time**, not runtime viability. Selection walks the order below and picks the first provider whose `*_auth().available` is true. Auth failures / HTTP 401–403 raise `ProviderError` and **do not** fall through to the next provider today (open B164). The only intra-provider fallback is OpenAI STT model (`gpt-4o-mini-transcribe` → `whisper-1` when `OPENAI_STT_MODEL` is unset).
+**Auto means credential presence at resolve time**, not runtime viability. Selection walks the order below and picks the first provider whose `*_auth().available` is true. Auth failures / HTTP 401–403 raise `ProviderError` and **do not** fall through to the next provider today (open B164). Runtime fallback exists for exactly **one** TTS error class — the provider generated text instead of audio (B177, [below](#scoped-tts-retry--provider-fallback-b177)). The only intra-provider fallback is OpenAI STT model (`gpt-4o-mini-transcribe` → `whisper-1` when `OPENAI_STT_MODEL` is unset).
 
 ### STT (`stt.provider = "auto"`)
 
@@ -76,6 +76,77 @@ Optional Custom STT gateway (explicit only — never via `auto`):
 Optional Custom TTS gateway (explicit only — never via `auto`):
 
 `provider = "custom"` (in `[tts]`) — see [Custom TTS](#custom-tts-openai-compatible-gateway) below.
+
+---
+
+## Per-leg provider selection (B187)
+
+A speak-then-listen turn has **two independent legs**, and no single provider name describes both: MiniMax is TTS-only, Custom STT and Custom TTS are separate gateways, and `[stt]` / `[tts]` already carry their own `provider` keys. So `hark tts --listen` and `hark ask` take a provider per leg:
+
+| Flag | Leg | Commands |
+|------|-----|----------|
+| `--tts-provider` | TTS only | `tts`, `ask` |
+| `--stt-provider` | STT only | `tts` (the `--listen` leg), `listen`, `ask` |
+| `--provider` | **both legs** (backwards-compatible shorthand) | `tts`, `listen`, `ask` |
+
+**Precedence:** a specific flag wins for its own leg, independent of command-line order. `--provider` was deliberately **not** narrowed to TTS — that would have changed the meaning of existing invocations with no error.
+
+`listen` is STT-only, so `--provider` and `--stt-provider` name the same leg there; giving both is **not** a usage error (the specific flag still wins).
+
+```bash
+# The case that used to fail: MiniMax speaks, the configured STT hears.
+hark ask --tts-provider minimax "Should the diagram lead with the security claim?"
+
+# Equivalent when [stt].provider is not what you want for this turn:
+hark ask --provider minimax --stt-provider custom "…"
+```
+
+Before B187 the single `--provider` drove both legs, so `hark ask --provider minimax` spoke the question and then failed the listen with `minimax STT unsupported`.
+
+Library parity: `run_ask()` and `speak_and_listen()` take `provider=` (both legs) plus `tts_provider=` / `stt_provider=`. The per-leg values also apply to the confirm turn — readback TTS uses the TTS leg, confirm capture uses the STT leg.
+
+## Scoped TTS retry + provider fallback (B177)
+
+`provider = "auto"` picks by **credential presence at resolve time**, not by runtime viability, so a provider that resolves can still refuse the specific text it is handed. Gemini TTS does exactly that: question-shaped input returns HTTP 400 `Model tried to generate text, but it should only be used for TTS`. Plain statements synthesize; substantive questions fail. It is content-dependent and nondeterministic — one filing session got its first question through, then six consecutive failures — and the shipped Gemini model is **already TTS-only**, so pinning a model is not the fix. With `xai`/`openai` disabled, `auto` lands on `google` and `hark ask` dead-ends at exit 4 while the operator is already waiting.
+
+**What happens now.** On a failure of that one class, `run_tts` retries once on the same provider, then walks the `auto` order:
+
+1. the chosen provider, as asked;
+2. the **same** provider again, with the request shaped where a lever exists (Gemini gets a leading read-aloud directive, which upstream treats as style guidance and does not speak; English output only, since the directive is English). No shaping happens on the first attempt, so a working call is never altered;
+3. each provider `auto` would pick next, in `auto`'s own order.
+
+The walk is built by re-running `resolve_tts("auto")` with each tried provider added to `disabled`, so credential discovery, the operator's `disabled` list, and MiniMax consent apply exactly as they do to plain `auto`. A fallback never prompts for consent on a TTY — the operator is mid-turn — so an unconsented MiniMax is skipped, not asked about. The walk is resolved lazily, only once the same-provider retry is spent, so neither a clean run nor a retry-rescued one pays for credential probes.
+
+A fallback rung is asked **without** the requested voice id. Voice ids are per-provider namespaces, not a shared vocabulary — `eve` is xAI's, OpenAI and MiniMax reject it, and Google ignores the field — so carrying it across would turn a content-shaped 400 into a voice-not-found 400. Each rung therefore uses its own default. The result's `voice` reports what that provider actually used wherever the provider tells us (xAI, OpenAI, MiniMax, Custom TTS); Google never echoes a voice, so a Google rung's reported `voice` falls back to the requested id and should not be read as what was spoken.
+
+**Scope — what does NOT fall back.** Only "the provider generated text instead of audio" is eligible (`Model tried to generate text…`, `should only be used for TTS`, a 200 with no audio part). On the **chosen** provider, auth (401/403), quota (429), missing credentials, `ProviderUnsupported`, and everything else **fail fast on the first attempt**, so a bad token can never be papered over as a working setup. Broadening that to auth errors is a separate open task, **B164**.
+
+Past the first rung the rule inverts: any failure just disqualifies that fallback target and the walk continues. `auto` picks on credential presence, not viability, so a present-but-revoked key can sit in the chain — and letting its 401 abort the walk would let one stale credential kill the whole fallback and misreport a content bug as an auth failure. Those hops are recorded with `error_class = "not_retryable"`. `KeyboardInterrupt` / `SystemExit` are never walked past.
+
+When nothing works, the **first** error is what surfaces — the real trigger, not the last provider's unrelated complaint.
+
+**The operator may hear a different voice, not just a different provider.** Because the rung is asked with no voice id, a fallback speaks in the new provider's default voice — so Hark can audibly change character mid-session. That is deliberate (the alternative is a voice-not-found 400 and no speech at all), and the `fallback` key plus the `voice` field say what happened.
+
+**A downgrade is never silent.** When any hop fires:
+
+| Surface | What it says |
+|---------|--------------|
+| `run_tts` result — `fallback` key (nested under `tts` in `hark ask` / `hark tts --listen` output, top-level in `hark tts`) | `requested`, `spoke`, and every `step` with its error |
+| `provider` in the same result | the provider that actually produced audio |
+| HEP `tts.provider_fallback` on `ambient.jsonl` | one event per hop — visible to `hark monitor` |
+| syslog + `usage.jsonl` (`component=tts`) | same fields; each failed attempt is recorded against the provider that failed it |
+| stderr | `hark: TTS google failed (text_instead_of_audio); fallback with xai` |
+
+An orchestrator that reads only `ok` would see a success, which is why `fallback` is present whenever the voice changed — check it before reporting a clean speak. Once a provider **switch** has happened, the run stops writing to the phrase cache entirely (it keys on voice + text with no provider), including for later chunks that start straight on the handed-over provider — otherwise a later run would replay a fallback provider's audio as an unmarked `provider="cache"` success. A same-provider retry still caches: that audio is the chosen provider's own.
+
+**When the classifier says no, it says so.** The eligible class is matched against substrings of an upstream response body, so a reworded 400 would silently stop being recognised and `ask` would dead-end again with nothing to show that anything changed. Any TTS **4xx that is not** classified as eligible therefore publishes `tts.fallback_declined` (provider, status, `error_class = "none"`, the truncated body) before failing fast. Expect it for a genuine auth or quota failure; if it ever carries a body that *is* the "tried to generate text" 400 in new words, `_TEXT_NOT_AUDIO_MARKERS` needs updating.
+
+```toml
+[tts]
+fallback_on_error = true   # default; false makes a pinned provider's failure terminal
+```
+
+Gemini's TTS model pin is `gemini-2.5-flash-preview-tts` and can be repointed with `GEMINI_TTS_MODEL` for an operator whose account behaves better on a different TTS model.
 
 ---
 

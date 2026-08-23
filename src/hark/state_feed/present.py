@@ -237,6 +237,39 @@ def present_for_monitor(event: dict[str, Any]) -> dict[str, Any]:
                 ),
             }
         )
+    elif kind == "tts.fallback_declined":
+        compact.update(
+            {
+                "provider": event.get("provider"),
+                "http_status": event.get("http_status"),
+                "error": event.get("error"),
+                "instructions": event.get("instructions")
+                or (
+                    "A TTS 4xx was not classified as fallback-eligible, so it "
+                    "failed fast (B177) — correct for auth/quota, but check the "
+                    "wording if a content-shaped 400 stopped being recognised."
+                ),
+            }
+        )
+    elif kind == "tts.provider_fallback":
+        compact.update(
+            {
+                "from_provider": event.get("from_provider"),
+                "to_provider": event.get("to_provider"),
+                "step": event.get("step"),
+                "error_class": event.get("error_class"),
+                "error": event.get("error"),
+                "instructions": event.get("instructions")
+                or (
+                    "TTS moved to another provider (B177) — see error_class: "
+                    "text_instead_of_audio is the content-shaped failure the "
+                    "fallback exists for, not_retryable is a fallback target "
+                    "that was resolvable but not usable. The operator heard a "
+                    "different voice than configured — say which provider "
+                    "spoke if it matters."
+                ),
+            }
+        )
     else:
         # Pass through compact non-null subset
         for key in (

@@ -16,6 +16,7 @@ from typing import Any
 from hark.answer_window.result import ListenResult
 from hark.audio.capture import capture_interrupt_signals
 from hark.config import HarkConfig
+from hark.providers.legs import split_leg_providers
 from hark.syslog import log as syslog
 
 _OVERLAP_SETTLE_TIMEOUT_S = 0.25
@@ -277,6 +278,8 @@ def speak_and_listen(
     text: str,
     *,
     provider: str | None = None,
+    tts_provider: str | None = None,
+    stt_provider: str | None = None,
     voice: str | None = None,
     end_mode: str | None = None,
     out: Path | None = None,
@@ -294,9 +297,19 @@ def speak_and_listen(
     while mute may still be held. Frames are discarded until TTS finishes plus
     ``overlap_discard_ms`` so residual echo is not fed to STT (ADR-009 no
     barge-in).
+
+    Providers (B187): ``provider`` is the both-legs shorthand;
+    ``tts_provider`` / ``stt_provider`` win for their own leg. A TTS-only
+    provider such as MiniMax can therefore speak while STT keeps its
+    configured provider.
     """
     from hark import speech as speech_mod
 
+    legs = split_leg_providers(
+        provider=provider,
+        tts_provider=tts_provider,
+        stt_provider=stt_provider,
+    )
     pre_arm_ms = int(cfg.audio.listen_pre_arm_ms)
     overlap = bool(cfg.audio.overlap_prearm) and pre_arm_ms > 0
     discard_ms = max(0, int(cfg.audio.overlap_discard_ms))
@@ -326,7 +339,8 @@ def speak_and_listen(
                 result = speech_mod.run_listen(
                     cfg,
                     profile="bound_answer",
-                    provider=provider,
+                    provider=legs.stt,
+                    tts_provider=legs.tts,
                     end_mode=end_mode,
                     last_tts=text,
                     already_armed=True,
@@ -404,7 +418,7 @@ def speak_and_listen(
         tts_info = speech_mod.run_tts(
             cfg,
             text,
-            provider=provider,
+            provider=legs.tts,
             voice=voice,
             play=True,
             out=out,
@@ -504,7 +518,8 @@ def speak_and_listen(
         listened = speech_mod.run_listen(
             cfg,
             profile="bound_answer",
-            provider=provider,
+            provider=legs.stt,
+            tts_provider=legs.tts,
             end_mode=end_mode,
             last_tts=text,
             post_tts_guard_s=cfg.audio.post_tts_guard_ms / 1000.0,

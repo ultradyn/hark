@@ -20,7 +20,7 @@ Do not re-derive the startup from memory. The parts agents most often get wrong:
 - **Voice follows phase** — vocal while planning, quiet while executing except blocker / decision / done.
 - **B141** — emit the question verbatim in visible chat *before* the blocking call.
 - **CLI missing?** [`../hark/POST_INSTALL.md`](../hark/POST_INSTALL.md) — `npx skills` does not install Python.
-- Never pipe interactive `hark` to `| tail` (B109). Safe targeting: prefer `hark answer <event_id>`.
+- Never pipe interactive `hark` to `| tail` (B109), and never truncate the JSON to save context — use `hark ask --format text` (B186), which prints the transcript alone on success. Safe targeting: prefer `hark answer <event_id>`.
 - Dogfood: every friction → `bl bug`, never a silent workaround.
 
 Do not invent answers. Speak, listen, deliver.

@@ -289,3 +289,40 @@ identity (it fails before reaching that assertion). Instrumented inside a real
 full run it shows the planted SIGINT delivered and consumed, nothing left
 pending, and no exception raised. Unexplained; stopped rather than attempt a
 fifth speculative fix.
+
+## 2026-08-23 COORDINATOR GATE: verified independently, merging, but B184 STAYS OPEN
+
+Reproduced and confirmed every load-bearing claim above myself, on this box:
+
+- install_signal_handlers has no uninstall. Confirmed: `_handlers_installed` module global (lifecycle.py:20), set at :167, and `if _handlers_installed: return` makes every later call a silent no-op. No uninstall exists anywhere in the file. Filed separately.
+- os.pidfd_open genuinely absent. Confirmed: CPython 3.13.11 (Clang 21.1.4, python-build-standalone), `hasattr(os, "pidfd_open")` is False. Filed separately - this means the production pidfd path never executes here and pidfd test coverage on this machine is illusory.
+- The fd-recycling mechanism (M4). Reproduced exactly: after `r,w=os.pipe(); os.close(r); os.close(w)`, an unrelated `open("/dev/null")` takes back the lowest free number and `os.fstat(r)` SUCCEEDS. So `pytest.raises(OSError)` on a bare fd number was a race, never an assertion.
+- The SIG_IGN repro for the original target. Reproduced verbatim on master: tests/test_ask_interrupt.py under SIGINT=SIG_IGN gives "1 failed, 55 passed" in 7.5s, failing on exactly `Failed: signal after capture-state publication reached body`. On the branch: 56 passed. 100% deterministic both ways, no load, no waiting.
+
+That last point reframes the whole item: the bug this task chased for a day as "load-dependent" reproduces in SEVEN SECONDS by setting SIGINT to SIG_IGN. Load was never the variable for that member. The "flakes under CPU load" title is wrong and should not mislead the next reader.
+
+### RESIDUAL - why this does not close B184
+
+I ran a harsher condition than the agent did: tests/test_tts_interrupt.py ALONE under SIG_IGN (the agent tested the full suite under SIG_IGN, where earlier files install a handler and change the disposition). Results, same command, same machine, quiet box:
+
+    master  run 1: 6 failed    branch run A: 2 failed
+    master  run 2: 6 failed    branch run 1: 1 failed
+    master  run 3: 6 failed    branch run 2: 1 failed
+                               branch run 3: 0 failed
+
+Master is STABLE at 6. The branch is 0-2 and VARIES, and the failing test is different every run:
+  run A: test_repeated_sigint_hard_exits_hung_synth_without_traceback[True] + test_direct_children_open_publishes_before_delivered_sigint
+  run 1: test_portable_result_eof_retains_authority_through_supervisor_atexit
+  run 2: test_deceptive_worker_argv_cannot_authorize_unknown_pid_hard_exit
+  run 3: none
+
+Disjoint failure sets across identical runs is the ORIGINAL signature of this family, so the family is not gone - it is much rarer. None of the branch failures is one of master s 6, so this is a genuine reduction (6 deterministic -> ~1 of 268 nondeterministic) and not a regression. But B184 stays open: a fifth mechanism is still unaccounted for in test_tts_interrupt.py, and test_outer_pidfd_is_owned_before_delivered_sigint remains unexplained by the agent s own admission after eliminating four hypotheses.
+
+Merging anyway: test-only, three mechanisms genuinely root-caused with deterministic repros, the target member fixed 100%, and a large rate reduction. Refusing a verified improvement because it is incomplete would be the wrong call.
+
+### Next steps for whoever picks this up
+1. Use `test_tts_interrupt.py` alone under SIG_IGN as the repro harness - it is far more sensitive than the full suite and runs in ~45s.
+2. The nine untouched `pytest.raises(OSError)` + EBADF sites (lines 4002, 4052, 4072, 4097, 4198, 4324, 4560, 4787, 7917, pre-merge numbering) carry the same latent M4 race. Audit, do not find-and-replace.
+3. tests/test_ask_capture_deadline.py has the same fixed-budget shape and was never touched.
+4. test_daemon.py::test_terminate_children... is a different class (readiness race on worker identity publication, timeout_s is an argument to the code under test - do NOT widen it).
+5. test_dashboard_server.py rest_to_stream handoff is a threaded SSE race, unrelated; give it its own item.

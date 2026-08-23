@@ -1,0 +1,35 @@
+---
+complexity: medium
+created_at: "2026-08-23T09:07:39Z"
+depends_on: []
+estimate_hours: 2
+id: B194
+priority: high
+status: pending
+tags:
+    - lifecycle
+    - signals
+    - api
+title: install_signal_handlers permanently hijacks SIGINT/SIGTERM/SIGHUP with no uninstall
+updated_at: "2026-08-23T09:07:39Z"
+---
+Found while root-causing B184. Confirmed independently by the coordinator on 2026-08-23.
+
+src/hark/lifecycle.py:150 install_signal_handlers() replaces SIGTERM, SIGINT and SIGHUP with its own handlers and provides NO way to undo it. It is gated by a module global `_handlers_installed` (declared at :20, set True at :167) whose only effect is to make every later call a silent no-op:
+
+    global _handlers_installed
+    if _handlers_installed:
+        return
+
+Consequences:
+1. Any consumer that runs the ambient loop even once can never get its own signal handling back for the life of the process. `request_shutdown` becomes the ONLY SIGINT semantics available.
+2. The installed `_stop_handler` records a shutdown request and returns - it does not raise. So after installation, `os.kill(os.getpid(), SIGINT)` no longer produces a KeyboardInterrupt anywhere in the process.
+3. The no-op guard means a caller cannot even re-assert its own handlers by calling again; the call succeeds and does nothing.
+
+Measured blast radius in the test suite (B184 evidence): a per-test leak detector caught the SIGINT handler flipping to install_signal_handlers.<locals>._stop_handler at tests/test_config_watch.py::test_ambient_loop_file_watch_reload and STAYING for the following ~5300 test teardowns. That is mechanism M1(b) of B184 - the interrupt tests were signalling a process whose SIGINT no longer raised.
+
+Library users are the real concern, not just tests: hark is importable, and importing plus running an ambient loop should not permanently commandeer the host process signal disposition.
+
+Fix direction: add an uninstall/restore path that saves the previous handlers (signal.getsignal for each) at install time and puts them back, ideally via a context manager so the ambient loop scopes it. Decide whether the module global should become a saved-state object rather than a bool. This is an API change, which is why the B184 agent correctly left it alone.
+
+Related: B185 (SigintMaskGuard.__del__ swallowing a genuine KeyboardInterrupt) is the same family of concern - process-wide signal state owned with no clean handback.

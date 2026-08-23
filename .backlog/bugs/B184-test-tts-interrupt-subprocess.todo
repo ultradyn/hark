@@ -109,3 +109,183 @@ NEW CANDIDATE, second independent sighting 2026-08-23: tests/test_dashboard_serv
 Significant because it is the FIRST candidate outside the interrupt files. If the root cause is marker-vs-state signalling in the interrupt harness, this one should NOT be in the family - a threaded SSE handoff race is a different mechanism that merely shares the trigger (load). Treat it as a separate bug that happens to have the same precondition, and do not let a fix for the interrupt family be judged on whether it fixes this. Worth its own bl item once the interrupt family is closed.
 
 Count now: at least 11 in test_tts_interrupt.py / test_ask_interrupt.py, plus test_ask_capture_deadline.py (one sighting) and this dashboard test (two sightings).
+
+## 2026-08-23: FOUR mechanisms, three fixed, on branch fix/B184-interrupt-flake
+
+Root-caused with deterministic, zero-CPU-load reproductions. No load generator
+is needed for any of this; earlier "under load" timings on this box were
+contaminated anyway (dead sshfs mount, ~128 threads in D-state).
+
+**(1) Ambient SIGINT disposition. FIXED.** `os.kill(os.getpid(), SIGINT)` only
+becomes a KeyboardInterrupt if something raises for it, and the tests never
+established that. Two ways it breaks: a suite launched as a shell background job
+or under `nohup` inherits SIGINT=SIG_IGN and the kernel discards the signal
+outright; and `hark.lifecycle.install_signal_handlers` (src/hark/lifecycle.py:150)
+has no uninstall, so the first test that runs an ambient loop leaves its
+`_stop_handler` -- which only records a shutdown request and returns -- owning
+SIGINT/SIGTERM for the rest of the session. Attribution evidence: a per-test
+leak detector showed the handler flip to
+`<function install_signal_handlers.<locals>._stop_handler>` at
+tests/test_config_watch.py::test_ambient_loop_file_watch_reload and stay there
+for the following ~5300 teardowns. test_tts_interrupt.py sorts after that file;
+test_ask_interrupt.py sorts before it, which is why the ask members needed the
+launcher case instead.
+
+REPRO (100% deterministic): run the target test with SIGINT inherited as
+SIG_IGN:
+
+    python -c "import signal,subprocess,sys; signal.signal(signal.SIGINT, signal.SIG_IGN); sys.exit(subprocess.run(sys.argv[1:]).returncode)" \
+      .venv/bin/python -m pytest -q "tests/test_ask_interrupt.py::test_signal_after_capture_state_publication_restores_global"
+
+On master that fails every time with the exact message seen in full runs:
+`Failed: signal after capture-state publication reached body`. With the fix it
+passes, and the whole file passes 56/56 under the same launcher.
+
+FIX: tests/conftest.py pins SIGINT per test and restores SIGINT/SIGTERM/SIGHUP
+plus `lifecycle._handlers_installed`, so every test gets the signal environment
+it gets when run alone.
+
+**(2) A blocked/pending SIGINT carried across tests. FIXED (defensively).**
+`SigintMaskGuard` records the mask it finds on entry and restores exactly that.
+Correct nesting -- but a SIGINT already blocked when a guarded region starts is
+still blocked when it ends, so a signal planted inside is never delivered and is
+left pending for whichever later code unblocks it. Probe, control vs treatment,
+100% separation:
+
+    SIGINT not blocked on entry -> raised = KeyboardInterrupt, fd closed
+    SIGINT already blocked      -> raised = None; after: blocked=True pending=True
+
+That second line is both a "DID NOT RAISE KeyboardInterrupt" failure and the
+source of strays: KeyboardInterrupt surfacing in an unrelated frame and aborting
+the session. Observed on master in json/decoder.py and _pytest/_code/code.py,
+and once mid-way through test_tts_interrupt.py.
+
+FIX: conftest drains a blocked/pending SIGINT at both edges of every test
+(unblock under SIG_IGN, so the kernel drops it and the drain cannot raise).
+
+HONEST LIMIT: this removes the precondition, but the leak detector never caught
+SIGINT blocked at a real test boundary, so the precondition is not shown to
+arise naturally. Guards left for `__del__` (restore_suppressing keeps `_active`
+set, B185) are the plausible route, which makes B185 implicated here.
+
+**(3) Markers published before the state they advertise. FIXED.** Three child
+scripts printed READY_SECOND/READY_AGAIN *before* entering the try whose
+`except KeyboardInterrupt` the parent's next signal targets, so a signal landing
+in the gap killed the child (returncode -2). Markers now print from inside the
+try. Covers test_long_lived_caller_delegates_next_sigint_after_synth_finishes
+and test_pre_submit_interrupt_does_not_strand_false_running_state (both were the
+`-2` failures) and _library_hung_tts_child.
+
+**(4) fstat on a bare fd number races fd reuse. NOT FIXED -- this is the
+"DID NOT RAISE OSError" family, and mechanism (1) does NOT explain it.**
+`with pytest.raises(OSError): os.fstat(fd)` is not a safe closure assertion:
+POSIX hands out the lowest free descriptor, so any unrelated open() in the
+process reclaims the number just closed and fstat succeeds. Deterministic
+proof, no load:
+
+    r, w = os.pipe(); os.close(r); os.close(w)
+    keep = open("/dev/null")          # takes the lowest free fd == r
+    os.fstat(r)                       # SUCCEEDS -> "DID NOT RAISE OSError"
+
+Observed output: `fd 3: fstat SUCCEEDED after close`, `fd 4: closed (9)`.
+
+RECOMMENDED FIX: assert identity, not validity -- capture (st_dev, st_ino) when
+the fd is created and treat "invalid OR different inode" as released. Several
+tests in this file already do exactly that (see the `source_stat` /
+`original_inode` / `foreign_inode` sites), so the technique is established here;
+roughly 70 `os.fstat` call sites would need auditing. Left undone deliberately:
+a 70-site sweep with no on-demand in-suite reproduction is not something to land
+unverified.
+
+Also unfixed, and separate: mechanism (a) from the earlier entry. Confirmed that
+`os.pidfd_open` really is absent in this interpreter (uv-managed CPython
+3.13.11, python-build-standalone/Clang), so hark's production pidfd path never
+runs here at all, and the tests that install a fake `pidfd_open` onto the shared
+`os` module still flip other tests' skipif between run and skip.
+
+Budget changes made as well: both interrupt files now take one `_WAIT_S` hang
+guard (30s, HARK_TEST_WAIT_S to override) in place of inline 1-5s caps, with the
+single wait that proves something does NOT finish named `_HANG_PROOF_S`.
+Child-script budgets are deliberately untouched -- child source lives in string
+literals and cannot see module constants (getting this wrong is a NameError in
+the child that reads as five unrelated test failures).
+
+VERIFICATION on branch fix/B184-interrupt-flake (commits cbbda4f, 5181d10, merge
+84db0be; tests only, no src change): full suite green twice in the foreground
+(6189 passed, 102 skipped, 0 failed) and green under the background/SIG_IGN
+launcher; that same background harness gave 3 failures on master (the target
+test, test_long_lived_caller..., test_outer_pidfd...). All 11 named family
+members pass.
+
+RESIDUAL: test_outer_pidfd_is_owned_before_delivered_sigint still fails about 1
+full-suite run in 4, needing full-suite context; instrumented in-suite it shows
+the planted SIGINT delivered and consumed with nothing left pending and no
+exception raised, which rules out timeouts, mask leakage and ambient
+disposition. Not explained.
+
+### Addendum after merging master (branch head bdf1c26)
+
+Mechanism (4) is now FIXED for the two members observed failing that way.
+`_assert_fd_released` (tests/test_tts_interrupt.py) compares the
+`(st_dev, st_ino)` captured when the descriptor was created, so "closed" and
+"already handed to someone else" both count as released. Deterministic
+before/after, no load:
+
+    nothing reopens                      old=pass                        new=pass
+    number reclaimed by unrelated open   old=FAIL: DID NOT RAISE OSError new=pass
+
+Applied at test_pipe_creation_publishes_both_fds_before_delivered_sigint and
+test_outer_pidfd_is_owned_before_delivered_sigint. NINE further
+`pytest.raises(OSError)` + `errno.EBADF` sites in the same file carry the same
+latent race and want the same treatment: lines 4002, 4052, 4072, 4097, 4198,
+4324, 4560, 4787, 7917 (pre-merge numbering). Not touched, because none was
+observed failing and a blind sweep should not land unverified.
+
+Worth stating because it changes how this bug should be read: mechanisms (1)
+and (4) are NOT load-dependent at all. (1) depends on how the suite was
+launched and on file ordering; (4) depends only on whether anything else in the
+process happened to open a file between the close and the assertion. That is a
+better explanation for **disjoint failure sets across consecutive identical
+runs** than CPU contention is, and it is why the family looked load-driven
+without being so.
+
+Coverage of the newer candidates:
+- test_pre_submit_interrupt_does_not_strand_false_running_state: FIXED,
+  mechanism (3), was one of the `-2` returncodes.
+- test_pipe_creation_publishes_both_fds_before_delivered_sigint: FIXED,
+  mechanism (4).
+- test_cli_pending_sigint_during_boundary_install_is_typed_and_traceback_free:
+  defect class addressed (budgets + disposition); never observed failing here,
+  so not claimed as verified.
+- tests/test_ask_capture_deadline.py: NOT covered. Out of the two files I
+  touched. It has the same fixed-budget shape (`released.wait(timeout=2.0)`
+  twice, and a `timeout=4.0`) and wants the same `_WAIT_S` treatment.
+- test_daemon.py::test_terminate_children_reports_unrecoverable_survivor_and_retains_safe_owner:
+  NOT covered, and a different class. It spawns two real hark workers and calls
+  `daemon.terminate_children(..., timeout_s=0.0)`, then asserts
+  `record_matches_process(retained[0])`. That is a readiness race against a
+  freshly spawned worker's identity publication, not a signal race; `timeout_s`
+  is an argument to the code under test, so it must not simply be widened. Seen
+  failing once here.
+- test_dashboard_server.py::test_rest_to_stream_handoff_captures_rotation_after_snapshot:
+  NOT covered and not expected to be. Threaded SSE race, unrelated to signal
+  disposition or descriptor identity.
+
+Verification at bdf1c26 (post-merge, quiet machine): full suite green twice in
+the foreground (6293 passed, 102 skipped, 0 failed) and green under the
+background/SIG_IGN launcher. Deterministic before/after on the same tree, using
+master's copies of the three test files as the "before":
+  before: test_ask_interrupt.py under SIG_IGN -> 1 failed, 55 passed
+  after : test_ask_interrupt.py under SIG_IGN -> 56 passed
+
+RESIDUAL unchanged: test_outer_pidfd_is_owned_before_delivered_sigint still
+fails roughly 1 run in 5-10 when run alongside others (1 of 4 full suites, 1 of
+5 eleven-test selections); passes alone and 3/3 adjacent to
+test_pipe_creation. Four hypotheses tested and eliminated: ambient disposition,
+mask leakage (a pytest-level pre-block does NOT reproduce it even though a
+standalone probe of _open_pidfd does), the handler object identity
+(default_int_handler vs a Python handler both raise correctly), and descriptor
+identity (it fails before reaching that assertion). Instrumented inside a real
+full run it shows the planted SIGINT delivered and consumed, nothing left
+pending, and no exception raised. Unexplained; stopped rather than attempt a
+fifth speculative fix.

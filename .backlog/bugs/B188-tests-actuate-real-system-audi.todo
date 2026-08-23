@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-08-23T05:23:26Z"
 claimed_by: cli-user
-completed_at: null
+completed_at: "2026-08-23T05:30:59Z"
 complexity: medium
 created_at: "2026-08-23T05:23:21Z"
 depends_on: []
+duration_minutes: 7.5519062728833335
 estimate_hours: 2
 id: B188
 priority: high
 started_at: "2026-08-23T05:23:26Z"
-status: in_progress
+status: done
 tags: []
 title: 'tests actuate real system audio: ducking, MPRIS pause and capture mute reach the operator desktop during test runs'
-updated_at: "2026-08-23T05:23:26Z"
+updated_at: "2026-08-23T05:30:59Z"
 ---
 Reported by the operator 2026-08-23: agents running the test suite were pausing his media and changing his volume.
 

@@ -61,6 +61,38 @@ _OWNED_SIGNALS = tuple(
 )
 
 
+def _clear_interrupt_backlog() -> None:
+    """Discard a blocked or pending SIGINT so it cannot fire in a later test.
+
+    B184's second mechanism, and the one that costs whole sessions.
+    ``SigintMaskGuard`` records the mask it finds on entry and restores exactly
+    that, which is correct nesting -- but it means a SIGINT already blocked
+    when a guarded region starts is still blocked when the region ends. A test
+    that plants a SIGINT inside such a region then gets no exception at all
+    ("DID NOT RAISE KeyboardInterrupt") and hands the still-pending signal to
+    whichever later test next unblocks it, where it surfaces as a
+    KeyboardInterrupt in an unrelated frame and aborts the run. Guards left
+    unrestored for ``__del__`` to finish (``restore_suppressing`` keeps
+    ``_active`` set) are how SIGINT ends up blocked across a test boundary in
+    the first place, so drain the backlog at both edges of every test.
+    """
+    if not hasattr(signal, "pthread_sigmask"):
+        return
+    blocked = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    pending = signal.sigpending() if hasattr(signal, "sigpending") else set()
+    if signal.SIGINT not in blocked and signal.SIGINT not in pending:
+        return
+    # Unblocking under SIG_IGN makes the kernel drop the pending signal rather
+    # than deliver it here, so the drain cannot itself raise.
+    restore_to = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})
+    finally:
+        if restore_to is not None:
+            signal.signal(signal.SIGINT, restore_to)
+
+
 @pytest.fixture(autouse=True)
 def _own_interrupt_dispositions() -> Iterator[None]:
     """Give every test the signal environment it gets when run alone."""
@@ -73,11 +105,13 @@ def _own_interrupt_dispositions() -> Iterator[None]:
     # SIGTERM to SIG_DFL would turn a test's mistimed self-signal into a kill
     # of the whole session rather than a failure of that one test.
     signal.signal(signal.SIGINT, signal.default_int_handler)
+    _clear_interrupt_backlog()
     lifecycle._handlers_installed = False
     try:
         yield
     finally:
         lifecycle._handlers_installed = handlers_installed
+        _clear_interrupt_backlog()
         for signum, handler in previous.items():
             # ``getsignal`` reports None for a disposition installed outside
             # Python; there is nothing to hand back in that case.

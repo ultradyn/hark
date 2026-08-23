@@ -125,6 +125,8 @@ Past the first rung the rule inverts: any failure just disqualifies that fallbac
 
 When nothing works, the **first** error is what surfaces — the real trigger, not the last provider's unrelated complaint.
 
+**The operator may hear a different voice, not just a different provider.** Because the rung is asked with no voice id, a fallback speaks in the new provider's default voice — so Hark can audibly change character mid-session. That is deliberate (the alternative is a voice-not-found 400 and no speech at all), and the `fallback` key plus the `voice` field say what happened.
+
 **A downgrade is never silent.** When any hop fires:
 
 | Surface | What it says |
@@ -135,7 +137,9 @@ When nothing works, the **first** error is what surfaces — the real trigger, n
 | syslog + `usage.jsonl` (`component=tts`) | same fields; each failed attempt is recorded against the provider that failed it |
 | stderr | `hark: TTS google failed (text_instead_of_audio); fallback with xai` |
 
-An orchestrator that reads only `ok` would see a success, which is why `fallback` is present whenever the voice changed — check it before reporting a clean speak. Once any hop has happened, the run stops writing to the phrase cache entirely (it keys on voice + text with no provider), including for later chunks that start straight on the handed-over provider — otherwise a later run would replay a fallback provider's audio as an unmarked `provider="cache"` success.
+An orchestrator that reads only `ok` would see a success, which is why `fallback` is present whenever the voice changed — check it before reporting a clean speak. Once a provider **switch** has happened, the run stops writing to the phrase cache entirely (it keys on voice + text with no provider), including for later chunks that start straight on the handed-over provider — otherwise a later run would replay a fallback provider's audio as an unmarked `provider="cache"` success. A same-provider retry still caches: that audio is the chosen provider's own.
+
+**When the classifier says no, it says so.** The eligible class is matched against substrings of an upstream response body, so a reworded 400 would silently stop being recognised and `ask` would dead-end again with nothing to show that anything changed. Any TTS **4xx that is not** classified as eligible therefore publishes `tts.fallback_declined` (provider, status, `error_class = "none"`, the truncated body) before failing fast. Expect it for a genuine auth or quota failure; if it ever carries a body that *is* the "tried to generate text" 400 in new words, `_TEXT_NOT_AUDIO_MARKERS` needs updating.
 
 ```toml
 [tts]

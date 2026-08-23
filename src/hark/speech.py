@@ -57,7 +57,7 @@ from hark.mic_coord import (
     user_capture_active,
     wait_until_tts_play_allowed,
 )
-from hark.providers.base import ProviderError
+from hark.providers.base import ProviderError, safe_exception_detail
 from hark.providers.resolve import (
     resolve_stt,  # noqa: F401 — open_answer_window / test monkeypatch seam
     resolve_tts,
@@ -65,8 +65,10 @@ from hark.providers.resolve import (
 from hark.providers.tts_fallback import (
     TEXT_INSTEAD_OF_AUDIO,
     FallbackStep,
+    classify_tts_error,
     fallback_provider_chain,
     synthesize_with_fallback,
+    tts_error_http_status,
 )
 from hark.signal_safety import SigintMaskGuard
 from hark.syslog import log as syslog
@@ -917,6 +919,36 @@ def run_tts(
             # Never fail speech because the terminal write failed.
             pass
 
+    def _log_fallback_declined(exc: BaseException) -> None:
+        """Surface the classifier saying NO to a 4xx (B177).
+
+        The eligible class is matched on substrings of an upstream response
+        body. If Google rewords its 400, the fallback silently stops applying
+        and `ask` dead-ends again with nothing to indicate anything changed.
+        Publishing the refusal turns a reworded body into a diagnosable event
+        instead of a regression rediscovered by an operator who cannot ask a
+        question. This does NOT widen the classifier — a declined error still
+        fails fast.
+        """
+        status = tts_error_http_status(exc)
+        if status is None or not (400 <= status < 500):
+            return
+        surface_tts_event(
+            "tts.fallback_declined",
+            provider=resolved_provider,
+            http_status=status,
+            error_class="none",
+            error=safe_exception_detail(exc),
+            instructions=(
+                f"A {status} from {resolved_provider!r} was NOT classified as "
+                "fallback-eligible, so TTS failed fast (B177). Correct for an "
+                "auth or quota problem. If this is the Gemini 'tried to "
+                "generate text' 400 with reworded text, the classifier in "
+                "hark/providers/tts_fallback.py needs the new wording — check "
+                "the error field against _TEXT_NOT_AUDIO_MARKERS."
+            ),
+        )
+
     def _synth_one(piece: str) -> tuple[bytes, str, str, str, bool]:
         """Return (audio, provider, content_type, voice, from_cache)."""
         nonlocal speaking_provider
@@ -928,15 +960,22 @@ def run_tts(
         # B177: one retry then the auto walk, scoped to content-shaped errors
         # (a bad token still fails fast). Later chunks start from whoever
         # succeeded, so a long reply does not re-fail on every chunk.
-        result, steps = synthesize_with_fallback(
-            provider=start_provider,
-            text=piece,
-            call=_transport_synth,
-            chain=_fallback_chain,
-            on_step=lambda step: _on_fallback_step(step, piece),
-            enabled=bool(getattr(cfg.tts, "fallback_on_error", True)),
-            language=cfg.tts.language,
-        )
+        try:
+            result, steps = synthesize_with_fallback(
+                provider=start_provider,
+                text=piece,
+                call=_transport_synth,
+                chain=_fallback_chain,
+                on_step=lambda step: _on_fallback_step(step, piece),
+                enabled=bool(getattr(cfg.tts, "fallback_on_error", True)),
+                language=cfg.tts.language,
+            )
+        except BaseException as exc:
+            if classify_tts_error(exc) is None:
+                # Only a refusal is news: an eligible error that exhausted the
+                # ladder is already reported hop by hop.
+                _log_fallback_declined(exc)
+            raise
         switched = any(step.step == "fallback" for step in steps)
         if switched and result.provider:
             # Only a real provider switch hands over. A same-provider retry

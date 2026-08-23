@@ -548,3 +548,30 @@ def test_hardening_is_skipped_for_non_english_output() -> None:
     plan = plan_synth_attempts("google", "¿Lo enviamos?", language="es")
     assert plan[1].hardened is False
     assert plan[1].text == "¿Lo enviamos?"
+
+
+# --- the classifier's refusal must be observable, not just commented ---------
+
+
+def test_http_status_is_recoverable_from_a_provider_error() -> None:
+    from hark.providers.tts_fallback import tts_error_http_status
+
+    assert tts_error_http_status(ProviderError(GEMINI_400)) == 400
+    assert tts_error_http_status(ProviderError("OpenAI TTS HTTP 401: bad")) == 401
+    assert tts_error_http_status(ProviderError("connection refused")) is None
+    assert tts_error_http_status(KeyboardInterrupt()) is None
+
+
+def test_the_ladder_never_raises_none_under_python_O() -> None:
+    """`assert first_exc is not None` would be stripped by -O.
+
+    The stripped form falls through to `raise None` -> TypeError, replacing an
+    impossible-state guard with a confusing one. Pin that it is a real raise.
+    """
+    import inspect
+
+    from hark.providers import tts_fallback
+
+    src = inspect.getsource(tts_fallback.synthesize_with_fallback)
+    assert "assert first_exc" not in src
+    assert "raise RuntimeError" in src

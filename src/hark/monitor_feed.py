@@ -57,6 +57,7 @@ MODE_A_WAKE_KINDS: frozenset[str] = frozenset(
         "tts.chunked",
         "tts.skipped",
         "tts.provider_fallback",
+        "tts.fallback_declined",
     }
 )
 

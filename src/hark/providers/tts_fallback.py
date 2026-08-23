@@ -19,12 +19,14 @@ of ``auth.json``). Generalizing fallback to auth errors is a separate open task,
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
 __all__ = [
     "NOT_RETRYABLE",
+    "tts_error_http_status",
     "TEXT_INSTEAD_OF_AUDIO",
     "TTS_FALLBACK_ORDER",
     "FallbackStep",
@@ -79,6 +81,9 @@ _FAIL_FAST_MARKERS: tuple[str, ...] = (
 # the retry of an attempt that already failed, so the happy path is untouched
 # and a mis-spoken prefix can only ever replace a hard failure.
 _GEMINI_READ_ALOUD_PREFIX = "Read the following text aloud verbatim: "
+
+# Providers render failures as "<label> HTTP <status>: <body>".
+_HTTP_STATUS_RE = re.compile(r"HTTP\s+(\d{3})\b")
 
 
 @dataclass(frozen=True)
@@ -140,6 +145,24 @@ def classify_tts_error(exc: BaseException) -> str | None:
 def is_fallback_eligible(exc: BaseException) -> bool:
     """True when *exc* is one of the narrow classes worth retrying elsewhere."""
     return classify_tts_error(exc) is not None
+
+
+def tts_error_http_status(exc: BaseException) -> int | None:
+    """HTTP status embedded in a provider error message, when there is one.
+
+    Every TTS provider renders failures as ``… HTTP <status>: <body>``, so the
+    status is recoverable without a typed error. Used only to decide whether a
+    classification *refusal* is worth surfacing.
+    """
+    from hark.providers.base import safe_exception_detail
+
+    match = _HTTP_STATUS_RE.search(safe_exception_detail(exc, fallback="", limit=4000))
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:  # pragma: no cover - the regex only matches digits
+        return None
 
 
 def harden_tts_text(
@@ -361,7 +384,10 @@ def synthesize_with_fallback(
             if on_step is not None:
                 on_step(step)
 
-    assert first_exc is not None
+    if first_exc is None:  # pragma: no cover - unreachable: the ladder is >=2 rungs
+        # Not an `assert`: `python -O` strips those, and the stripped form
+        # would fall through to `raise None` -> TypeError.
+        raise RuntimeError("TTS fallback ladder ended with no attempt and no error")
     try:
         setattr(first_exc, "tts_fallback_steps", [s.as_meta() for s in steps])
         # Attribution for the usage/audit trail: the ladder ends without

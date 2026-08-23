@@ -18,7 +18,13 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   hop is observable — a `fallback` key in the `tts` / `ask` JSON (`requested` / `spoke` /
   `steps`), a `tts.provider_fallback` HEP event visible to `hark monitor`, syslog, and one
   stderr line — so a downgrade cannot read as a clean success, and a fallback provider's
-  audio is kept out of the phrase cache so a later run cannot replay it unmarked. New `[tts]
+  audio is kept out of the phrase cache so a later run cannot replay it unmarked. **The
+  operator may hear a different voice, not only a different provider:** a fallback rung is
+  asked with no voice id and speaks in the new provider's default, because voice ids are
+  per-provider namespaces and carrying one across turns the content 400 into a
+  voice-not-found 400. A 4xx that is *not* classified as eligible now publishes
+  `tts.fallback_declined` before failing fast, so a reworded upstream body surfaces as a
+  diagnosable event rather than a silent regression. New `[tts]
   fallback_on_error` (default `true`) makes it optional; `GEMINI_TTS_MODEL` repoints the
   (already TTS-only) Gemini model pin. See `docs/PROVIDERS.md` § Scoped TTS retry.
 - fix(providers, B187/gh-10): `--provider` no longer forces one provider onto **both**

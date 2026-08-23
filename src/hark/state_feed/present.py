@@ -237,6 +237,20 @@ def present_for_monitor(event: dict[str, Any]) -> dict[str, Any]:
                 ),
             }
         )
+    elif kind == "tts.fallback_declined":
+        compact.update(
+            {
+                "provider": event.get("provider"),
+                "http_status": event.get("http_status"),
+                "error": event.get("error"),
+                "instructions": event.get("instructions")
+                or (
+                    "A TTS 4xx was not classified as fallback-eligible, so it "
+                    "failed fast (B177) — correct for auth/quota, but check the "
+                    "wording if a content-shaped 400 stopped being recognised."
+                ),
+            }
+        )
     elif kind == "tts.provider_fallback":
         compact.update(
             {

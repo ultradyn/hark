@@ -761,3 +761,188 @@ def test_a_listen_only_turn_has_no_spoken_provider() -> None:
     rec = build_record({"ok": True, "text": "yes", "provider": "custom"}, kind="listen")
     assert rec is not None
     assert "tts_provider" not in rec
+
+
+def test_an_unclassified_4xx_publishes_the_refusal_before_failing_fast(
+    synth,
+) -> None:
+    """The classifier matches an upstream body; a reword must not go silent.
+
+    Without this, Google changing the 400's text would make the fallback stop
+    applying and `ask` dead-end exactly as it did before B177 — with nothing to
+    indicate anything had changed.
+    """
+    synth.errors = {"google": "Gemini TTS HTTP 403: permission denied on model"}
+    synth.chain = ["xai"]
+
+    with pytest.raises(ProviderError):
+        run_tts(_cfg(), QUESTION, play=False, use_cache=False)
+
+    declined = [e for e in synth.events if e["kind"] == "tts.fallback_declined"]
+    assert len(declined) == 1
+    assert declined[0]["provider"] == "google"
+    assert declined[0]["http_status"] == 403
+    assert declined[0]["error_class"] == "none"
+    assert "permission denied" in declined[0]["error"]
+    assert "_TEXT_NOT_AUDIO_MARKERS" in declined[0]["instructions"]
+    # It is a refusal notice, not a fallback: no hop was taken.
+    assert not [e for e in synth.events if e["kind"] == "tts.provider_fallback"]
+
+
+def test_a_non_http_failure_publishes_no_refusal_notice(synth) -> None:
+    """Only a 4xx is a classification decision worth reviewing."""
+    synth.errors = {"google": "connection refused"}
+    synth.chain = ["xai"]
+
+    with pytest.raises(ProviderError):
+        run_tts(_cfg(), QUESTION, play=False, use_cache=False)
+
+    assert not [e for e in synth.events if e["kind"] == "tts.fallback_declined"]
+
+
+def test_an_exhausted_eligible_ladder_publishes_no_refusal_notice(synth) -> None:
+    """An eligible error is already reported hop by hop; do not double-report."""
+    synth.errors = {"google": GEMINI_400, "xai": GEMINI_400}
+    synth.chain = ["xai"]
+
+    with pytest.raises(ProviderError):
+        run_tts(_cfg(), QUESTION, play=False, use_cache=False)
+
+    assert not [e for e in synth.events if e["kind"] == "tts.fallback_declined"]
+    assert [e for e in synth.events if e["kind"] == "tts.provider_fallback"]
+
+
+def test_the_refusal_kind_is_registered_for_hark_monitor() -> None:
+    from hark.monitor_feed import MODE_A_WAKE_KINDS
+    from hark.state_feed.present import present_for_monitor
+
+    assert "tts.fallback_declined" in MODE_A_WAKE_KINDS
+    compact = present_for_monitor(
+        {
+            "kind": "tts.fallback_declined",
+            "event_id": "e2",
+            "observed_at": "2026-08-23T00:00:00Z",
+            "provider": "google",
+            "http_status": 401,
+            "error_class": "none",
+            "error": "Gemini TTS HTTP 401: API key not valid",
+        }
+    )
+    assert compact["http_status"] == 401
+    assert compact["provider"] == "google"
+    assert "B177" in compact["instructions"]
+
+
+def test_the_no_open_nudge_also_speaks_on_the_tts_leg(monkeypatch, tmp_path) -> None:
+    """Cover the SECOND nudge call site behaviourally, not by reading source.
+
+    Both nudge sites were changed identically, so without this a revert of just
+    the no-open one stays green.
+    """
+    from hark.audio.capture import CaptureTimeout
+    from hark.config import HarkConfig as Cfg
+    from hark.config import ListenConfig
+    from hark.speech import NO_OPEN_NUDGE_TEXT, run_listen
+    from hark.usage import UsageStore
+
+    class _NullCtx:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    err = CaptureTimeout(
+        "no speech detected (peak_db=-45.4 peak_rms=0.005 open_thresh~-48.0dB)"
+    )
+
+    def fake_capture(**kwargs):
+        raise err
+
+    monkeypatch.setattr("hark.speech.resolve_stt", lambda *a, **k: object())
+    monkeypatch.setattr("hark.speech.capture_utterance", fake_capture)
+    for name in (
+        "pause_ambient_for_mic",
+        "MicLease",
+        "BusySection",
+        "duck_media",
+    ):
+        monkeypatch.setattr(f"hark.speech.{name}", lambda *a, **k: _NullCtx())
+    for name in (
+        "register_active_listen",
+        "clear_active_listen",
+        "consume_listen_action",
+        "poll_listen_action",
+    ):
+        monkeypatch.setattr(f"hark.speech.{name}", lambda *a, **k: None)
+    monkeypatch.setattr("hark.speech.play_record_start", lambda: None)
+    monkeypatch.setattr("hark.speech.play_record_stop", lambda: None)
+    monkeypatch.setattr("hark.speech.configure_cues_from_config", lambda cfg: None)
+    monkeypatch.setattr(
+        "hark.speech.UsageStore", lambda *a, **k: UsageStore(tmp_path / "u.jsonl")
+    )
+
+    spoke: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        "hark.speech.run_tts",
+        lambda cfg, text, **kw: spoke.append((text, kw.get("provider")))
+        or {"ok": True},
+    )
+
+    cfg = Cfg(listen=ListenConfig(no_open_retry=False, no_open_nudge=True))
+    cfg.tts.provider = "minimax"
+    cfg.stt.provider = "custom"
+
+    with pytest.raises(TimeoutError, match="no speech detected"):
+        run_listen(
+            cfg,
+            post_tts_guard_s=0,
+            provider="custom",
+            tts_provider="minimax",
+        )
+
+    # The no-open nudge was spoken, and on the TTS leg — never on "custom".
+    assert spoke == [(NO_OPEN_NUDGE_TEXT, "minimax")]
+
+
+def test_a_retry_only_rescue_records_no_fallback_from(synth) -> None:
+    """The `requested == spoke` suppression in transcripts.
+
+    This is the branch that could silently regress into recording
+    tts_fallback_from == tts_provider, which would read as a fallback that
+    never happened.
+    """
+    from hark.transcripts import build_record
+
+    synth.script = {"google": [GEMINI_400, None]}
+    synth.chain = []
+    tts = run_tts(_cfg(), QUESTION, play=False, use_cache=False)
+
+    assert tts["fallback"]["requested"] == tts["fallback"]["spoke"] == "google"
+    rec = build_record({"ok": True, "text": "yes", "tts": tts}, kind="ask")
+    assert rec is not None
+    assert rec["tts_provider"] == "google"
+    assert "tts_fallback_from" not in rec
+
+
+def test_a_tts_listen_turn_records_the_spoken_provider() -> None:
+    """The kind whose heard leg is nested — worth pinning explicitly."""
+    from hark.transcripts import build_record
+
+    rec = build_record(
+        {
+            "ok": True,
+            "text": "yes please",
+            "tts": {
+                "ok": True,
+                "provider": "xai",
+                "fallback": {"requested": "google", "spoke": "xai", "steps": []},
+            },
+            "listen": {"provider": "custom", "duration_ms": 300},
+        },
+        kind="tts_listen",
+    )
+    assert rec is not None
+    assert rec["provider"] == "custom"      # heard, from the nested block
+    assert rec["tts_provider"] == "xai"     # spoke
+    assert rec["tts_fallback_from"] == "google"

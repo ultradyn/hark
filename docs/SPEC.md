@@ -69,7 +69,7 @@ hark skip <event_id>
 hark reply <target> …
 hark keys <target> <key> [key…]
 
-# Speech
+# Speech  (tts/listen/ask: --json | --format json|text, --text = --format text)
 hark tts … [--standalone]
 hark listen … [--end-mode silence|radio]
 hark listen-end [--cancel] [--stream-id ID]

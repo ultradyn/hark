@@ -184,6 +184,9 @@ uv run hark stop                 # graceful stop (HARK_STOP_GRACE_S / --timeout)
 uv run hark tts "hello"
 uv run hark listen               # speak, then silence ends (or end_mode=radio)
 uv run hark ask "What color?"
+answer=$(uv run hark ask --format text "What color?")   # transcript only on stdout
+#   --format text (alias --text) on ask / listen / tts --listen: success prints
+#   just the transcript; error, cancel, meta_command still print the full JSON.
 uv run hark mute                 # system default mic (pactl)
 uv run hark unmute
 uv run hark mute-sync            # hardware unmute → OS (--once or --watch)

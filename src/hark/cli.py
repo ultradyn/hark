@@ -7,7 +7,7 @@ import functools
 import json
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from hark import __version__
 from hark.config import config_to_dict, eprint, load_config, write_default_config
@@ -45,6 +45,78 @@ def _scoped_herdr(func):
             return func(args, cfg)
 
     return wrapped
+
+
+_TEXT_FORMAT_HELP = (
+    "stdout format (default: json). 'text' prints only the captured "
+    "transcript and a newline, so answer=$(hark ask --format text '...') "
+    "captures the answer and nothing else. Anything that is not a plain "
+    "answer -- error, cancellation, meta_command, empty transcript{extra} -- "
+    "still prints the full JSON, with the same exit code, so failures stay "
+    "diagnosable. Cannot be combined with --json."
+)
+
+
+def _add_output_format_flags(
+    parser: argparse.ArgumentParser,
+    *,
+    extra_json_case: str = "",
+) -> None:
+    """--json | --format {json,text} | --text for transcript commands (B186).
+
+    ``--json`` keeps its existing meaning ("pretty-print the JSON"), so the
+    format choice is a separate, mutually exclusive flag. ``--format`` is
+    declared before its ``--text`` alias: argparse applies per-action defaults
+    in declaration order, and only the first action for a shared dest wins.
+    """
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--json", action="store_true", help="pretty-print the JSON payload"
+    )
+    group.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="json",
+        help=_TEXT_FORMAT_HELP.format(extra=extra_json_case),
+    )
+    group.add_argument(
+        "--text",
+        dest="format",
+        action="store_const",
+        const="text",
+        help="alias of --format text",
+    )
+
+
+def _wants_text_output(args: argparse.Namespace) -> bool:
+    """True when text output was requested via --format text / --text."""
+    return getattr(args, "format", None) == "text"
+
+
+def _text_mode_transcript(payload: dict[str, Any]) -> str | None:
+    """The transcript to print under --format text, or None to keep JSON.
+
+    Text mode exists so a caller can capture the spoken answer without parsing
+    (or truncating) telemetry, so it prints only when there *is* a plain
+    answer. A failure, a cancellation, a meta-command (control, not an answer)
+    and an empty transcript all keep the full JSON: a lone blank line would
+    leave the caller with neither an answer nor a diagnosis.
+    """
+    if not payload.get("ok") or payload.get("cancelled") or payload.get("meta_command"):
+        return None
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return text
+
+
+def _emit_turn(payload: dict[str, Any], args: argparse.Namespace) -> None:
+    """Print one listen / ask / tts --listen result in the requested format."""
+    text = _text_mode_transcript(payload) if _wants_text_output(args) else None
+    if text is None:
+        print(json.dumps(payload, indent=2 if getattr(args, "json", False) else None))
+    else:
+        print(text)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -285,7 +357,7 @@ def build_parser() -> argparse.ArgumentParser:
     tts.add_argument("--voice")
     tts.add_argument("--no-play", action="store_true")
     tts.add_argument("--out", type=Path)
-    tts.add_argument("--json", action="store_true")
+    _add_output_format_flags(tts, extra_json_case=", or no --listen")
     tts.add_argument(
         "--listen",
         action="store_true",
@@ -322,7 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
     li = sub.add_parser("listen", help="speech-to-text")
     li.add_argument("--provider")
     li.add_argument("--end-mode", choices=("silence", "radio"))
-    li.add_argument("--json", action="store_true")
+    _add_output_format_flags(li)
     li.add_argument(
         "--event-id",
         default=None,
@@ -347,7 +419,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--confirm", choices=("auto", "always", "never"))
     ask.add_argument("--end-mode", choices=("silence", "radio"))
     ask.add_argument("--provider")
-    ask.add_argument("--json", action="store_true")
+    _add_output_format_flags(ask)
     ask.add_argument(
         "--event-id",
         default=None,
@@ -826,12 +898,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     result.get("exit"), fallback=ERROR
                 )
                 result["for_event"] = getattr(args, "event_id", None)
-                print(
-                    json.dumps(
-                        result,
-                        indent=2 if getattr(args, "json", False) else None,
-                    )
-                )
+                _emit_turn(result, args)
                 return int(result.get("exit", ABORT))
             return ABORT
         raise
@@ -1774,7 +1841,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
             "stream_id": listened.stream_id,
         },
     }
-    print(json.dumps(out, indent=2 if args.json else None))
+    _emit_turn(out, args)
     return OK
 
 
@@ -1806,7 +1873,7 @@ def cmd_listen(args: argparse.Namespace, cfg) -> int:
         "end_phrase": result.end_phrase,
         "stream_id": result.stream_id,
     }
-    print(json.dumps(payload, indent=2 if args.json else None))
+    _emit_turn(payload, args)
     return OK
 
 
@@ -1851,7 +1918,7 @@ def cmd_ask(args: argparse.Namespace, cfg) -> int:
     if not result.get("ok"):
         result["exit"] = normalize_failure_exit(result.get("exit"), fallback=ERROR)
     result["for_event"] = getattr(args, "event_id", None)
-    print(json.dumps(result, indent=2 if args.json else None))
+    _emit_turn(result, args)
     return int(result.get("exit", OK if result.get("ok") else ERROR))
 
 

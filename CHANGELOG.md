@@ -6,6 +6,13 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- feat(cli, B186): **`--format {json,text}`** (alias `--text`) on `ask`, `listen` and
+  `tts --listen` — success prints *only* the transcript, so `answer=$(hark ask --format
+  text "…")` is clean (the pipe warning is on stderr). Error, cancellation,
+  `meta_command` and empty transcripts keep the full JSON and the same exit codes.
+  Mutually exclusive with `--json`, which still means "pretty-print". Fixes a
+  deterministic data-loss trap: `text` is the *second* payload key and the ~20-key
+  `tts` object is *last*, so `| tail -c N` kept telemetry and destroyed the answer.
 - **breaking**(session-profile, B125): **no profile now defaults to `session_local`**, was
   `herdr`. An absent profile no longer starts the Herdr watch worker, so `hark start` with
   no profile is voice-for-this-session only. Fleet watching is opt-in: `scope=herdr` or

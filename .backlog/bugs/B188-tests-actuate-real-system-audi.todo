@@ -1,0 +1,30 @@
+---
+complexity: medium
+created_at: "2026-08-23T05:23:21Z"
+depends_on: []
+estimate_hours: 2
+id: B188
+priority: high
+status: pending
+tags:
+    - testing
+    - audio
+    - dx
+title: 'tests actuate real system audio: ducking, MPRIS pause and capture mute reach the operator desktop during test runs'
+updated_at: "2026-08-23T05:23:21Z"
+---
+Reported by the operator 2026-08-23: agents running the test suite were pausing his media and changing his volume.
+
+Cause: audio.duck_media_during_tts / duck_media_during_stt / pause_media_during_stt all default to true (src/hark/config.py:337-343), and tests/conftest.py isolates XDG_STATE_HOME but nothing gates the media-control path. Any test that spawns a real `hark` child (tests/test_ask_interrupt.py, tests/test_tts_interrupt.py and friends) therefore runs real `pactl set-sink-input-volume` / `playerctl pause` / `pactl set-source-mute` against the operator desktop.
+
+Mutating command sites (read-only probes are fine and stay ungated):
+- src/hark/audio/media.py:693  pactl set-sink-input-volume   (via _run_pactl_cmd)
+- src/hark/audio/media.py:732  playerctl -p NAME pause       (via _run_pactl_cmd)
+- src/hark/audio/media.py:755  playerctl -p NAME play        (via _run_pactl_cmd)
+- src/hark/audio/mic_mute.py:65   pactl set-source-mute
+- src/hark/audio/mic_mute.py:127  amixer -c N -q sset Mic ARG
+- src/hark/audio/mic_mute.py:132  amixer -c N -q sset Mic mute/unmute
+
+Fix: one gate module every mutating call asks first, blocked by default under pytest and by HARK_MEDIA_CONTROL=0, plus an autouse conftest fixture and a tripwire that fails a test if a mutating argv reaches subprocess.
+
+Env var must be set in os.environ (not just monkeypatched in-process) because the load-bearing case is a SPAWNED hark child, which inherits the environment but not any monkeypatch. Follows the existing HARK_UPDATE_CHECK precedent from B088 (default off in tests, opt in per test).

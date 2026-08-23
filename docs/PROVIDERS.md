@@ -137,7 +137,6 @@ When nothing works, the **first** error is what surfaces — the real trigger, n
 | syslog + `usage.jsonl` (`component=tts`) | same fields; each failed attempt is recorded against the provider that failed it |
 | stderr | `hark: TTS google failed (text_instead_of_audio); fallback with xai` |
 
-**Known gap — the confirm readback is not covered.** `hark ask`'s confirm turn speaks a readback ("I heard: …") through `run_tts` at `src/hark/speak_then_listen/ask.py:146` and **discards the result**. A fallback during *that* synth therefore reaches no `fallback` key, no `hark ask` JSON, and no transcript record — only the HEP event and the stderr line. So on a confirming ask, "which provider spoke" is answered for the question but not for the readback. Tracked as **B192**; closing it means threading a result out of a currently-swallowed call.
 
 An orchestrator that reads only `ok` would see a success, which is why `fallback` is present whenever the voice changed — check it before reporting a clean speak. Once a provider **switch** has happened, the run stops writing to the phrase cache entirely (it keys on voice + text with no provider), including for later chunks that start straight on the handed-over provider — otherwise a later run would replay a fallback provider's audio as an unmarked `provider="cache"` success. A same-provider retry still caches: that audio is the chosen provider's own.
 

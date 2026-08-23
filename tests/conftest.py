@@ -102,14 +102,65 @@ def _tripwire_no_mutating_audio_argv(
                 "@pytest.mark.allow_media_control if it must drive the argv "
                 "directly."
             )
+        try:
+            playback = external_audio.is_audio_playback_argv(
+                argv if isinstance(argv, (list, tuple)) else [argv]
+            )
+        except Exception:
+            playback = False
+        if playback:
+            raise AssertionError(
+                "B190: an audio player was spawned during a test: "
+                f"{list(argv)!r}. This makes real noise on the operator's "
+                "machine. Stub the playback layer (hark.audio.playback) or "
+                "hark.speech.run_tts, or mark the test with "
+                "@pytest.mark.allow_media_control."
+            )
         return real_run(*args, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", guarded)
 
 
+@pytest.fixture(autouse=True)
+def _tripwire_no_real_audio_device(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Fail the test if playback reaches the real audio device (B190).
+
+    ``playback.py:1338`` plays WAV/PCM through ``sounddevice`` rather than a
+    subprocess, so the argv tripwire cannot see it. This covers that path.
+
+    A test that swaps ``hark.audio.playback.sd`` for its own fake bypasses this
+    (it patches the name, not the module) — which is fine, since a fake makes no
+    sound. Skipped entirely when sounddevice is absent.
+    """
+    if request.node.get_closest_marker("allow_media_control"):
+        return
+    try:
+        from hark.audio import playback
+    except Exception:
+        return
+    sd = getattr(playback, "sd", None)
+    if sd is None:
+        return
+
+    def blocked(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError(
+            "B190: playback reached the real audio device (sounddevice.play) "
+            "during a test. This makes real noise on the operator's machine. "
+            "Stub hark.audio.playback or hark.speech.run_tts, or mark the test "
+            "with @pytest.mark.allow_media_control."
+        )
+
+    for name in ("play", "wait"):
+        if hasattr(sd, name):
+            monkeypatch.setattr(sd, name, blocked, raising=False)
+
+
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
-        "allow_media_control: test drives real audio-control argvs; exempt from "
-        "the B188 subprocess tripwire",
+        "allow_media_control: test drives real audio-control or playback argvs; "
+        "exempt from the B188 and B190 tripwires",
     )

@@ -139,6 +139,13 @@ When nothing works, the **first** error is what surfaces — the real trigger, n
 
 An orchestrator that reads only `ok` would see a success, which is why `fallback` is present whenever the voice changed — check it before reporting a clean speak. Once a provider **switch** has happened, the run stops writing to the phrase cache entirely (it keys on voice + text with no provider), including for later chunks that start straight on the handed-over provider — otherwise a later run would replay a fallback provider's audio as an unmarked `provider="cache"` success. A same-provider retry still caches: that audio is the chosen provider's own.
 
+**Two known gaps in that coverage.** Both are pre-existing, and both matter more now that the transcript log claims provider provenance.
+
+* **The confirm-turn readback is not covered.** `src/hark/speak_then_listen/ask.py:146` discards the `run_tts` result for the `"I heard: …"` readback, so a fallback *there* reaches no JSON, no `fallback` key and no transcript — only the HEP event and the stderr line. Tracked as B191.
+* **A failed spoken nudge is syslog-only.** `open_window.py:458` and `:538` catch broadly, so a nudge TTS failure never propagates; it is logged as `speech.no_open_nudge_failed` / `speech.empty_stt_nudge_failed` at `level="warn"` with the error, and appears in no payload and no transcript. Tracked as B193.
+
+Neither is silent, but neither is in the places an orchestrator looks. Read the HEP stream if you need certainty that a turn spoke on the provider it claims.
+
 **When the classifier says no, it says so.** The eligible class is matched against substrings of an upstream response body, so a reworded 400 would silently stop being recognised and `ask` would dead-end again with nothing to show that anything changed. Any TTS **4xx that is not** classified as eligible therefore publishes `tts.fallback_declined` (provider, status, `error_class = "none"`, the truncated body) before failing fast. Expect it for a genuine auth or quota failure; if it ever carries a body that *is* the "tried to generate text" 400 in new words, `_TEXT_NOT_AUDIO_MARKERS` needs updating.
 
 ```toml

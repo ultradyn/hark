@@ -6,11 +6,12 @@ depends_on: []
 estimate_hours: 1
 id: B192
 priority: medium
+reason: duplicate of B191 (same defect, ask.py:146); B191 is the surviving item
 started_at: null
-status: pending
+status: blocked
 tags: []
 title: ask confirm-turn readback discards its run_tts result, so a B177 TTS fallback during the readback reaches no JSON and no transcript
-updated_at: "2026-08-23T08:06:47Z"
+updated_at: "2026-08-23T08:07:13Z"
 ---
 Found while implementing B177 (scoped TTS retry + provider fallback), confirmed by the parent review gate.
 

@@ -91,7 +91,10 @@ def _spoke(payload: dict[str, Any]) -> tuple[Any, Any]:
     spoke = tts.get("provider")
     fallback = tts.get("fallback")
     requested = fallback.get("requested") if isinstance(fallback, dict) else None
-    if requested == spoke:
+    if requested == spoke or spoke is None:
+        # "fell back from X" with no "to" is an incoherent record for whoever
+        # reads this log later, so a missing spoken provider drops the pair
+        # rather than half of it. Only reachable on a malformed `tts` block.
         requested = None
     return spoke, requested
 

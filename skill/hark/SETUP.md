@@ -124,9 +124,9 @@ hark session-profile show   # path: ~/.local/state/hark/session_profile.json
 # note start_watch= (false when scope=session_local)
 ```
 
-Defaults when no profile file: `herdr` + `blocked_only` + `radio`.
-**Mismatch to know:** that CLI default is `herdr` (watch on), while the skill's inference
-default is `session_local`. Always `set --scope` explicitly so the two never disagree.
+Defaults when no profile file: `session_local` + `blocked_only` + `radio` — so an absent
+profile never silently watches a Herdr fleet. Fleet watching is opt-in: set `scope=herdr`,
+or `hark start --force-watch`. Still `set --scope` explicitly rather than leaning on it.
 
 ```bash
 hark start                  # watch + ambient per profile / flags

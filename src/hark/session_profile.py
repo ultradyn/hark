@@ -14,6 +14,8 @@ Fields:
 ``apply_mode_to_config`` writes ``[ambient].streaming`` / ``[listen].end_mode``.
 ``should_start_watch`` drives ``hark start`` / workers so session-local runs
 do not spawn Herdr watch (no blocked/done noise on the monitor path).
+**No profile defaults to ``session_local``** — watching a Herdr fleet is
+opt-in, via a profile or ``hark start --force-watch``.
 """
 
 from __future__ import annotations
@@ -91,7 +93,7 @@ _MODE_ALIASES: dict[str, Mode] = {
 class SessionProfile:
     """Operator intent for one handsfree skill session."""
 
-    scope: Scope = "herdr"
+    scope: Scope = "session_local"
     autonomy: Autonomy = "blocked_only"
     role: str = ""
     mode: Mode = "radio"
@@ -117,7 +119,7 @@ def _norm_key(raw: str) -> str:
     return re.sub(r"\s+", " ", (raw or "").strip().lower())
 
 
-def normalize_scope(raw: str | None, default: Scope = "herdr") -> Scope:
+def normalize_scope(raw: str | None, default: Scope = "session_local") -> Scope:
     if raw is None or not str(raw).strip():
         return default
     key = _norm_key(str(raw))
@@ -184,7 +186,7 @@ def load_profile(path: Path | None = None) -> SessionProfile | None:
         return None
     try:
         return SessionProfile(
-            scope=normalize_scope(str(data.get("scope") or "herdr")),
+            scope=normalize_scope(str(data.get("scope") or "session_local")),
             autonomy=normalize_autonomy(str(data.get("autonomy") or "blocked_only")),
             role=str(data.get("role") or "").strip(),
             mode=normalize_mode(str(data.get("mode") or "radio")),
@@ -246,7 +248,10 @@ def should_start_watch(profile: SessionProfile | None = None) -> bool:
     """False when session-local only (no Herdr event forward)."""
     prof = profile if profile is not None else load_profile()
     if prof is None:
-        return True  # default product path: watch Herdr
+        # No profile means nobody said to watch other agents. Default to the
+        # quiet thing: voice for this session only. Watching a whole Herdr
+        # fleet is opt-in via a profile or `hark start --force-watch`.
+        return False
     return prof.scope != "session_local"
 
 
@@ -401,7 +406,10 @@ def cmd_session_profile(args: Any) -> int:
             if as_json:
                 out.write(json.dumps({"ok": True, "profile": None}) + "\n")
             else:
-                out.write("no session profile set (defaults: herdr + radio + blocked_only)\n")
+                out.write(
+                    "no session profile set "
+                    "(defaults: session_local + radio + blocked_only)\n"
+                )
             return OK
         if as_json:
             out.write(json.dumps({"ok": True, "profile": prof.as_dict()}, indent=2) + "\n")

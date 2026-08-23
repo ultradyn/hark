@@ -1,4 +1,4 @@
-"""B125: session profile from structured startup interview."""
+"""B125: session profile inferred at skill start (no interview)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from hark.session_profile import (
+    SessionProfile,
     apply_mode_to_config,
     autonomy_instructions,
     load_profile,
@@ -50,9 +51,21 @@ def test_mode_config_patch():
     assert mode_config_patch("auto_end")["ambient.streaming"] is False
 
 
+def test_no_profile_defaults_to_session_local(tmp_path, monkeypatch):
+    """An absent profile must not silently watch a whole Herdr fleet."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    assert load_profile() is None
+    assert should_start_watch() is False
+    assert SessionProfile().scope == "session_local"
+    # An empty/missing scope resolves the same way.
+    assert normalize_scope(None) == "session_local"
+    assert normalize_scope("") == "session_local"
+
+
 def test_save_load_should_start_watch(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    assert should_start_watch() is True  # no profile → default herdr
+    # No profile means nobody asked for fleet watching: stay session-local.
+    assert should_start_watch() is False
     set_profile(scope="session_local", mode="conversation", autonomy="silent")
     prof = load_profile()
     assert prof is not None

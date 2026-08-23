@@ -34,6 +34,28 @@ _WAIT_S = float(os.environ.get("HARK_TEST_WAIT_S", "30"))
 _HANG_PROOF_S = 1.0
 
 
+def _assert_fd_released(fd: int, identity: os.stat_result) -> None:
+    """Assert this test no longer owns ``fd``: closed, or already reclaimed.
+
+    B184: probing a bare descriptor number with ``os.fstat`` and expecting
+    EBADF is a race, not an assertion. POSIX hands out the lowest free
+    descriptor, so any unrelated ``open`` in this process -- pytest's own
+    capture files, a spawned child's pipes -- takes back the number production
+    just closed, ``os.fstat`` then succeeds, and the test reports "DID NOT
+    RAISE OSError" as though the descriptor had leaked. Compare identity
+    rather than validity: a different ``(st_dev, st_ino)`` means our descriptor
+    is gone, which is what these tests are really asserting.
+    """
+    try:
+        current = os.fstat(fd)
+    except OSError as exc:
+        assert exc.errno == errno.EBADF
+        return
+    assert (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino), (
+        f"fd {fd} still refers to the descriptor this test opened"
+    )
+
+
 def _linux_pidfd_open(pid: int) -> int:
     libc = ctypes.CDLL(None, use_errno=True)
     fd = libc.syscall(434, pid, 0)  # __NR_pidfd_open
@@ -7567,9 +7589,14 @@ def test_pipe_creation_publishes_both_fds_before_delivered_sigint(monkeypatch):
     real_pipe = os.pipe
     opened: list[int] = []
 
+    identities: dict[int, os.stat_result] = {}
+
     def pipe_then_sigint():
         fds = real_pipe()
         opened.extend(fds)
+        # Record what each number points at now, so the later release check
+        # cannot be fooled by the number being handed back out (B184).
+        identities.update({fd: os.fstat(fd) for fd in fds})
         blocked = signal.pthread_sigmask(signal.SIG_BLOCK, set())
         assert signal.SIGINT in blocked
         os.kill(os.getpid(), signal.SIGINT)
@@ -7586,9 +7613,7 @@ def test_pipe_creation_publishes_both_fds_before_delivered_sigint(monkeypatch):
 
     assert len(opened) == 2
     for fd in opened:
-        with pytest.raises(OSError) as caught:
-            os.fstat(fd)
-        assert caught.value.errno == errno.EBADF
+        _assert_fd_released(fd, identities[fd])
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux pidfd regression")
@@ -7601,11 +7626,14 @@ def test_outer_pidfd_is_owned_before_delivered_sigint(monkeypatch):
 
     process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     opened: list[int] = []
+    identities: dict[int, os.stat_result] = {}
 
     def pidfd_then_sigint(pid, flags=0):
         assert flags == 0
         fd = _linux_pidfd_open(pid)
         opened.append(fd)
+        # See _assert_fd_released: record identity, not just the number (B184).
+        identities[fd] = os.fstat(fd)
         blocked = signal.pthread_sigmask(signal.SIG_BLOCK, set())
         assert signal.SIGINT in blocked
         os.kill(os.getpid(), signal.SIGINT)
@@ -7623,9 +7651,7 @@ def test_outer_pidfd_is_owned_before_delivered_sigint(monkeypatch):
         with pytest.raises(KeyboardInterrupt):
             isolation.SubprocessSynthTransport._open_pidfd(process)
         assert len(opened) == 1
-        with pytest.raises(OSError) as caught:
-            os.fstat(opened[0])
-        assert caught.value.errno == errno.EBADF
+        _assert_fd_released(opened[0], identities[opened[0]])
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
         if process.poll() is None:

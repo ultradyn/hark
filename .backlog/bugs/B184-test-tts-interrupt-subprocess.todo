@@ -328,3 +328,31 @@ Merging anyway: test-only, three mechanisms genuinely root-caused with determini
 5. test_dashboard_server.py rest_to_stream handoff is a threaded SSE race, unrelated; give it its own item.
 
 Post-merge full-suite evidence on master (quiet box): run 1 = 2 failed / 6319 passed (test_repeated_sigint_reaps_setsid_double_fork_provider_tree_and_pipes, test_deceptive_worker_argv_cannot_authorize_unknown_pid_hard_exit); run 2 = 6321 passed / 0 failed. So the merged suite varies 0-2, consistent with the residual documented above and not a regression from the merge. Both runs on 2026-08-23 with no other agents running.
+
+## HANDOVER TRAPS for the fifth mechanism (from the B184 agent, 2026-08-23)
+
+**TRAP 1 - child-script wait budgets must stay LITERAL.** Child process source in tests/test_tts_interrupt.py lives inside string literals, so a child cannot see module constants like `_WAIT_S`. A well-meaning sweep of the wait budgets therefore produces a NameError INSIDE THE CHILD, which surfaces as roughly five unrelated test failures with plausible-looking messages - you will spend the time chasing those instead of the sweep that caused them. The agent lost more time to this than to anything else.
+
+The subtlety that makes it easy to get wrong twice: it is not enough to skip triple-quoted blocks. Concatenated SINGLE-LINE string literals also carry child source, and a first pass that only skips multi-line strings will miss them.
+
+**Do not reuse the scratchpad retime.py / unretime.py.** Verified by the coordinator: the copy left on disk still has exactly that bug - its `string_line_spans()` guards on `tok.end[0] > tok.start[0]`, i.e. multi-line strings only, despite a docstring claiming otherwise. It is the hazardous version, not the fixed one. Also note the scratchpad lives under /tmp/claude-*/ and is session-scoped, so all of it is gone by the time anyone reads this. Everything durable is in this bl item.
+
+Consequence for the nine untouched `pytest.raises(OSError)` / EBADF sites: this is a second, independent reason they are an audit and not a find-and-replace.
+
+**TRAP 2 - test_outer_pidfd_is_owned_before_delivered_sigint is probably NOT a separate puzzle.** The agent could not explain it after eliminating four hypotheses; the coordinator harness (test_tts_interrupt.py alone under SIG_IGN) then showed residual nondeterminism of the same shape. Working assumption for whoever picks this up: it IS the fifth mechanism, not an extra one.
+
+Already eliminated - do not re-test these:
+  1. ambient SIGINT disposition
+  2. signal-mask leakage across tests
+  3. handler-object identity (both `default_int_handler` and a Python handler raise correctly)
+  4. descriptor identity (it fails BEFORE reaching that assertion)
+Instrumented inside a real full run it shows the planted SIGINT delivered and consumed, nothing left pending, and no exception raised.
+
+**Where to start:** the unresolved contradiction from M2. A STANDALONE probe of `_open_pidfd` with SIGINT pre-blocked reproduces `raised=None` cleanly and with 100% separation:
+
+    SIGINT not blocked on entry -> raised = KeyboardInterrupt, fd closed
+    SIGINT already blocked      -> raised = None; after: blocked=True pending=True
+
+but a pytest-level plugin that pre-blocks SIGINT before each test does NOT reproduce a failure. Something about the pytest process differs from the standalone one in a way that changes signal delivery, and nobody has named it. That contradiction is the most likely location of the answer.
+
+Remember B195 while doing this: os.pidfd_open does not exist in this interpreter, so any test with "pidfd" in its name is currently asserting about the non-pidfd fallback. Do not reason about this test as though the pidfd path is executing - it is not.

@@ -191,3 +191,4 @@ bugs:
     - file: B190-tests-can-synthesize-and-play.todo
     - file: B191-confirm-turn-readback-discards.todo
     - file: B192-ask-confirm-turn-readback-disc.todo
+    - file: B193-answer-window-nudge-tts-failur.todo

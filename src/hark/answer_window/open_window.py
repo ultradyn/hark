@@ -949,63 +949,68 @@ def open_answer_window(
             if pieces and agent_act in ("finish", None):
                 # Primary: per-segment join (B083). Optional full-audio re-STT is a
                 # *candidate only* — never replace a longer joined body (word loss).
-                if agent_act == "finish" or agent_act is None:
-                    from types import SimpleNamespace
+                from types import SimpleNamespace
 
-                    body = radio_sess.finalize_joined_body()
-                    latency_ms = 0
-                    tr_provider = last_provider
-                    if len(pieces) >= 1:
-                        wav = write_wav_bytes(
-                            b"".join(pieces), last_sample_rate or 16000
-                        )
-                        stt_seq += 1
-                        tr_full, latency_ms = _transcribe_logged(
-                            stt,
-                            wav,
-                            stream_id=stream,
-                            seq=stt_seq,
-                            mode=mode.value,
-                            purpose="radio_final",
-                            sample_rate=last_sample_rate or 16000,
-                        )
-                        tr_provider = getattr(tr_full, "provider", None) or tr_provider
-                        body = radio_sess.finalize_joined_body(
-                            (tr_full.text or "").strip()
-                        )
-                    tr = SimpleNamespace(text=body, provider=tr_provider)
-                    if agent_act == "finish":
-                        store.record_stt(
-                            text=body,
-                            provider=tr.provider,
-                            audio_ms=int(1000 * (time.monotonic() - started)),
-                            latency_ms=latency_ms,
-                            ok=True,
-                        )
-                        return radio_sess.result_for_agent_action(
-                            "finish",
-                            text=body,
-                            provider=tr.provider,
-                            duration_ms=int(1000 * (time.monotonic() - started)),
-                        )
-                    # max_listen / fall-through: return assembled body if any
-                    if body:
-                        store.record_stt(
-                            text=body,
-                            provider=tr.provider,
-                            audio_ms=int(1000 * (time.monotonic() - started)),
-                            latency_ms=latency_ms,
-                            ok=True,
-                        )
-                        return ListenResult(
-                            text=body,
-                            provider=tr.provider,
-                            duration_ms=int(1000 * (time.monotonic() - started)),
-                            end_mode=mode.value,
-                            end_phrase="max_listen",
-                            stream_id=stream,
-                            partials_emitted=radio_sess.partial_seq,
-                        )
+                body = radio_sess.finalize_joined_body()
+                latency_ms = 0
+                tr_provider = last_provider
+                # An explicit agent finish is a hard shutdown request. The
+                # segment STT results already form the durable transcript;
+                # do not make the caller wait on an optional full-audio
+                # re-STT request after `listen-end` has been acknowledged.
+                # That provider call is synchronous and can otherwise keep
+                # a one-shot `hark ask` alive until its transport timeout.
+                if agent_act is None and len(pieces) >= 1:
+                    wav = write_wav_bytes(
+                        b"".join(pieces), last_sample_rate or 16000
+                    )
+                    stt_seq += 1
+                    tr_full, latency_ms = _transcribe_logged(
+                        stt,
+                        wav,
+                        stream_id=stream,
+                        seq=stt_seq,
+                        mode=mode.value,
+                        purpose="radio_final",
+                        sample_rate=last_sample_rate or 16000,
+                    )
+                    tr_provider = getattr(tr_full, "provider", None) or tr_provider
+                    body = radio_sess.finalize_joined_body(
+                        (tr_full.text or "").strip()
+                    )
+                tr = SimpleNamespace(text=body, provider=tr_provider)
+                if agent_act == "finish":
+                    store.record_stt(
+                        text=body,
+                        provider=tr.provider,
+                        audio_ms=int(1000 * (time.monotonic() - started)),
+                        latency_ms=latency_ms,
+                        ok=True,
+                    )
+                    return radio_sess.result_for_agent_action(
+                        "finish",
+                        text=body,
+                        provider=tr.provider,
+                        duration_ms=int(1000 * (time.monotonic() - started)),
+                    )
+                # max_listen / fall-through: return assembled body if any
+                if body:
+                    store.record_stt(
+                        text=body,
+                        provider=tr.provider,
+                        audio_ms=int(1000 * (time.monotonic() - started)),
+                        latency_ms=latency_ms,
+                        ok=True,
+                    )
+                    return ListenResult(
+                        text=body,
+                        provider=tr.provider,
+                        duration_ms=int(1000 * (time.monotonic() - started)),
+                        end_mode=mode.value,
+                        end_phrase="max_listen",
+                        stream_id=stream,
+                        partials_emitted=radio_sess.partial_seq,
+                    )
             if agent_act == "cancel":
                 return radio_sess.result_for_agent_action(
                     "cancel",

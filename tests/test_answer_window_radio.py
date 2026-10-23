@@ -907,3 +907,68 @@ def test_open_answer_window_radio_agent_cancel_via_deps(monkeypatch):
     assert result.end_phrase == "agent:cancel"
     assert result.stream_id == "s-cancel"
     assert opened["n"] >= 1
+
+
+def test_open_answer_window_radio_agent_finish_does_not_retranscribe(monkeypatch):
+    """Explicit listen-end returns from joined partials without final STT."""
+    from types import SimpleNamespace
+
+    from hark.config import HarkConfig, ListenConfig
+
+    _stub_speech_shell(monkeypatch)
+    cfg = HarkConfig(listen=ListenConfig(end_mode="radio"))
+    policy = _policy(
+        stream_id="s-finish",
+        soft_end_phrases_enabled=False,
+        stream_partials=True,
+        post_tts_guard_s=0,
+    )
+    calls = {"capture": 0, "stt": 0}
+
+    def fake_capture(**kwargs):
+        calls["capture"] += 1
+        on_opened = kwargs.get("on_opened")
+        if on_opened is not None:
+            on_opened()
+        return _cap()
+
+    class FinishAfterFirstSegment:
+        name = "fake"
+
+        def transcribe(self, _wav, *, language=None):
+            del language
+            calls["stt"] += 1
+            if calls["stt"] > 1:
+                raise AssertionError("agent finish must not issue radio_final STT")
+            return SimpleNamespace(text="the assembled answer", provider="fake")
+
+    # The action is visible only after the first segment has been transcribed,
+    # so the loop exits through its explicit finish boundary. A second STT call
+    # here would be the optional radio_final request and would violate the
+    # hard-stop contract (the fake provider intentionally has no second result).
+    control = {"polls": 0}
+
+    def poll(_stream_id):
+        control["polls"] += 1
+        # The first poll is the loop's pre-capture check. Leave the action
+        # pending until the next loop boundary, after the partial was emitted.
+        return "finish" if control["polls"] >= 2 else None
+
+    def consume(_stream_id):
+        # The segment-level action check sees no action yet; the boundary check
+        # below consumes the finish request.
+        return "finish" if control["polls"] >= 2 else None
+
+    result = _open_radio(
+        policy,
+        cfg=cfg,
+        stt=FinishAfterFirstSegment(),
+        capture=fake_capture,
+        poll_listen_action=poll,
+        consume_listen_action=consume,
+    )
+
+    assert result.end_phrase == "agent:finish"
+    assert result.cancelled is False
+    assert result.text == "the assembled answer"
+    assert calls["stt"] == 1

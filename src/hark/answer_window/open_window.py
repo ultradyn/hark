@@ -33,6 +33,7 @@ from hark.answer_window.silence import (
 from hark.audio.capture import effective_radio_segment_pad_ms
 from hark.audio.stream_recovery import open_stream_recovery
 from hark.endpointing import EndpointStrategy
+from hark.exitcodes import TIMEOUT
 from hark.listen_end import EndMode
 from hark.providers.base import safe_exception_detail, safe_provider_failure
 from hark.partial import new_stream_id
@@ -146,7 +147,12 @@ def open_answer_window(
             )
         except (ProviderError, TimeoutError) as exc:
             failure = safe_provider_failure(exc)
-            outcome.update(ok=False, error=failure.detail, exit=failure.code)
+            code = (
+                TIMEOUT
+                if isinstance(exc, TimeoutError) and not isinstance(exc, ProviderError)
+                else failure.code
+            )
+            outcome.update(ok=False, error=failure.detail, exit=code)
             nudge_outcomes.append(outcome)
             raise
         else:

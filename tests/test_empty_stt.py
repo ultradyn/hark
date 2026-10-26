@@ -215,14 +215,16 @@ def test_empty_stt_disabled_raises_immediately(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("final", ["operator answer", ""])
-def test_failed_recovery_nudge_is_on_success_or_timeout(monkeypatch, final):
+@pytest.mark.parametrize("nudge_timeout", [False, True])
+def test_failed_recovery_nudge_is_on_success_or_timeout(monkeypatch, final, nudge_timeout):
     from hark.providers.base import ProviderError
 
     stt = _FakeStt(texts=["", final])
     _patch_listen_infra(monkeypatch, stt, [_cap(), _cap()])
 
     def failed_tts(*_a, **_k):
-        raise ProviderError("recovery provider unavailable")
+        error = TimeoutError if nudge_timeout else ProviderError
+        raise error("recovery provider unavailable")
 
     monkeypatch.setattr("hark.speech.run_tts", failed_tts)
     cfg = HarkConfig(listen=ListenConfig(empty_stt_retry=False, empty_stt_nudge=True))
@@ -236,7 +238,7 @@ def test_failed_recovery_nudge_is_on_success_or_timeout(monkeypatch, final):
         outcomes = exc.value.tts_nudges
     assert outcomes == [{
         "reason": "empty_stt", "profile": "bound_answer", "ok": False,
-        "error": "recovery provider unavailable", "exit": 4,
+        "error": "recovery provider unavailable", "exit": 6 if nudge_timeout else 4,
     }]
 
 

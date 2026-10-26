@@ -36,3 +36,5 @@ Fix direction: add an uninstall/restore path that saves the previous handlers (s
 Related: B185 (SigintMaskGuard.__del__ swallowing a genuine KeyboardInterrupt) is the same family of concern - process-wide signal state owned with no clean handback.
 
 Verified 2026-10-26: handlers leak across ambient returns. Signal lane serial order B194 then B185 then B195 then B184; B189 independent within lane. Decision: scoped handler ownership/restoration; remove signal restoration from finalizers and reconcile in ordinary owner frames; common stdlib/libc pidfd adapter with stable real-capability testing. Coordinate tts_isolation/capture/tunnel adapters with other owners.
+
+Implementation/decision receipt 2026-10-26: Install returns ownership acquisition; uninstall restores only still-owned handlers and complete signal transaction, ambient scope covers early returns/errors and nested/external replacements. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.

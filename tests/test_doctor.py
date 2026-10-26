@@ -128,6 +128,8 @@ def test_run_doctor_setup_incomplete_soft(tmp_path, monkeypatch):
 
 
 def test_run_doctor_setup_complete_with_sessions(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
     from hark.config import SessionConfig
     from hark.setup_flow import SetupAnswers, write_setup_complete
 
@@ -145,6 +147,13 @@ def test_run_doctor_setup_complete_with_sessions(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "hark.doctor.shutil.which",
         lambda name: f"/usr/bin/{name}" if name == "pactl" else None,
+    )
+    monkeypatch.setattr(
+        "hark.doctor.HerdrClient.health",
+        lambda self: SimpleNamespace(
+            session_id="local", ok=True, version="test", protocol=1,
+            socket="/tmp/test-herdr.sock", agent_count=0, error=None,
+        ),
     )
     cfg = HarkConfig(
         audio=AudioConfig(),

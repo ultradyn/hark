@@ -6,6 +6,8 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- 2026-10-26: doctor now reports independent untested STT/TTS configuration, recent failures, conference hold and ordered repairs; setup supports explicit MiniMax consent, and worker startup preflights wake dependencies (docs/SETUP_DIAGNOSTICS.md).
+
 - fix(providers, B177/gh-9): **TTS no longer dead-ends when a provider answers instead of
   speaking.** Gemini TTS returns HTTP 400 `Model tried to generate text, but it should only
   be used for TTS` on question-shaped text, content-dependently and nondeterministically, so

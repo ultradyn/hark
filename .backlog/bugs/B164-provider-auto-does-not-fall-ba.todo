@@ -18,3 +18,5 @@ updated_at: "2026-10-26T00:12:47Z"
 provider=auto does not fall back on auth errors: xAI 403 hard-failed hark tts and hark ask STT instead of skipping to next configured provider. Auth failures should trigger fallback like availability failures.
 
 Verified 2026-10-26: auto TTS and STT still fail on primary auth errors. Decision: auto-only observable fallback on 401/403/auth-missing, no same-provider auth retry; explicit pins and primary quota errors remain fail-fast. B164 then B181 share provider/speech lane. B181 true worker wall deadline plus shorter Google HTTP bounds; coordinate isolation.py pidfd integration with signal lane.
+
+Implementation/decision receipt 2026-10-26: Auto-only observable auth handover for TTS/STT; no same-provider auth retry, explicit pins and primary quota errors fail fast. Real subprocess fallback tested. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.

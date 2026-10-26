@@ -35,3 +35,5 @@ To decide (this is why it is filed rather than fixed):
 Either answer is fine. The current state, where the tests pass and nobody knows they are testing the fallback, is not.
 
 Check before assuming: verify on the deployment target as well as here. `python -c "import os; print(hasattr(os, \"pidfd_open\"))"` on a distro CPython 3.13 will likely print True, which is exactly the mismatch that makes this worth resolving.
+
+Implementation/decision receipt 2026-10-26: Shared Linux stdlib/libc pidfd adapter used by capture, synthesis parent/worker and tunnel. Missing stdlib wrappers no longer disable production pidfds; real libc child integration covered. Existing worker_process adapter retained. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.

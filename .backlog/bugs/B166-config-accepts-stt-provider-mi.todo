@@ -16,3 +16,5 @@ updated_at: "2026-10-26T00:19:47Z"
 ---
 
 config accepts stt provider=minimax silently; unsupported-STT only discovered at call time. Validate provider capability at config load / doctor. (Error message listing alternatives is good.)
+
+Implementation/decision receipt 2026-10-26: Unsupported STT providers warn during config load and appear unsupported in offline doctor readiness; preserves clear runtime errors. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.

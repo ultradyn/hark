@@ -75,6 +75,14 @@ def test_run_tts_play_stack_order_conference_mute_duck(monkeypatch):
     cfg.audio.duck_media_during_tts = True
     cfg.audio.hold_during_conference = True
 
+    class CachedProvider:
+        name = "test-cache"
+
+        def synthesize(self, *args, **kwargs):
+            raise AssertionError("cache hit must not synthesize or spend credentials")
+
+    monkeypatch.setattr("hark.speech.resolve_tts", lambda *a, **k: CachedProvider())
+
     class Hold:
         skipped = False
 

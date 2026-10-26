@@ -49,3 +49,5 @@ Operator cannot reliably hear full multiple-choice questions; forces repeat and 
 Repro again 2026-08-11 wayfinding Q9: operator heard TTS start just after 'Option A colon' — missed question preamble. Same session radio+google eve+media duck. Prompt was multi-option priority vs P19.
 
 Investigation/fix receipt 2026-10-26: overlapping pre-arm cue could stop/close global TTS convenience stream; replaced with owned per-call stream, complete PCM callback including preamble and owned skip/cleanup. Deterministic full-frame tests +24 real native stream smoke +24stream Valgrind (0errors) passed. Null-sink verification proves source delivery, not acoustic fidelity; original hardware symptom not directly recreated. Artifacts /tmp/hark-native-playback-stress-summary.md. Final integrated gate pending.
+
+Final verification 2026-10-26: reviewed fix merged to master. Integrated x-tall CPython3.13.11 suite: 6525 passed, 104 skipped, 0 failed in151.61s. Independent review and parent review passed. Full receipt /tmp/hark-b135-full-final.log; per-task evidence and design above.

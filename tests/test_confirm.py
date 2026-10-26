@@ -1545,3 +1545,27 @@ def test_format_strip_scales_linearly_on_long_zwsp_runs():
     poison = "c" + (_ZWSP * 10_000) + "ancel"
     assert classify_confirm_reply(f"yes {poison}") == "no"
     assert classify_confirm_reply("yes" + (_ZWSP * 10_000)) == "yes"
+
+
+@pytest.mark.parametrize("reply", [
+    "yes I cаn’t approve this", "yes I сan’t approve this",
+    "YES I CАN’T APPROVE THIS", "yes I ԁon’t approve this",
+    "yes I wοn’t approve this", "yes I ԝont approve this",
+    "yes 'cаn’t' approve this", "yes I cа\u200bn’t approve this",
+])
+def test_confusable_negative_contractions_cannot_authorize(reply):
+    """B158: source-script lookalikes must not hide a complete refusal."""
+    assert classify_confirm_reply(reply) == "unclear"
+
+
+@pytest.mark.parametrize("reply", [
+    "yes café looks good", "yes спасибо", "yes καλό", "yes саша",
+    "yes the сantilever design is approved", "yes wοnton soup",
+    "yes cаn’tastic", "yes λcаn’t", "yes cаn’tλ",
+])
+def test_confusable_contraction_check_preserves_multilingual_word_boundaries(reply):
+    assert classify_confirm_reply(reply) == "yes"
+
+
+def test_literal_negative_still_wins_beside_confusable_contraction():
+    assert classify_confirm_reply("yes no I cаn’t approve this") == "no"

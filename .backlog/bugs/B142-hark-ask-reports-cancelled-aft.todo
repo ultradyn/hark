@@ -16,3 +16,5 @@ title: hark ask reports cancelled after clear affirmative reply
 updated_at: "2026-07-16T00:49:13Z"
 ---
 While dogfooding with 'hark ask --confirm never', Hark transcribed a clear affirmative architecture answer ('three slices is fine ... three different PRs') and reported confirm_reply='Yes.', but returned ok=false, cancelled=true, exit=7. The answer was usable, yet the command status contradicted both transcript and confirmation. The CLI should not enter confirmation under --confirm never, and a positive confirmation must not produce cancelled=true. This occurred after the duplicate Hark instance issue had been identified.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. Explicit never-confirm policy and unambiguous affirmative classification remain wired through ask; direct and run_ask regressions. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

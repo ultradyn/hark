@@ -352,6 +352,9 @@ def run_doctor(
     # TTS play queue (B099) — auto-heal abandoned tickets; soft warn only
     report["tts_play_queue"] = _tts_play_queue_report()
 
+    # Interrupted answer-window audio recovery (B178) — soft only; never hard-fail
+    report["recover"] = _recover_report()
+
     # First-run / sessions setup posture (B116) — soft only; never hard-fail
     report["setup"] = _setup_report(cfg)
 
@@ -384,6 +387,25 @@ def _coding_clis_report(cfg: HarkConfig) -> dict[str, Any]:
         "prefer_aliases": prefer,
         "agents": rows,
     }
+
+
+def _recover_report() -> dict[str, Any]:
+    """Surface recoverable interrupted answer-window audio (B178, soft only)."""
+    try:
+        from hark.audio.stream_recovery import recovery_doctor_report
+
+        return recovery_doctor_report()
+    except Exception as exc:  # pragma: no cover - defensive
+        return {
+            "status": "error",
+            "ok": False,
+            "count": 0,
+            "orphaned": 0,
+            "error": str(exc)[:200],
+            "warnings": [f"recover check failed: {exc}"],
+            "hints": [],
+            "streams": [],
+        }
 
 
 def _tts_play_queue_report() -> dict[str, Any]:
@@ -686,6 +708,20 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
         f"(radio = keep open until end phrase)",
         file=out,
     )
+    rec = report.get("recover") or {}
+    if rec:
+        print(
+            f"  recover: {rec.get('status', '?')} "
+            f"orphaned={rec.get('orphaned', 0)} "
+            f"total={rec.get('count', 0)} "
+            f"(flush≤{rec.get('flush_interval_s', '?')}s; "
+            f"retain {rec.get('retention_days', '?')}d)",
+            file=out,
+        )
+        for w in rec.get("warnings") or []:
+            print(f"  warn: {w}", file=out)
+        for h in rec.get("hints") or []:
+            print(f"  hint: {h}", file=out)
     ambient = report.get("ambient") or {}
     model = ambient.get("model_path") or "(no model_path)"
     model_ok = ambient.get("model_ok")

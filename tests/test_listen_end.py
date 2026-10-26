@@ -1,4 +1,5 @@
 from hark.config import load_config
+import pytest
 from hark.listen_end import (
     DEFAULT_CANCEL_PHRASES,
     DEFAULT_END_PHRASES,
@@ -19,6 +20,23 @@ def test_defaults_are_product_scoped():
     assert "cancel that" not in DEFAULT_CANCEL_PHRASES
     assert "send it" not in DEFAULT_END_PHRASES
     assert "over" not in DEFAULT_END_PHRASES
+
+
+@pytest.mark.parametrize("closer", [
+    "that covers it", "that answers it", "done answering",
+    "I'm done answering the question", "I am done answering",
+])
+def test_operator_answer_closers_are_terminal_only(closer):
+    hit = evaluate_radio_transcript(f"Use the smaller change. {closer}, thanks.")
+    assert hit is not None and hit.kind == "end"
+    assert "use the smaller change" in hit.body
+    assert evaluate_radio_transcript(f"{closer} after I explain one more thing") is None
+    assert evaluate_radio_transcript(closer, soft_end_phrases_enabled=False) is None
+
+
+@pytest.mark.parametrize("text", ["I'm done", "done", "I'm done with the first part"])
+def test_ambiguous_done_still_keeps_radio_open(text):
+    assert evaluate_radio_transcript(text) is None
 
 
 def test_parse_end_mode():

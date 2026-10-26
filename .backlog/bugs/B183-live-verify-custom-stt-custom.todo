@@ -39,3 +39,5 @@ Live dogfood evidence (2026-08-17):
 - 503 control_plane_unavailable: not encountered during verification.
 
 READY: both surfaces 2xx with real payloads.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. Historical real gateway dogfood evidence retained in ticket; current adapters intact. No repeat API spend/live playback. B182 dependency complete. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

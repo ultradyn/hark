@@ -65,3 +65,5 @@ custom_model = \"gpt-4o-mini-transcribe\"  # or gateway-documented model id
 - Streaming STT
 
 Implemented on master working tree: CustomStt + resolve/config/doctor/providers + docs/PROVIDERS.md client contract + tests/test_custom_stt.py (all green). Explicit pin only; OpenAI /audio/transcriptions default; optional custom_path=/stt. No gateway product branding. LLMP P18: foundation+routes present on llmp master; M2 OpenAI-native adapter still pending in backlog — client is ready to hit either surface once upstream adapters land.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. Explicit Custom STT adapter/config/redaction/request contract remains present; tests/test_custom_stt.py. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

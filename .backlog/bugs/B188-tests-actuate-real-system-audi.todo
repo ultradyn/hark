@@ -30,3 +30,5 @@ Mutating command sites (read-only probes are fine and stay ungated):
 Fix: one gate module every mutating call asks first, blocked by default under pytest and by HARK_MEDIA_CONTROL=0, plus an autouse conftest fixture and a tripwire that fails a test if a mutating argv reaches subprocess.
 
 Env var must be set in os.environ (not just monkeypatched in-process) because the load-bearing case is a SPAWNED hark child, which inherits the environment but not any monkeypatch. Follows the existing HARK_UPDATE_CHECK precedent from B088 (default off in tests, opt in per test).
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. Inherited HARK_MEDIA_CONTROL=0, mutation tripwires and runtime media-control gate remain present; provider spend residual tracked separately B190. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

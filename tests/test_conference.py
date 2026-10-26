@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,7 +20,7 @@ from hark.conference import (
 )
 
 
-def test_detect_zoom_process():
+def test_idle_zoom_process_without_streams_is_free():
     entries = [
         ("1", "systemd", "/sbin/init"),
         ("42", "zoom", "/opt/zoom/ZoomLauncher"),
@@ -29,9 +31,107 @@ def test_detect_zoom_process():
         check_audio=True,
         fail_open=True,
     )
-    assert match.active is True
+    assert match.active is False
     assert any("zoom" in m for m in match.matched)
     assert "process" in match.sources
+    assert "audio" in match.sources
+
+
+@pytest.mark.parametrize("browser", ["brave", "chrome", "firefox"])
+def test_stale_browser_join_url_without_streams_is_free(browser):
+    match = detect_conference(
+        proc_entries=[("42", browser, f"/usr/bin/{browser} https://zoom.us/j/123")],
+        stream_blobs=[],
+        check_audio=True,
+    )
+    assert match.active is False
+    assert "cmdline:zoom.us/j/" in match.matched
+    assert "audio" in match.sources
+
+
+@pytest.mark.parametrize("fail_open", [True, False])
+def test_process_only_when_audio_scan_fails_respects_policy(monkeypatch, fail_open):
+    def broken_scan():
+        raise OSError("audio service unavailable")
+
+    monkeypatch.setattr("hark.conference.list_audio_stream_blobs", broken_scan)
+    match = detect_conference(
+        proc_entries=[("42", "zoom", "/opt/zoom")],
+        check_audio=True,
+        fail_open=fail_open,
+    )
+    assert match.active is not fail_open
+    assert "audio service unavailable" in match.error
+
+
+@pytest.mark.parametrize("failure", ["missing", "exit", "timeout", "oserror"])
+@pytest.mark.parametrize("fail_open", [True, False])
+def test_real_inventory_failures_are_not_empty_success(monkeypatch, failure, fail_open):
+    monkeypatch.setattr("shutil.which", lambda name: None if failure == "missing" else f"/bin/{name}")
+
+    def run(args, **kwargs):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, 3)
+        if failure == "oserror":
+            raise OSError("connection failed")
+        return SimpleNamespace(returncode=1, stdout="", stderr="Connection refused")
+
+    monkeypatch.setattr("hark.conference.subprocess.run", run)
+    match = detect_conference(
+        proc_entries=[("42", "zoom", "/opt/zoom")],
+        fail_open=fail_open,
+    )
+    assert match.active is not fail_open
+    assert "inventory unavailable" in match.error
+
+
+def test_successful_empty_inventory_is_free_even_when_fail_closed(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr("hark.conference.subprocess.run", lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout="", stderr="",
+    ))
+    match = detect_conference(
+        proc_entries=[("42", "zoom", "/opt/zoom")],
+        fail_open=False,
+    )
+    assert not match.active
+    assert "audio" in match.sources
+    assert match.error is None
+
+
+def test_incomplete_pulse_inventory_falls_back_to_pipewire(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}")
+
+    def run(args, **kwargs):
+        if args[0] == "pactl":
+            return SimpleNamespace(returncode=1, stdout="", stderr="failed")
+        return SimpleNamespace(returncode=0, stdout='application.name = "Microsoft Teams"', stderr="")
+
+    monkeypatch.setattr("hark.conference.subprocess.run", run)
+    match = detect_conference(proc_entries=[])
+    assert match.active
+    assert any("teams" in marker for marker in match.matched)
+
+
+def test_conference_status_uses_configured_policy(monkeypatch):
+    from hark.conference import conference_status
+
+    seen = {}
+
+    def detect(**kwargs):
+        seen.update(kwargs)
+        return ConferenceMatch(active=True, matched=("proc:custom-meeting",))
+
+    monkeypatch.setattr("hark.conference.detect_conference", detect)
+    cfg = HarkConfig(audio=AudioConfig(
+        conference_process_names=["custom-meeting"],
+        conference_check_audio=False,
+    ))
+    result = conference_status(cfg)
+    assert result.active
+    assert result.matched == ("proc:custom-meeting",)
+    assert seen["process_names"] == ["custom-meeting"]
+    assert seen["check_audio"] is False
 
 
 def test_detect_meet_cmdline():

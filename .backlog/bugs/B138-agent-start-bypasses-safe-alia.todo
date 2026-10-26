@@ -31,3 +31,5 @@ The CLI erases the distinction between unknown and unsafe resolver failures and 
 - Prefer the existing resolve_flexible policy or one shared launch-resolution path over recreating fallback policy in CLI.
 - Add end-to-end CLI tests for cc to gcc rejection, unknown safe PATH binary fallback, unsafe unknown binary, overrides, explicit --adhoc, and normal aliases.
 - Error output explains the rejected token without starting a Herdr pane.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. cmd_agent_start uses resolve_flexible; implicit ad-hoc fallback only for UNKNOWN_AGENT; unsafe aliases/overrides remain rejected. End-to-end tests/test_cli_agent_start.py. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

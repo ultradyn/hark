@@ -18,6 +18,7 @@ from typing import Any, Callable, Iterator
 
 import numpy as np
 
+from hark import pidfd as process_pidfd
 from hark.audio.frames import FramePhase, MicFrameSource, MuteFreezeGate
 from hark.audio.mic_mute import mute_freeze_budget_s
 from hark.endpointing import EndpointFrame, EndpointStrategy, SilenceEndpointer
@@ -189,6 +190,26 @@ _active_stream_lock = threading.RLock()
 _active_input_stream: Any | None = None
 _stream_cancel_lock = threading.RLock()
 _STREAM_CLEANUP_JOIN_S = 2.0
+# B178: optional durable-audio flusher installed by stream_recovery (never import
+# that module from a signal handler — import locks are not signal-safe).
+_recovery_flush: Callable[[], None] | None = None
+
+
+def set_recovery_flush(callback: Callable[[], None] | None) -> None:
+    """Register/clear the B178 recovery flusher used by cancel_active_capture."""
+    global _recovery_flush
+    _recovery_flush = callback
+
+
+def _run_recovery_flush() -> None:
+    """Best-effort flush; must not raise into signal/cancel paths."""
+    cb = _recovery_flush
+    if cb is None:
+        return
+    try:
+        cb()
+    except Exception:
+        pass
 
 
 @dataclass
@@ -442,7 +463,9 @@ class _ParentLifetimeGuard:
         pidfds: list[int] = []
         fallback: list[tuple[int, str | None]] = []
         try:
-            pidfd_open = getattr(os, "pidfd_open", None)
+            pidfd_open = (
+                process_pidfd.open_pidfd if process_pidfd.available() else None
+            )
             for identity in self._ancestors:
                 if not callable(pidfd_open):
                     fallback.append(identity)
@@ -830,6 +853,9 @@ def cancel_active_capture(
     """
     global _active_input_stream
     request_capture_cancel(signum, reason=reason)
+    # B178: flush durable answer-window audio before teardown races drop the tail.
+    # Callback only — no imports here (signal-handler safe).
+    _run_recovery_flush()
     owner: _StreamCleanupOwner | None = None
     with _active_stream_lock:
         stream = _active_input_stream
@@ -1628,6 +1654,7 @@ def capture_utterance(
     # Pluggable endpointing (B007). None strategy == legacy fixed-silence gate.
     endpoint_strategy: EndpointStrategy | None = None,
     on_endpoint_event: Callable[[str, dict], None] | None = None,
+    on_accepted_pcm: Callable[[bytes], None] | None = None,
     **gate: Any,
 ) -> CaptureResult:
     """Energy-gated capture until turn end or should_stop or max.
@@ -1729,6 +1756,13 @@ def capture_utterance(
     wait_speech_ms = 0
     # Safety cap for discard phase (TTS tail + residual + long mute)
     discard_max_s = max(spec.discard_max_floor_s, initial_timeout_s)
+
+    def _emit_accepted_pcm(samples_block: np.ndarray) -> None:
+        if on_accepted_pcm is not None:
+            try:
+                on_accepted_pcm(pcm16_mono_bytes(samples_block))
+            except Exception:
+                pass
 
     try:
         stream_owner = sd.InputStream(
@@ -1961,7 +1995,12 @@ def capture_utterance(
                                 frames.disarm_deadline()
                                 # Seed buffer with short pre-roll only (not full leading silence)
                                 if preroll_blocks > 0:
-                                    chunks.extend(preroll)
+                                    # Emit per-frame for B178 recovery without an
+                                    # extra np.concatenate (energy path keeps a
+                                    # single final concat; see test_endpointing).
+                                    for pr in preroll:
+                                        chunks.append(pr)
+                                        _emit_accepted_pcm(pr)
                                     preroll.clear()
                                 wait_speech_ms = int(
                                     1000 * (time.monotonic() - start)
@@ -1985,6 +2024,7 @@ def capture_utterance(
                             )
                     else:
                         chunks.append(samples.copy())
+                        _emit_accepted_pcm(samples)
                         # Classic hysteresis hang floor (open_thresh freezes at open).
                         hang_floor = (
                             float(open_thresh) - float(hang_margin_db)

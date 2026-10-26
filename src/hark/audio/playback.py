@@ -1324,19 +1324,77 @@ def _apply_playback_speed(
 
 def _play_pcm16(pcm: bytes, sample_rate: int) -> None:
     if sd is not None:
-        samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-        if samples.size == 0:
+        if not pcm:
             return
+        if sample_rate <= 0 or len(pcm) % 2:
+            raise ValueError(
+                "PCM playback requires complete int16 frames and a positive sample rate"
+            )
+        # sounddevice's play/wait/stop helpers share one process-global stream.
+        # A pre-arm cue can overlap TTS and would stop/close the TTS stream.
+        # Own the stream and its cancellation independently for every playback.
+        finished = threading.Event()
+        skipped = threading.Event()
+        control = threading.RLock()
+        offset = 0
+        closed = False
+
+        def _fill(outdata: Any, frames: int, _time: Any, _status: Any) -> None:
+            nonlocal offset
+            target = memoryview(outdata).cast("B")
+            count = min(frames * 2, len(pcm) - offset)
+            target[:count] = pcm[offset : offset + count]
+            target[count:] = b"\x00" * (len(target) - count)
+            offset += count
+            if offset >= len(pcm):
+                # CallbackStop drains this final buffer before finished_callback.
+                raise sd.CallbackStop
+
+        stream = sd.RawOutputStream(
+            samplerate=sample_rate,
+            channels=1,
+            dtype="int16",
+            callback=_fill,
+            finished_callback=finished.set,
+        )
 
         def _stop() -> None:
-            try:
-                sd.stop()
-            except Exception:
-                pass
+            skipped.set()
+            with control:
+                if not closed:
+                    try:
+                        stream.abort()
+                    finally:
+                        finished.set()
 
-        with _skip_stopper(_stop):
-            sd.play(samples, sample_rate)
-            sd.wait()
+        try:
+            with _skip_stopper(_stop):
+                with control:
+                    if not skipped.is_set():
+                        stream.start()
+                # Bound a missing completion callback. Native driver operations
+                # themselves still require a responsive PortAudio backend.
+                duration_s = len(pcm) / (2 * sample_rate)
+                if not finished.wait(timeout=duration_s + 5.0):
+                    raise TimeoutError(
+                        "audio playback did not finish within its duration budget"
+                    )
+        finally:
+            primary_active = sys.exc_info()[0] is not None
+            with control:
+                try:
+                    if not finished.is_set():
+                        stream.abort()
+                except BaseException:
+                    if not primary_active:
+                        raise
+                finally:
+                    closed = True
+                    try:
+                        stream.close()
+                    except BaseException:
+                        if not primary_active:
+                            raise
         return
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         p = Path(tmp.name)

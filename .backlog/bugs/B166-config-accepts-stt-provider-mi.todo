@@ -1,14 +1,18 @@
 ---
+claimed_at: "2026-10-26T00:19:47Z"
+claimed_by: codex-stream-vapor-nm24
+completed_at: null
 complexity: medium
 created_at: "2026-07-23T09:26:36Z"
 depends_on: []
 estimate_hours: 1
 id: B166
 priority: high
-status: pending
+started_at: "2026-10-26T00:19:47Z"
+status: in_progress
 tags: []
 title: config accepts stt provider=minimax silently; unsupported-STT only discovered at call time. Validate provider capability at config load / doctor. (Error message listing alternatives is good.)
-updated_at: "2026-07-23T09:26:36Z"
+updated_at: "2026-10-26T00:19:47Z"
 ---
 
 config accepts stt provider=minimax silently; unsupported-STT only discovered at call time. Validate provider capability at config load / doctor. (Error message listing alternatives is good.)

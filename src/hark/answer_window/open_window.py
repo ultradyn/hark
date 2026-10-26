@@ -11,6 +11,7 @@ test seams stay stable during the E4 migration.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import replace
 
 from hark.answer_window.deps import AnswerWindowDeps
@@ -30,8 +31,11 @@ from hark.answer_window.silence import (
     is_no_open_timeout as _is_no_open_timeout,
 )
 from hark.audio.capture import effective_radio_segment_pad_ms
+from hark.audio.stream_recovery import open_stream_recovery
 from hark.endpointing import EndpointStrategy
+from hark.exitcodes import TIMEOUT
 from hark.listen_end import EndMode
+from hark.providers.base import safe_exception_detail, safe_provider_failure
 from hark.partial import new_stream_id
 
 
@@ -121,6 +125,39 @@ def open_answer_window(
     ProviderError = speech.ProviderError
     ABORT = speech.ABORT
     _build_endpoint_strategy = speech.build_endpoint_strategy
+
+    nudge_outcomes: list[dict] = []
+
+    def _with_nudges(result: ListenResult) -> ListenResult:
+        result.tts_nudges = list(nudge_outcomes)
+        return result
+
+    def _listen_result(**fields) -> ListenResult:
+        return ListenResult(tts_nudges=list(nudge_outcomes), **fields)
+
+    def _run_nudge(text: str, *, reason: str) -> None:
+        outcome = {"reason": reason, "profile": policy.profile}
+        try:
+            info = run_tts(
+                cfg,
+                text,
+                provider=nudge_tts_provider,
+                play=True,
+                mute_mic=cfg.audio.mute_mic_during_tts,
+            )
+        except (ProviderError, TimeoutError) as exc:
+            failure = safe_provider_failure(exc)
+            code = (
+                TIMEOUT
+                if isinstance(exc, TimeoutError) and not isinstance(exc, ProviderError)
+                else failure.code
+            )
+            outcome.update(ok=False, error=failure.detail, exit=code)
+            nudge_outcomes.append(outcome)
+            raise
+        else:
+            outcome.update(info)
+            nudge_outcomes.append(outcome)
 
     # --- policy → local knobs (parity with former run_listen locals) ---
     mode = policy.end_mode
@@ -325,7 +362,7 @@ def open_answer_window(
             duration_ms=duration_ms,
             text_len=len(body),
         )
-        return ListenResult(
+        return _listen_result(
             text=body,
             provider=prov,
             duration_ms=duration_ms,
@@ -348,8 +385,42 @@ def open_answer_window(
     do_duck_stt = bool(policy.duck_media_during_stt)
     do_pause_stt = bool(policy.pause_media_during_stt)
 
+    # B178: durable PCM recovery for abnormal interruption (harness kill, signal,
+    # crash). Successful clean completion discards the private stream dir.
+    recovery = open_stream_recovery(
+        stream, mode=mode.value, sample_rate=gate_spec.sample_rate
+    )
+    recovery_done = False
+
+    def _recovery_pcm(pcm: bytes) -> None:
+        recovery.append_pcm(pcm)
+
+    def _recovery_success() -> None:
+        nonlocal recovery_done
+        if recovery_done:
+            return
+        recovery_done = True
+        try:
+            recovery.complete_and_discard()
+        except Exception:
+            pass
+
+    def _recovery_keep(*, reason: str | None = None) -> None:
+        nonlocal recovery_done
+        if recovery_done:
+            return
+        recovery_done = True
+        try:
+            if reason:
+                recovery.mark_interrupted(reason=reason)
+            else:
+                recovery.close_retain(reason="incomplete")
+        except Exception:
+            pass
+
     # Pause ambient wake scanning so we get the mic (dogfood B010)
     with (
+        recovery,
         pause_ambient_for_mic(reason="listen"),
         MicLease("listen"),
         BusySection("listen"),
@@ -418,10 +489,16 @@ def open_answer_window(
                             audio_ok_after=lead_ok,
                             endpoint_strategy=endpoint_strategy,
                             on_endpoint_event=_endpoint_event,
+                            on_accepted_pcm=_recovery_pcm,
                         )
+                        try:
+                            recovery.note_segment(force_flush=True)
+                        except Exception:
+                            pass
                     except TimeoutError as exc:
                         # Reload mid-wait (before speech / empty capture) → clean cancel
                         if _reload_abort():
+                            _recovery_keep(reason="config_reload")
                             return _reload_cancel_result()
                         _cue_stop_once(reason="timeout")
                         err_s = str(exc)
@@ -449,19 +526,16 @@ def open_answer_window(
                                 continue
                             if decision.action is SilenceEvent.NUDGE:
                                 try:
-                                    run_tts(
-                                        cfg,
+                                    _run_nudge(
                                         decision.nudge_text or nudge_no_open_text,
-                                        provider=nudge_tts_provider,
-                                        play=True,
-                                        mute_mic=cfg.audio.mute_mic_during_tts,
+                                        reason="no_open",
                                     )
-                                except Exception as nudge_exc:
+                                except (ProviderError, TimeoutError) as nudge_exc:
                                     syslog(
                                         "speech.no_open_nudge_failed",
                                         component="stt",
                                         level="warn",
-                                        error=str(nudge_exc)[:200],
+                                        error=safe_exception_detail(nudge_exc, limit=200),
                                         stream_id=stream,
                                     )
                                 settle = max(
@@ -471,6 +545,7 @@ def open_answer_window(
                         raise
                     # Config reload mid-capture (should_stop) — not a normal silence end
                     if _reload_abort():
+                        _recovery_keep(reason="config_reload")
                         return _reload_cancel_result(duration_ms=cap.duration_ms)
                     agent_act = consume_listen_action(stream)
                     _cue_stop_once(
@@ -488,7 +563,8 @@ def open_answer_window(
                             ok=False,
                             error="agent_cancel",
                         )
-                        return ListenResult(
+                        _recovery_success()
+                        return _listen_result(
                             text="",
                             provider=getattr(stt, "name", "unknown"),
                             duration_ms=cap.duration_ms,
@@ -529,19 +605,16 @@ def open_answer_window(
                             continue
                         if decision.action is SilenceEvent.NUDGE:
                             try:
-                                run_tts(
-                                    cfg,
+                                _run_nudge(
                                     decision.nudge_text or EMPTY_STT_NUDGE_TEXT,
-                                    provider=nudge_tts_provider,
-                                    play=True,
-                                    mute_mic=cfg.audio.mute_mic_during_tts,
+                                    reason="empty_stt",
                                 )
-                            except Exception as nudge_exc:
+                            except (ProviderError, TimeoutError) as nudge_exc:
                                 syslog(
                                     "speech.empty_stt_nudge_failed",
                                     component="stt",
                                     level="warn",
-                                    error=str(nudge_exc)[:200],
+                                    error=safe_exception_detail(nudge_exc, limit=200),
                                     stream_id=stream,
                                 )
                             settle = max(0.1, cfg.audio.post_tts_guard_ms / 1000.0)
@@ -582,7 +655,8 @@ def open_answer_window(
                             empty_stt_attempts=attempt,
                             after_tts=after_tts,
                         )
-                    return ListenResult(
+                    _recovery_success()
+                    return _listen_result(
                         text=tr.text,
                         provider=tr.provider,
                         duration_ms=cap.duration_ms,
@@ -653,6 +727,7 @@ def open_answer_window(
                 _arm_cue_if_requested()
             while time.monotonic() - started < max_listen:
                 if _reload_abort():
+                    _recovery_keep(reason="config_reload")
                     return _reload_cancel_result(
                         duration_ms=int(1000 * (time.monotonic() - started)),
                         text=radio_sess.last_partial_text,
@@ -705,9 +780,18 @@ def open_answer_window(
                         ),
                         discard_leading_ms=seg_discard,
                         audio_ok_after=seg_ok_after,
+                        on_accepted_pcm=_recovery_pcm,
                     )
+                    try:
+                        recovery.note_segment(
+                            partial_text=radio_sess.last_partial_text or None,
+                            force_flush=True,
+                        )
+                    except Exception:
+                        pass
                 except TimeoutError:
                     if _reload_abort():
+                        _recovery_keep(reason="config_reload")
                         return _reload_cancel_result(
                             duration_ms=int(1000 * (time.monotonic() - started)),
                             text=radio_sess.last_partial_text,
@@ -751,15 +835,30 @@ def open_answer_window(
                                 ok=hit.kind != "cancel",
                                 error="cancel" if hit.kind == "cancel" else None,
                             )
-                            return radio_sess.result_for_phrase_hit(
+                            _recovery_success()
+                            return _with_nudges(radio_sess.result_for_phrase_hit(
                                 hit,
                                 text=tr.text,
                                 provider=tr.provider,
                                 duration_ms=int(
                                     1000 * (time.monotonic() - started)
                                 ),
+                            ))
+                        # Idle retranscription is a candidate, never authority
+                        # to erase speech already accepted in segment partials.
+                        body = radio_sess.finalize_joined_body(
+                            (tr.text or "").strip()
+                        )
+                        if not body:
+                            store.record_stt(
+                                text="",
+                                provider=tr.provider,
+                                ok=False,
+                                error="empty transcript after radio idle",
                             )
-                        body = (tr.text or "").strip()
+                            raise ProviderError(
+                                "heard audio but STT returned empty text after radio idle"
+                            )
                         store.record_stt(
                             text=body,
                             provider=tr.provider,
@@ -776,7 +875,8 @@ def open_answer_window(
                             text_len=len(body),
                             partials_emitted=radio_sess.partial_seq,
                         )
-                        return ListenResult(
+                        _recovery_success()
+                        return _listen_result(
                             text=body,
                             provider=tr.provider,
                             duration_ms=int(
@@ -799,6 +899,7 @@ def open_answer_window(
                     raise
                 # Config reload mid-segment (should_stop) — clean cancel with stop cue
                 if _reload_abort():
+                    _recovery_keep(reason="config_reload")
                     return _reload_cancel_result(
                         duration_ms=int(1000 * (time.monotonic() - started)),
                         text=radio_sess.last_partial_text,
@@ -901,7 +1002,12 @@ def open_answer_window(
                             latency_ms=latency_ms,
                             ok=True,
                         )
-                    return ended
+                    try:
+                        recovery.set_partial_text(ended.text or radio_sess.last_partial_text)
+                    except Exception:
+                        pass
+                    _recovery_success()
+                    return _with_nudges(ended)
                 # Joined segment STT is append-only; RadioSession refuses shrink
                 # so a flaky mid-slice rewrite cannot drop words already seen.
                 if radio_sess.emit_partial_if_needed(
@@ -915,6 +1021,10 @@ def open_answer_window(
                 ):
                     ev = radio_sess.last_partial_event or {}
                     frag = ev.get("fragment") or ""
+                    try:
+                        recovery.set_partial_text(radio_sess.last_partial_text)
+                    except Exception:
+                        pass
                     # Prefer fragment in logs so each radio slice is visible
                     # (full cumulative body is still on the event as text).
                     syslog(
@@ -987,12 +1097,13 @@ def open_answer_window(
                         latency_ms=latency_ms,
                         ok=True,
                     )
-                    return radio_sess.result_for_agent_action(
+                    _recovery_success()
+                    return _with_nudges(radio_sess.result_for_agent_action(
                         "finish",
                         text=body,
                         provider=tr.provider,
                         duration_ms=int(1000 * (time.monotonic() - started)),
-                    )
+                    ))
                 # max_listen / fall-through: return assembled body if any
                 if body:
                     store.record_stt(
@@ -1002,7 +1113,8 @@ def open_answer_window(
                         latency_ms=latency_ms,
                         ok=True,
                     )
-                    return ListenResult(
+                    _recovery_success()
+                    return _listen_result(
                         text=body,
                         provider=tr.provider,
                         duration_ms=int(1000 * (time.monotonic() - started)),
@@ -1012,12 +1124,23 @@ def open_answer_window(
                         partials_emitted=radio_sess.partial_seq,
                     )
             if agent_act == "cancel":
-                return radio_sess.result_for_agent_action(
+                _recovery_success()
+                return _with_nudges(radio_sess.result_for_agent_action(
                     "cancel",
                     text=radio_sess.last_partial_text,
                     provider=last_provider,
                     duration_ms=int(1000 * (time.monotonic() - started)),
-                )
+                ))
             raise TimeoutError(f"radio listen exceeded max_listen_s={max_listen}")
         finally:
+            primary = sys.exception()
+            if primary is not None and nudge_outcomes:
+                try:
+                    primary.tts_nudges = list(nudge_outcomes)
+                except Exception:
+                    pass
             clear_active_listen(stream)
+            # Abnormal exit (signal, crash path that still runs finally, uncaught
+            # error): keep durable PCM. Successful paths already discarded it.
+            if not recovery_done:
+                _recovery_keep(reason="abnormal_exit")

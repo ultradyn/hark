@@ -81,6 +81,31 @@ def test_default_radio_idle_is_three_times_end_silence():
     assert cfg.listen.radio_partial_silence_s < cfg.listen.radio_idle_end_silence_s
 
 
+@pytest.mark.parametrize("segment", ["keep the operator answer", ""])
+def test_radio_idle_empty_final_keeps_partial_or_fails(monkeypatch, segment):
+    import hark.speech as speech
+    from hark.providers.base import ProviderError
+
+    _stub_listen_deps(monkeypatch, speech, transcripts=[segment, ""])
+    outcomes = iter([_cap(80)])
+
+    def capture(**kwargs):
+        try:
+            return next(outcomes)
+        except StopIteration:
+            raise TimeoutError("no speech detected")
+
+    monkeypatch.setattr(speech, "capture_utterance", capture)
+    cfg = HarkConfig(listen=ListenConfig(end_mode="radio", soft_end_phrases_enabled=False))
+    if segment:
+        result = speech.run_listen(cfg, post_tts_guard_s=0)
+        assert result.text == segment
+        assert result.end_phrase == "radio_idle"
+    else:
+        with pytest.raises(ProviderError, match="empty text after radio idle"):
+            speech.run_listen(cfg, post_tts_guard_s=0)
+
+
 def test_config_default_scales_with_end_silence(tmp_path, monkeypatch):
     cfg_file = tmp_path / "config.toml"
     cfg_file.write_text(

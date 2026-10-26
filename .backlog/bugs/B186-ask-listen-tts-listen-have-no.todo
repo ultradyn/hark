@@ -37,3 +37,5 @@ Part 2 - a lost transcript is currently unrecoverable. Even with the flag, an ag
 Part 2 is separable - land it as its own commit so it can be dropped if scope needs cutting.
 
 Related: #3 (piping to tail appears to hang) is the buffering side of the same rough edge. Version at filing: 2026-08-23, editable v0.1.0, git v0.1.10-365-gfc3a1b5.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. Text output modes and durable completed transcript logging implemented; tests/test_cli_output_format.py and test_transcripts.py. Existing GitHub twin #11 untouched. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

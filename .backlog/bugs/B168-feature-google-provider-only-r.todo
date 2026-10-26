@@ -1,14 +1,18 @@
 ---
+completed_at: null
 complexity: medium
 created_at: "2026-07-23T09:27:47Z"
 depends_on: []
 estimate_hours: 1
 id: B168
 priority: high
-status: completed
+started_at: null
+status: done
 tags: []
 title: 'feature: google provider only reads GEMINI_API_KEY/GOOGLE_API_KEY env — cannot borrow agy (Antigravity) OAuth the way it borrows grok/codex/pi auth files. If agy exposes a usable Google credential, add an auth-file adapter for it.'
 updated_at: "2026-07-23T11:59:00Z"
 ---
 
 feature: google provider only reads GEMINI_API_KEY/GOOGLE_API_KEY env — cannot borrow agy (Antigravity) OAuth the way it borrows grok/codex/pi auth files. If agy exposes a usable Google credential, add an auth-file adapter for it.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. agy OAuth adapter exists with environment precedence, expiry handling and Bearer transport regressions; tests/test_auth_discovery.py. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

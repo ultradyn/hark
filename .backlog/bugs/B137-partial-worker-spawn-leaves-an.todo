@@ -31,3 +31,5 @@ Failure after the first successful spawn leaks an untracked child and no PID sta
 - Report the failed role and any rollback failure explicitly.
 - Apply the same behavior to hark start and the optional daemon path that shares spawn_mode_a_workers.
 - Add tests for failure on first and second spawn, rollback signal failure, early child exit, pidfile write failure, and successful two-role startup.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. Transactional daemon startup tracks each spawn and rolls back failures, including second-role/early-exit/pidfile failures; tests/test_daemon.py covers child reaping and state cleanup. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

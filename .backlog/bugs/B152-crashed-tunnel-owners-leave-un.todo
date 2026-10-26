@@ -1,19 +1,18 @@
 ---
-claimed_at: "2026-07-16T01:45:07Z"
-claimed_by: cli-user
-completed_at: "2026-07-19T10:22:35Z"
+claimed_at: "2026-10-26T00:16:53Z"
+claimed_by: codex-stream-vapor-nm24
+completed_at: null
 complexity: medium
 created_at: "2026-07-16T01:44:28Z"
 depends_on: []
-duration_minutes: 4837.480645086033
 estimate_hours: 1
 id: B152
 priority: high
-started_at: "2026-07-16T01:45:07Z"
-status: done
+started_at: "2026-10-26T00:16:53Z"
+status: in_progress
 tags: []
 title: Crashed tunnel owners leave unreapable SSH children
-updated_at: "2026-07-19T10:22:35Z"
+updated_at: "2026-10-26T00:16:53Z"
 ---
 ## Evidence
 
@@ -26,3 +25,5 @@ A Hark-started SSH tunnel has a crash-safe lifetime: either the child is guarant
 ## Actual
 
 Abrupt owner exit can strand a Hark-started SSH child and socket indefinitely. Later processes may reuse the forward but cannot stop it, so repeated crashes can accumulate orphan SSH processes.
+
+Verified 2026-10-26: durable adoption exists but SIGKILL before owner marker publication can strand SSH child. Decision: Linux exec helper sets PR_SET_PDEATHSIG(SIGKILL), verifies expected parent PID, then execs ssh; avoid preexec_fn in threaded caller. Parent crash terminates borrowed forward too; later access recreates it. Fail closed when requested native protection cannot install. Separate tunnel lane owns tunnel.py/new child helper/dedicated crash tests, after B135/B136 watch code completed.

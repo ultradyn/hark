@@ -37,3 +37,5 @@ Hark has Custom STT (B174, provider="custom") but no Custom TTS — TTS resolves
 - pytest green on new + existing tests.
 - hark providers / hark doctor show Custom TTS readiness.
 - tts.provider=custom + base/key/model pins synthesize real audio end-to-end (covered by B183 dogfood).
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. Explicit Custom TTS adapter/config/voice/key/path contract remains present; tests/test_custom_tts.py. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

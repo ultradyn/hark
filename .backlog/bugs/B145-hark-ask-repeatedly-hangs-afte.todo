@@ -16,3 +16,5 @@ title: hark ask repeatedly hangs after speaking question
 updated_at: "2026-07-19T10:15:40Z"
 ---
 A fresh operator-requested retry of 'hark ask --confirm never' in /home/xertrov/src/amaroo spoke and printed the question, then remained blocked for more than 30 seconds with no transcript or structured timeout result. This reproduced after the earlier interrupted-listener failure logged in B143 and after workers had been restarted. When the orchestrator attempted to cancel the returned PTY session, the process id was already unknown, so the caller had neither a result nor a live process it could cleanly manage. Hark ask needs reliable completion, timeout reporting, and process/session lifecycle behavior after TTS hands off to listening.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. Capture read deadlines force bounded timeout when native read stalls; tests/test_ask_capture_deadline.py. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

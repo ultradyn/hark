@@ -1,5 +1,5 @@
 ---
-completed_at: null
+completed_at: "2026-10-26T00:23:54Z"
 complexity: low
 created_at: "2026-08-23T08:06:47Z"
 depends_on: []
@@ -7,10 +7,10 @@ estimate_hours: 1
 id: B192
 priority: medium
 started_at: null
-status: blocked
+status: done
 tags: []
 title: ask confirm-turn readback discards its run_tts result, so a B177 TTS fallback during the readback reaches no JSON and no transcript
-updated_at: "2026-08-23T08:07:13Z"
+updated_at: "2026-10-26T00:23:54Z"
 ---
 Found while implementing B177 (scoped TTS retry + provider fallback), confirmed by the parent review gate.
 

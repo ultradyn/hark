@@ -1,17 +1,18 @@
 ---
+claimed_at: "2026-10-26T00:13:51Z"
+claimed_by: codex-stream-vapor-nm24
+completed_at: null
 complexity: medium
 created_at: "2026-08-23T08:06:52Z"
 depends_on: []
 estimate_hours: 1
 id: B193
 priority: medium
-status: pending
-tags:
-    - providers
-    - observability
-    - answer-window
+started_at: "2026-10-26T00:13:51Z"
+status: in_progress
+tags: []
 title: 'answer-window nudge TTS failures are syslog-only: broad except means no payload or transcript signal'
-updated_at: "2026-08-23T08:06:52Z"
+updated_at: "2026-10-26T00:13:51Z"
 ---
 Stated plainly by the B187/B177 agent as a known gap it deliberately did not widen scope to fix.
 

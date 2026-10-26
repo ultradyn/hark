@@ -1,14 +1,20 @@
 ---
+claimed_at: "2026-10-26T00:12:47Z"
+claimed_by: codex-stream-vapor-nm24
+completed_at: null
 complexity: medium
 created_at: "2026-07-23T09:26:35Z"
 depends_on: []
 estimate_hours: 1
 id: B164
 priority: high
-status: pending
+started_at: "2026-10-26T00:12:47Z"
+status: in_progress
 tags: []
 title: 'provider=auto does not fall back on auth errors: xAI 403 hard-failed hark tts and hark ask STT instead of skipping to next configured provider. Auth failures should trigger fallback like availability failures.'
-updated_at: "2026-07-23T09:26:35Z"
+updated_at: "2026-10-26T00:12:47Z"
 ---
 
 provider=auto does not fall back on auth errors: xAI 403 hard-failed hark tts and hark ask STT instead of skipping to next configured provider. Auth failures should trigger fallback like availability failures.
+
+Verified 2026-10-26: auto TTS and STT still fail on primary auth errors. Decision: auto-only observable fallback on 401/403/auth-missing, no same-provider auth retry; explicit pins and primary quota errors remain fail-fast. B164 then B181 share provider/speech lane. B181 true worker wall deadline plus shorter Google HTTP bounds; coordinate isolation.py pidfd integration with signal lane.

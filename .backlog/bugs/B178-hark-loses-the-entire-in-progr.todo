@@ -1,19 +1,18 @@
 ---
-claimed_at: "2026-08-11T13:37:48Z"
-claimed_by: cli-user
-completed_at: "2026-08-11T13:37:52Z"
+claimed_at: "2026-10-26T00:13:51Z"
+claimed_by: codex-stream-vapor-nm24
+completed_at: null
 complexity: medium
 created_at: "2026-08-11T13:07:10Z"
 depends_on: []
-duration_minutes: 0.07186000106666666
 estimate_hours: 1
 id: B178
 priority: high
-started_at: "2026-08-11T13:37:48Z"
-status: done
+started_at: "2026-10-26T00:13:51Z"
+status: in_progress
 tags: []
 title: Hark loses the entire in-progress recording when ask/listen is interrupted; persist recoverable audio continuously with bounded loss
-updated_at: "2026-08-11T13:37:52Z"
+updated_at: "2026-10-26T00:13:51Z"
 ---
 ## Dogfood incident
 
@@ -49,3 +48,5 @@ Hark must never lose more than a few seconds of accepted microphone audio becaus
 B143 fixed interrupted capture cleanup and structured cancellation. This bug is specifically durable audio recovery and bounded data loss.
 
 Implemented on branch fix/B178: private recover/streams PCM durability, hark recover CLI, doctor section, tests including SIGKILL mid-stream.
+
+Verified 2026-10-26: master lacks recording recovery; existing clean fix/B178 holds dd26c44 and 7c78aa5. Decision: reuse and adapt implementation to CaptureGateSpec; harden short PCM/metadata writes. Restore B178 before setup/doctor/CLI edits, then B172/B173/B193 capture diagnostics.

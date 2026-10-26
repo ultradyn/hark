@@ -29,3 +29,5 @@ A normal return from the socket loop bypasses the only tunnel cleanup block.
 - Preserve the original watch result and do not mask it with cleanup errors.
 - Tests cover normal socket return, KeyboardInterrupt, reconnect exhaustion, poll fallback, partial tunnel setup failure, and multiple tunnels.
 - Verify local socket files and SSH child processes are removed after exit.
+
+Resolved 2026-10-26: watch explicitly drains access leases and reports cleanup failure without replacing original return or exception. Real AF_UNIX child/socket/marker cleanup regressions pass; remote watch selection 68 passed. Parent + independent review passed.

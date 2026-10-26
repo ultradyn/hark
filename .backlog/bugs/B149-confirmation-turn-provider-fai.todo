@@ -34,3 +34,5 @@ Confirmation-turn ProviderError escapes the run_ask API and can crash cmd_ask in
 - Use the provider error code consistently with the initial answer-window path.
 - Add direct run_ask and CLI regressions.
 - Keep confirmation timeout and cancellation behavior unchanged.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. Confirmation provider failures use structured failure result with original answer and TTS metadata; tests/test_ask_provider_errors.py. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

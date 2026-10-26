@@ -65,3 +65,122 @@ def test_reload_request_flag():
     assert reload_requested() is True
     clear_reload_request()
     assert reload_requested() is False
+
+
+def test_signal_scope_restores_prior_handlers_and_supports_nesting():
+    import signal
+    import hark.lifecycle as lc
+
+    signals = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        signals.append(signal.SIGHUP)
+    previous = {signum: signal.getsignal(signum) for signum in signals}
+    with lc.signal_handler_scope():
+        installed = {signum: signal.getsignal(signum) for signum in signals}
+        assert lc._handlers_installed is True
+        assert installed != previous
+        with lc.signal_handler_scope():
+            assert {signum: signal.getsignal(signum) for signum in signals} == installed
+        assert {signum: signal.getsignal(signum) for signum in signals} == installed
+    assert {signum: signal.getsignal(signum) for signum in signals} == previous
+    assert lc._handlers_installed is False
+
+
+def test_signal_uninstall_preserves_a_new_external_owner():
+    import signal
+    import hark.lifecycle as lc
+
+    previous = signal.getsignal(signal.SIGINT)
+    external = lambda _sig, _frame: None
+    try:
+        with lc.signal_handler_scope():
+            signal.signal(signal.SIGINT, external)
+        assert signal.getsignal(signal.SIGINT) is external
+        assert lc._handlers_installed is False
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def test_partial_signal_install_failure_rolls_back(monkeypatch):
+    import signal
+    import pytest
+    import hark.lifecycle as lc
+
+    native = signal.signal
+    previous = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
+
+    def fail_install(signum, handler):
+        if signum == signal.SIGINT:
+            raise ValueError("install failed")
+        return native(signum, handler)
+
+    monkeypatch.setattr(signal, "signal", fail_install)
+    with pytest.raises(ValueError, match="install failed"):
+        lc.install_signal_handlers()
+    assert {signum: signal.getsignal(signum) for signum in previous} == previous
+    assert lc._handlers_installed is False
+    assert lc._installed_handlers == {}
+
+
+def test_ambient_missing_model_return_restores_signal_handlers(monkeypatch):
+    import io
+    import signal
+    import hark.ambient as ambient
+    from hark.config import HarkConfig
+
+    cfg = HarkConfig()
+    cfg.ambient.engine = "vosk"
+    cfg.ambient.model_path = ""
+    cfg.audio.sync_hw_unmute = False
+    previous = signal.getsignal(signal.SIGINT)
+    assert ambient.run_ambient_loop(cfg, out=io.StringIO(), announce=False) == 1
+    assert signal.getsignal(signal.SIGINT) is previous
+
+
+def test_pending_sigint_during_uninstall_finishes_all_restoration(monkeypatch):
+    import os
+    import signal
+    import pytest
+    import hark.lifecycle as lc
+
+    if not hasattr(signal, "pthread_sigmask"):
+        pytest.skip("requires POSIX signal masks")
+    signals = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        signals.append(signal.SIGHUP)
+    previous = {signum: signal.getsignal(signum) for signum in signals}
+    assert lc.install_signal_handlers() is True
+    native = signal.signal
+    delivered = False
+
+    def restore_then_interrupt(signum, handler):
+        nonlocal delivered
+        result = native(signum, handler)
+        if signum == signal.SIGINT and not delivered:
+            delivered = True
+            os.kill(os.getpid(), signal.SIGINT)
+        return result
+
+    monkeypatch.setattr(signal, "signal", restore_then_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        lc.uninstall_signal_handlers()
+    assert delivered is True
+    assert {signum: signal.getsignal(signum) for signum in signals} == previous
+    assert lc._handlers_installed is False
+
+
+def test_ambient_setup_exception_restores_signal_handlers(monkeypatch):
+    import signal
+    import pytest
+    import hark.ambient as ambient
+    from hark.config import HarkConfig
+
+    previous = signal.getsignal(signal.SIGINT)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("setup failed")
+
+    monkeypatch.setattr(ambient, "_run_ambient_loop", fail)
+    with pytest.raises(RuntimeError, match="setup failed"):
+        ambient.run_ambient_loop(HarkConfig(), announce=False)
+    assert signal.getsignal(signal.SIGINT) is previous

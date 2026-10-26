@@ -102,6 +102,8 @@ def log_exception(
 
 
 def tail_lines(n: int = 50, path: Path | None = None) -> list[dict[str, Any]]:
+    if n <= 0:
+        return []
     p = path or system_log_path()
     if not p.is_file():
         return []

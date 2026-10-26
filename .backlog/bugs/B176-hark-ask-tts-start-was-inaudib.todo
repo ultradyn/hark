@@ -16,3 +16,5 @@ updated_at: "2026-10-26T00:13:03Z"
 ---
 
 hark ask TTS start was inaudible/missed; operator suspects mute/media-duck sequencing muted the beginning. Reproduced during tm-plugin-skills Wayfinder bootstrap with google/eve TTS; subsequent short prompt reported the issue.
+
+Investigation/fix receipt 2026-10-26: concrete concurrent cue/TTS defect removed by per-playback RawOutputStream ownership instead of process-global play/wait/stop. Deterministic overlapping-stream full-PCM tests passed (127-test playback gate). Real private-null-sink smoke delivered all158640 sourceframes across24streams/2workers; bounded native completion. Larger-buffer Valgrind run completed24streams with0memoryerrors. Historical acoustic symptom not directly recreated; no operator desktop/API calls. Final integrated gate pending.

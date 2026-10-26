@@ -1,6 +1,4 @@
 ---
-claimed_at: "2026-08-23T05:42:53Z"
-claimed_by: cli-user
 completed_at: null
 complexity: medium
 created_at: "2026-08-23T05:42:48Z"
@@ -9,10 +7,10 @@ estimate_hours: 2
 id: B190
 priority: high
 started_at: "2026-08-23T05:42:53Z"
-status: blocked
+status: pending
 tags: []
 title: 'tests can synthesize and play real audio: B188 gates ducking but not TTS playback or provider spend'
-updated_at: "2026-08-23T07:46:03Z"
+updated_at: "2026-10-26T00:20:39Z"
 ---
 Follow-on from B188. That task gated the MUTATING media-control commands (volume duck, MPRIS pause, capture mute). It did NOT gate the two other ways a test reaches the operator: making noise, and spending money.
 

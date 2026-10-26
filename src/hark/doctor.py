@@ -665,7 +665,9 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
                 print(f"  warn: last {leg.upper()} attempt failed for {candidate['provider']}"
                       + (f" (HTTP {status})" if status else ""), file=out)
     conf = report.get("conference") or {}
-    print(f"  conference hold: {'ACTIVE' if conf.get('active') else 'inactive'} "
+    active = conf.get("active")
+    conference_state = "unknown" if active is None else "ACTIVE" if active else "inactive"
+    print(f"  conference hold: {conference_state} "
           f"enabled={conf.get('hold_enabled', False)} matched={conf.get('matched', [])}", file=out)
     md = report.get("media_duck") or {}
     if md:

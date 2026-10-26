@@ -159,3 +159,17 @@ def test_diagnostic_parser_flags():
     parser = build_parser()
     assert parser.parse_args(["doctor", "--plan"]).plan is True
     assert parser.parse_args(["setup", "--minimax-ok"]).minimax_ok is True
+
+
+def test_doctor_unknown_conference_detection_is_not_inactive(monkeypatch):
+    from hark import doctor
+    monkeypatch.setattr(doctor, "all_provider_status", lambda: [])
+
+    def unavailable(cfg):
+        raise RuntimeError("conference detector unavailable")
+
+    monkeypatch.setattr("hark.conference.conference_status", unavailable)
+    output = io.StringIO()
+    assert doctor.run_doctor(HarkConfig(sessions=[]), out=output) == 0
+    assert "conference hold: unknown" in output.getvalue()
+    assert "conference hold: inactive" not in output.getvalue()

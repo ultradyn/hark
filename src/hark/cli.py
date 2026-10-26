@@ -111,6 +111,15 @@ def _add_output_format_flags(
     )
 
 
+def _listen_nudge_fields(source: Any) -> dict[str, Any]:
+    """Read optional diagnostics once without trusting exception descriptors."""
+    try:
+        nudges = getattr(source, "tts_nudges", None)
+    except BaseException:
+        return {}
+    return {"tts_nudges": nudges} if isinstance(nudges, list) and nudges else {}
+
+
 def _wants_text_output(args: argparse.Namespace) -> bool:
     """True when text output was requested via --format text / --text."""
     return getattr(args, "format", None) == "text"
@@ -1996,7 +2005,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
             "tts": getattr(exc, "tts_info", None),
             "error": str(exc),
             "listen": None,
-            **({"tts_nudges": exc.tts_nudges} if getattr(exc, "tts_nudges", None) else {}),
+            **_listen_nudge_fields(exc),
             **_standalone_fields(),
         }
         _emit_turn(payload, args, kind="tts_listen", prompt=text)
@@ -2014,7 +2023,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
             "text": listened.text,
             "tts": result,
             "stream_id": listened.stream_id,
-            **({"tts_nudges": listened.tts_nudges} if getattr(listened, "tts_nudges", None) else {}),
+            **_listen_nudge_fields(listened),
             **_standalone_fields(),
         }
         record_turn(
@@ -2035,7 +2044,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
         "text": listened.text,
         "meta_command": listened.meta_command,
         "for_event": getattr(args, "event_id", None),
-        **({"tts_nudges": listened.tts_nudges} if getattr(listened, "tts_nudges", None) else {}),
+        **_listen_nudge_fields(listened),
         **_standalone_fields(),
         "listen": {
             "provider": listened.provider,
@@ -2233,13 +2242,13 @@ def cmd_listen(args: argparse.Namespace, cfg) -> int:
             error = str(exc)
             code = TIMEOUT if isinstance(exc, TimeoutError) else AUDIO
         payload = {"ok": False, "text": None, "error": error, "exit": code,
-                   **({"tts_nudges": exc.tts_nudges} if getattr(exc, "tts_nudges", None) else {})}
+                   **_listen_nudge_fields(exc)}
         _emit_turn(payload, args, kind="listen")
         return code
     if result.cancelled:
         eprint(f"cancelled via {result.end_phrase!r}")
         cancelled = {"ok": False, "cancelled": True, "text": result.text,
-                     **({"tts_nudges": result.tts_nudges} if getattr(result, "tts_nudges", None) else {})}
+                     **_listen_nudge_fields(result)}
         record_turn(
             {**cancelled, "provider": result.provider, "stream_id": result.stream_id},
             kind="listen",
@@ -2258,7 +2267,7 @@ def cmd_listen(args: argparse.Namespace, cfg) -> int:
         "end_mode": result.end_mode,
         "end_phrase": result.end_phrase,
         "stream_id": result.stream_id,
-        **({"tts_nudges": result.tts_nudges} if getattr(result, "tts_nudges", None) else {}),
+        **_listen_nudge_fields(result),
     }
     _emit_turn(payload, args, kind="listen")
     return OK

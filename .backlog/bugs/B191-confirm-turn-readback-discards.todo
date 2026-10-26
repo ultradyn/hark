@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-10-26T00:12:26Z"
 claimed_by: codex-stream-vapor-nm24
-completed_at: null
+completed_at: "2026-10-26T00:23:54Z"
 complexity: medium
 created_at: "2026-08-23T08:06:41Z"
 depends_on: []
+duration_minutes: 11.477138596066666
 estimate_hours: 1
 id: B191
 priority: medium
 started_at: "2026-10-26T00:12:26Z"
-status: in_progress
+status: done
 tags: []
 title: confirm-turn readback discards its run_tts result, so a TTS fallback there reaches no JSON and no transcript
-updated_at: "2026-10-26T00:12:26Z"
+updated_at: "2026-10-26T00:23:54Z"
 ---
 Found by the B187/B177 review agent, 2026-08-23, and confirmed by the coordinator by reading the code.
 

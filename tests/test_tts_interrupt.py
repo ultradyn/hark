@@ -83,7 +83,7 @@ def _isolated_env(tmp_path: Path) -> dict[str, str]:
     env["XDG_STATE_HOME"] = str(tmp_path / "state")
     current = env.get("PYTHONPATH")
     env["PYTHONPATH"] = str(ROOT / "src") + (os.pathsep + current if current else "")
-    return env
+    return __import__("hark_test_guard").guarded_subprocess_env(env)
 
 
 def _read_ready(proc: subprocess.Popen[str], timeout_s: float = _WAIT_S) -> str:
@@ -414,7 +414,7 @@ def _pre_main_tts_child(site_dir: Path, *, block_pidfd_open: bool) -> str:
             "time.sleep(30)\\n",
             encoding="utf-8",
         )
-        os.environ["PYTHONPATH"] = str(site_dir)
+        os.environ.update(__import__("hark_test_guard").guarded_subprocess_env({{**os.environ, "PYTHONPATH": str(site_dir)}}))
 
         class Store:
             def record_tts(self, **kwargs):
@@ -457,7 +457,7 @@ def _pending_group_sigint_child(site_dir: Path, release_path: Path) -> str:
             " while not release.exists(): time.sleep(0.01)\\n",
             encoding="utf-8",
         )
-        os.environ["PYTHONPATH"] = str(site_dir)
+        os.environ.update(__import__("hark_test_guard").guarded_subprocess_env({{**os.environ, "PYTHONPATH": str(site_dir)}}))
 
         class Store:
             def record_tts(self, **kwargs):
@@ -550,7 +550,7 @@ def _detached_tree_tts_child(site_dir: Path) -> str:
             {sitecustomize!r},
             encoding="utf-8",
         )
-        os.environ["PYTHONPATH"] = str(site_dir)
+        os.environ.update(__import__("hark_test_guard").guarded_subprocess_env({{**os.environ, "PYTHONPATH": str(site_dir)}}))
 
         class Store:
             def record_tts(self, **kwargs):
@@ -707,7 +707,7 @@ def _terminalization_window_child(site_dir: Path, stage: str) -> str:
             encoding="utf-8",
         )
         import os
-        os.environ["PYTHONPATH"] = str(site_dir)
+        os.environ.update(__import__("hark_test_guard").guarded_subprocess_env({{**os.environ, "PYTHONPATH": str(site_dir)}}))
 
         stage = {stage!r}
         real_wait = isolation.SynthProcessLifecycle._wait_direct_child
@@ -1008,7 +1008,7 @@ def _canonical_pre_main_unknown_pid_subreaper_child(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=__import__("hark_test_guard").guarded_subprocess_env(env),
         )
         hidden_pid = None
         try:
@@ -1299,7 +1299,7 @@ def _portable_detached_pipe_child(site_dir: Path) -> str:
         site_dir = Path({str(site_dir)!r})
         site_dir.mkdir(parents=True, exist_ok=True)
         (site_dir / "sitecustomize.py").write_text({sitecustomize!r}, encoding="utf-8")
-        os.environ["PYTHONPATH"] = str(site_dir)
+        os.environ.update(__import__("hark_test_guard").guarded_subprocess_env({{**os.environ, "PYTHONPATH": str(site_dir)}}))
 
         class Store:
             def record_tts(self, **kwargs):
@@ -1365,7 +1365,7 @@ def _saturated_output_tts_child(
         (site_dir / "sitecustomize.py").write_text(
             {sitecustomize!r}, encoding="utf-8"
         )
-        os.environ["PYTHONPATH"] = str(site_dir)
+        os.environ.update(__import__("hark_test_guard").guarded_subprocess_env({{**os.environ, "PYTHONPATH": str(site_dir)}}))
 
         class Store:
             def record_tts(self, **kwargs):
@@ -6881,7 +6881,7 @@ def test_procfs_loss_with_adopted_descendant_is_bounded_and_orphan_free(tmp_path
         (site_dir / "sitecustomize.py").write_text(
             {sitecustomize!r}, encoding="utf-8"
         )
-        os.environ["PYTHONPATH"] = str(site_dir) + os.pathsep + {str(ROOT / "src")!r}
+        os.environ.update(__import__("hark_test_guard").guarded_subprocess_env({{**os.environ, "PYTHONPATH": str(site_dir) + os.pathsep + {str(ROOT / "src")!r}}}))
 
         class Store:
             def record_tts(self, **kwargs):
@@ -6992,9 +6992,10 @@ def test_already_exited_payload_still_cleans_adopted_descendant(tmp_path):
         (site_dir / "sitecustomize.py").write_text(
             {sitecustomize!r}, encoding="utf-8"
         )
-        os.environ["PYTHONPATH"] = (
-            str(site_dir) + os.pathsep + {str(ROOT / "src")!r}
-        )
+        os.environ.update(__import__("hark_test_guard").guarded_subprocess_env({{
+            **os.environ,
+            "PYTHONPATH": str(site_dir) + os.pathsep + {str(ROOT / "src")!r},
+        }}))
 
         class Store:
             def record_tts(self, **kwargs):

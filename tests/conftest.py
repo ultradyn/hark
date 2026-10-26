@@ -9,14 +9,38 @@ volume or pauses their music (B188). Opt in via ``HARK_MEDIA_CONTROL=1``.
 
 from __future__ import annotations
 
+import os
 import signal
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from hark.audio import external_audio
+from network_guard_bootstrap import hark_test_guard
+
+# Startup scripts import this same test helper by its standalone module name.
+sys.modules.setdefault("hark_test_guard", hark_test_guard)
+
+
+@pytest.fixture(autouse=True)
+def _block_live_provider_network(monkeypatch, request):
+    """Mocked transports and loopback stay local; live IO needs dual opt-in."""
+    enabled = hark_test_guard.live_provider_allowed(
+        marker=request.node.get_closest_marker("allow_provider_network") is not None
+    )
+    monkeypatch.setenv(hark_test_guard.ALLOW, "1" if enabled else "0")
+    env = hark_test_guard.guarded_subprocess_env()
+    monkeypatch.setenv(hark_test_guard.ACTIVE, env[hark_test_guard.ACTIVE])
+    monkeypatch.setenv("PYTHONPATH", env["PYTHONPATH"])
+
+
+@pytest.fixture
+def guarded_subprocess_env():
+    """Build a customized child env without dropping B190 guards."""
+    return hark_test_guard.guarded_subprocess_env
 
 
 @pytest.fixture
@@ -165,12 +189,9 @@ def _tripwire_no_mutating_audio_argv(
       (last patch wins), so it is not covered — which is harmless, since
       nothing real executes.
 
-    Opt out with ``@pytest.mark.allow_media_control`` when a test genuinely has
-    to drive the real argv path.
+    ``allow_media_control`` exempts deliberate mutating-control tests only;
+    audible player processes still require a fake implementation.
     """
-    if request.node.get_closest_marker("allow_media_control"):
-        return
-
     real_run = subprocess.run
 
     def guarded(*args, **kwargs):  # type: ignore[no-untyped-def]
@@ -181,7 +202,7 @@ def _tripwire_no_mutating_audio_argv(
             )
         except Exception:
             mutating = False
-        if mutating:
+        if mutating and not request.node.get_closest_marker("allow_media_control"):
             raise AssertionError(
                 "B188: a mutating audio command reached subprocess.run during a "
                 f"test: {list(argv)!r}. This would change the operator's real "
@@ -202,8 +223,8 @@ def _tripwire_no_mutating_audio_argv(
                 "B190: an audio player was spawned during a test: "
                 f"{list(argv)!r}. This makes real noise on the operator's "
                 "machine. Stub the playback layer (hark.audio.playback) or "
-                "hark.speech.run_tts, or mark the test with "
-                "@pytest.mark.allow_media_control."
+                "hark.speech.run_tts. Media-control permission does not "
+                "authorize audible playback."
             )
         return real_run(*args, **kwargs)
 
@@ -224,8 +245,6 @@ def _tripwire_no_real_audio_device(
     (it patches the name, not the module) — which is fine, since a fake makes no
     sound. Skipped entirely when sounddevice is absent.
     """
-    if request.node.get_closest_marker("allow_media_control"):
-        return
     try:
         from hark.audio import playback
     except Exception:
@@ -238,18 +257,28 @@ def _tripwire_no_real_audio_device(
         raise AssertionError(
             "B190: playback reached the real audio device (sounddevice.play) "
             "during a test. This makes real noise on the operator's machine. "
-            "Stub hark.audio.playback or hark.speech.run_tts, or mark the test "
-            "with @pytest.mark.allow_media_control."
+            "Stub hark.audio.playback or hark.speech.run_tts. Media-control "
+            "permission does not authorize audible playback."
         )
 
-    for name in ("play", "wait"):
+    for name in ("play", "wait", "RawOutputStream", "OutputStream"):
         if hasattr(sd, name):
             monkeypatch.setattr(sd, name, blocked, raising=False)
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    os.environ[hark_test_guard.ALLOW] = "0"
+    hark_test_guard.install()
+    for name, value in hark_test_guard.guarded_subprocess_env().items():
+        if name in (hark_test_guard.ACTIVE, "PYTHONPATH"):
+            os.environ[name] = value
     config.addinivalue_line(
         "markers",
-        "allow_media_control: test drives real audio-control or playback argvs; "
-        "exempt from the B188 and B190 tripwires",
+        "allow_provider_network: live provider IO also requires "
+        "HARK_TEST_PROVIDER_NETWORK=1; independent of media-control permission",
+    )
+    config.addinivalue_line(
+        "markers",
+        "allow_media_control: test drives real audio-control argvs; "
+        "exempt from the B188 mutating-control tripwire only",
     )

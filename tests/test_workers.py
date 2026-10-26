@@ -83,7 +83,7 @@ def spawn_markerless_hark_worker(role: str, directory: Path) -> subprocess.Popen
     child = subprocess.Popen(
         [sys.executable, "-m", "hark", role],
         start_new_session=True,
-        env={**os.environ, "PYTHONPATH": str(package_root)},
+        env=__import__("hark_test_guard").guarded_subprocess_env({**os.environ, "PYTHONPATH": str(package_root)}),
     )
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:

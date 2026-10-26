@@ -198,7 +198,7 @@ def test_line_buffered_pipe_streams_progressively(tmp_path):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env={**os.environ, "PYTHONPATH": str(root / "src"), "HARK_UPDATE_CHECK": "0"},
+        env=__import__("hark_test_guard").guarded_subprocess_env({**os.environ, "PYTHONPATH": str(root / "src"), "HARK_UPDATE_CHECK": "0"}),
     )
     assert proc.stdout is not None
     deadline = time.monotonic() + 1.0

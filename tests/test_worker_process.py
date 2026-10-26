@@ -418,7 +418,7 @@ def test_structured_pre_scope_markerless_worker_is_migrated_from_historical_life
         "while True: time.sleep(0.05)\n",
         encoding="utf-8",
     )
-    env = {**os.environ, "PYTHONPATH": str(shim.parent)}
+    env = __import__("hark_test_guard").guarded_subprocess_env({**os.environ, "PYTHONPATH": str(shim.parent)})
     child = subprocess.Popen(
         [sys.executable, "-m", "hark", "ambient"],
         env=env,

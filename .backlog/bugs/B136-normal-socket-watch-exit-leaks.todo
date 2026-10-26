@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-10-26T00:12:37Z"
 claimed_by: codex-stream-vapor-nm24
-completed_at: null
+completed_at: "2026-10-26T00:18:00Z"
 complexity: low
 created_at: "2026-07-15T21:03:11Z"
 depends_on: []
+duration_minutes: 5.3895452802333335
 estimate_hours: 1
 id: B136
 priority: medium
 started_at: "2026-10-26T00:12:37Z"
-status: in_progress
+status: done
 tags: []
 title: Normal socket-watch exit leaks its managed SSH tunnel
-updated_at: "2026-10-26T00:12:37Z"
+updated_at: "2026-10-26T00:18:00Z"
 ---
 ## Evidence
 run_watch creates managed Tunnel objects before transport selection. In the socket path it directly returns _watch_socket before entering the later polling try/finally that calls Tunnel.stop. A deterministic reproduction made _watch_socket return 0 and observed stop_calls=0. Tunnel.stop is responsible for terminating the SSH process and removing the local socket. Exceptional socket fallback eventually reaches cleanup; normal socket return does not. This is distinct from B126, where non-watch operations never establish a tunnel.
@@ -29,3 +30,5 @@ A normal return from the socket loop bypasses the only tunnel cleanup block.
 - Preserve the original watch result and do not mask it with cleanup errors.
 - Tests cover normal socket return, KeyboardInterrupt, reconnect exhaustion, poll fallback, partial tunnel setup failure, and multiple tunnels.
 - Verify local socket files and SSH child processes are removed after exit.
+
+Resolved 2026-10-26: watch explicitly drains access leases and reports cleanup failure without replacing original return or exception. Real AF_UNIX child/socket/marker cleanup regressions pass; remote watch selection 68 passed. Parent + independent review passed.

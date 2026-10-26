@@ -1,14 +1,22 @@
 ---
+claimed_at: "2026-10-26T00:13:03Z"
+claimed_by: codex-stream-vapor-nm24
+completed_at: null
 complexity: medium
 created_at: "2026-08-10T12:19:36Z"
 depends_on: []
 estimate_hours: 1
 id: B171
 priority: high
-status: pending
+started_at: "2026-10-26T00:13:03Z"
+status: in_progress
 tags: []
 title: 'conference hold false-positive: browser main-process cmdline retains zoom.us/j/ join URL from launch forever (until browser restart), so hold_during_conference holds ALL TTS with chime-only beeps long after the meeting ended. Seen 2026-08-10: Brave launched 1d11h earlier with join URL; stale zoom client also lingered. Suggest: ignore boot-time argv URLs (age-gate cmdline matches), require live AV stream from the matched process, and/or cap via conference_max_hold_s with audible/logged hint. Also: hark doctor should surface ''conference hold ACTIVE (matched: ...)'' so operators see why TTS is silent.'
-updated_at: "2026-08-10T12:19:36Z"
+updated_at: "2026-10-26T00:13:03Z"
 ---
 
 conference hold false-positive: browser main-process cmdline retains zoom.us/j/ join URL from launch forever (until browser restart), so hold_during_conference holds ALL TTS with chime-only beeps long after the meeting ended. Seen 2026-08-10: Brave launched 1d11h earlier with join URL; stale zoom client also lingered. Suggest: ignore boot-time argv URLs (age-gate cmdline matches), require live AV stream from the matched process, and/or cap via conference_max_hold_s with audible/logged hint. Also: hark doctor should surface 'conference hold ACTIVE (matched: ...)' so operators see why TTS is silent.
+
+Verified 2026-10-26: empty successful audio inventory still promotes stale process/URL to conference active. Decision: with check_audio enabled require live audio corroboration; preserve explicit process-only mode. Playback lane also fixes concrete shared sounddevice convenience playback race for B176/B179/B180 via per-call streams and bounded owned cleanup; historical native crash attribution requires evidence before closure.
+
+Resolved 2026-10-26: require live audio corroboration when configured; distinguish empty inventories from unavailable/failed scans, honor fail policy. Exposed conference_status for doctor integration. Independent and parent review passed; x-tall Python3.13.11 playback selection 127 passed.

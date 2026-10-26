@@ -448,6 +448,71 @@ def build_parser() -> argparse.ArgumentParser:
         help="tag the captured reply with the blocked event it answers (echoed as for_event)",
     )
 
+    # B178: recover interrupted answer-window audio
+    rec = sub.add_parser(
+        "recover",
+        help=(
+            "list/inspect/transcribe/discard recoverable answer-window "
+            "recordings after abnormal interruption (B178)"
+        ),
+    )
+    rec_sub = rec.add_subparsers(dest="recover_cmd", required=True)
+    rec_list = rec_sub.add_parser(
+        "list",
+        help="list recoverable streams under the private state recover dir",
+    )
+    rec_list.add_argument("--json", action="store_true")
+    rec_list.add_argument(
+        "--all",
+        action="store_true",
+        help="include in-progress streams whose owner pid is still alive",
+    )
+    rec_show = rec_sub.add_parser("show", help="show one recovered stream")
+    rec_show.add_argument("stream_id")
+    rec_show.add_argument("--json", action="store_true")
+    rec_export = rec_sub.add_parser(
+        "export",
+        help="write recovered audio to a WAV file (default: stdout path only)",
+    )
+    rec_export.add_argument("stream_id")
+    rec_export.add_argument(
+        "-o",
+        "--out",
+        type=Path,
+        default=None,
+        help="output WAV path (default: ./hark-recover-<stream_id>.wav)",
+    )
+    rec_export.add_argument("--json", action="store_true")
+    rec_tr = rec_sub.add_parser(
+        "transcribe",
+        help="run STT on a recovered stream (does not auto-discard)",
+    )
+    rec_tr.add_argument("stream_id")
+    rec_tr.add_argument("--provider", default=None)
+    rec_tr.add_argument("--json", action="store_true")
+    rec_tr.add_argument(
+        "--discard",
+        action="store_true",
+        help="delete the recovery stream after a successful non-empty transcript",
+    )
+    rec_disc = rec_sub.add_parser(
+        "discard",
+        help="delete one recovered stream (operator privacy cleanup)",
+    )
+    rec_disc.add_argument("stream_id")
+    rec_disc.add_argument("--json", action="store_true")
+    rec_purge = rec_sub.add_parser(
+        "purge",
+        help="delete recovery streams older than retention (default 7 days)",
+    )
+    rec_purge.add_argument(
+        "--older-than-days",
+        type=float,
+        default=None,
+        help="retention days (default: 7)",
+    )
+    rec_purge.add_argument("--json", action="store_true")
+
     le = sub.add_parser(
         "listen-end",
         help="finish or cancel an active listen (agent control from partials)",
@@ -1063,6 +1128,8 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
         return cmd_tts(args, cfg)
     if cmd == "listen":
         return cmd_listen(args, cfg)
+    if cmd == "recover":
+        return cmd_recover(args, cfg)
     if cmd == "listen-end":
         return cmd_listen_end(args)
     if cmd == "ask":
@@ -1975,6 +2042,172 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
     }
     _emit_turn(out, args, kind="tts_listen", prompt=text)
     return OK
+
+
+def cmd_recover(args: argparse.Namespace, cfg) -> int:
+    """B178: inspect / export / STT / discard durable answer-window audio."""
+    from hark.audio.stream_recovery import (
+        DEFAULT_RETENTION_DAYS,
+        discard_recovered_stream,
+        get_recovered_stream,
+        list_recovered_streams,
+        purge_old_recovered_streams,
+        streams_dir,
+    )
+
+    sub = getattr(args, "recover_cmd", None)
+    as_json = bool(getattr(args, "json", False))
+
+    if sub == "list":
+        include_active = bool(getattr(args, "all", False))
+        # Default: orphaned/incomplete only. --all also shows live in-progress.
+        items = list_recovered_streams(
+            include_active=True,
+            only_orphaned=not include_active,
+        )
+        payload = {
+            "ok": True,
+            "root": str(streams_dir()),
+            "count": len(items),
+            "streams": [s.to_public_dict() for s in items],
+        }
+        if as_json:
+            print(json.dumps(payload, indent=2))
+        else:
+            if not items:
+                print("no recoverable answer-window recordings")
+                print(f"  root: {payload['root']}")
+                print("  hint: interrupted ask/listen keeps private PCM here (B178)")
+            else:
+                print(f"recoverable streams ({len(items)})  root={payload['root']}")
+                for s in items:
+                    d = s.to_public_dict()
+                    print(
+                        f"  {d['stream_id']}  {d['duration_ms']}ms  "
+                        f"status={d['status']} orphaned={d['orphaned']}  "
+                        f"mode={d.get('mode')}"
+                    )
+                    if d.get("partial_text"):
+                        preview = d["partial_text"]
+                        if len(preview) > 80:
+                            preview = preview[:79] + "…"
+                        print(f"    partial: {preview}")
+                    print(f"    {d['recover_cmds']['transcribe']}")
+                    print(f"    {d['recover_cmds']['discard']}")
+        return OK
+
+    if sub == "show":
+        item = get_recovered_stream(args.stream_id)
+        if item is None:
+            eprint(f"hark recover: no stream {args.stream_id!r}")
+            return USAGE
+        payload = item.to_public_dict()
+        if as_json:
+            print(json.dumps(payload, indent=2))
+        else:
+            for key in (
+                "stream_id",
+                "status",
+                "mode",
+                "duration_ms",
+                "bytes",
+                "sample_rate",
+                "orphaned",
+                "pid",
+                "pid_alive",
+                "started_at",
+                "updated_at",
+                "partial_text",
+                "end_reason",
+                "path",
+            ):
+                print(f"{key}: {payload.get(key)}")
+            print("cmds:")
+            for name, cmd in (payload.get("recover_cmds") or {}).items():
+                print(f"  {name}: {cmd}")
+        return OK
+
+    if sub == "export":
+        item = get_recovered_stream(args.stream_id)
+        if item is None:
+            eprint(f"hark recover: no stream {args.stream_id!r}")
+            return USAGE
+        if item.pcm_bytes <= 0:
+            eprint("hark recover: stream has no audio bytes")
+            return ERROR
+        out_path = args.out
+        if out_path is None:
+            safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in item.stream_id)
+            out_path = Path(f"hark-recover-{safe}.wav")
+        out_path = Path(out_path)
+        out_path.write_bytes(item.read_wav())
+        try:
+            out_path.chmod(0o600)
+        except OSError:
+            pass
+        payload = {
+            "ok": True,
+            "stream_id": item.stream_id,
+            "path": str(out_path.resolve()),
+            "bytes": item.pcm_bytes,
+            "duration_ms": item.duration_ms,
+        }
+        print(json.dumps(payload, indent=2 if as_json else None))
+        return OK
+
+    if sub == "transcribe":
+        item = get_recovered_stream(args.stream_id)
+        if item is None:
+            eprint(f"hark recover: no stream {args.stream_id!r}")
+            return USAGE
+        if item.pcm_bytes <= 0:
+            eprint("hark recover: stream has no audio bytes")
+            return ERROR
+        from hark.speech import resolve_stt
+
+        stt = resolve_stt(args.provider or cfg.stt.provider, stt_cfg=cfg.stt)
+        wav = item.read_wav()
+        tr = stt.transcribe(wav)
+        text = (getattr(tr, "text", None) or "").strip()
+        provider = getattr(tr, "provider", None) or getattr(stt, "name", "unknown")
+        discarded = False
+        if bool(getattr(args, "discard", False)) and text:
+            discarded = discard_recovered_stream(item.stream_id)
+        payload = {
+            "ok": bool(text),
+            "stream_id": item.stream_id,
+            "text": text,
+            "provider": provider,
+            "duration_ms": item.duration_ms,
+            "discarded": discarded,
+        }
+        print(json.dumps(payload, indent=2 if as_json else None))
+        return OK if text else ERROR
+
+    if sub == "discard":
+        ok = discard_recovered_stream(args.stream_id)
+        payload = {"ok": ok, "stream_id": args.stream_id, "discarded": ok}
+        if as_json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print("discarded" if ok else "nothing to discard")
+        return OK if ok else USAGE
+
+    if sub == "purge":
+        days = getattr(args, "older_than_days", None)
+        if days is None:
+            days = DEFAULT_RETENTION_DAYS
+        n = purge_old_recovered_streams(retention_days=float(days))
+        payload = {
+            "ok": True,
+            "purged": n,
+            "older_than_days": float(days),
+            "root": str(streams_dir()),
+        }
+        print(json.dumps(payload, indent=2 if as_json else None))
+        return OK
+
+    return USAGE
 
 
 def cmd_listen(args: argparse.Namespace, cfg) -> int:

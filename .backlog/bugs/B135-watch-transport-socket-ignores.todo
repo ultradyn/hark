@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-10-26T00:12:37Z"
 claimed_by: codex-stream-vapor-nm24
-completed_at: null
+completed_at: "2026-10-26T00:18:00Z"
 complexity: medium
 created_at: "2026-07-15T21:02:57Z"
 depends_on: []
+duration_minutes: 5.389505300183333
 estimate_hours: 1
 id: B135
 priority: high
 started_at: "2026-10-26T00:12:37Z"
-status: in_progress
+status: done
 tags: []
 title: watch --transport socket ignores configured sessions after the first
-updated_at: "2026-10-26T00:12:37Z"
+updated_at: "2026-10-26T00:18:00Z"
 ---
 ## Evidence
 run_watch selects socket mode whenever transport equals socket without requiring one client. It emits watch.armed with every configured client session, then calls _watch_socket with clients[0] only. A deterministic two-session reproduction announced sessions one and two but subscribed and watched only one. The polling path iterates every client, so behavior changes silently with the transport flag. This violates ADR-003 multi-session first-class behavior.
@@ -34,3 +35,5 @@ Explicit socket mode reports all sessions armed while ignoring every client afte
 Investigation sequencing (2026-10-26): audit B135-B195 in seven read-only lanes before claims/worktrees: watch+tunnels (B135-139,B144,B152,B155); confirmation (B142,B147-149,B151,B154,B156-159,B191-193); providers (B164,B174,B177,B181-183,B187); doctor/setup (B162-163,B165-170,B175); playback (B146,B160-161,B171,B176,B179-180); capture (B140-141,B143,B145,B150,B153,B172-173,B178,B186,B188,B190); signal/test isolation (B184-185,B189,B194-195). Fix lanes will own disjoint files; shared speech/CLI/config seams serialize. Completed items are audited too. Remote pytest on x-p35, max two concurrent test processes.
 
 Decision 2026-10-26: reject explicit multi-session socket mode before armed, as ticket permits; auto mode keeps all-session polling. B136 original tunnel leak fixed, but preserve watch return/primary failure when cleanup raises by watch-local reporting. B135 then B136 share watch.py and watch tests in one serial lane.
+
+Resolved 2026-10-26: explicit multi-session sockets refuse before acquisition/armed; auto polls every selected session. Parent + independent review passed. x-tall Python3.13.11 remote watch/self-exclusion/access selection: 68 passed.

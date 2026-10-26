@@ -1,14 +1,18 @@
 ---
+claimed_at: "2026-10-26T00:19:47Z"
+claimed_by: codex-stream-vapor-nm24
+completed_at: null
 complexity: medium
 created_at: "2026-07-23T09:28:08Z"
 depends_on: []
 estimate_hours: 1
 id: B169
 priority: high
-status: pending
+started_at: "2026-10-26T00:19:47Z"
+status: in_progress
 tags: []
 title: 'hark start reports ''started missing workers ambient=<pid>'' but the ambient worker dies instantly when the wake model is missing — start --status shows ''ambient: not running'' seconds later. start should pre-flight the wake model/deps and refuse with a clear message instead of a phantom start.'
-updated_at: "2026-07-23T09:28:08Z"
+updated_at: "2026-10-26T00:19:47Z"
 ---
 
 hark start reports 'started missing workers ambient=<pid>' but the ambient worker dies instantly when the wake model is missing — start --status shows 'ambient: not running' seconds later. start should pre-flight the wake model/deps and refuse with a clear message instead of a phantom start.

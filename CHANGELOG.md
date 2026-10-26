@@ -124,6 +124,12 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   `HARK_STT_CUSTOM_API_KEY` (secret never dumped). Explicit pin only —
   never selected by `auto`. Documented client contract in
   `docs/PROVIDERS.md`. Doctor / `hark providers` report config readiness.
+- fix(listen, B178): persist answer-window microphone PCM continuously under a
+  private `$XDG_STATE_HOME/hark/recover/streams/<stream_id>/` tree (≈1s flush)
+  so harness kills / signals / crashes lose at most a few seconds of accepted
+  audio. Surface via `hark recover list|show|export|transcribe|discard|purge`
+  and a soft `hark doctor` recover section; clean up on successful completion;
+  7-day retention purge for abandoned streams.
 - feat(providers): `[stt].disabled` / `[tts].disabled` (and
   `HARK_STT_DISABLED` / `HARK_TTS_DISABLED`) skip banned providers even when
   credentials exist; `hark doctor` reports the disable lists.

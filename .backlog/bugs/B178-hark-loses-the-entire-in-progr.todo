@@ -50,3 +50,5 @@ B143 fixed interrupted capture cleanup and structured cancellation. This bug is 
 Implemented on branch fix/B178: private recover/streams PCM durability, hark recover CLI, doctor section, tests including SIGKILL mid-stream.
 
 Verified 2026-10-26: master lacks recording recovery; existing clean fix/B178 holds dd26c44 and 7c78aa5. Decision: reuse and adapt implementation to CaptureGateSpec; harden short PCM/metadata writes. Restore B178 before setup/doctor/CLI edits, then B172/B173/B193 capture diagnostics.
+
+Resolved 2026-10-26: restored previously unmerged recovery implementation, adapted CaptureGateSpec; continuous private accepted-PCM persistence, recover CLI and doctor. Hardened short writes, reentrant signal flush, metadata failures and reload retention. Independent review PASS after fixes; parent review completed; x-tall Python3.13.11 recovery tests 19 passed, including abrupt process death.

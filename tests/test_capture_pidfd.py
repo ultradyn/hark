@@ -19,7 +19,7 @@ def test_parent_pidfd_adapter_works_without_stdlib_wrapper(monkeypatch):
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     fd = None
     try:
-        fd = capture.pidfd.open_pidfd(child.pid)
+        fd = capture.process_pidfd.open_pidfd(child.pid)
         assert select.select([fd], [], [], 0)[0] == []
         child.terminate()
         child.wait(timeout=10)

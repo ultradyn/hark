@@ -1,19 +1,16 @@
 ---
-claimed_at: "2026-07-16T01:45:07Z"
-claimed_by: cli-user
-completed_at: "2026-07-19T10:22:35Z"
+completed_at: null
 complexity: medium
 created_at: "2026-07-16T01:44:28Z"
 depends_on: []
-duration_minutes: 4837.480645086033
 estimate_hours: 1
 id: B152
 priority: high
-started_at: "2026-07-16T01:45:07Z"
-status: done
+started_at: null
+status: pending
 tags: []
 title: Crashed tunnel owners leave unreapable SSH children
-updated_at: "2026-07-19T10:22:35Z"
+updated_at: "2026-10-26T00:16:53Z"
 ---
 ## Evidence
 

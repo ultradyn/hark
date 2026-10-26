@@ -1104,6 +1104,8 @@ def _portable_supervisor_atexit_child() -> str:
 
         def visible_wait(self, process, *, deadline=None):
             print(f"WAIT_ACTIVE {{int(self._process_lifecycle.active)}}", flush=True)
+            if deadline is None:
+                return real_wait(self, process)
             return real_wait(self, process, deadline=deadline)
 
         isolation.SubprocessSynthTransport._open_pidfd = staticmethod(

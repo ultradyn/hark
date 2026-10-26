@@ -114,9 +114,10 @@ def test_partial_signal_install_failure_rolls_back(monkeypatch):
             raise ValueError("install failed")
         return native(signum, handler)
 
-    monkeypatch.setattr(signal, "signal", fail_install)
-    with pytest.raises(ValueError, match="install failed"):
-        lc.install_signal_handlers()
+    with monkeypatch.context() as patch:
+        patch.setattr(signal, "signal", fail_install)
+        with pytest.raises(ValueError, match="install failed"):
+            lc.install_signal_handlers()
     assert {signum: signal.getsignal(signum) for signum in previous} == previous
     assert lc._handlers_installed is False
     assert lc._installed_handlers == {}

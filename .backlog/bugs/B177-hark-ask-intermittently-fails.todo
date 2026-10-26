@@ -32,3 +32,5 @@ DESIGN DECISION (coordinator, 2026-08-23): fix BOTH halves, and treat the fallba
 Sequencing: land AFTER B187/gh-10 (split --tts-provider / --stt-provider). Both touch provider resolution, and having a clean per-leg provider first means the fallback only has to walk the TTS chain.
 
 Do not add a blanket retry-on-any-error: scope the retry to this error class so a real auth or quota failure still fails fast (cf. B175, doctor reporting ready on a bad token).
+
+Reopened 2026-10-26 during full B135-up audit: real decoded subprocess ProviderError terminalizes shared synthesis pool via cancel, preventing B177 retry/fallback although in-process tests passed. Decision: structured provider errors normally reap/release authority while actual timeout/interruption still cancels. Covered in provider lane B164/B181; add real subprocess retry/handover regressions before closure.

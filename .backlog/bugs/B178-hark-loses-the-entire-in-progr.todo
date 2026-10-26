@@ -53,3 +53,5 @@ Implemented on branch fix/B178: private recover/streams PCM durability, hark rec
 Verified 2026-10-26: master lacks recording recovery; existing clean fix/B178 holds dd26c44 and 7c78aa5. Decision: reuse and adapt implementation to CaptureGateSpec; harden short PCM/metadata writes. Restore B178 before setup/doctor/CLI edits, then B172/B173/B193 capture diagnostics.
 
 Resolved 2026-10-26: restored previously unmerged recovery implementation, adapted CaptureGateSpec; continuous private accepted-PCM persistence, recover CLI and doctor. Hardened short writes, reentrant signal flush, metadata failures and reload retention. Independent review PASS after fixes; parent review completed; x-tall Python3.13.11 recovery tests 19 passed, including abrupt process death.
+
+Final verification 2026-10-26: reviewed fix merged to master. Integrated x-tall CPython3.13.11 suite: 6525 passed, 104 skipped, 0 failed in151.61s. Independent review and parent review passed. Full receipt /tmp/hark-b135-full-final.log; per-task evidence and design above.

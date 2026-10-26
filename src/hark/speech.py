@@ -58,6 +58,7 @@ from hark.mic_coord import (
     wait_until_tts_play_allowed,
 )
 from hark.providers.base import ProviderError, safe_exception_detail
+from hark.providers.auth_fallback import is_auth_failure
 from hark.providers.resolve import (
     resolve_stt,  # noqa: F401 — open_answer_window / test monkeypatch seam
     resolve_tts,
@@ -273,8 +274,10 @@ class _InterruptibleSynthPool:
     def unregister_synth_process(self, process: Any) -> None:
         self._process_lifecycle.release(process)
 
-    def wait_and_unregister_synth_process(self, process: Any) -> int:
-        return self._process_lifecycle.wait_and_release(process)
+    def wait_and_unregister_synth_process(
+        self, process: Any, *, deadline: float | None = None,
+    ) -> int:
+        return self._process_lifecycle.wait_and_release(process, deadline=deadline)
 
     def cancel_synth_process(self, process: Any) -> bool:
         return self._process_lifecycle.cancel()
@@ -892,6 +895,8 @@ def run_tts(
         _record_synth_fail(piece, step.error, provider=step.from_provider)
         if step.error_class == TEXT_INSTEAD_OF_AUDIO:
             why = "failed on a content-shaped provider error"
+        elif step.error_class == "authentication":
+            why = "rejected its credentials or required audio scope"
         else:
             why = (
                 "was resolvable but not usable (its credentials are present "
@@ -902,7 +907,7 @@ def run_tts(
             **step.as_meta(),
             instructions=(
                 f"TTS provider {step.from_provider!r} {why}; Hark is "
-                f"continuing with {step.to_provider!r} (B177). The voice the "
+                f"continuing with {step.to_provider!r} (B164/B177). The voice the "
                 "operator hears may differ from the configured provider — "
                 "report which provider spoke, never a plain success."
             ),
@@ -957,9 +962,9 @@ def run_tts(
             return cached, "cache", "audio/mpeg", voice_id, True
         with fallback_lock:
             start_provider = speaking_provider
-        # B177: one retry then the auto walk, scoped to content-shaped errors
-        # (a bad token still fails fast). Later chunks start from whoever
-        # succeeded, so a long reply does not re-fail on every chunk.
+        # B177 retries content-shaped errors once; B164 skips rejected auth
+        # directly to the auto walk. Later chunks start from whoever succeeded,
+        # so a long reply does not re-fail on every chunk.
         try:
             result, steps = synthesize_with_fallback(
                 provider=start_provider,
@@ -969,9 +974,12 @@ def run_tts(
                 on_step=lambda step: _on_fallback_step(step, piece),
                 enabled=bool(getattr(cfg.tts, "fallback_on_error", True)),
                 language=cfg.tts.language,
+                auto_auth=_req_norm == "auto",
             )
         except BaseException as exc:
-            if classify_tts_error(exc) is None:
+            if classify_tts_error(exc) is None and not (
+                _req_norm == "auto" and is_auth_failure(exc)
+            ):
                 # Only a refusal is news: an eligible error that exhausted the
                 # ladder is already reported hop by hop.
                 _log_fallback_declined(exc)

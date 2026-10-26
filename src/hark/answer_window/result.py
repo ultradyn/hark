@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -18,3 +19,4 @@ class ListenResult:
     stream_id: str | None = None
     partials_emitted: int = 0
     meta_command: str | None = None
+    tts_nudges: list[dict[str, Any]] = field(default_factory=list)

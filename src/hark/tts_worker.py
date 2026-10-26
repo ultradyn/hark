@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 from hark.providers.base import ProviderError
+from hark import pidfd
 from hark.signal_safety import SigintMaskGuard
 
 
@@ -36,8 +37,8 @@ _PORTABLE_OUTPUT_DRAIN_SECONDS = 0.05
 _BLOCKING_RESTORE_ATTEMPTS = 2
 _PAYLOAD_POPEN_CLASS = subprocess.Popen
 _NATIVE_PAYLOAD_POPEN_INIT = subprocess.Popen.__init__
-_PIDFD_OPEN = getattr(os, "pidfd_open", None)
-_PIDFD_SEND_SIGNAL = getattr(signal, "pidfd_send_signal", None)
+_PIDFD_OPEN = pidfd.open_pidfd if pidfd.available() else None
+_PIDFD_SEND_SIGNAL = pidfd.send_signal if pidfd.available() else None
 _OS_CLOSE = os.close
 _PTHREAD_SIGMASK = getattr(signal, "pthread_sigmask", None)
 _DIRECT_CHILDREN_AUTHORITY_FD = -1

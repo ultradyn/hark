@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import os
 import signal
+import sys
 import threading
 import time
+from contextlib import contextmanager
+from collections.abc import Iterator
 from pathlib import Path
 
 from hark.paths import state_dir
+from hark.signal_safety import SigintMaskGuard
 from hark.syslog import log as syslog
 
 _lock = threading.Lock()
@@ -18,6 +22,8 @@ _reload = False
 _reload_source: str | None = None
 _busy_depth = 0
 _handlers_installed = False
+_previous_handlers: dict[int, object] = {}
+_installed_handlers: dict[int, object] = {}
 
 # Spoken cues (short, cacheable)
 PHRASE_SHUTDOWN = "Hark shutting down."
@@ -147,11 +153,15 @@ def shutdown_phrase(reason: str | None = None) -> str:
     return PHRASE_RESTART if r == "restart" else PHRASE_SHUTDOWN
 
 
-def install_signal_handlers() -> None:
-    """Install SIGTERM/SIGINT (stop) and SIGHUP (config reload) handlers."""
+def install_signal_handlers() -> bool:
+    """Install lifecycle handlers; return whether this call acquired ownership.
+
+    Pair a successful installation with ``uninstall_signal_handlers``. Nested
+    users should prefer ``signal_handler_scope`` to preserve an outer owner.
+    """
     global _handlers_installed
     if _handlers_installed:
-        return
+        return False
 
     def _stop_handler(signum: int, _frame: object) -> None:
         request_shutdown(signum)
@@ -159,12 +169,73 @@ def install_signal_handlers() -> None:
     def _hup_handler(signum: int, _frame: object) -> None:
         request_reload(signum, source="sighup")
 
-    signal.signal(signal.SIGTERM, _stop_handler)
-    signal.signal(signal.SIGINT, _stop_handler)
-    # SIGHUP: reload config (custom wake phrases, etc.) without full restart
+    handlers = {signal.SIGTERM: _stop_handler, signal.SIGINT: _stop_handler}
     if hasattr(signal, "SIGHUP"):
-        signal.signal(signal.SIGHUP, _hup_handler)
+        handlers[signal.SIGHUP] = _hup_handler
+    try:
+        for signum, handler in handlers.items():
+            previous = signal.getsignal(signum)
+            if previous is None:
+                raise ValueError(f"cannot preserve non-Python handler for signal {signum}")
+            # Publish ownership even when an injected signal.signal wrapper
+            # raises after installing the handler.
+            try:
+                signal.signal(signum, handler)
+            finally:
+                if signal.getsignal(signum) is handler:
+                    _previous_handlers[signum] = previous
+                    _installed_handlers[signum] = handler
+    except BaseException:
+        try:
+            uninstall_signal_handlers()
+        except Exception:
+            # Keep the original installation failure and retained ownership
+            # state so a later explicit uninstall can retry.
+            pass
+        raise
     _handlers_installed = True
+    return True
+
+
+def uninstall_signal_handlers() -> None:
+    """Restore handlers still owned by Hark, preserving external replacements."""
+    guard = SigintMaskGuard.acquire()
+    try:
+        _restore_owned_signal_handlers()
+    finally:
+        # In particular, pending SIGINT may reach the previous owner only
+        # after SIGHUP/SIGTERM ownership and our bookkeeping are settled.
+        guard.restore_preserving_primary()
+
+
+def _restore_owned_signal_handlers() -> None:
+    global _handlers_installed
+    primary = sys.exception()
+    first_error: BaseException | None = None
+    for signum, installed in list(_installed_handlers.items()):
+        previous = _previous_handlers[signum]
+        try:
+            if signal.getsignal(signum) is installed and previous is not None:
+                signal.signal(signum, previous)
+        except BaseException as exc:
+            first_error = first_error or exc
+            continue
+        _installed_handlers.pop(signum, None)
+        _previous_handlers.pop(signum, None)
+    _handlers_installed = bool(_installed_handlers)
+    if first_error is not None and primary is None:
+        raise first_error
+
+
+@contextmanager
+def signal_handler_scope() -> Iterator[None]:
+    """Own process signal handling only for this scope's lifetime."""
+    installed_here = install_signal_handlers()
+    try:
+        yield
+    finally:
+        if installed_here:
+            uninstall_signal_handlers()
 
 
 class BusySection:

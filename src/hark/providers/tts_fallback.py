@@ -9,12 +9,9 @@ so pinning a model cannot be the fix. With ``xai``/``openai`` disabled, ``auto``
 lands on ``google`` and ``hark ask`` dead-ends at exit 4 while the operator is
 already waiting for the question. The fallback is what keeps ``ask`` usable.
 
-**Scope is deliberately narrow.** Only the "generated text instead of audio"
-class is eligible. Auth (401/403), quota (429), missing credentials, and every
-other failure still fail fast, so a bad token can never be papered over as a
-working setup (cf. B175, where ``doctor`` reported "ready" off the mere presence
-of ``auth.json``). Generalizing fallback to auth errors is a separate open task,
-**B164** — do not widen the classifier for it here.
+The content-error classifier stays narrow. B164 additionally permits an
+observable authentication handover for auto selection, without retrying the
+rejected credentials. Explicit pins and primary quota failures still fail fast.
 """
 
 from __future__ import annotations
@@ -301,6 +298,7 @@ def synthesize_with_fallback(
     on_step: Callable[[FallbackStep], None] | None = None,
     enabled: bool = True,
     language: str | None = None,
+    auto_auth: bool = False,
 ) -> tuple[_R, list[FallbackStep]]:
     """Run *call* down the ladder; return its result plus the steps taken.
 
@@ -308,10 +306,10 @@ def synthesize_with_fallback(
     most once, and only once the same-provider retry is spent, so neither the
     happy path nor a retry-rescued run pays a credential-probe cost.
 
-    An ineligible failure on the **first** rung fails fast, unchanged. Past
-    that, an ineligible failure only disqualifies that fallback target and the
-    walk continues — ``auto`` picks on credential presence, not viability, so a
-    stale key sitting in the chain must not be able to truncate it.
+    An ineligible failure on the **first** rung fails fast, unchanged. With
+    ``auto_auth``, a credential rejection instead skips the same-provider retry
+    and hands over to the auto chain. Past the first rung, an ineligible failure
+    only disqualifies that target and the walk continues.
 
     When every rung fails, the **first** exception is re-raised: that is the
     real trigger, and the last provider's unrelated complaint would misdirect
@@ -320,6 +318,7 @@ def synthesize_with_fallback(
     ``tts_last_provider``.
     """
     from hark.providers.base import safe_exception_detail
+    from hark.providers.auth_fallback import is_auth_failure
 
     if not enabled:
         return call(provider, text), []
@@ -345,13 +344,20 @@ def synthesize_with_fallback(
                 # than by no marker happening to appear in their str().
                 raise
             error_class = classify_tts_error(exc)
+            auth_failure = auto_auth and is_auth_failure(exc)
+            if auth_failure:
+                error_class = "authentication"
             if first_exc is None:
-                # The chosen provider's OWN first failure decides fail-fast: a
-                # bad token or exhausted quota there must surface immediately
-                # rather than be papered over by a provider switch (B175).
+                # The chosen provider's first failure decides eligibility.
+                # Auth may hand over only for auto; quota remains fail-fast.
                 if error_class is None:
                     raise
                 first_exc = exc
+            if auth_failure and index < len(attempts) and attempts[index].step == "retry":
+                # An expired token cannot succeed on a same-provider retry.
+                # Skip directly to the auto chain, keeping B177's retry for
+                # content-shaped failures unchanged.
+                index += 1
             # Past the first rung, ANY provider failure only means that
             # fallback target is unusable — `auto` resolves on credential
             # presence, not viability, so a present-but-revoked key can sit in

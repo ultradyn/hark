@@ -1,6 +1,6 @@
 ---
-claimed_at: "2026-08-23T05:42:53Z"
-claimed_by: cli-user
+claimed_at: "2026-10-26T00:20:39Z"
+claimed_by: codex-stream-vapor-nm24
 completed_at: null
 complexity: medium
 created_at: "2026-08-23T05:42:48Z"
@@ -8,11 +8,11 @@ depends_on: []
 estimate_hours: 2
 id: B190
 priority: high
-started_at: "2026-08-23T05:42:53Z"
-status: blocked
+started_at: "2026-10-26T00:20:39Z"
+status: in_progress
 tags: []
 title: 'tests can synthesize and play real audio: B188 gates ducking but not TTS playback or provider spend'
-updated_at: "2026-08-23T07:46:03Z"
+updated_at: "2026-10-26T00:20:39Z"
 ---
 Follow-on from B188. That task gated the MUTATING media-control commands (volume duck, MPRIS pause, capture mute). It did NOT gate the two other ways a test reaches the operator: making noise, and spending money.
 
@@ -55,3 +55,5 @@ Mechanism: run_listen reaches playback through the ARM-CUE path, not only throug
 Correct fix pattern, for anyone hitting a B190 assertion: mirror the stubs in tests/test_empty_stt.py::_patch_listen_infra - play_record_start, play_record_stop, duck_media, MicLease, configure_cues_from_config. Better still, stub at the PROVIDER seam (hark.speech.resolve_tts) rather than at run_tts: that exercises the whole ladder with no network and no device, which is what you want if the code under test involves the B177 fallback.
 
 Do NOT reach for @pytest.mark.allow_media_control to silence a B190 assertion. The marker exists for a test that must genuinely drive real argvs; using it to quiet an over-broad stub surface reintroduces exactly the incident this task was filed for.
+
+Decision 2026-10-26: resolve design blocker with explicit dual opt-in for live-provider verification: pytest marker allow_provider_network plus HARK_TEST_PROVIDER_NETWORK=1; normal pytest blocks external provider HTTP while loopback fixtures and mocked transports remain allowed, and policy must carry into spawned Python children. B183-style dogfood uses explicit opt-in; no blanket media-control exemption. Test-only guard implementation separate from production provider fallback; conftest provider region separate from signal fixture region. Playback protection must include new RawOutputStream boundary.

@@ -18,3 +18,5 @@ updated_at: "2026-10-26T00:19:47Z"
 feature (from operator): first-run check command that prints an ORDERED fix plan with next actions + doc links (install wake model -> setup -> start herdr ...), not just doctor warnings. Solves setup friction e.g. sherpa/vosk.
 
 Implementation/decision receipt 2026-10-26: hark doctor --plan emits dependency-ordered concrete repairs and documentation links. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.
+
+Final verification 2026-10-26: reviewed fix merged to master. Integrated x-tall CPython3.13.11 suite: 6525 passed, 104 skipped, 0 failed in151.61s. Independent review and parent review passed. Full receipt /tmp/hark-b135-full-final.log; per-task evidence and design above.

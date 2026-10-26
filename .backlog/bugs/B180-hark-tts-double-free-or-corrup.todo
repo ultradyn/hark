@@ -31,3 +31,5 @@ hark tts "C locked for nav. Also filing a Hark bug..."
 - [ ] Repro or ASAN/valgrind on TTS play path
 - [ ] Fix double-free; no hang after crash
 - [ ] Regression test or stress on rapid tts after ask
+
+Investigation 2026-10-26: no archived Aug11-12 coredump and original allocator crash could not be reproduced. Eliminated concrete shared-global sounddevice stream close race as B176/B179 mitigation. Plain native smoke24streams/2workers completed; strict Valgrind larger-buffer24stream run completed with0memoryerrors/0suppressed; leak checking disabled. First default-buffer Valgrind run had0memoryerrors but hit production completion timeout under instrumentation, and ALSA underrun recoveries persisted. This does not establish historical double-free cause or acoustic fidelity. Keep this ticket pending for a reproducible allocator crash/core rather than claim conclusively fixed. Detailed receipts /tmp/hark-native-playback-stress-summary.md and /tmp/hark-native-memcheck-large-buffer-result.json.

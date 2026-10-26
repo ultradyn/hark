@@ -1,10 +1,12 @@
 ---
+completed_at: null
 complexity: medium
 created_at: "2026-07-23T09:26:35Z"
 depends_on: []
 estimate_hours: 1
 id: B162
 priority: high
+started_at: null
 status: pending
 tags: []
 title: 'doctor shows provider ✓ on credential PRESENCE only — xAI grok_oauth listed healthy but live TTS/STT calls 403 (bad-credentials). Doctor should validate tokens (or mark untested) so ''speech: ready'' isn''t misleading.'
@@ -12,3 +14,5 @@ updated_at: "2026-07-23T09:26:35Z"
 ---
 
 doctor shows provider ✓ on credential PRESENCE only — xAI grok_oauth listed healthy but live TTS/STT calls 403 (bad-credentials). Doctor should validate tokens (or mark untested) so 'speech: ready' isn't misleading.
+
+Verified 2026-10-26: doctor still equates credential presence with readiness. Decision: no unsolicited live probes; label credentials untested, independent STT/TTS capability/configuration and recent errors. Setup lane serial B162/B163/B165/B166/B167/B169/B170/B175 owns doctor/setup/config/workers/CLI; starts after B178 recovery restoration, now landed. Explicit setup --minimax-ok only, doctor --plan ordered actions, ambient model/dependency preflight, conference status from B171.

@@ -20,3 +20,5 @@ Evidence: the destructive confirmation classifier performs NFKC but no mixed-scr
 Verified 2026-10-26: still present. Decision: fail closed only for bounded negative contraction tokens with conservative Greek/Cyrillic confusable skeletons; preserve ordinary multilingual prose and whole-word boundaries. Lane confirm owns confirm_lexicon.py, ask.py, transcripts.py and confirmation tests; B158 then B191; B193 waits for capture/CLI serialization integration.
 
 Resolved 2026-10-26: conservative bounded Cyrillic/Greek negative-contraction skeletons fail closed; whole-word and multilingual controls retained. Independent and parent review PASS; x-tall Python3.13.11 confirmation selection 4034 passed.
+
+Final verification 2026-10-26: reviewed fix merged to master. Integrated x-tall CPython3.13.11 suite: 6525 passed, 104 skipped, 0 failed in151.61s. Independent review and parent review passed. Full receipt /tmp/hark-b135-full-final.log; per-task evidence and design above.

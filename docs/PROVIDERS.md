@@ -47,12 +47,14 @@ Env: `HARK_STT_DISABLED`, `HARK_TTS_DISABLED` (comma-separated), `HARK_TTS_MINIM
 
 MiniMax TTS: on first interactive use when MiniMax would be selected, Hark asks for consent and persists `tts.minimax_ok = true`. Non-interactive runs fail with a clear hint until consent is set. Use `hark setup --minimax-ok` to explicitly persist consent, or `HARK_TTS_MINIMAX_OK=1` for a process. Provider selection and session profiles never grant consent implicitly.
 
-**Auto means credential presence at resolve time**, not runtime viability. Selection walks the order below and picks the first provider whose `*_auth().available` is true. Auth failures / HTTP 401–403 raise `ProviderError` and **do not** fall through to the next provider today (open B164). Runtime fallback exists for exactly **one** TTS error class — the provider generated text instead of audio (B177, [below](#scoped-tts-retry--provider-fallback-b177)). The only intra-provider fallback is OpenAI STT model (`gpt-4o-mini-transcribe` → `whisper-1` when `OPENAI_STT_MODEL` is unset).
+**Auto initially selects by credential presence**, not verified runtime viability. Selection walks the order below and picks the first provider whose `*_auth().available` is true. If an auto-selected STT or TTS provider rejects authentication (HTTP 401/403 or missing credentials), Hark skips directly to the next enabled, credential-present provider without retrying the rejected credentials (B164). STT logs `stt.provider_fallback` and reports the successful transcript's provider; TTS reports its handover through the [fallback surfaces below](#scoped-tts-retry--provider-fallback-b177). Explicit provider pins do not hand authentication errors to a different provider, and primary quota failures (429) remain terminal. TTS also retries and falls back for the content-error class where a provider generates text instead of audio (B177).
+
+`[tts] fallback_on_error = false` disables both TTS runtime fallback paths, including auto authentication handover and the content-error retry. STT auto authentication fallback is independent of that TTS setting. Disabled providers, explicit-only Custom gateways, and MiniMax consent retain their normal selection rules.
 
 ### STT (`stt.provider = "auto"`)
 
 1. **xAI** if Grok OAuth token or `XAI_API_KEY` is present  
-2. **OpenAI** if key/token present (default model `gpt-4o-mini-transcribe`; falls back to `whisper-1` for API keys when `OPENAI_STT_MODEL` unset — Codex ChatGPT OAuth supports GPT-4o transcribe but not `whisper-1`)  
+2. **OpenAI** if key/token present (default model `gpt-4o-mini-transcribe`; when `OPENAI_STT_MODEL` is unset, 400/404 can try `whisper-1`, while auto selection hands 401/403 directly to the next provider — [model policy](#openai))
 3. **Google/Gemini** if key or agy/OpenCode/Pi token present  
 4. Else error listing how to configure (`grok login` / `agy` / `XAI_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY`)  
 
@@ -116,13 +118,13 @@ Library parity: `run_ask()` and `speak_and_listen()` take `provider=` (both legs
 2. the **same** provider again, with the request shaped where a lever exists (Gemini gets a leading read-aloud directive, which upstream treats as style guidance and does not speak; English output only, since the directive is English). No shaping happens on the first attempt, so a working call is never altered;
 3. each provider `auto` would pick next, in `auto`'s own order.
 
-The walk is built by re-running `resolve_tts("auto")` with each tried provider added to `disabled`, so credential discovery, the operator's `disabled` list, and MiniMax consent apply exactly as they do to plain `auto`. A fallback never prompts for consent on a TTY — the operator is mid-turn — so an unconsented MiniMax is skipped, not asked about. The walk is resolved lazily, only once the same-provider retry is spent, so neither a clean run nor a retry-rescued one pays for credential probes.
+The walk is built by re-running `resolve_tts("auto")` with each tried provider added to `disabled`, so credential discovery, the operator's `disabled` list, and MiniMax consent apply exactly as they do to plain `auto`. A fallback never prompts for consent on a TTY — the operator is mid-turn — so an unconsented MiniMax is skipped. The walk is resolved lazily after the content-error retry is spent, or immediately after an auto-selected provider's authentication rejection. A clean run or successful content retry does not pay for those credential probes.
 
 A fallback rung is asked **without** the requested voice id. Voice ids are per-provider namespaces, not a shared vocabulary — `eve` is xAI's, OpenAI and MiniMax reject it, and Google ignores the field — so carrying it across would turn a content-shaped 400 into a voice-not-found 400. Each rung therefore uses its own default. The result's `voice` reports what that provider actually used wherever the provider tells us (xAI, OpenAI, MiniMax, Custom TTS); Google never echoes a voice, so a Google rung's reported `voice` falls back to the requested id and should not be read as what was spoken.
 
-**Scope — what does NOT fall back.** Only "the provider generated text instead of audio" is eligible (`Model tried to generate text…`, `should only be used for TTS`, a 200 with no audio part). On the **chosen** provider, auth (401/403), quota (429), missing credentials, `ProviderUnsupported`, and everything else **fail fast on the first attempt**, so a bad token can never be papered over as a working setup. Broadening that to auth errors is a separate open task, **B164**.
+**Scope.** A content-shaped failure (`Model tried to generate text…`, `should only be used for TTS`, or a response missing audio) gets one same-provider retry before fallback, including for an explicit pin. An **auto-selected** provider's authentication rejection instead goes straight to the fallback chain, with `error_class = "authentication"` and no same-provider retry. Explicit pins' authentication failures, primary quota failures (429), `ProviderUnsupported`, timeouts, and other primary failures remain terminal. These TTS retry and handover paths require `fallback_on_error = true`.
 
-Past the first rung the rule inverts: any failure just disqualifies that fallback target and the walk continues. `auto` picks on credential presence, not viability, so a present-but-revoked key can sit in the chain — and letting its 401 abort the walk would let one stale credential kill the whole fallback and misreport a content bug as an auth failure. Those hops are recorded with `error_class = "not_retryable"`. `KeyboardInterrupt` / `SystemExit` are never walked past.
+Past the first rung, a provider failure disqualifies that target and the walk continues. A present-but-revoked key must not truncate an otherwise usable chain. With auto authentication handover enabled, rejected credentials are recorded as `error_class = "authentication"`; other ineligible later-rung errors use `"not_retryable"`. `KeyboardInterrupt` / `SystemExit` are never walked past.
 
 When nothing works, the **first** error is what surfaces — the real trigger, not the last provider's unrelated complaint.
 
@@ -157,14 +159,20 @@ the window later times out or is interrupted. Both lists reach the transcript
 log. If no answer was captured, a `diagnostic_only` record preserves the nudge
 outcome without inventing transcript text.
 
-**When the classifier says no, it says so.** The eligible class is matched against substrings of an upstream response body, so a reworded 400 would silently stop being recognised and `ask` would dead-end again with nothing to show that anything changed. Any TTS **4xx that is not** classified as eligible therefore publishes `tts.fallback_declined` (provider, status, `error_class = "none"`, the truncated body) before failing fast. Expect it for a genuine auth or quota failure; if it ever carries a body that *is* the "tried to generate text" 400 in new words, `_TEXT_NOT_AUDIO_MARKERS` needs updating.
+**When the classifier says no, it says so.** Content-error eligibility is matched against substrings of an upstream response body. An unrecognised TTS 4xx publishes `tts.fallback_declined` (provider, status, `error_class = "none"`, the truncated body) before failing. Expect this for an explicit pin's authentication error or a primary quota error. Auto authentication handover has its own classification and fallback events. If a declined event contains the "tried to generate text" 400 in new words, `_TEXT_NOT_AUDIO_MARKERS` needs updating.
 
 ```toml
 [tts]
-fallback_on_error = true   # default; false makes a pinned provider's failure terminal
+fallback_on_error = true   # default; false disables content-error retries and provider handover
 ```
 
 Gemini's TTS model pin is `gemini-2.5-flash-preview-tts` and can be repointed with `GEMINI_TTS_MODEL` for an operator whose account behaves better on a different TTS model.
+
+### Synthesis deadline (B181)
+
+Each isolated TTS synthesis attempt has a **30-second wall-clock deadline** shared across worker startup, request upload, result headers/body/audio, result EOF, and supervisor exit/reap. On expiry, Hark raises a provider failure and attempts bounded cleanup of its owned worker tree. Cleanup grace can extend elapsed command time beyond the synthesis deadline; queue, microphone and media holds unwind through the normal error path. A timeout on the primary attempt does not trigger a retry. Separate content retries or fallback attempts each receive their own deadline, so a whole multi-attempt or multi-chunk turn can take longer than 30 seconds.
+
+Google TTS additionally uses a **5-second connect timeout** and **20-second read timeout**. These transport limits complement the parent deadline, which also bounds partial or trickling responses. The synthesis deadline does not include listening time or the separate playback-queue wait budget.
 
 ---
 
@@ -275,7 +283,7 @@ and per model id**, so a working chat key does not imply working speech:
 |----------|---------|-----|
 | `501 not_supported` | route reached; that upstream has the audio capability disabled | operator enables STT/TTS on the provider |
 | `404` provider/model not found | `custom_model` matched no configured route (or the id is not granted) | use a model id the gateway documents |
-| `401` / `403` | key rejected — Hark does **not** fall through to another provider (B164) | check the key source |
+| `401` / `403` | key rejected — Custom is an explicit pin, so authentication failure is terminal | check the key source |
 
 Model-routed gateways may also expose synthetic ids for their dual-mount paths
 (e.g. an STT default injected when `model` is omitted on `/stt`).
@@ -367,7 +375,7 @@ and per model id**, so a working chat key does not imply working speech:
 |----------|---------|-----|
 | `501 not_supported` | route reached; that upstream has the audio capability disabled | operator enables STT/TTS on the provider |
 | `404` provider/model not found | `custom_model` matched no configured route (or the id is not granted) | use a model id the gateway documents |
-| `401` / `403` | key rejected — Hark does **not** fall through to another provider (B164) | check the key source |
+| `401` / `403` | key rejected — Custom is an explicit pin, so authentication failure is terminal | check the key source |
 
 Model-routed gateways may also expose synthetic ids for their dual-mount paths
 (e.g. an STT default injected when `model` is omitted on `/stt`).
@@ -449,7 +457,7 @@ https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
 | Streaming STT | Realtime API / gpt-realtime-whisper — **not implemented** |
 | TTS | `POST /v1/audio/speech` (shipped) |
 
-Default STT model is `gpt-4o-mini-transcribe`. Set `OPENAI_STT_MODEL` to pin a model; when set, the automatic `whisper-1` fallback on 400/401/403/404 is **disabled**.
+Default STT model is `gpt-4o-mini-transcribe`. When `OPENAI_STT_MODEL` is unset, OpenAI STT can try `whisper-1` after HTTP 400/404. With an explicit OpenAI provider pin, legacy model fallback also covers 401/403. With auto provider selection, 401/403 skips that model retry and hands authentication failure directly to the next enabled provider. Setting `OPENAI_STT_MODEL` disables all automatic `whisper-1` model fallback.
 
 Auth discovery (env first, then CLI stores — fail-open):
 

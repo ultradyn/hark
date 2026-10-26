@@ -28,3 +28,5 @@ Fix: guard `if n <= 0: return []` at the top of tail_lines, matching hark.transc
 Also worth a look while in there: the same `[-n:]` shape appears in the read-block loop condition (`while size > 0 and data.count(b"\n") <= n`), which for n=0 reads only one block. Not a correctness bug once n<=0 returns early, but do not leave a second path that behaves differently.
 
 Not fixed in B186 - correctly held as out of scope by the implementer.
+
+Implementation/decision receipt 2026-10-26: tail_lines returns empty for n<=0 before filesystem access; logs zero no longer reads whole file. watch-logs already guarded. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.

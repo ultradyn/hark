@@ -23,3 +23,5 @@ A Hark-started SSH tunnel has a crash-safe lifetime: either the child is guarant
 ## Actual
 
 Abrupt owner exit can strand a Hark-started SSH child and socket indefinitely. Later processes may reuse the forward but cannot stop it, so repeated crashes can accumulate orphan SSH processes.
+
+Verified 2026-10-26: durable adoption exists but SIGKILL before owner marker publication can strand SSH child. Decision: Linux exec helper sets PR_SET_PDEATHSIG(SIGKILL), verifies expected parent PID, then execs ssh; avoid preexec_fn in threaded caller. Parent crash terminates borrowed forward too; later access recreates it. Fail closed when requested native protection cannot install. Separate tunnel lane owns tunnel.py/new child helper/dedicated crash tests, after B135/B136 watch code completed.

@@ -18,3 +18,5 @@ updated_at: "2026-10-26T00:19:47Z"
 config accepts stt provider=minimax silently; unsupported-STT only discovered at call time. Validate provider capability at config load / doctor. (Error message listing alternatives is good.)
 
 Implementation/decision receipt 2026-10-26: Unsupported STT providers warn during config load and appear unsupported in offline doctor readiness; preserves clear runtime errors. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.
+
+Final verification 2026-10-26: reviewed fix merged to master. Integrated x-tall CPython3.13.11 suite: 6525 passed, 104 skipped, 0 failed in151.61s. Independent review and parent review passed. Full receipt /tmp/hark-b135-full-final.log; per-task evidence and design above.

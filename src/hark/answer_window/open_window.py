@@ -814,7 +814,21 @@ def open_answer_window(
                                     1000 * (time.monotonic() - started)
                                 ),
                             )
-                        body = (tr.text or "").strip()
+                        # Idle retranscription is a candidate, never authority
+                        # to erase speech already accepted in segment partials.
+                        body = radio_sess.finalize_joined_body(
+                            (tr.text or "").strip()
+                        )
+                        if not body:
+                            store.record_stt(
+                                text="",
+                                provider=tr.provider,
+                                ok=False,
+                                error="empty transcript after radio idle",
+                            )
+                            raise ProviderError(
+                                "heard audio but STT returned empty text after radio idle"
+                            )
                         store.record_stt(
                             text=body,
                             provider=tr.provider,

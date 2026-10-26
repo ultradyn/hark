@@ -17,3 +17,5 @@ updated_at: "2026-07-22T17:07:40Z"
 ---
 
 We should be able to run 'hark tts --once' from anywhere any it should work. The --once flag indicates we're running in like isolation, not with a hark server, etc. If there is a hark server running in the bg, we can use that, or we just do it ourselves if not. The flag name '--once' may not be ideal, you should use a more appropriate name if you can think of one.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. standalone TTS mode and once alias work without server requirement; arbitrary working directory tests. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

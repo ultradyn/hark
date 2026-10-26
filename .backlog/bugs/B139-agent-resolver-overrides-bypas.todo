@@ -30,3 +30,5 @@ The resolver reports source=`override` successfully; the failure or wrong progra
 - Safe executable override paths and argv prefixes continue to work.
 - Errors identify the agent and rejected override without starting a pane.
 - Unit and end-to-end CLI regressions cover the unsafe and safe cases.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. Override resolution checks regular executable, strict symlink target and reject collisions; tests/test_agents_resolve.py and CLI rejection regressions. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

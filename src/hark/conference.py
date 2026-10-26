@@ -280,7 +280,7 @@ def _match_process_list(
     return hits
 
 
-def _run_capture(args: list[str], *, timeout: float = 3.0) -> str:
+def _run_capture(args: list[str], *, timeout: float = 3.0) -> str | None:
     try:
         p = subprocess.run(
             args,
@@ -290,33 +290,33 @@ def _run_capture(args: list[str], *, timeout: float = 3.0) -> str:
             timeout=timeout,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return ""
+        return None
     if p.returncode != 0:
-        return (p.stdout or "") + (p.stderr or "")
+        return None
     return p.stdout or ""
 
 
 def list_audio_stream_blobs() -> list[str]:
-    """Collect stream/application name text from pactl or pw-cli (best-effort)."""
-    blobs: list[str] = []
+    """Collect a complete stream inventory; distinguish empty from unavailable."""
     from shutil import which
 
     if which("pactl"):
-        for cmd in (
-            ["pactl", "list", "sink-inputs"],
-            ["pactl", "list", "source-outputs"],
-            ["pactl", "list", "short", "sink-inputs"],
-            ["pactl", "list", "short", "source-outputs"],
-        ):
-            text = _run_capture(cmd)
-            if text.strip():
-                blobs.append(text)
+        results = [
+            _run_capture(cmd)
+            for cmd in (
+                ["pactl", "list", "sink-inputs"],
+                ["pactl", "list", "source-outputs"],
+            )
+        ]
+        if all(text is not None for text in results):
+            return [text for text in results if text and text.strip()]
     if which("pw-cli"):
         text = _run_capture(["pw-cli", "ls", "Node"])
-        if text.strip():
-            blobs.append(text)
-        # info dump can be large; keep short list only if ls empty
-    return blobs
+        if text is not None:
+            return [text] if text.strip() else []
+    raise OSError(
+        "conference audio inventory unavailable (pactl/pw-cli missing or failed)"
+    )
 
 
 def _match_stream_blobs(
@@ -502,8 +502,10 @@ def detect_conference(
     if check_audio:
         try:
             blobs = stream_blobs if stream_blobs is not None else list_audio_stream_blobs()
+            # An empty inventory is still an audio scan. Resident clients and
+            # browser launch URLs alone do not establish an ongoing call.
+            sources.append("audio")
             if blobs:
-                sources.append("audio")
                 matched.extend(
                     _match_stream_blobs(blobs, process_names=names)
                 )
@@ -529,7 +531,7 @@ def detect_conference(
             matched=tuple(uniq),
             detail="conference signals present",
         )
-    if proc_hits and "audio" not in sources:
+    if proc_hits and not check_audio:
         return ConferenceMatch(
             active=True,
             sources=tuple(sources),
@@ -542,6 +544,18 @@ def detect_conference(
             sources=tuple(sources),
             matched=tuple(uniq),
             detail="process match only; no conference audio stream — treat free",
+        )
+    if proc_hits and check_audio and errors:
+        return ConferenceMatch(
+            active=not fail_open,
+            sources=tuple(sources),
+            matched=tuple(uniq),
+            detail=(
+                "audio detection failed (fail-open → free)"
+                if fail_open
+                else "audio detection failed (fail-closed → hold)"
+            ),
+            error="; ".join(errors),
         )
     if uniq:
         return ConferenceMatch(
@@ -780,7 +794,8 @@ def wait_until_conference_free(
         sleep_fn(poll)
 
 
-def _default_detect(cfg: "HarkConfig | AudioConfig | None") -> ConferenceMatch:
+def conference_status(cfg: "HarkConfig | AudioConfig | None" = None) -> ConferenceMatch:
+    """Report current conference evidence using the configured detection policy."""
     audio = _audio_cfg(cfg)
     check_audio = bool(getattr(audio, "conference_check_audio", True)) if audio else True
     return detect_conference(
@@ -820,7 +835,7 @@ def apply_conference_hold(
     elif callable(detect_match):
         match = detect_match()
     else:
-        match = _default_detect(cfg)
+        match = conference_status(cfg)
 
     if not match.active:
         return HoldResult(
@@ -880,7 +895,7 @@ def apply_conference_hold(
     def _active() -> bool:
         if is_active is not None:
             return is_active()
-        return _default_detect(cfg).active
+        return conference_status(cfg).active
 
     free, wait_ms = wait_until_conference_free(
         cfg,

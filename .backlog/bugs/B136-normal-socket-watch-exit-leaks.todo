@@ -32,3 +32,5 @@ A normal return from the socket loop bypasses the only tunnel cleanup block.
 - Verify local socket files and SSH child processes are removed after exit.
 
 Resolved 2026-10-26: watch explicitly drains access leases and reports cleanup failure without replacing original return or exception. Real AF_UNIX child/socket/marker cleanup regressions pass; remote watch selection 68 passed. Parent + independent review passed.
+
+Final verification 2026-10-26: reviewed fix merged to master. Integrated x-tall CPython3.13.11 suite: 6525 passed, 104 skipped, 0 failed in151.61s. Independent review and parent review passed. Full receipt /tmp/hark-b135-full-final.log; per-task evidence and design above.

@@ -395,3 +395,27 @@ def test_transcripts_with_no_log_is_not_an_error(capsys):
 def test_transcripts_is_wired_into_the_cli(monkeypatch, capsys):
     assert cli.main(["transcripts", "--path"]) == OK
     assert capsys.readouterr().out.strip().endswith("transcripts.jsonl")
+
+
+@pytest.mark.parametrize("ok", [True, False])
+def test_ask_logs_confirmation_fallback_separately_from_question(monkeypatch, capsys, ok):
+    result = _ok_ask_result(
+        ok=ok, exit=OK if ok else ABORT,
+        confirm_tts={
+            "ok": True, "provider": "xai",
+            "fallback": {"requested": "google", "spoke": "xai", "steps": []},
+        },
+    )
+    assert _run_ask(monkeypatch, result) == result["exit"]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["confirm_tts"] == result["confirm_tts"]
+    (record,) = _records()
+    assert record["tts_provider"] == "mock"
+    assert record["confirm_tts_provider"] == "xai"
+    assert record["confirm_tts_fallback_from"] == "google"
+
+
+def test_transcript_without_confirmation_has_no_confirmation_provenance():
+    record = transcripts.build_record(_ok_ask_result(), kind="ask")
+    assert "confirm_tts_provider" not in record
+    assert "confirm_tts_fallback_from" not in record

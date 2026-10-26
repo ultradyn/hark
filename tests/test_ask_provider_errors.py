@@ -77,6 +77,7 @@ def test_run_ask_confirmation_provider_error_preserves_answer_and_tts(monkeypatc
         "exit": 4,
         "text": "deploy the release",
         "tts": {"ok": True, "provider": "mock", "voice": "eve"},
+        "confirm_tts": {"ok": True, "provider": "mock"},
     }
 
 
@@ -100,6 +101,7 @@ def test_cmd_ask_serializes_confirmation_provider_error(monkeypatch, capsys):
         "exit": 4,
         "text": "deploy the release",
         "tts": {"ok": True, "provider": "mock", "voice": "eve"},
+        "confirm_tts": {"ok": True, "provider": "mock"},
         "for_event": "event-149",
     }
 
@@ -181,6 +183,8 @@ def test_run_ask_zero_provider_code_is_nonzero_failure(
         "exit": 4,
         "text": "deploy the release",
         "tts": {"ok": True, "provider": "mock", "voice": "eve"},
+        **({"confirm_tts": {"ok": True, "provider": "mock"}}
+           if setup_failure is _confirmation_provider_failure else {}),
     }
 
 
@@ -213,6 +217,8 @@ def test_cmd_ask_zero_provider_code_exits_failure(
         "exit": 4,
         "text": "deploy the release",
         "tts": {"ok": True, "provider": "mock", "voice": "eve"},
+        **({"confirm_tts": {"ok": True, "provider": "mock"}}
+           if setup_failure is _confirmation_provider_failure else {}),
         "for_event": "event-154",
     }
 
@@ -469,3 +475,48 @@ def test_provider_detail_is_bounded_and_control_safe_at_ask_boundary(monkeypatch
     assert len(result["error"]) <= 400
     assert all(character.isprintable() for character in result["error"])
     assert result["error"].endswith("...")
+
+
+@pytest.mark.parametrize("outcome", ["yes", "no", "cancel", "provider", "timeout", "interrupt"])
+def test_confirmation_readback_provenance_survives_all_later_outcomes(monkeypatch, outcome):
+    cfg = _initial_answer(monkeypatch)
+    readback_tts = {
+        "ok": True, "provider": "xai",
+        "fallback": {"requested": "google", "spoke": "xai", "steps": []},
+    }
+    monkeypatch.setattr("hark.speech.run_tts", lambda *a, **k: readback_tts)
+
+    def confirm_listen(*args, **kwargs):
+        if outcome == "provider":
+            raise ProviderError("confirmation unavailable")
+        if outcome == "timeout":
+            raise TimeoutError("no confirmation")
+        if outcome == "interrupt":
+            raise KeyboardInterrupt()
+        return ListenResult(
+            text=outcome, provider="mock", duration_ms=10, end_mode="silence",
+            cancelled=outcome == "cancel",
+        )
+
+    monkeypatch.setattr("hark.speech.run_listen", confirm_listen)
+    result = run_ask(cfg, "Deploy now?", risk_hint="R2")
+    assert result["confirm_tts"] == readback_tts
+    assert result["tts"] == {"ok": True, "provider": "mock", "voice": "eve"}
+    assert result["text"] == "deploy the release"
+    assert result["ok"] is (outcome == "yes")
+
+
+def test_failed_readback_keeps_partial_tts_provenance(monkeypatch):
+    cfg = _initial_answer(monkeypatch)
+    partial = {"ok": False, "provider": "xai", "fallback": {"requested": "google"}}
+
+    def fail_readback(*args, **kwargs):
+        exc = ProviderError("readback failed after fallback")
+        exc.tts_info = partial
+        raise exc
+
+    monkeypatch.setattr("hark.speech.run_tts", fail_readback)
+    result = run_ask(cfg, "Deploy now?", risk_hint="R2")
+    assert result["confirm_tts"] == partial
+    assert result["tts"]["provider"] == "mock"
+    assert result["ok"] is False

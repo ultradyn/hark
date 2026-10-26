@@ -26,6 +26,7 @@ def _provider_failure_result(
     *,
     tts_info: Any = _EXCEPTION_TTS,
     text: str | None = None,
+    confirm_tts: Any = _EXCEPTION_TTS,
 ) -> dict[str, Any]:
     failure = safe_provider_failure(exc)
     result = {
@@ -36,6 +37,10 @@ def _provider_failure_result(
     }
     if text is not None:
         result["text"] = text
+    if confirm_tts is not _EXCEPTION_TTS:
+        readback = confirm_tts if confirm_tts is not None else failure.tts_info
+        if readback is not None:
+            result["confirm_tts"] = readback
     return result
 
 
@@ -45,6 +50,7 @@ def _timeout_failure_result(
     tts_info: Any,
     text: str | None = None,
     error: str | None = None,
+    confirm_tts: Any = None,
 ) -> dict[str, Any]:
     """Keep ask failures JSON while retaining typed playback diagnostics."""
     result: dict[str, Any] = {
@@ -55,6 +61,8 @@ def _timeout_failure_result(
     }
     if text is not None:
         result["text"] = text
+    if confirm_tts is not None:
+        result["confirm_tts"] = confirm_tts
     if isinstance(exc, TtsPlayTimeout):
         result["error_type"] = exc.error_type
         result["tts_play_lock"] = exc.as_dict()
@@ -139,11 +147,14 @@ def _run_ask(
         explicit_override=explicit_confirm,
     )
 
+    confirmation: dict[str, Any] = {}
     if need_confirm:
         # Confirming: readback TTS + silence Answer Window + lexicon (HandoffState.CONFIRMING).
         readback = f"I heard: {listened.text}. Say yes to send, or cancel."
         try:
-            speech_mod.run_tts(cfg, readback, provider=legs.tts, play=True)
+            confirmation["confirm_tts"] = speech_mod.run_tts(
+                cfg, readback, provider=legs.tts, play=True
+            )
             conf = speech_mod.run_listen(
                 cfg,
                 profile="confirm",
@@ -157,6 +168,7 @@ def _run_ask(
                 exc,
                 text=listened.text,
                 tts_info=tts_info,
+                confirm_tts=confirmation.get("confirm_tts"),
             )
         except TimeoutError as exc:
             return _timeout_failure_result(
@@ -164,6 +176,7 @@ def _run_ask(
                 error=None if isinstance(exc, TtsPlayTimeout) else "confirm timeout",
                 text=listened.text,
                 tts_info=tts_info,
+                confirm_tts=confirmation.get("confirm_tts"),
             )
         except KeyboardInterrupt as exc:
             # The first answer is already durable user context. Preserve it if
@@ -171,6 +184,8 @@ def _run_ask(
             if getattr(exc, "tts_info", None) is None:
                 setattr(exc, "tts_info", tts_info)
             setattr(exc, "answer_text", listened.text)
+            if "confirm_tts" in confirmation:
+                setattr(exc, "confirm_tts", confirmation["confirm_tts"])
             raise
         if conf.cancelled:
             return {
@@ -181,6 +196,7 @@ def _run_ask(
                 "end_phrase": conf.end_phrase,
                 "exit": ABORT,
                 "tts": tts_info,
+                **confirmation,
             }
         # Security invariant: the silence Answer Window transcript reaches this
         # seam before Unicode compatibility normalization. Keep it in that form so
@@ -195,6 +211,7 @@ def _run_ask(
                 "end_phrase": conf.end_phrase,
                 "exit": ABORT,
                 "tts": tts_info,
+                **confirmation,
             }
 
     return {
@@ -207,6 +224,7 @@ def _run_ask(
         "risk": risk,
         "tts": tts_info,
         "exit": OK,
+        **confirmation,
     }
 
 
@@ -227,6 +245,9 @@ def interrupted_ask_result(exc: KeyboardInterrupt) -> dict[str, Any]:
     }
     if reason is not None:
         result["reason"] = reason
+    confirm_tts = getattr(exc, "confirm_tts", None)
+    if confirm_tts is not None:
+        result["confirm_tts"] = confirm_tts
     return result
 
 

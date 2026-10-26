@@ -76,7 +76,7 @@ def _pick(payload: dict[str, Any], key: str) -> Any:
     return None
 
 
-def _spoke(payload: dict[str, Any]) -> tuple[Any, Any]:
+def _spoke(payload: dict[str, Any], key: str = "tts") -> tuple[Any, Any]:
     """(provider that actually spoke, provider originally asked if it differs).
 
     B177: TTS can fall back mid-turn, so the requested provider is not
@@ -85,7 +85,7 @@ def _spoke(payload: dict[str, Any]) -> tuple[Any, Any]:
     trust — so the spoken provider is recorded, plus the requested one whenever
     a fallback moved it.
     """
-    tts = payload.get("tts")
+    tts = payload.get(key)
     if not isinstance(tts, dict):
         return None, None
     spoke = tts.get("provider")
@@ -117,6 +117,7 @@ def build_record(
         return None
     now = time.time()
     tts_provider, tts_fallback_from = _spoke(payload)
+    confirm_tts_provider, confirm_tts_fallback_from = _spoke(payload, "confirm_tts")
     rec: dict[str, Any] = {
         "ts": now,
         "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
@@ -129,6 +130,8 @@ def build_record(
         # The heard leg is `provider`; these are the spoken one (B177).
         "tts_provider": tts_provider,
         "tts_fallback_from": tts_fallback_from,
+        "confirm_tts_provider": confirm_tts_provider,
+        "confirm_tts_fallback_from": confirm_tts_fallback_from,
         "duration_ms": _pick(payload, "duration_ms"),
         "end_mode": _pick(payload, "end_mode"),
         "end_phrase": _pick(payload, "end_phrase"),

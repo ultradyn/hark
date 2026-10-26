@@ -17,3 +17,5 @@ updated_at: "2026-07-22T17:07:40Z"
 ---
 
 When TTS is playing, we should open a notification that allows the user to skip it. The notification should also have the entire question or TTS text.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. Full-text skip notification wraps all chunks and stops owned playback/remaining chunks; tests/test_tts_notify.py. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

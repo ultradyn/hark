@@ -321,7 +321,6 @@ def _report_speech_setup(cfg, *, out: TextIO, err: TextIO) -> int:
     return OK
 
 
-
 def run_setup(
     *,
     non_interactive: bool = False,

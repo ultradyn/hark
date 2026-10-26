@@ -25,7 +25,8 @@ Shipped I/O is **batch REST** (`httpx` POST). Upstream Realtime/WS/Cloud streami
 | **Google (Gemini / Antigravity)** | **Yes** — Gemini audio understanding (file → transcript); Cloud STT **not implemented** | Yes — Gemini TTS; Cloud TTS **not implemented** | **No** (Live/Cloud streaming unused) | `GOOGLE_API_KEY` / `GEMINI_API_KEY`; also **agy** OAuth + OpenCode / Pi | Good batch path after RMS/energy (or Smart Turn) segment |
 | **MiniMax** | **ASR not clearly public** on main API docs | **Yes** — T2A (`/v1/t2a_v2`), batch (`stream: false`) | N/A (TTS not streamed in hark) | `MINIMAX_API_KEY`; also `mmx` CLI / Pi / OpenCode / legacy `~/.minimax` | Use for **TTS**; STT = `unsupported` until official ASR endpoint confirmed |
 
-**Principle:** implement every *documented* speech API we can; for missing STT (Anthropic, MiniMax ASR), ship a provider module that `hark doctor` reports with a clear reason. Doctor checks **credential discovery** (secret / CLI store presence), not live STT/TTS capability — e.g. MiniMax ✓ means keys found, not that STT works. `speech_ok` today is an **xAI-credential** gate, not “any fallback key ready”.
+**Principle:** implement documented speech APIs and report capabilities per modality. Doctor checks configuration and credential discovery without making live STT/TTS requests. It labels audio access **untested**, distinguishes unsupported/disabled/consent-blocked providers, and shows sanitized recent failure metadata. `speech_ok` means both STT and TTS have a configured candidate under their selected policies; it does not verify audio scopes, quota, or token validity. Run `hark doctor --plan` for ordered repairs; see [setup diagnostics](SETUP_DIAGNOSTICS.md).
+
 
 ---
 
@@ -44,7 +45,7 @@ minimax_ok = false             # must be true before MiniMax TTS runs
 
 Env: `HARK_STT_DISABLED`, `HARK_TTS_DISABLED` (comma-separated), `HARK_TTS_MINIMAX_OK=1`.
 
-MiniMax TTS: on first interactive use when MiniMax would be selected, Hark asks for consent and persists `tts.minimax_ok = true`. Non-interactive runs fail with a clear hint until the flag is set. `hark doctor` / setup **display** `minimax_ok` but do not set it — agents pinning MiniMax must set the flag or `HARK_TTS_MINIMAX_OK=1` before non-interactive `hark tts` (B170).
+MiniMax TTS: on first interactive use when MiniMax would be selected, Hark asks for consent and persists `tts.minimax_ok = true`. Non-interactive runs fail with a clear hint until consent is set. Use `hark setup --minimax-ok` to explicitly persist consent, or `HARK_TTS_MINIMAX_OK=1` for a process. Provider selection and session profiles never grant consent implicitly.
 
 **Auto means credential presence at resolve time**, not runtime viability. Selection walks the order below and picks the first provider whose `*_auth().available` is true. Auth failures / HTTP 401–403 raise `ProviderError` and **do not** fall through to the next provider today (open B164). Runtime fallback exists for exactly **one** TTS error class — the provider generated text instead of audio (B177, [below](#scoped-tts-retry--provider-fallback-b177)). The only intra-provider fallback is OpenAI STT model (`gpt-4o-mini-transcribe` → `whisper-1` when `OPENAI_STT_MODEL` is unset).
 

@@ -462,7 +462,7 @@ def open_answer_window(
                     except TimeoutError as exc:
                         # Reload mid-wait (before speech / empty capture) → clean cancel
                         if _reload_abort():
-                            _recovery_success()
+                            _recovery_keep(reason="config_reload")
                             return _reload_cancel_result()
                         _cue_stop_once(reason="timeout")
                         err_s = str(exc)
@@ -512,7 +512,7 @@ def open_answer_window(
                         raise
                     # Config reload mid-capture (should_stop) — not a normal silence end
                     if _reload_abort():
-                        _recovery_success()
+                        _recovery_keep(reason="config_reload")
                         return _reload_cancel_result(duration_ms=cap.duration_ms)
                     agent_act = consume_listen_action(stream)
                     _cue_stop_once(
@@ -697,7 +697,7 @@ def open_answer_window(
                 _arm_cue_if_requested()
             while time.monotonic() - started < max_listen:
                 if _reload_abort():
-                    _recovery_success()
+                    _recovery_keep(reason="config_reload")
                     return _reload_cancel_result(
                         duration_ms=int(1000 * (time.monotonic() - started)),
                         text=radio_sess.last_partial_text,
@@ -761,7 +761,7 @@ def open_answer_window(
                         pass
                 except TimeoutError:
                     if _reload_abort():
-                        _recovery_success()
+                        _recovery_keep(reason="config_reload")
                         return _reload_cancel_result(
                             duration_ms=int(1000 * (time.monotonic() - started)),
                             text=radio_sess.last_partial_text,
@@ -855,7 +855,7 @@ def open_answer_window(
                     raise
                 # Config reload mid-segment (should_stop) — clean cancel with stop cue
                 if _reload_abort():
-                    _recovery_success()
+                    _recovery_keep(reason="config_reload")
                     return _reload_cancel_result(
                         duration_ms=int(1000 * (time.monotonic() - started)),
                         text=radio_sess.last_partial_text,

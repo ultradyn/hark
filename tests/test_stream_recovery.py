@@ -73,6 +73,48 @@ def test_zero_write_fails_without_spinning(monkeypatch):
         recovery._write_all(42, b"pcm")
 
 
+def test_signal_reentrant_flush_cannot_duplicate_pcm(monkeypatch, tmp_path):
+    import hark.audio.stream_recovery as recovery
+
+    session = open_stream_recovery("reentrant", root=tmp_path)
+    pcm = _pcm_tone(320)
+    session.append_pcm(pcm)
+    real_write = os.write
+    interrupted = False
+
+    def write_then_interrupt(fd, data):
+        nonlocal interrupted
+        n = real_write(fd, data)
+        if fd == session._pcm_fd and not interrupted:
+            interrupted = True
+            flush_all_active_recovery()
+            raise KeyboardInterrupt()
+        return n
+
+    monkeypatch.setattr(recovery.os, "write", write_then_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        session.flush()
+    session.close_retain(reason="interrupt")
+    assert get_recovered_stream("reentrant", root=tmp_path).read_pcm() == pcm
+
+
+def test_metadata_failure_does_not_disable_audio(monkeypatch, tmp_path):
+    import hark.audio.stream_recovery as recovery
+
+    session = open_stream_recovery("metadata-failure", root=tmp_path)
+    pcm = _pcm_tone(160)
+
+    def unavailable(*_a):
+        raise OSError("metadata replace unavailable")
+
+    monkeypatch.setattr(recovery, "_atomic_write_json", unavailable)
+    session.append_pcm(pcm)
+    session.flush()
+    session.append_pcm(pcm)
+    session.close_retain(reason="interrupted")
+    assert get_recovered_stream("metadata-failure", root=tmp_path).read_pcm() == pcm * 2
+
+
 def test_append_flush_and_recover_bytes(tmp_path: Path) -> None:
     root = tmp_path / "state"
     session = open_stream_recovery(

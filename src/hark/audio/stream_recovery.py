@@ -251,6 +251,7 @@ class StreamRecoverySession:
         self._started_at = time.time()
         self._closed = False
         self._io_failed = False
+        self._flushing = False
         self._registered = False
 
     def __enter__(self) -> "StreamRecoverySession":
@@ -418,17 +419,26 @@ class StreamRecoverySession:
         self._registered = False
 
     def _flush_unlocked(self, *, force: bool) -> None:
+        # Signal handlers run on this same thread and can reenter the RLock.
+        # They must never write a buffer that an interrupted flush owns.
+        if self._flushing:
+            return
         if self._pcm_fd is None or self._io_failed:
             self._buf.clear()
             return
         if not self._buf and not force:
             return
+        self._flushing = True
         try:
             if self._buf:
                 view = bytes(self._buf)
-                _write_all(self._pcm_fd, view)
-                self._bytes_written += len(view)
+                # Transfer ownership before the first write. If cancellation
+                # lands after a partial write, a later flush must not replay
+                # its already-written prefix. At most this bounded buffer's
+                # unwritten tail is lost, rather than duplicating speech.
                 self._buf.clear()
+                _write_all(self._pcm_fd, view)
+                self._bytes_written = os.fstat(self._pcm_fd).st_size
             os.fsync(self._pcm_fd)
             self._last_flush_mono = time.monotonic()
             self._write_meta_unlocked()
@@ -447,6 +457,8 @@ class StreamRecoverySession:
                 )
             except Exception:
                 pass
+        finally:
+            self._flushing = False
 
     def _write_meta_unlocked(self) -> None:
         if self._io_failed:
@@ -472,7 +484,9 @@ class StreamRecoverySession:
         try:
             _atomic_write_json(self.meta_path, payload)
         except OSError:
-            self._io_failed = True
+            # A failed metadata replace must not disable the writable audio
+            # descriptor. Recovery scans can derive duration from the PCM.
+            pass
 
     def _close_fd_unlocked(self) -> None:
         fd = self._pcm_fd

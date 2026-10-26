@@ -111,10 +111,17 @@ def build_record(
     kind: str,
     prompt: str | None = None,
 ) -> dict[str, Any] | None:
-    """One transcript record, or None when there is no transcript to keep."""
+    """One transcript/diagnostic record, or None when neither is available."""
     text = payload.get("text")
-    if not isinstance(text, str) or not text.strip():
+    nudge_fields = {
+        key: value
+        for key in ("tts_nudges", "confirm_tts_nudges")
+        if isinstance(value := _pick(payload, key), list) and value
+    }
+    if (not isinstance(text, str) or not text.strip()) and not nudge_fields:
         return None
+    if not isinstance(text, str):
+        text = ""
     now = time.time()
     tts_provider, tts_fallback_from = _spoke(payload)
     confirm_tts_provider, confirm_tts_fallback_from = _spoke(payload, "confirm_tts")
@@ -139,7 +146,12 @@ def build_record(
         "meta_command": payload.get("meta_command"),
         "for_event": payload.get("for_event"),
         "pid": os.getpid(),
+        **nudge_fields,
     }
+    if not text.strip():
+        rec["diagnostic_only"] = True
+        if payload.get("error"):
+            rec["error"] = payload["error"]
     if payload.get("cancelled"):
         rec["cancelled"] = True
     if len(text) > TEXT_MAX_CHARS:
@@ -158,8 +170,8 @@ def record_turn(
 ) -> bool:
     """Append one completed turn. Returns True when a record was written.
 
-    Turns with no transcript body (a TTS or provider failure before capture)
-    are skipped — there is nothing to recover. Never raises.
+    Turns with no transcript body are skipped unless they carry spoken-nudge
+    diagnostics needed to explain a failed recovery prompt. Never raises.
     """
     try:
         if logging_disabled():

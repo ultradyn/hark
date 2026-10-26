@@ -520,3 +520,83 @@ def test_failed_readback_keeps_partial_tts_provenance(monkeypatch):
     assert result["confirm_tts"] == partial
     assert result["tts"]["provider"] == "mock"
     assert result["ok"] is False
+
+
+@pytest.mark.parametrize("outcome", ["success", "cancel", "provider", "timeout", "interrupt"])
+def test_ask_preserves_answer_window_nudge_outcomes(monkeypatch, outcome):
+    cfg = HarkConfig()
+    nudges = [{"reason": "no_open", "profile": "bound_answer", "ok": False,
+               "error": "recovery prompt unavailable", "exit": 4}]
+
+    def answer(*args, **kwargs):
+        if outcome in {"provider", "timeout", "interrupt"}:
+            exc = {"provider": ProviderError, "timeout": TimeoutError,
+                   "interrupt": KeyboardInterrupt}[outcome]("capture ended")
+            exc.tts_nudges = nudges
+            raise exc
+        listened = ListenResult(
+            text="answer", provider="mock", duration_ms=10, end_mode="silence",
+            cancelled=outcome == "cancel",
+        )
+        listened.tts_nudges = nudges
+        return {"ok": True, "provider": "mock"}, listened
+
+    monkeypatch.setattr("hark.speech.speak_and_listen", answer)
+    result = run_ask(cfg, "Question?", confirm="never")
+    assert result["tts_nudges"] == nudges
+    assert "confirm_tts_nudges" not in result
+    assert result["ok"] is (outcome == "success")
+
+
+@pytest.mark.parametrize("outcome", ["yes", "no", "cancel", "provider", "timeout", "interrupt"])
+def test_ask_keeps_answer_and_confirmation_nudges_separate(monkeypatch, outcome):
+    cfg = _initial_answer(monkeypatch)
+    answer_nudges = [{"reason": "no_open", "profile": "bound_answer", "ok": True,
+                      "provider": "mock"}]
+    confirm_nudges = [{"reason": "empty_stt", "profile": "confirm", "ok": False,
+                       "error": "recovery prompt unavailable", "exit": 4}]
+    listened = ListenResult(
+        text="answer", provider="mock", duration_ms=10, end_mode="silence",
+    )
+    listened.tts_nudges = answer_nudges
+    monkeypatch.setattr(
+        "hark.speech.speak_and_listen",
+        lambda *a, **k: ({"ok": True, "provider": "mock"}, listened),
+    )
+    monkeypatch.setattr("hark.speech.run_tts", lambda *a, **k: {"ok": True})
+
+    def confirm_listen(*args, **kwargs):
+        if outcome in {"provider", "timeout", "interrupt"}:
+            exc = {"provider": ProviderError, "timeout": TimeoutError,
+                   "interrupt": KeyboardInterrupt}[outcome]("confirmation ended")
+            exc.tts_nudges = confirm_nudges
+            raise exc
+        conf = ListenResult(
+            text=outcome, provider="mock", duration_ms=10, end_mode="silence",
+            cancelled=outcome == "cancel",
+        )
+        conf.tts_nudges = confirm_nudges
+        return conf
+
+    monkeypatch.setattr("hark.speech.run_listen", confirm_listen)
+    result = run_ask(cfg, "Deploy now?", risk_hint="R2")
+    assert result["tts_nudges"] == answer_nudges
+    assert result["confirm_tts_nudges"] == confirm_nudges
+    assert result["ok"] is (outcome == "yes")
+
+
+def test_hostile_nudge_metadata_cannot_replace_provider_failure(monkeypatch):
+    class HostileNudges(ProviderError):
+        @property
+        def tts_nudges(self):
+            raise KeyboardInterrupt("hostile nudge descriptor")
+
+    def answer(*args, **kwargs):
+        raise HostileNudges("provider unavailable")
+
+    monkeypatch.setattr("hark.speech.speak_and_listen", answer)
+    result = run_ask(HarkConfig(), "Question?", confirm="never")
+    assert result["ok"] is False
+    assert result["error"] == "provider unavailable"
+    assert result["exit"] == 4
+    assert "tts_nudges" not in result

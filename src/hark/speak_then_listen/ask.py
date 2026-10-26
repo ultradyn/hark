@@ -21,12 +21,23 @@ from hark.risk import classify_question, confirm_required
 _EXCEPTION_TTS = object()
 
 
+def _nudge_fields(source: Any, *, key: str = "tts_nudges") -> dict[str, Any]:
+    """Read optional window diagnostics without trusting error descriptors."""
+    try:
+        nudges = getattr(source, "tts_nudges", None)
+    except BaseException:
+        return {}
+    return {key: nudges} if isinstance(nudges, list) and nudges else {}
+
+
 def _provider_failure_result(
     exc: ProviderError,
     *,
     tts_info: Any = _EXCEPTION_TTS,
     text: str | None = None,
     confirm_tts: Any = _EXCEPTION_TTS,
+    diagnostics: dict[str, Any] | None = None,
+    nudge_key: str = "tts_nudges",
 ) -> dict[str, Any]:
     failure = safe_provider_failure(exc)
     result = {
@@ -41,6 +52,8 @@ def _provider_failure_result(
         readback = confirm_tts if confirm_tts is not None else failure.tts_info
         if readback is not None:
             result["confirm_tts"] = readback
+    result.update(diagnostics or {})
+    result.update(_nudge_fields(exc, key=nudge_key))
     return result
 
 
@@ -51,6 +64,8 @@ def _timeout_failure_result(
     text: str | None = None,
     error: str | None = None,
     confirm_tts: Any = None,
+    diagnostics: dict[str, Any] | None = None,
+    nudge_key: str = "tts_nudges",
 ) -> dict[str, Any]:
     """Keep ask failures JSON while retaining typed playback diagnostics."""
     result: dict[str, Any] = {
@@ -66,6 +81,8 @@ def _timeout_failure_result(
     if isinstance(exc, TtsPlayTimeout):
         result["error_type"] = exc.error_type
         result["tts_play_lock"] = exc.as_dict()
+    result.update(diagnostics or {})
+    result.update(_nudge_fields(exc, key=nudge_key))
     return result
 
 
@@ -116,6 +133,7 @@ def _run_ask(
             tts_info=getattr(exc, "tts_info", None),
         )
 
+    turn_info = _nudge_fields(listened)
     if listened.cancelled:
         return {
             "ok": False,
@@ -124,6 +142,7 @@ def _run_ask(
             "exit": ABORT,
             "end_phrase": listened.end_phrase,
             "tts": tts_info,
+            **turn_info,
         }
 
     # Meta-command spoken in the answer window: honour it as control, never
@@ -138,6 +157,7 @@ def _run_ask(
             "end_mode": listened.end_mode,
             "tts": tts_info,
             "exit": OK,
+            **turn_info,
         }
 
     risk = risk_hint or classify_question(prompt).risk
@@ -147,12 +167,11 @@ def _run_ask(
         explicit_override=explicit_confirm,
     )
 
-    confirmation: dict[str, Any] = {}
     if need_confirm:
         # Confirming: readback TTS + silence Answer Window + lexicon (HandoffState.CONFIRMING).
         readback = f"I heard: {listened.text}. Say yes to send, or cancel."
         try:
-            confirmation["confirm_tts"] = speech_mod.run_tts(
+            turn_info["confirm_tts"] = speech_mod.run_tts(
                 cfg, readback, provider=legs.tts, play=True
             )
             conf = speech_mod.run_listen(
@@ -163,12 +182,15 @@ def _run_ask(
                 end_mode="silence",
                 last_tts=readback,
             )
+            turn_info.update(_nudge_fields(conf, key="confirm_tts_nudges"))
         except ProviderError as exc:
             return _provider_failure_result(
                 exc,
                 text=listened.text,
                 tts_info=tts_info,
-                confirm_tts=confirmation.get("confirm_tts"),
+                confirm_tts=turn_info.get("confirm_tts"),
+                diagnostics=turn_info,
+                nudge_key="confirm_tts_nudges",
             )
         except TimeoutError as exc:
             return _timeout_failure_result(
@@ -176,7 +198,9 @@ def _run_ask(
                 error=None if isinstance(exc, TtsPlayTimeout) else "confirm timeout",
                 text=listened.text,
                 tts_info=tts_info,
-                confirm_tts=confirmation.get("confirm_tts"),
+                confirm_tts=turn_info.get("confirm_tts"),
+                diagnostics=turn_info,
+                nudge_key="confirm_tts_nudges",
             )
         except KeyboardInterrupt as exc:
             # The first answer is already durable user context. Preserve it if
@@ -184,8 +208,8 @@ def _run_ask(
             if getattr(exc, "tts_info", None) is None:
                 setattr(exc, "tts_info", tts_info)
             setattr(exc, "answer_text", listened.text)
-            if "confirm_tts" in confirmation:
-                setattr(exc, "confirm_tts", confirmation["confirm_tts"])
+            turn_info.update(_nudge_fields(exc, key="confirm_tts_nudges"))
+            setattr(exc, "ask_diagnostics", turn_info)
             raise
         if conf.cancelled:
             return {
@@ -196,7 +220,7 @@ def _run_ask(
                 "end_phrase": conf.end_phrase,
                 "exit": ABORT,
                 "tts": tts_info,
-                **confirmation,
+                **turn_info,
             }
         # Security invariant: the silence Answer Window transcript reaches this
         # seam before Unicode compatibility normalization. Keep it in that form so
@@ -211,7 +235,7 @@ def _run_ask(
                 "end_phrase": conf.end_phrase,
                 "exit": ABORT,
                 "tts": tts_info,
-                **confirmation,
+                **turn_info,
             }
 
     return {
@@ -224,7 +248,7 @@ def _run_ask(
         "risk": risk,
         "tts": tts_info,
         "exit": OK,
-        **confirmation,
+        **turn_info,
     }
 
 
@@ -248,6 +272,8 @@ def interrupted_ask_result(exc: KeyboardInterrupt) -> dict[str, Any]:
     confirm_tts = getattr(exc, "confirm_tts", None)
     if confirm_tts is not None:
         result["confirm_tts"] = confirm_tts
+    diagnostics = getattr(exc, "ask_diagnostics", None)
+    result.update(diagnostics if isinstance(diagnostics, dict) else _nudge_fields(exc))
     return result
 
 

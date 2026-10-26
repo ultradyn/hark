@@ -147,10 +147,14 @@ later listen failure preserves the completed readback result. The transcript log
 records `confirm_tts_provider` and `confirm_tts_fallback_from` separately from
 `tts_provider` and `tts_fallback_from`.
 
-**A failed spoken nudge is still syslog-only.** The answer window catches nudge
-failures and logs `speech.no_open_nudge_failed` / `speech.empty_stt_nudge_failed`
-at `level="warn"`, but the outcome appears in no payload or transcript. Tracked
-as B193. Read the HEP stream and syslog when diagnosing a missing recovery prompt.
+**Recovery nudges report their outcome.** Answer-window `tts_nudges` records
+spoken recovery prompts, including the provider/fallback result or a structured
+nonfatal failure. A failed nudge does not abort an otherwise usable listen
+window. Ask results retain answer-window outcomes as `tts_nudges` and
+confirmation-window outcomes separately as `confirm_tts_nudges`, including when
+the window later times out or is interrupted. Both lists reach the transcript
+log. If no answer was captured, a `diagnostic_only` record preserves the nudge
+outcome without inventing transcript text.
 
 **When the classifier says no, it says so.** The eligible class is matched against substrings of an upstream response body, so a reworded 400 would silently stop being recognised and `ask` would dead-end again with nothing to show that anything changed. Any TTS **4xx that is not** classified as eligible therefore publishes `tts.fallback_declined` (provider, status, `error_class = "none"`, the truncated body) before failing fast. Expect it for a genuine auth or quota failure; if it ever carries a body that *is* the "tried to generate text" 400 in new words, `_TEXT_NOT_AUDIO_MARKERS` needs updating.
 

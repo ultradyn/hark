@@ -419,3 +419,38 @@ def test_transcript_without_confirmation_has_no_confirmation_provenance():
     record = transcripts.build_record(_ok_ask_result(), kind="ask")
     assert "confirm_tts_provider" not in record
     assert "confirm_tts_fallback_from" not in record
+
+
+@pytest.mark.parametrize("text", [None, "", "   "])
+def test_failed_nudge_is_durable_even_without_transcript(monkeypatch, text):
+    nudges = [{"reason": "no_open", "profile": "bound_answer", "ok": False,
+               "error": "recovery prompt failed", "exit": 4}]
+    result = {"ok": False, "text": text, "exit": 6, "error": "no speech",
+              "tts_nudges": nudges}
+    assert _run_ask(monkeypatch, result) == 6
+    (record,) = _records()
+    assert record["tts_nudges"] == nudges
+    assert record["diagnostic_only"] is True
+    assert record["error"] == "no speech"
+    assert not record["text"].strip()
+
+
+def test_transcript_keeps_question_and_confirmation_nudges():
+    answer = [{"reason": "no_open", "profile": "bound_answer", "ok": True}]
+    confirm = [{"reason": "empty_stt", "profile": "confirm", "ok": False}]
+    record = transcripts.build_record(
+        _ok_ask_result(tts_nudges=answer, confirm_tts_nudges=confirm), kind="ask",
+    )
+    assert record["tts_nudges"] == answer
+    assert record["confirm_tts_nudges"] == confirm
+    assert "diagnostic_only" not in record
+
+
+def test_nested_listen_nudge_outcomes_reach_transcript():
+    nudges = [{"reason": "empty_stt", "ok": False, "error": "provider down"}]
+    record = transcripts.build_record(
+        {"ok": False, "text": "", "listen": {"tts_nudges": nudges}},
+        kind="tts_listen",
+    )
+    assert record["tts_nudges"] == nudges
+    assert record["diagnostic_only"] is True

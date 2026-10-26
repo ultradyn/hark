@@ -41,3 +41,5 @@ Provenance of that note: the B187/B177 review sub-agent proposed the name-equali
 Also from B192, on the fix shape: the discarded call at ask.py:146 sits INSIDE the try/except that maps ProviderError/TimeoutError, which is why threading a result out was held out of scope rather than being a one-liner.
 
 B192 can now be closed; nothing unique remains in it.
+
+Resolved 2026-10-26: separate confirm_tts result and confirm provider/fallback transcript provenance preserved through confirmation success/cancellation/failure/interruption. Independent and parent review PASS; x-tall confirmation selection 4034 passed.

@@ -81,6 +81,10 @@ def _linux_pidfd_send_signal(pidfd: int, signum: int) -> None:
 def _isolated_env(tmp_path: Path) -> dict[str, str]:
     env = os.environ.copy()
     env["XDG_STATE_HOME"] = str(tmp_path / "state")
+    # The child scripts replace synthesis with deterministic test workers, but
+    # run_tts still resolves a provider first. Never depend on the operator's
+    # credentials merely to reach the mocked worker on a clean buildbox.
+    env["XAI_API_KEY"] = "hark-test-placeholder-not-a-real-key"
     current = env.get("PYTHONPATH")
     env["PYTHONPATH"] = str(ROOT / "src") + (os.pathsep + current if current else "")
     return __import__("hark_test_guard").guarded_subprocess_env(env)
@@ -1104,6 +1108,8 @@ def _portable_supervisor_atexit_child() -> str:
 
         def visible_wait(self, process, *, deadline=None):
             print(f"WAIT_ACTIVE {{int(self._process_lifecycle.active)}}", flush=True)
+            if deadline is None:
+                return real_wait(self, process)
             return real_wait(self, process, deadline=deadline)
 
         isolation.SubprocessSynthTransport._open_pidfd = staticmethod(
@@ -3452,6 +3458,8 @@ def test_exec_worker_result_and_exception_mapping(
     from hark.providers.base import ProviderError
     from hark.tts_isolation import SynthWorkerError
 
+    monkeypatch.setenv("XAI_API_KEY", "hark-test-placeholder-not-a-real-key")
+
     class Store:
         def record_tts(self, **kwargs):
             return None
@@ -3491,6 +3499,8 @@ def test_worker_without_linux_prctl_fails_closed_before_synthesis(monkeypatch):
     import hark.speech as speech
     from hark.config import HarkConfig
     from hark.tts_isolation import SynthWorkerError
+
+    monkeypatch.setenv("XAI_API_KEY", "hark-test-placeholder-not-a-real-key")
 
     class Store:
         def record_tts(self, **kwargs):
@@ -4884,6 +4894,14 @@ def test_system_python_pidfd_authority_constructor_and_signal_gate(tmp_path):
         import signal
         import subprocess
         import sys
+        import importlib.util
+
+        if not (
+            hasattr(os, "pidfd_open")
+            and hasattr(signal, "pidfd_send_signal")
+            and importlib.util.find_spec("httpx") is not None
+        ):
+            raise SystemExit(77)
 
         import hark.tts_isolation as isolation
 
@@ -4922,7 +4940,8 @@ def test_system_python_pidfd_authority_constructor_and_signal_gate(tmp_path):
         env=_isolated_env(tmp_path),
         check=False,
     )
-
+    if proc.returncode == 77:
+        pytest.skip("system Python lacks native pidfd wrappers or Hark runtime dependencies")
     assert proc.returncode == 0
     assert proc.stdout == "SYSTEM_PIDFD_GATE_OK\n"
     assert proc.stderr == ""
@@ -4991,6 +5010,8 @@ def test_spawn_return_failure_reaps_preclaimed_child_and_preserves_primary(tmp_p
 def test_future_tracking_append_failure_preserves_memoryerror(monkeypatch, tmp_path):
     import hark.speech as speech
     from hark.config import HarkConfig
+
+    monkeypatch.setenv("XAI_API_KEY", "hark-test-placeholder-not-a-real-key")
 
     class Store:
         def record_tts(self, **kwargs):

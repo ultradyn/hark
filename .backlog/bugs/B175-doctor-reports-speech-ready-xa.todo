@@ -16,3 +16,5 @@ updated_at: "2026-10-26T00:19:47Z"
 ---
 
 doctor reports 'speech: ready (xAI or fallback keys)' based on auth.json PRESENCE only — token inside was invalid (xAI 403 bad-credentials on tts, 2026-08-10 23:55). Doctor should validate the token with a cheap authenticated call (or at least surface last tts/stt error) so 'ready' means ready. Related: B173 (swallowed STT auth failure).
+
+Implementation/decision receipt 2026-10-26: Doctor no longer prints speech ready from file/key presence; reports independent untested legs and sanitized recent failures. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.

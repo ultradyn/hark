@@ -1,4 +1,6 @@
 ---
+claimed_at: "2026-10-26T00:19:47Z"
+claimed_by: codex-stream-vapor-nm24
 completed_at: null
 complexity: medium
 created_at: "2026-07-23T09:26:35Z"
@@ -6,11 +8,11 @@ depends_on: []
 estimate_hours: 1
 id: B162
 priority: high
-started_at: null
-status: pending
+started_at: "2026-10-26T00:19:47Z"
+status: in_progress
 tags: []
 title: 'doctor shows provider ✓ on credential PRESENCE only — xAI grok_oauth listed healthy but live TTS/STT calls 403 (bad-credentials). Doctor should validate tokens (or mark untested) so ''speech: ready'' isn''t misleading.'
-updated_at: "2026-07-23T09:26:35Z"
+updated_at: "2026-10-26T00:19:47Z"
 ---
 
 doctor shows provider ✓ on credential PRESENCE only — xAI grok_oauth listed healthy but live TTS/STT calls 403 (bad-credentials). Doctor should validate tokens (or mark untested) so 'speech: ready' isn't misleading.

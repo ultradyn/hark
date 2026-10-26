@@ -1,4 +1,6 @@
 ---
+claimed_at: "2026-10-26T00:13:51Z"
+claimed_by: codex-stream-vapor-nm24
 completed_at: null
 complexity: medium
 created_at: "2026-08-11T13:07:10Z"
@@ -6,8 +8,8 @@ depends_on: []
 estimate_hours: 1
 id: B178
 priority: high
-started_at: null
-status: pending
+started_at: "2026-10-26T00:13:51Z"
+status: in_progress
 tags: []
 title: Hark loses the entire in-progress recording when ask/listen is interrupted; persist recoverable audio continuously with bounded loss
 updated_at: "2026-10-26T00:13:51Z"

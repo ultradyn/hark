@@ -1,4 +1,6 @@
 ---
+claimed_at: "2026-10-26T00:13:03Z"
+claimed_by: codex-stream-vapor-nm24
 completed_at: null
 complexity: medium
 created_at: "2026-08-11T15:44:07Z"
@@ -6,11 +8,11 @@ depends_on: []
 estimate_hours: 2
 id: B179
 priority: high
-started_at: null
-status: pending
+started_at: "2026-10-26T00:13:03Z"
+status: in_progress
 tags: []
 title: TTS playback often starts mid-utterance (drops question preamble)
-updated_at: "2026-08-11T15:44:07Z"
+updated_at: "2026-10-26T00:13:03Z"
 ---
 ## Symptom
 During wayfinding with `hark ask` (radio mode, session-local), the operator repeatedly heard TTS **start mid-question** — missing the beginning (e.g. questions appeared to "always start at option C"). Happened on multiple consecutive asks in one session (LLMP non-chat passthrough wayfinding, 2026-08-11).

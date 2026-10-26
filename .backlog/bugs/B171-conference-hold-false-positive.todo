@@ -22,3 +22,5 @@ Verified 2026-10-26: empty successful audio inventory still promotes stale proce
 Resolved 2026-10-26: require live audio corroboration when configured; distinguish empty inventories from unavailable/failed scans, honor fail policy. Exposed conference_status for doctor integration. Independent and parent review passed; x-tall Python3.13.11 playback selection 127 passed.
 
 Implementation/decision receipt 2026-10-26: Successful empty audio inventory no longer promotes stale URLs/resident conference process to active; unavailable scans honor failure policy. Doctor exposes active/inactive/unknown + matches. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.
+
+Final verification 2026-10-26: reviewed fix merged to master. Integrated x-tall CPython3.13.11 suite: 6525 passed, 104 skipped, 0 failed in151.61s. Independent review and parent review passed. Full receipt /tmp/hark-b135-full-final.log; per-task evidence and design above.

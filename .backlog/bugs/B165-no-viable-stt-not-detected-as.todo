@@ -16,3 +16,5 @@ updated_at: "2026-10-26T00:19:47Z"
 ---
 
 no-viable-STT not detected as a setup condition: with xai invalid + openai unscoped + no google key + minimax TTS-only, every listen fails at runtime. doctor should compute and hard-warn 'no working STT provider' and setup should refuse to claim ready.
+
+Implementation/decision receipt 2026-10-26: Independent STT/TTS configuration/capability/disabled/consent viability; setup cannot claim runtime readiness from interview marker and returns provider failure for unusable policies. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.

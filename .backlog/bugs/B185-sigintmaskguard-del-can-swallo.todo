@@ -45,3 +45,5 @@ Don't widen the suppression. Either force a synchronous delivery point inside th
 tests/test_tts_interrupt.py:7576 monkeypatches `isolation.os.pidfd_open` with `raising=False`, and `isolation.os` IS the shared `os` module — so this file is a second installer of that attribute alongside tests/test_ask_interrupt.py:1315. Relevant to the run-vs-skip flip recorded in B184 note (a), whose trigger is still unpinned.
 
 Implementation/decision receipt 2026-10-26: Removed signal-restoring finalizer; explicit ordinary-frame bounded restore/reconciliation preserves primary exception and prevents unraisable finalizer swallowing. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.
+
+Final verification 2026-10-26: reviewed fix merged to master. Integrated x-tall CPython3.13.11 suite: 6525 passed, 104 skipped, 0 failed in151.61s. Independent review and parent review passed. Full receipt /tmp/hark-b135-full-final.log; per-task evidence and design above.

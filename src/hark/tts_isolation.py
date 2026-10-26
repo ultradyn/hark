@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import signal
 import struct
 import subprocess
@@ -26,6 +27,54 @@ _BORROW_BUSY = object()
 _OS_CLOSE = os.close
 _PTHREAD_SIGMASK = getattr(signal, "pthread_sigmask", None)
 _NATIVE_SYNTH_POPEN_INIT = subprocess.Popen.__init__
+_SYNTH_TIMEOUT_S = 30.0
+
+
+class SynthDeadlineExceeded(ProviderError):
+    """The parent stopped waiting for a worker; its tree must be cancelled."""
+
+
+class _DeadlinePipe:
+    """Exact pipe reads/writes sharing one monotonic synthesis deadline.
+
+    Raw unbuffered IO avoids a readable header masking a stalled audio body.
+    The same deadline covers startup, request upload, result EOF and reap.
+    """
+
+    def __init__(self, fd: int, deadline: float) -> None:
+        self.fd = fd
+        self.deadline = deadline
+
+    def _ready(self, *, write: bool = False) -> None:
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise SynthDeadlineExceeded("TTS synthesis deadline exceeded while waiting for worker IO")
+        readable, writable, _ = select.select(
+            [] if write else [self.fd], [self.fd] if write else [], [], remaining
+        )
+        if not (writable if write else readable):
+            raise SynthDeadlineExceeded("TTS synthesis deadline exceeded while waiting for worker IO")
+
+    def read(self, size: int) -> bytes:
+        pieces: list[bytes] = []
+        remaining = size
+        while remaining:
+            self._ready()
+            piece = os.read(self.fd, remaining)
+            if not piece:
+                break
+            pieces.append(piece)
+            remaining -= len(piece)
+        return b"".join(pieces)
+
+    def write(self, payload: bytes) -> None:
+        view = memoryview(payload)
+        while view:
+            self._ready(write=True)
+            # A ready pipe guarantees PIPE_BUF bytes can be written without
+            # blocking; larger blocking writes can exceed our deadline.
+            sent = os.write(self.fd, view[:512])
+            view = view[sent:]
 
 
 class _FdTransferState:
@@ -764,7 +813,9 @@ class SynthProcessLifecycle:
             return
         identity.request_close()
 
-    def wait_and_release(self, process: subprocess.Popen[bytes]) -> int:
+    def wait_and_release(
+        self, process: subprocess.Popen[bytes], *, deadline: float | None = None,
+    ) -> int:
         """Wait for supervisor exit/reap while retaining cancellation authority."""
         authority = self._authority
         if authority is None or authority.process is not process:
@@ -777,6 +828,8 @@ class SynthProcessLifecycle:
             raise SynthWorkerError("TTS synth supervisor has no process id")
 
         while not authority.reaped:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise SynthDeadlineExceeded("TTS synthesis deadline exceeded while waiting for worker exit")
             self._wait_direct_child(authority, 0.05)
         returncode = self._returncode(process)
         self._finish_reaped(authority)
@@ -978,6 +1031,7 @@ class ProcessOwner(Protocol):
     def wait_and_unregister_synth_process(
         self,
         process: subprocess.Popen[bytes],
+        *, deadline: float | None = None,
     ) -> int: ...
 
     def cancel_synth_process(self, process: subprocess.Popen[bytes]) -> bool: ...
@@ -1005,9 +1059,13 @@ class SubprocessSynthTransport:
         owner: ProcessOwner,
         *,
         command_factory: Callable[[], list[str]] = synth_worker_command,
+        timeout_s: float = _SYNTH_TIMEOUT_S,
     ) -> None:
         self._owner = owner
         self._command_factory = command_factory
+        if timeout_s <= 0 or not timeout_s < float("inf"):
+            raise ValueError("synthesis timeout must be finite and positive")
+        self._timeout_s = timeout_s
 
     @staticmethod
     def _open_pidfd(process: subprocess.Popen[bytes]) -> _OwnedPidfd | None:
@@ -1126,6 +1184,7 @@ class SubprocessSynthTransport:
         raise SynthWorkerError(f"TTS synth worker {remote_type}: {remote_message}")
 
     def synthesize(self, request: SynthRequest) -> SynthResponse:
+        deadline = time.monotonic() + self._timeout_s
         # Preallocate the cleanup publication before entering os.pipe. The
         # protected operation writes both returned integers here before
         # callbacks or pending SIGINT can resume, so kernel-created pipe ends
@@ -1148,6 +1207,7 @@ class SubprocessSynthTransport:
         process: subprocess.Popen[bytes] | None = None
         identity: _IdentityToken | None = None
         read_file = None
+        process_finished = False
         try:
             _run_fd_transfer(
                 _FdTransferState(),
@@ -1193,20 +1253,33 @@ class SubprocessSynthTransport:
             )
             if len(request_payload) > _MAX_METADATA_SIZE:
                 raise SynthWorkerError("oversize TTS synth worker request")
-            process.stdin.write(struct.pack("!I", len(request_payload)))
-            process.stdin.write(request_payload)
+            request_pipe = _DeadlinePipe(process.stdin.fileno(), deadline)
+            request_pipe.write(struct.pack("!I", len(request_payload)))
+            request_pipe.write(request_payload)
             process.stdin.close()
             read_file = read_guard.adopt("rb", closefd=True)
-            response = self._decode(read_file, -1)
+            try:
+                response = self._decode(_DeadlinePipe(read_file.fileno(), deadline), -1)
+            except ProviderError as exc:
+                if isinstance(exc, SynthDeadlineExceeded):
+                    raise
+                # A complete provider-error frame is a normal worker verdict,
+                # not cancellation. Reap its supervisor before propagating so
+                # the same pool can safely launch a retry/fallback. Cancelling
+                # here would permanently terminalize that pool's authority.
+                self._owner.wait_and_unregister_synth_process(process, deadline=deadline)
+                process_finished = True
+                raise
             # Result EOF does not prove that supervisor cleanup/atexit has
             # finished. Retain cancellation authority through confirmed exit
             # and reap on every platform.
-            returncode = self._owner.wait_and_unregister_synth_process(process)
+            returncode = self._owner.wait_and_unregister_synth_process(process, deadline=deadline)
+            process_finished = True
             if returncode != 0:
                 raise SynthWorkerError(f"TTS synth worker exited {returncode}")
             return response
         except BaseException:
-            if process is not None:
+            if process is not None and not process_finished:
                 try:
                     if not self._owner.cancel_synth_process(process):
                         self._owner.cancel_synth_process(process)

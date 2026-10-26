@@ -96,7 +96,9 @@ class GoogleTts:
                 "responseModalities": ["AUDIO"],
             },
         }
-        with httpx.Client(timeout=120.0) as client:
+        # The parent also enforces a 30s wall deadline. Fail a silent network
+        # stall sooner and leave time for isolated-worker cleanup.
+        with httpx.Client(timeout=httpx.Timeout(20.0, connect=5.0)) as client:
             r = client.post(url, headers=headers, json=body)
 
             if r.status_code >= 400:

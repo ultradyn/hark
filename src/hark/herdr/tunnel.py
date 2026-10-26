@@ -11,6 +11,13 @@ ever signalled; foreign or unverifiable processes are left alone.
 Cross-process lease files under the transport key decide when the final cleanup
 owner may reap the child. In-process reference counting still collapses duplicate
 leases inside one Python process.
+
+On Linux, a helper supervises SSH against the owner's exact process identity.
+Its SSH child arms a parent-death signal against the supervisor's durable main
+thread. This also covers death before the durable marker is published without
+binding the tunnel to a short-lived caller thread.
+An owner crash closes its forward, including any borrowers; a later acquisition
+can recreate it. Other Unix platforms retain the existing marker/adoption path.
 """
 
 from __future__ import annotations
@@ -24,6 +31,7 @@ import signal
 import socket
 import stat
 import subprocess
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -32,6 +40,7 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Iterator
 
+from hark import pidfd as pidfd_api
 from hark.paths import cache_dir
 
 
@@ -501,11 +510,9 @@ def _signal_verified(identity: ProcessIdentity, sig: int) -> bool:
     if identity_state(identity) is not _IdentityState.LIVE:
         return False
 
-    pidfd_open = getattr(os, "pidfd_open", None)
-    pidfd_send = getattr(signal, "pidfd_send_signal", None)
-    if pidfd_open is not None and pidfd_send is not None:
+    if pidfd_api.available():
         try:
-            pidfd = pidfd_open(identity.pid, 0)
+            pidfd = pidfd_api.open_pidfd(identity.pid, 0)
         except ProcessLookupError:
             return False
         except OSError:
@@ -516,7 +523,7 @@ def _signal_verified(identity: ProcessIdentity, sig: int) -> bool:
                 if identity_state(identity) is not _IdentityState.LIVE:
                     return False
                 try:
-                    pidfd_send(pidfd, sig)
+                    pidfd_api.send_signal(pidfd, sig)
                 except ProcessLookupError:
                     return False
                 return True
@@ -654,6 +661,21 @@ class Tunnel:
             f"{self.local_socket}:{self.remote_socket}",
             self.ssh,
         ]
+        if sys.platform == "linux":
+            # The supervisor follows process identity, rather than PDEATHSIG's
+            # creating-thread lifetime. It owns/reaps SSH even if this caller
+            # thread exits, and is itself the child tracked in the owner marker.
+            parent = self_process_identity()
+            command = [
+                sys.executable,
+                "-m",
+                "hark.herdr.tunnel_child",
+                "supervise",
+                str(parent.pid),
+                parent.start_time,
+                parent.boot_id,
+                *command,
+            ]
         self.proc = subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 import signal
 import sys
 from typing import Any
@@ -15,6 +15,9 @@ from hark.signal_safety import SigintMaskGuard
 _CLI_PROCESS_EXIT_EXPECTED: ContextVar[bool] = ContextVar(
     "hark_tts_cli_process_exit_expected",
     default=False,
+)
+_CLI_TERMINAL_WAITS: ContextVar[list[Callable[[], None]] | None] = ContextVar(
+    "hark_tts_cli_terminal_waits", default=None
 )
 
 
@@ -168,15 +171,53 @@ def cli_process_exit_expected() -> bool:
     return _CLI_PROCESS_EXIT_EXPECTED.get()
 
 
+def register_cli_terminal_wait(wait: Callable[[], None]) -> bool:
+    """Retain interrupted work until the outer command has emitted its result.
+
+    Library calls have no CLI scope and retain no references here. Nested CLI
+    scopes contribute to the outer scope, whose teardown owns the wait.
+    """
+    waits = _CLI_TERMINAL_WAITS.get()
+    if waits is None:
+        return False
+    if wait not in waits:
+        waits.append(wait)
+    return True
+
+
+def _finish_cli_terminal_waits(waits: list[Callable[[], None]]) -> None:
+    primary = sys.exception()
+    first_error: BaseException | None = None
+    for wait in waits:
+        try:
+            wait()
+        except BaseException as exc:
+            if first_error is None:
+                first_error = exc
+    if first_error is not None and primary is None:
+        raise first_error
+
+
 @contextmanager
 def cli_tts_interrupt_scope() -> Iterator[None]:
     """Own OS SIGINT for the complete CLI dispatch boundary."""
     token = _CLI_PROCESS_EXIT_EXPECTED.set(True)
+    waits = _CLI_TERMINAL_WAITS.get()
+    wait_token = None
+    if waits is None:
+        waits = []
+        wait_token = _CLI_TERMINAL_WAITS.set(waits)
     try:
         _CLI_SIGINT_CONTROLLER.activate()
         try:
             yield
         finally:
-            _CLI_SIGINT_CONTROLLER.deactivate()
+            try:
+                if wait_token is not None:
+                    _finish_cli_terminal_waits(waits)
+            finally:
+                _CLI_SIGINT_CONTROLLER.deactivate()
     finally:
+        if wait_token is not None:
+            _CLI_TERMINAL_WAITS.reset(wait_token)
         _CLI_PROCESS_EXIT_EXPECTED.reset(token)

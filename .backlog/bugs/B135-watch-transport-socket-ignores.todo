@@ -37,3 +37,5 @@ Investigation sequencing (2026-10-26): audit B135-B195 in seven read-only lanes 
 Decision 2026-10-26: reject explicit multi-session socket mode before armed, as ticket permits; auto mode keeps all-session polling. B136 original tunnel leak fixed, but preserve watch return/primary failure when cleanup raises by watch-local reporting. B135 then B136 share watch.py and watch tests in one serial lane.
 
 Resolved 2026-10-26: explicit multi-session sockets refuse before acquisition/armed; auto polls every selected session. Parent + independent review passed. x-tall Python3.13.11 remote watch/self-exclusion/access selection: 68 passed.
+
+Final verification 2026-10-26: reviewed fix merged to master. Integrated x-tall CPython3.13.11 suite: 6525 passed, 104 skipped, 0 failed in151.61s. Independent review and parent review passed. Full receipt /tmp/hark-b135-full-final.log; per-task evidence and design above.

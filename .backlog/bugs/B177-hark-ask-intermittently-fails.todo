@@ -38,3 +38,5 @@ Do not add a blanket retry-on-any-error: scope the retry to this error class so 
 Reopened 2026-10-26 during full B135-up audit: real decoded subprocess ProviderError terminalizes shared synthesis pool via cancel, preventing B177 retry/fallback although in-process tests passed. Decision: structured provider errors normally reap/release authority while actual timeout/interruption still cancels. Covered in provider lane B164/B181; add real subprocess retry/handover regressions before closure.
 
 Implementation/decision receipt 2026-10-26: Real subprocess provider verdict now reaps/releases normally so same owner can retry/fallback; genuine deadline/interrupt still cancels. Preserved B177 content-error scope and separate B164 auto-auth behavior. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.
+
+Final verification 2026-10-26: reviewed fix merged to master. Integrated x-tall CPython3.13.11 suite: 6525 passed, 104 skipped, 0 failed in151.61s. Independent review and parent review passed. Full receipt /tmp/hark-b135-full-final.log; per-task evidence and design above.

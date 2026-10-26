@@ -214,6 +214,55 @@ def test_empty_stt_disabled_raises_immediately(monkeypatch, tmp_path):
     assert tts_calls == []
 
 
+@pytest.mark.parametrize("final", ["operator answer", ""])
+def test_failed_recovery_nudge_is_on_success_or_timeout(monkeypatch, final):
+    from hark.providers.base import ProviderError
+
+    stt = _FakeStt(texts=["", final])
+    _patch_listen_infra(monkeypatch, stt, [_cap(), _cap()])
+
+    def failed_tts(*_a, **_k):
+        raise ProviderError("recovery provider unavailable")
+
+    monkeypatch.setattr("hark.speech.run_tts", failed_tts)
+    cfg = HarkConfig(listen=ListenConfig(empty_stt_retry=False, empty_stt_nudge=True))
+    if final:
+        result = run_listen(cfg, post_tts_guard_s=0)
+        assert result.text == final
+        outcomes = result.tts_nudges
+    else:
+        with pytest.raises(TimeoutError) as exc:
+            run_listen(cfg, post_tts_guard_s=0)
+        outcomes = exc.value.tts_nudges
+    assert outcomes == [{
+        "reason": "empty_stt", "profile": "bound_answer", "ok": False,
+        "error": "recovery provider unavailable", "exit": 4,
+    }]
+
+
+def test_recovery_nudge_fallback_remains_visible(monkeypatch):
+    stt = _FakeStt(texts=["", "operator answer"])
+    _patch_listen_infra(monkeypatch, stt, [_cap(), _cap()])
+    info = {"ok": True, "provider": "secondary", "fallback": {"spoke": "secondary"}}
+    monkeypatch.setattr("hark.speech.run_tts", lambda *_a, **_k: info)
+    cfg = HarkConfig(listen=ListenConfig(empty_stt_retry=False, empty_stt_nudge=True))
+    result = run_listen(cfg, post_tts_guard_s=0)
+    assert result.tts_nudges[0]["fallback"] == info["fallback"]
+
+
+def test_unexpected_nudge_bug_is_not_swallowed(monkeypatch):
+    stt = _FakeStt(texts=[""])
+    _patch_listen_infra(monkeypatch, stt, [_cap()])
+
+    def broken_tts(*_a, **_k):
+        raise ValueError("unexpected implementation bug")
+
+    monkeypatch.setattr("hark.speech.run_tts", broken_tts)
+    cfg = HarkConfig(listen=ListenConfig(empty_stt_retry=False, empty_stt_nudge=True))
+    with pytest.raises(ValueError, match="implementation bug"):
+        run_listen(cfg, post_tts_guard_s=0)
+
+
 def test_already_armed_still_applies_post_tts_guard(monkeypatch, tmp_path):
     """Pre-arm must not zero settle delay (mute unmute / residual race)."""
     stt = _FakeStt(texts=["hello"])

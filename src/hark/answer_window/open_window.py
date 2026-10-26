@@ -11,6 +11,7 @@ test seams stay stable during the E4 migration.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import replace
 
 from hark.answer_window.deps import AnswerWindowDeps
@@ -33,6 +34,7 @@ from hark.audio.capture import effective_radio_segment_pad_ms
 from hark.audio.stream_recovery import open_stream_recovery
 from hark.endpointing import EndpointStrategy
 from hark.listen_end import EndMode
+from hark.providers.base import safe_exception_detail, safe_provider_failure
 from hark.partial import new_stream_id
 
 
@@ -122,6 +124,34 @@ def open_answer_window(
     ProviderError = speech.ProviderError
     ABORT = speech.ABORT
     _build_endpoint_strategy = speech.build_endpoint_strategy
+
+    nudge_outcomes: list[dict] = []
+
+    def _with_nudges(result: ListenResult) -> ListenResult:
+        result.tts_nudges = list(nudge_outcomes)
+        return result
+
+    def _listen_result(**fields) -> ListenResult:
+        return ListenResult(tts_nudges=list(nudge_outcomes), **fields)
+
+    def _run_nudge(text: str, *, reason: str) -> None:
+        outcome = {"reason": reason, "profile": policy.profile}
+        try:
+            info = run_tts(
+                cfg,
+                text,
+                provider=nudge_tts_provider,
+                play=True,
+                mute_mic=cfg.audio.mute_mic_during_tts,
+            )
+        except (ProviderError, TimeoutError) as exc:
+            failure = safe_provider_failure(exc)
+            outcome.update(ok=False, error=failure.detail, exit=failure.code)
+            nudge_outcomes.append(outcome)
+            raise
+        else:
+            outcome.update(info)
+            nudge_outcomes.append(outcome)
 
     # --- policy → local knobs (parity with former run_listen locals) ---
     mode = policy.end_mode
@@ -326,7 +356,7 @@ def open_answer_window(
             duration_ms=duration_ms,
             text_len=len(body),
         )
-        return ListenResult(
+        return _listen_result(
             text=body,
             provider=prov,
             duration_ms=duration_ms,
@@ -490,19 +520,16 @@ def open_answer_window(
                                 continue
                             if decision.action is SilenceEvent.NUDGE:
                                 try:
-                                    run_tts(
-                                        cfg,
+                                    _run_nudge(
                                         decision.nudge_text or nudge_no_open_text,
-                                        provider=nudge_tts_provider,
-                                        play=True,
-                                        mute_mic=cfg.audio.mute_mic_during_tts,
+                                        reason="no_open",
                                     )
-                                except Exception as nudge_exc:
+                                except (ProviderError, TimeoutError) as nudge_exc:
                                     syslog(
                                         "speech.no_open_nudge_failed",
                                         component="stt",
                                         level="warn",
-                                        error=str(nudge_exc)[:200],
+                                        error=safe_exception_detail(nudge_exc, limit=200),
                                         stream_id=stream,
                                     )
                                 settle = max(
@@ -531,7 +558,7 @@ def open_answer_window(
                             error="agent_cancel",
                         )
                         _recovery_success()
-                        return ListenResult(
+                        return _listen_result(
                             text="",
                             provider=getattr(stt, "name", "unknown"),
                             duration_ms=cap.duration_ms,
@@ -572,19 +599,16 @@ def open_answer_window(
                             continue
                         if decision.action is SilenceEvent.NUDGE:
                             try:
-                                run_tts(
-                                    cfg,
+                                _run_nudge(
                                     decision.nudge_text or EMPTY_STT_NUDGE_TEXT,
-                                    provider=nudge_tts_provider,
-                                    play=True,
-                                    mute_mic=cfg.audio.mute_mic_during_tts,
+                                    reason="empty_stt",
                                 )
-                            except Exception as nudge_exc:
+                            except (ProviderError, TimeoutError) as nudge_exc:
                                 syslog(
                                     "speech.empty_stt_nudge_failed",
                                     component="stt",
                                     level="warn",
-                                    error=str(nudge_exc)[:200],
+                                    error=safe_exception_detail(nudge_exc, limit=200),
                                     stream_id=stream,
                                 )
                             settle = max(0.1, cfg.audio.post_tts_guard_ms / 1000.0)
@@ -626,7 +650,7 @@ def open_answer_window(
                             after_tts=after_tts,
                         )
                     _recovery_success()
-                    return ListenResult(
+                    return _listen_result(
                         text=tr.text,
                         provider=tr.provider,
                         duration_ms=cap.duration_ms,
@@ -806,14 +830,14 @@ def open_answer_window(
                                 error="cancel" if hit.kind == "cancel" else None,
                             )
                             _recovery_success()
-                            return radio_sess.result_for_phrase_hit(
+                            return _with_nudges(radio_sess.result_for_phrase_hit(
                                 hit,
                                 text=tr.text,
                                 provider=tr.provider,
                                 duration_ms=int(
                                     1000 * (time.monotonic() - started)
                                 ),
-                            )
+                            ))
                         # Idle retranscription is a candidate, never authority
                         # to erase speech already accepted in segment partials.
                         body = radio_sess.finalize_joined_body(
@@ -846,7 +870,7 @@ def open_answer_window(
                             partials_emitted=radio_sess.partial_seq,
                         )
                         _recovery_success()
-                        return ListenResult(
+                        return _listen_result(
                             text=body,
                             provider=tr.provider,
                             duration_ms=int(
@@ -977,7 +1001,7 @@ def open_answer_window(
                     except Exception:
                         pass
                     _recovery_success()
-                    return ended
+                    return _with_nudges(ended)
                 # Joined segment STT is append-only; RadioSession refuses shrink
                 # so a flaky mid-slice rewrite cannot drop words already seen.
                 if radio_sess.emit_partial_if_needed(
@@ -1068,12 +1092,12 @@ def open_answer_window(
                         ok=True,
                     )
                     _recovery_success()
-                    return radio_sess.result_for_agent_action(
+                    return _with_nudges(radio_sess.result_for_agent_action(
                         "finish",
                         text=body,
                         provider=tr.provider,
                         duration_ms=int(1000 * (time.monotonic() - started)),
-                    )
+                    ))
                 # max_listen / fall-through: return assembled body if any
                 if body:
                     store.record_stt(
@@ -1084,7 +1108,7 @@ def open_answer_window(
                         ok=True,
                     )
                     _recovery_success()
-                    return ListenResult(
+                    return _listen_result(
                         text=body,
                         provider=tr.provider,
                         duration_ms=int(1000 * (time.monotonic() - started)),
@@ -1095,14 +1119,20 @@ def open_answer_window(
                     )
             if agent_act == "cancel":
                 _recovery_success()
-                return radio_sess.result_for_agent_action(
+                return _with_nudges(radio_sess.result_for_agent_action(
                     "cancel",
                     text=radio_sess.last_partial_text,
                     provider=last_provider,
                     duration_ms=int(1000 * (time.monotonic() - started)),
-                )
+                ))
             raise TimeoutError(f"radio listen exceeded max_listen_s={max_listen}")
         finally:
+            primary = sys.exception()
+            if primary is not None and nudge_outcomes:
+                try:
+                    primary.tts_nudges = list(nudge_outcomes)
+                except Exception:
+                    pass
             clear_active_listen(stream)
             # Abnormal exit (signal, crash path that still runs finally, uncaught
             # error): keep durable PCM. Successful paths already discarded it.

@@ -1,4 +1,6 @@
 ---
+claimed_at: "2026-10-26T00:12:26Z"
+claimed_by: codex-stream-vapor-nm24
 completed_at: null
 complexity: medium
 created_at: "2026-07-16T16:01:21Z"
@@ -6,8 +8,8 @@ depends_on: []
 estimate_hours: 1.5
 id: B158
 priority: high
-started_at: "2026-07-16T16:02:17Z"
-status: pending
+started_at: "2026-10-26T00:12:26Z"
+status: in_progress
 tags: []
 title: Mixed-script confusable negative contractions can approve confirmation
 updated_at: "2026-10-26T00:12:26Z"

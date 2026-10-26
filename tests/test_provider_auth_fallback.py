@@ -160,6 +160,35 @@ def test_stt_auto_reuses_audio_on_next_provider_and_keeps_healthy_provider(monke
     assert events[0][1]["error_class"] == "authentication"
 
 
+def test_stt_handover_logging_cannot_replace_auth_failure_with_hostile_render(
+    monkeypatch,
+):
+    _stt_providers(monkeypatch)
+    events = []
+
+    class Hostile(ProviderError):
+        renders = 0
+
+        def __str__(self):
+            self.renders += 1
+            if self.renders > 1:
+                raise RuntimeError("render failed after classification")
+            return "xAI STT HTTP 403: denied"
+
+    error = Hostile("denied")
+
+    def reject(*a, **kw):
+        raise error
+
+    monkeypatch.setattr(
+        resolve, "XaiStt", lambda: SimpleNamespace(name="xai", transcribe=reject)
+    )
+    monkeypatch.setattr("hark.syslog.log", lambda *a, **kw: events.append(kw))
+    provider = resolve.resolve_stt("auto", stt_cfg=SttConfig())
+    assert provider.transcribe(b"wav").provider == "openai"
+    assert events[0]["error"] == "provider failure"
+
+
 @pytest.mark.parametrize("pin,status", [("xai", 403), ("auto", 429)])
 def test_stt_explicit_and_quota_do_not_switch(monkeypatch, pin, status):
     calls = _stt_providers(monkeypatch, first_status=status)

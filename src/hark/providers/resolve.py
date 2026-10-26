@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from hark.providers.auth import google_auth, minimax_auth, openai_auth, xai_auth
 from hark.providers.auth_fallback import is_auth_failure
-from hark.providers.base import ProviderError, ProviderUnsupported, SttProvider, TtsProvider
+from hark.providers.base import ProviderError, ProviderUnsupported, SttProvider, TtsProvider, safe_exception_detail
 from hark.providers.google_p import GoogleStt, GoogleTts
 from hark.providers.minimax import MinimaxStt, MinimaxTts
 from hark.providers.openai_p import OpenAIStt, OpenAITts
@@ -238,7 +238,7 @@ class _AutoStt:
                     "stt.provider_fallback", component="stt", level="warning",
                     message="STT auto provider authentication failed; trying next provider",
                     from_provider=failed, to_provider=following.name,
-                    error_class="authentication", error=str(exc)[:300],
+                    error_class="authentication", error=safe_exception_detail(exc, limit=300),
                 )
                 # Retain the healthy provider for later radio segments. It is
                 # a concrete provider, so repeated auth failures never recurse.

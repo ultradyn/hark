@@ -1267,7 +1267,17 @@ class SubprocessSynthTransport:
                 # not cancellation. Reap its supervisor before propagating so
                 # the same pool can safely launch a retry/fallback. Cancelling
                 # here would permanently terminalize that pool's authority.
-                self._owner.wait_and_unregister_synth_process(process, deadline=deadline)
+                try:
+                    self._owner.wait_and_unregister_synth_process(process, deadline=deadline)
+                except SynthDeadlineExceeded:
+                    # A live supervisor must not be mistaken for a completed
+                    # auth verdict and retried with another process.
+                    raise
+                except Exception:
+                    # Retain the decoded primary provider error if reap or
+                    # bookkeeping fails; the outer cancellation path still
+                    # owns cleanup. Interrupts continue to propagate normally.
+                    raise exc
                 process_finished = True
                 raise
             # Result EOF does not prove that supervisor cleanup/atexit has

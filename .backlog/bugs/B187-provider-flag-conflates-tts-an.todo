@@ -31,3 +31,5 @@ On `listen` (STT-only) --provider and --stt-provider mean the same thing - do no
 Sequencing: land this BEFORE B177/gh-9 (TTS fallback). Both touch provider resolution; doing selection first gives the fallback work a clean per-leg provider to fall back within.
 
 Version at filing: 2026-08-17, editable v0.1.0, git v0.1.10-324-g9ea9549-dirty.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. Independent TTS/STT leg selection, CLI flags and confirmation/nudge routing remain wired; tests/test_provider_legs.py. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

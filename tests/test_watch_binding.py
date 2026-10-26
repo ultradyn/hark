@@ -2,10 +2,13 @@ import errno
 import io
 import json
 
+import pytest
+
 import hark.cli as cli
 import hark.watch as watch
 from hark.config import HarkConfig, SessionConfig
 from hark.delivery import BoundEvent, DeliveryStore
+from hark.exitcodes import USAGE
 from hark.herdr.client import AgentInfo, HerdrError
 from hark.herdr.socket_client import is_expected_disconnect
 
@@ -43,6 +46,74 @@ class FakeWatchClient:
         if self.read_error:
             raise self.read_error
         return "Allow this action?"
+
+
+@pytest.mark.parametrize("once", [False, True])
+def test_explicit_multi_session_socket_refuses_before_arming(
+    monkeypatch, once
+):
+    def unexpected_client(_session):
+        pytest.fail("unsupported socket selection must not acquire any clients")
+
+    monkeypatch.setattr(watch, "HerdrClient", unexpected_client)
+    monkeypatch.setattr(
+        watch, "_watch_socket", lambda *_a, **_kw: pytest.fail("must not subscribe")
+    )
+    cfg = HarkConfig(sessions=[SessionConfig(id="one"), SessionConfig(id="two")])
+    out = io.StringIO()
+
+    assert watch.run_watch(
+        cfg, transport="socket", once=once, out=out, register_events=False
+    ) == USAGE
+
+    events = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert len(events) == 1
+    assert events[0]["kind"] == "watch.error"
+    assert "one session" in events[0]["error"]
+    assert "--transport auto or poll" in events[0]["error"]
+
+
+@pytest.mark.parametrize("socket_capable", [(True, True), (True, False)])
+@pytest.mark.parametrize("failed_session", [None, "one"])
+def test_multi_session_auto_polls_every_healthy_session(
+    monkeypatch, socket_capable, failed_session
+):
+    polled = []
+
+    class MultiClient(FakeWatchClient):
+        def socket_exists(self):
+            return socket_capable[("one", "two").index(self.session.id)]
+
+        def list_agents(self):
+            polled.append(self.session.id)
+            if self.session.id == failed_session:
+                raise HerdrError("session unavailable")
+            return super().list_agents()
+
+    monkeypatch.setattr(watch, "HerdrClient", MultiClient)
+    monkeypatch.setattr(watch, "detect_self", lambda: None)
+    monkeypatch.setattr(
+        watch, "_watch_socket", lambda *_a, **_kw: pytest.fail("must poll all sessions")
+    )
+    monkeypatch.setattr(
+        watch.time, "sleep", lambda _s: (_ for _ in ()).throw(KeyboardInterrupt())
+    )
+    cfg = HarkConfig(sessions=[SessionConfig(id="one"), SessionConfig(id="two")])
+    out = io.StringIO()
+
+    assert watch.run_watch(
+        cfg, transport="auto", out=out, register_events=False
+    ) == 0
+
+    assert polled == ["one", "two"]
+    events = [json.loads(line) for line in out.getvalue().splitlines()]
+    armed = next(event for event in events if event["kind"] == "watch.armed")
+    assert armed["sessions"] == ["one", "two"]
+    assert armed["transport"] == "poll"
+    blocked = [event for event in events if event["kind"] == "agent.blocked"]
+    assert {event["session_id"] for event in blocked} == (
+        {"one", "two"} - {failed_session}
+    )
 
 
 def _run_once(monkeypatch, *, read_error: Exception | None = None):

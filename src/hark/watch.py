@@ -19,7 +19,7 @@ from hark.events import (
     make_target_invalidated,
     monitor_profile,
 )
-from hark.exitcodes import HERDR
+from hark.exitcodes import HERDR, USAGE
 from hark.herdr.access import HerdrSessionAccess
 from hark.herdr.client import AgentInfo, HerdrClient, HerdrError
 from hark.herdr.socket_client import is_expected_disconnect
@@ -179,6 +179,17 @@ def _run_watch_scoped(
     selected_ids = list(session_ids or [session.id for session in cfg.sessions])
     if not selected_ids and not session_ids:
         selected_ids = ["local"]
+    if transport == "socket" and len(selected_ids) > 1:
+        _emit(
+            make_watch_error(
+                ",".join(selected_ids),
+                "socket watch supports one session; use --transport auto or poll "
+                "to watch multiple sessions",
+            ),
+            for_monitor=for_monitor,
+            out=out,
+        )
+        return USAGE
 
     clients: list[HerdrClient] = []
     for session_id in selected_ids:

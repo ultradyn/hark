@@ -607,8 +607,21 @@ after the discard window is kept as usual.
 | `[tts] notify_skip` (B161) | `true` | Desktop notification with the full TTS text + a **Skip** action while TTS plays; clicking Skip stops playback. Silently disabled when `notify-send` / a session bus is unavailable. |
 | `[tts] print_prompt` | `true` | Print the spoken text to stdout before / while synthesizing (operator transcript of what was said). |
 | `[tts] chunk_chars` | `1500` | Split long prompts into chunks of this many characters for synthesis/play. |
-| `[tts] fallback_on_error` (B177) | `true` | On a **content-shaped** TTS failure (the provider generated text instead of audio), retry once on the same provider then walk the `auto` order. Auth / quota failures still fail fast. Every hop is reported in `tts.fallback` and as a `tts.provider_fallback` HEP event — see [PROVIDERS.md](PROVIDERS.md#scoped-tts-retry--provider-fallback-b177). |
+| `[tts] fallback_on_error` (B164/B177) | `true` | Content-shaped failures retry once, then walk the `auto` order. Auto-selected providers hand authentication failures directly to the next provider without retry; explicit pins' auth errors and primary quota failures remain terminal. `false` disables both TTS paths; STT auto auth fallback is independent. Every TTS hop is reported in `tts.fallback` and `tts.provider_fallback` — see [PROVIDERS.md](PROVIDERS.md#scoped-tts-retry--provider-fallback-b177). |
 | `hark tts --standalone` / `--once` (B160) | opt-in flag | One-shot TTS run that works from any directory with no hark server required; JSON output reports whether a background server was detected (its playback coordination applies automatically when live). |
+
+Each isolated synthesis attempt has a 30-second wall deadline spanning request
+upload, result body/audio/EOF and supervisor reap, followed by bounded owned-worker
+cleanup on expiry. Google TTS also has 5-second connect and 20-second read limits.
+Retries and chunks have separate attempt deadlines; listen and queue wait budgets
+are separate. See [synthesis deadline](PROVIDERS.md#synthesis-deadline-b181).
+
+Library callers own lifecycle signal handlers for a bounded scope: prefer
+`with hark.lifecycle.signal_handler_scope(): ...`. If calling
+`install_signal_handlers()` directly, pair a `True` return (ownership acquired)
+with `uninstall_signal_handlers()` in `finally`; a `False` return belongs to an
+existing outer scope. Uninstall restores only handlers Hark still owns and
+preserves replacements installed by another caller.
 
 ### Listen recovery defaults (`[listen]`)
 

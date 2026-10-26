@@ -6,6 +6,8 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
 
 ## Unreleased
 
+- 2026-10-26: speech results preserve `confirm_tts`, `tts_nudges` and `confirm_tts_nudges`; lifecycle handlers use scoped install/uninstall ownership, auto providers hand over rejected auth, and TTS attempts have a 30-second wall deadline (docs/PROVIDERS.md, docs/AUDIO_DESIGN.md); test provider-network and playback guards are documented in docs/TESTING.md.
+
 - 2026-10-26: doctor now reports independent untested STT/TTS configuration, recent failures, conference hold and ordered repairs; setup supports explicit MiniMax consent, and worker startup preflights wake dependencies (docs/SETUP_DIAGNOSTICS.md).
 
 - fix(providers, B177/gh-9): **TTS no longer dead-ends when a provider answers instead of
@@ -14,9 +16,10 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   with `xai`/`openai` disabled `hark ask` became unusable for asking questions (exit 4 with
   the operator already waiting). `run_tts` now retries once on the same provider — shaping
   the request where a lever exists — then walks the `auto` order, and later chunks continue
-  on whichever provider worked. **Scoped to that one error class:** auth (401/403), quota
-  (429), `ProviderUnsupported`, and everything else still fail fast on the first attempt, so
-  a bad token is never masked as a working setup (auth fallback stays open as B164). Every
+  on whichever provider worked. **Content failures get one retry; auto auth skips it:**
+  B164 adds immediate handover on an auto-selected provider's auth rejection (401/403 or
+  missing credentials). Explicit pins' auth errors, primary quota errors (429),
+  `ProviderUnsupported`, timeouts and other primary errors remain terminal. Every
   hop is observable — a `fallback` key in the `tts` / `ask` JSON (`requested` / `spoke` /
   `steps`), a `tts.provider_fallback` HEP event visible to `hark monitor`, syslog, and one
   stderr line — so a downgrade cannot read as a clean success, and a fallback provider's
@@ -24,10 +27,11 @@ Format: sections headed `## X.Y.Z` match git tags `vX.Y.Z` and the npm package v
   operator may hear a different voice, not only a different provider:** a fallback rung is
   asked with no voice id and speaks in the new provider's default, because voice ids are
   per-provider namespaces and carrying one across turns the content 400 into a
-  voice-not-found 400. A 4xx that is *not* classified as eligible now publishes
+  voice-not-found 400. A 4xx that is *not* eligible for content retry or auto auth handover publishes
   `tts.fallback_declined` before failing fast, so a reworded upstream body surfaces as a
   diagnosable event rather than a silent regression. New `[tts]
-  fallback_on_error` (default `true`) makes it optional; `GEMINI_TTS_MODEL` repoints the
+  fallback_on_error` (default `true`) controls both TTS retry and auth handover; STT auto
+  auth fallback is independent. `GEMINI_TTS_MODEL` repoints the
   (already TTS-only) Gemini model pin. See `docs/PROVIDERS.md` § Scoped TTS retry.
 - fix(providers, B187/gh-10): `--provider` no longer forces one provider onto **both**
   speech legs. New `--tts-provider` / `--stt-provider` on `tts` / `listen` / `ask` (and

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 from pathlib import Path
 
 from hark.setup_flow import (
@@ -16,6 +17,17 @@ from hark.setup_flow import (
     write_setup_complete,
 )
 from hark.exitcodes import OK
+
+
+@pytest.fixture(autouse=True)
+def _configured_speech_for_interview_tests(monkeypatch):
+    # These tests concern saved interview answers; runtime readiness is tested
+    # separately in test_setup_readiness.py with explicit provider fixtures.
+    monkeypatch.setattr("hark.speech_readiness.speech_readiness", lambda cfg: {
+        "configured": True,
+        "stt": {"hint": "STT configured; access untested"},
+        "tts": {"hint": "TTS configured; access untested"},
+    })
 
 
 def test_persona_defaults():

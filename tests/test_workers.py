@@ -17,6 +17,15 @@ import hark.worker_process as worker_process
 from hark.exitcodes import OK, USAGE
 
 
+@pytest.fixture(autouse=True)
+def _ready_wake_for_lifecycle_tests(monkeypatch):
+    # Worker identity/lifecycle tests isolate startup prerequisites. Dedicated
+    # preflight tests cover missing dependencies/models without starting audio.
+    monkeypatch.setattr("hark.wake_readiness.ambient_readiness", lambda cfg: {
+        "status": "ready", "warnings": [], "hints": [],
+    })
+
+
 def spawn_hark_worker(role: str, directory: Path) -> subprocess.Popen[bytes]:
     """Long-lived process with the same decisive argv shape as a Hark worker."""
     launcher = directory / "hark"

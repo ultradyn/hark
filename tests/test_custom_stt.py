@@ -349,7 +349,9 @@ def test_doctor_speech_ok_when_custom_pinned(monkeypatch) -> None:
     code = run_doctor(cfg, as_json=True, out=out, err=io.StringIO())
     assert code == OK
     report = json.loads(out.getvalue())
-    assert report["speech_ok"] is True
+    assert report["speech_ok"] is False  # custom STT alone cannot configure TTS
+    assert report["speech"]["stt"]["configured"] is True
+    assert report["speech"]["tts"]["configured"] is False
     assert report["custom_stt"]["available"] is True
     assert any(p["name"] == "custom" and p["available"] for p in report["providers"])
 

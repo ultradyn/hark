@@ -28,89 +28,7 @@ from hark.paths import (
 from hark.providers.auth import all_provider_status
 
 
-def _ambient_readiness(cfg: HarkConfig) -> dict[str, Any]:
-    """Engine-aware ambient/wake model readiness for doctor (B070)."""
-    from pathlib import Path
-
-    eng = (cfg.ambient.engine or "vosk").strip().lower()
-    model_path = cfg.ambient.model_path
-    model_ok = False
-    status = "unknown"
-    warnings: list[str] = []
-    hints: list[str] = []
-    package_ok: bool | None = None
-
-    if eng in ("text_probe", "mock", "test", "off", "none", "disabled"):
-        model_ok = True
-        status = "probe"
-        package_ok = True
-    elif eng == "vosk":
-        try:
-            import vosk  # noqa: F401
-
-            package_ok = True
-        except ImportError:
-            package_ok = False
-            warnings.append("vosk package missing (uv sync --extra wake)")
-        p = Path(model_path) if model_path else None
-        model_ok = bool(p and p.is_dir())
-        if model_ok:
-            status = "ready" if package_ok else "package_missing"
-        else:
-            status = "missing_model"
-            hints.append("run ./scripts/setup-ambient.sh or download-vosk-model.sh")
-    elif eng in ("sherpa_kws", "sherpa", "kws"):
-        try:
-            import sherpa_onnx  # noqa: F401
-
-            package_ok = True
-        except ImportError:
-            package_ok = False
-            warnings.append(
-                "sherpa-onnx package missing (uv sync --extra wake-sherpa)"
-            )
-        try:
-            from hark.wake import is_sherpa_kws_model_dir
-
-            model_ok = is_sherpa_kws_model_dir(model_path)
-        except Exception:
-            model_ok = bool(
-                model_path and Path(model_path).is_dir()
-                and (Path(model_path) / "tokens.txt").is_file()
-            )
-        if model_ok and package_ok:
-            status = "ready"
-        elif not model_ok:
-            status = "missing_model"
-            hints.append(
-                "run ./scripts/download-sherpa-kws-model.sh "
-                "(English GigaSpeech 3.3M int8 KWS)"
-            )
-        else:
-            status = "package_missing"
-    else:
-        status = "unknown_engine"
-        warnings.append(f"unknown ambient.engine={eng!r}")
-        p = Path(model_path) if model_path else None
-        model_ok = bool(p and p.is_dir())
-
-    return {
-        "enabled": cfg.ambient.enabled,
-        "engine": cfg.ambient.engine,
-        "wake_mode": getattr(cfg.ambient, "wake_mode", "names"),
-        "names": list(getattr(cfg.ambient, "names", []) or []),
-        "activation_count": len(cfg.ambient.activation_phrases),
-        "learn_from_near_misses": bool(
-            getattr(cfg.ambient, "learn_from_near_misses", True)
-        ),
-        "model_path": model_path,
-        "model_ok": model_ok,
-        "package_ok": package_ok,
-        "status": status,
-        "warnings": warnings,
-        "hints": hints,
-        "snippet_s": cfg.ambient.snippet_s,
-    }
+from hark.wake_readiness import ambient_readiness as _ambient_readiness
 
 
 def run_doctor(
@@ -119,6 +37,7 @@ def run_doctor(
     as_json: bool = False,
     out: TextIO | None = None,
     err: TextIO | None = None,
+    plan: bool = False,
 ) -> int:
     out = out or sys.stdout
     err = err or sys.stderr
@@ -297,39 +216,25 @@ def run_doctor(
     except Exception as exc:  # pragma: no cover - defensive
         report["custom_tts_error"] = str(exc)
 
-    # Primary speech path
-    xai = next((p for p in report["providers"] if p["name"] == "xai"), None)
-    pinned = (report.get("stt_provider") or "auto").lower().strip()
-    custom_ready = bool((report.get("custom_stt") or {}).get("available"))
-    tts_pinned = (report.get("tts_provider") or "auto").lower().strip()
-    custom_tts_ready = bool((report.get("custom_tts") or {}).get("available"))
-    tts_custom_pinned = tts_pinned in ("custom", "custom_tts", "custom-tts")
-    if pinned in ("custom", "custom_stt", "custom-stt"):
-        report["speech_ok"] = custom_ready
-        if not custom_ready:
-            report["speech_hint"] = (
-                "custom STT incomplete — set custom_base_url + "
-                "HARK_STT_CUSTOM_API_KEY (+ custom_model for /audio/transcriptions)"
-            )
-        else:
-            report.pop("speech_hint", None)
-    elif tts_custom_pinned:
-        # TTS pinned to Custom: STT follows its own policy (xai/cloud/…);
-        # a missing xAI key must not degrade speech when TTS needs no xAI.
-        report["speech_ok"] = custom_tts_ready
-        if not custom_tts_ready:
-            report["speech_hint"] = (
-                "custom TTS incomplete — set [tts].custom_base_url + "
-                "HARK_TTS_CUSTOM_API_KEY (+ custom_model for /audio/speech)"
-            )
-        else:
-            report.pop("speech_hint", None)
-    elif xai and not xai["available"]:
-        # not fatal for doctor of herdr path, but mark speech degraded
-        report["speech_ok"] = False
-        report["speech_hint"] = "run grok login or set XAI_API_KEY"
-    else:
-        report["speech_ok"] = True
+    from hark.speech_readiness import speech_readiness
+
+    report["speech"] = speech_readiness(
+        cfg, providers=report["providers"], custom_stt=report.get("custom_stt", {}),
+        custom_tts=report.get("custom_tts", {}), local_stt=report.get("local_stt", []),
+    )
+    # Compatibility key means configured viability, never verified audio access.
+    report["speech_ok"] = report["speech"]["configured"]
+    report["speech_hint"] = " ".join(report["speech"][leg]["hint"] for leg in ("stt", "tts"))
+    from hark.conference import conference_status
+    try:
+        conference = conference_status(cfg)
+        report["conference"] = {
+            "active": conference.active, "matched": list(conference.matched),
+            "detail": conference.detail, "error": conference.error,
+            "hold_enabled": cfg.audio.hold_during_conference,
+        }
+    except Exception:
+        report["conference"] = {"active": None, "error": "conference detection unavailable"}
 
     # Media ducking readiness (B047 / I002) — soft warnings only; never hard-fail
     report["media_duck"] = _media_duck_report(cfg)
@@ -358,10 +263,19 @@ def run_doctor(
     # First-run / sessions setup posture (B116) — soft only; never hard-fail
     report["setup"] = _setup_report(cfg)
 
+    from hark.speech_readiness import next_actions
+    report["next_actions"] = next_actions(
+        cfg, speech=report["speech"], ambient=report["ambient"],
+        setup=report["setup"], sessions=report["sessions"],
+    )
     if as_json:
         out.write(json.dumps(report, indent=2) + "\n")
     else:
         _print_human(report, out=out)
+        if plan:
+            print("  Ordered next actions:", file=out)
+            for number, action in enumerate(report["next_actions"], 1):
+                print(f"    {number}. {action['action']}: {action['command']} ({action['doc']})", file=out)
 
     if not report["herdr_ok"]:
         return HERDR
@@ -667,9 +581,10 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
             print(f"    ✗ {s['session_id']}: {s['error']} (sock={s['socket']})", file=out)
     print("  providers:", file=out)
     for p in report["providers"]:
-        mark = "✓" if p["available"] else "·"
+        mark = "?" if p["available"] else "·"
         src = f" [{p['source']}]" if p["source"] else ""
-        print(f"    {mark} {p['name']}{src}: {p['detail']}", file=out)
+        suffix = " (credentials/configuration present; audio access untested)" if p["available"] else ""
+        print(f"    {mark} {p['name']}{src}: {p['detail']}{suffix}", file=out)
     stt_dis = report.get("stt_disabled") or []
     tts_dis = report.get("tts_disabled") or []
     print(
@@ -740,10 +655,20 @@ def _print_human(report: dict[str, Any], *, out: TextIO) -> None:
         print(f"  warn: {w}", file=out)
     for h in ambient.get("hints") or []:
         print(f"  hint: {h}", file=out)
-    if report.get("speech_ok"):
-        print("  speech: ready (xAI or fallback keys)", file=out)
-    else:
-        print(f"  speech: not ready — {report.get('speech_hint')}", file=out)
+    print(f"  speech: {report.get('speech_hint')}", file=out)
+    for leg in ("stt", "tts"):
+        for candidate in (report.get("speech", {}).get(leg, {}).get("candidates", [])):
+            if candidate.get("hint"):
+                print(f"  hint: {candidate['hint']}", file=out)
+            if candidate.get("last_failure"):
+                status = candidate["last_failure"].get("http_status")
+                print(f"  warn: last {leg.upper()} attempt failed for {candidate['provider']}"
+                      + (f" (HTTP {status})" if status else ""), file=out)
+    conf = report.get("conference") or {}
+    active = conf.get("active")
+    conference_state = "unknown" if active is None else "ACTIVE" if active else "inactive"
+    print(f"  conference hold: {conference_state} "
+          f"enabled={conf.get('hold_enabled', False)} matched={conf.get('matched', [])}", file=out)
     md = report.get("media_duck") or {}
     if md:
         pactl_s = "ok" if md.get("pactl_ok") else "MISSING"

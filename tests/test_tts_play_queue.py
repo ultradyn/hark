@@ -102,6 +102,7 @@ def test_claim_lock_timeout_reports_owner_and_queue(tmp_path):
     env = os.environ.copy()
     env["XDG_STATE_HOME"] = str(state)
     env["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
+    env = __import__("hark_test_guard").guarded_subprocess_env(env)
     holder = _flock_holder(lock, env=env)
     queue.write_text(
         json.dumps(

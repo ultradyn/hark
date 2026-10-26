@@ -18,3 +18,5 @@ updated_at: "2026-10-26T00:19:47Z"
 openai codex token lacks audio scope (401 api.model.audio.request) but doctor lists provider ✓ — capability/scope per modality (TTS vs STT) should be surfaced in doctor.
 
 Implementation/decision receipt 2026-10-26: Doctor reports independent modality capability and explicit Codex audio-scope caution; no claim that OAuth presence proves speech authorization. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.
+
+Final verification 2026-10-26: reviewed fix merged to master. Integrated x-tall CPython3.13.11 suite: 6525 passed, 104 skipped, 0 failed in151.61s. Independent review and parent review passed. Full receipt /tmp/hark-b135-full-final.log; per-task evidence and design above.

@@ -44,3 +44,5 @@ Also from B192, on the fix shape: the discarded call at ask.py:146 sits INSIDE t
 B192 can now be closed; nothing unique remains in it.
 
 Resolved 2026-10-26: separate confirm_tts result and confirm provider/fallback transcript provenance preserved through confirmation success/cancellation/failure/interruption. Independent and parent review PASS; x-tall confirmation selection 4034 passed.
+
+Final verification 2026-10-26: reviewed fix merged to master. Integrated x-tall CPython3.13.11 suite: 6525 passed, 104 skipped, 0 failed in151.61s. Independent review and parent review passed. Full receipt /tmp/hark-b135-full-final.log; per-task evidence and design above.

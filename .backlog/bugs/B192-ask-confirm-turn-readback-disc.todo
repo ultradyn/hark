@@ -53,3 +53,5 @@ multi-chunk case a name check misses.
 DUPLICATE of B191 — do not work this one. Both were filed within minutes of each other on 2026-08-23: the B187/B177 implementation agent filed B192 and the coordinator filed B191, for the same defect at src/hark/speak_then_listen/ask.py:146. B191 is the surviving item; it carries the extra design note about the readback needing its own JSON key rather than overwriting the question TTS block, and docs/PROVIDERS.md references B191. Anything unique to B192 should be folded into B191 before B192 is closed.
 
 Fold-in complete 2026-08-23: the phrase-cache trap note and the fix-shape note are now in B191. Nothing unique remains here. Closing as a duplicate — the work, if any, happens on B191.
+
+Closed 2026-10-26 as documented duplicate of B191. All unique notes already folded into B191; B191 now fixed, reviewed, remotely verified, and merged. No second implementation or external tracker mutation.

@@ -268,6 +268,14 @@ def test_run_tts_alone_does_not_print_question(monkeypatch, capsys):
 
     print_calls: list[str] = []
 
+    class CachedProvider:
+        name = "test-cache"
+
+        def synthesize(self, *_args, **_kwargs):
+            raise AssertionError("cached playback must not synthesize")
+
+    monkeypatch.setattr("hark.speech.resolve_tts", lambda *_a, **_k: CachedProvider())
+
     class FakeMute:
         def __enter__(self):
             return SimpleNamespace(applied=False)

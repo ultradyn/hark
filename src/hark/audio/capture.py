@@ -1996,7 +1996,7 @@ def capture_utterance(
                                 # Seed buffer with short pre-roll only (not full leading silence)
                                 if preroll_blocks > 0:
                                     # Emit per-frame for B178 recovery without an
-                                    # extra np.concatenate (energy path keeps a
+                                    # extra array concatenation (energy path keeps a
                                     # single final concat; see test_endpointing).
                                     for pr in preroll:
                                         chunks.append(pr)

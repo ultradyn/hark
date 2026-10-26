@@ -271,6 +271,14 @@ def test_run_tts_repairs_after_play(monkeypatch):
 
     repairs: list[dict] = []
 
+    class CachedProvider:
+        name = "test-cache"
+
+        def synthesize(self, *_args, **_kwargs):
+            raise AssertionError("cached playback must not synthesize")
+
+    monkeypatch.setattr("hark.speech.resolve_tts", lambda *_a, **_k: CachedProvider())
+
     class FakeDuck:
         def __enter__(self):
             return SimpleNamespace(as_meta=lambda: {"media_ducked": False})

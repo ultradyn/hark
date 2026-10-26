@@ -738,6 +738,65 @@ def test_watch_uses_shared_access_and_reports_tunnel_failure(monkeypatch):
     assert "ssh refused" in event["error"]
 
 
+@pytest.mark.parametrize("exit_path", ["return", "interrupt", "fallback", "poll"])
+def test_watch_exit_reaps_managed_children_and_removes_sockets(
+    monkeypatch, tmp_path, exit_path
+):
+    import hark.watch as watch
+    from hark.herdr import tunnel as tunnel_mod
+
+    monkeypatch.setattr(tunnel_mod, "cache_dir", lambda: tmp_path)
+    starts, children = _patch_test_tunnel_start(monkeypatch, tunnel_mod)
+    tunnel_mod._TUNNELS.clear()
+
+    class WatchClient(FakeClient):
+        def list_agents(self):
+            if exit_path == "fallback":
+                raise KeyboardInterrupt
+            return []
+
+        def socket_exists(self):
+            return True
+
+    def socket_watch(*_a, **_kw):
+        if exit_path == "interrupt":
+            raise KeyboardInterrupt
+        if exit_path == "fallback":
+            raise RuntimeError("subscribe exhausted")
+        return 0
+
+    monkeypatch.setattr(watch, "HerdrClient", WatchClient)
+    monkeypatch.setattr(watch, "_watch_socket", socket_watch)
+    monkeypatch.setattr(watch, "ensure_tunnel", tunnel_mod.ensure_tunnel)
+    sessions = [remote_session()]
+    if exit_path == "poll":
+        sessions.append(remote_session(id="second", ssh="dev@second"))
+    cfg = HarkConfig(sessions=sessions)
+    out = io.StringIO()
+
+    try:
+        if exit_path == "interrupt":
+            with pytest.raises(KeyboardInterrupt):
+                watch.run_watch(cfg, transport="socket", out=out, register_events=False)
+        else:
+            assert watch.run_watch(
+                cfg,
+                transport="poll" if exit_path == "poll" else "socket",
+                once=exit_path == "poll",
+                out=out,
+                register_events=False,
+            ) == 0
+
+        assert len(children) == len(sessions)
+        assert all(child.poll() is not None for child in children)
+        for tunnel in starts:
+            assert not os.path.lexists(tunnel.local_socket)
+            assert not tunnel_mod._owner_marker_path(tunnel.local_socket).exists()
+        assert tunnel_mod._TUNNELS == {}
+    finally:
+        _cleanup_children(children)
+
+
 def test_cli_status_uses_shared_access_and_does_not_fallback(monkeypatch, capsys):
     from hark import cli
 

@@ -116,6 +116,117 @@ def test_multi_session_auto_polls_every_healthy_session(
     )
 
 
+@pytest.mark.parametrize("socket_exit", [0, KeyboardInterrupt(), RuntimeError("protocol failure")])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_socket_watch_closes_tunnel_on_every_exit(
+    monkeypatch, tmp_path, socket_exit, cleanup_fails
+):
+    stops = []
+
+    class Tunnel:
+        local_socket = tmp_path / "remote.sock"
+
+        def stop(self):
+            stops.append("remote")
+            if cleanup_fails:
+                raise OSError("cleanup denied")
+
+    def socket_watch(*_a, **_kw):
+        if isinstance(socket_exit, BaseException):
+            raise socket_exit
+        return socket_exit
+
+    monkeypatch.setattr(watch, "ensure_tunnel", lambda *_a, **_kw: Tunnel())
+    monkeypatch.setattr(watch, "HerdrClient", FakeWatchClient)
+    monkeypatch.setattr(watch, "_watch_socket", socket_watch)
+    monkeypatch.setattr(
+        watch.time, "sleep", lambda _s: (_ for _ in ()).throw(KeyboardInterrupt())
+    )
+    cfg = HarkConfig(sessions=[SessionConfig(id="remote", ssh="remote")])
+    out = io.StringIO()
+
+    if isinstance(socket_exit, KeyboardInterrupt):
+        with pytest.raises(KeyboardInterrupt) as caught:
+            watch.run_watch(cfg, transport="socket", out=out, register_events=False)
+        assert caught.value is socket_exit
+    else:
+        assert watch.run_watch(
+            cfg, transport="socket", out=out, register_events=False
+        ) == 0
+
+    assert stops == ["remote"]
+    events = [json.loads(line) for line in out.getvalue().splitlines()]
+    cleanup_errors = [event for event in events if "cleanup failed" in event.get("error", "")]
+    assert len(cleanup_errors) == int(cleanup_fails)
+
+
+def test_watch_partial_tunnel_setup_closes_all_acquired_leases(monkeypatch, tmp_path):
+    stops = []
+
+    class Tunnel:
+        def __init__(self, session_id):
+            self.session_id = session_id
+            self.local_socket = tmp_path / f"{session_id}.sock"
+
+        def stop(self):
+            stops.append(self.session_id)
+            if self.session_id == "two":
+                raise OSError("cleanup denied")
+
+    def tunnel(session_id, *_a, **_kw):
+        if session_id == "three":
+            raise OSError("SSH failed")
+        return Tunnel(session_id)
+
+    monkeypatch.setattr(watch, "ensure_tunnel", tunnel)
+    monkeypatch.setattr(watch, "HerdrClient", FakeWatchClient)
+    cfg = HarkConfig(sessions=[SessionConfig(id=name, ssh=name) for name in ("one", "two", "three")])
+    out = io.StringIO()
+
+    assert watch.run_watch(
+        cfg, transport="poll", once=True, out=out, register_events=False
+    ) == 0
+
+    assert stops == ["two", "one"]
+    events = [json.loads(line) for line in out.getvalue().splitlines()]
+    armed = next(event for event in events if event["kind"] == "watch.armed")
+    assert armed["sessions"] == ["one", "two"]
+    errors = [event["error"] for event in events if event["kind"] == "watch.error"]
+    assert any("SSH failed" in error for error in errors)
+    assert any("cleanup denied" in error for error in errors)
+
+
+def test_watch_primary_exception_survives_cleanup_and_output_errors(monkeypatch):
+    primary = ValueError("primary watch failure")
+
+    def fail_watch(*_a, **_kw):
+        raise primary
+
+    def fail_close(_self):
+        raise OSError("cleanup denied")
+
+    class BrokenOutput:
+        def write(self, _text):
+            raise OSError("output closed")
+
+    monkeypatch.setattr(watch, "_run_watch_scoped", fail_watch)
+    # The real close drains its leases before raising. Model that behavior so
+    # the context's idempotent second close cannot add a secondary failure.
+    calls = []
+
+    def close_once(self):
+        calls.append(True)
+        if len(calls) == 1:
+            fail_close(self)
+
+    monkeypatch.setattr(watch.HerdrSessionAccess, "close", close_once)
+
+    with pytest.raises(ValueError) as caught:
+        watch.run_watch(HarkConfig(), out=BrokenOutput())
+
+    assert caught.value is primary
+
+
 def _run_once(monkeypatch, *, read_error: Exception | None = None):
     client: FakeWatchClient | None = None
 

@@ -146,18 +146,36 @@ def run_watch(
         client_factory=HerdrClient,
         tunnel_factory=ensure_tunnel,
     ) as access:
-        return _run_watch_scoped(
-            cfg,
-            access=access,
-            session_ids=session_ids,
-            statuses=statuses,
-            for_monitor=for_monitor,
-            transport=transport,
-            once=once,
-            out=out,
-            read_questions=read_questions,
-            register_events=register_events,
-        )
+        try:
+            return _run_watch_scoped(
+                cfg,
+                access=access,
+                session_ids=session_ids,
+                statuses=statuses,
+                for_monitor=for_monitor,
+                transport=transport,
+                once=once,
+                out=out,
+                read_questions=read_questions,
+                register_events=register_events,
+            )
+        finally:
+            # Close explicitly while the context is active so a failed tunnel
+            # cleanup cannot replace the watch result or its primary exception.
+            # close() drains its tracked leases even when a stop fails; the
+            # context's subsequent close is therefore an idempotent no-op.
+            try:
+                access.close()
+            except Exception as exc:
+                try:
+                    _emit(
+                        make_watch_error("watch", f"tunnel cleanup failed: {exc}"),
+                        for_monitor=for_monitor,
+                        out=out or sys.stdout,
+                    )
+                except Exception:
+                    # A failed output stream must not replace the primary result.
+                    pass
 
 
 def _run_watch_scoped(

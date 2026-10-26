@@ -18,6 +18,7 @@ from typing import Any, Callable, Iterator
 
 import numpy as np
 
+from hark import pidfd
 from hark.audio.frames import FramePhase, MicFrameSource, MuteFreezeGate
 from hark.audio.mic_mute import mute_freeze_budget_s
 from hark.endpointing import EndpointFrame, EndpointStrategy, SilenceEndpointer
@@ -462,7 +463,7 @@ class _ParentLifetimeGuard:
         pidfds: list[int] = []
         fallback: list[tuple[int, str | None]] = []
         try:
-            pidfd_open = getattr(os, "pidfd_open", None)
+            pidfd_open = pidfd.open_pidfd if pidfd.available() else None
             for identity in self._ancestors:
                 if not callable(pidfd_open):
                     fallback.append(identity)

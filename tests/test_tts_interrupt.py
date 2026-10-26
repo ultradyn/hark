@@ -21,6 +21,9 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# Freeze native-wrapper availability at collection. Later tests deliberately
+# monkeypatch the shared os/signal modules; that must not flip run/skip policy.
+_STDLIB_PIDFD_AVAILABLE = hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal")
 
 # B184: every positive wait in this file is a hang guard, not a latency
 # assertion. These tests spawn real interpreters that import hark before they
@@ -1099,9 +1102,9 @@ def _portable_supervisor_atexit_child() -> str:
             print("AUTH_RELEASED", flush=True)
             return real_unregister(self, process)
 
-        def visible_wait(self, process):
+        def visible_wait(self, process, *, deadline=None):
             print(f"WAIT_ACTIVE {{int(self._process_lifecycle.active)}}", flush=True)
-            return real_wait(self, process)
+            return real_wait(self, process, deadline=deadline)
 
         isolation.SubprocessSynthTransport._open_pidfd = staticmethod(
             lambda process: None
@@ -1558,7 +1561,7 @@ def test_rapid_third_sigint_waits_for_provider_tree_and_pipe_cleanup(
         os.close(supervisor_pidfd)
 
 
-@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
+@pytest.mark.skipif(not _STDLIB_PIDFD_AVAILABLE, reason="requires native Python pidfd wrappers; libc adapter covered separately")
 def test_repeated_sigint_kills_worker_hung_before_python_main_and_closes_pipes(
     tmp_path,
 ):
@@ -1601,7 +1604,7 @@ def test_repeated_sigint_kills_worker_hung_before_python_main_and_closes_pipes(
         os.close(worker_pidfd)
 
 
-@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
+@pytest.mark.skipif(not _STDLIB_PIDFD_AVAILABLE, reason="requires native Python pidfd wrappers; libc adapter covered separately")
 def test_repeated_sigint_kills_unreaped_child_in_popen_to_pidfd_gap(tmp_path):
     proc = subprocess.Popen(
         [
@@ -1641,7 +1644,7 @@ def test_repeated_sigint_kills_unreaped_child_in_popen_to_pidfd_gap(tmp_path):
         os.close(worker_pidfd)
 
 
-@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
+@pytest.mark.skipif(not _STDLIB_PIDFD_AVAILABLE, reason="requires native Python pidfd wrappers; libc adapter covered separately")
 def test_process_group_sigint_during_startup_has_no_worker_traceback(tmp_path):
     release_path = tmp_path / "release-worker"
     proc = subprocess.Popen(
@@ -2477,7 +2480,7 @@ def test_library_terminalization_rejects_preclaim_race_without_spawning(tmp_path
     assert stderr == ""
 
 
-@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
+@pytest.mark.skipif(not _STDLIB_PIDFD_AVAILABLE, reason="requires native Python pidfd wrappers; libc adapter covered separately")
 def test_nested_sigint_resumes_term_wait_until_worker_reaped(tmp_path):
     proc = subprocess.Popen(
         [
@@ -3672,8 +3675,9 @@ def test_unregister_failure_does_not_replace_provider_error_or_leave_child():
                 self.identity.request_close()
             raise RuntimeError("unregister failed")
 
-        def wait_and_unregister_synth_process(self, process):
-            returncode = process.wait()
+        def wait_and_unregister_synth_process(self, process, *, deadline=None):
+            timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
+            returncode = process.wait(timeout=timeout)
             self.unregister_synth_process(process)
             return returncode
 
@@ -3880,7 +3884,7 @@ def test_pipe_transfer_baseexception_ownership_matrix(
         os.close(source_fd)
 
 
-@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
+@pytest.mark.skipif(not _STDLIB_PIDFD_AVAILABLE, reason="requires native Python pidfd wrappers; libc adapter covered separately")
 def test_pidfd_open_failure_reaps_worker_and_preserves_primary(monkeypatch):
     import hark.speech as speech
     import hark.tts_isolation as isolation
@@ -3924,7 +3928,7 @@ def test_pidfd_open_failure_reaps_worker_and_preserves_primary(monkeypatch):
         owner._pool.shutdown(wait=False, cancel_futures=True)
 
 
-@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
+@pytest.mark.skipif(not _STDLIB_PIDFD_AVAILABLE, reason="requires native Python pidfd wrappers; libc adapter covered separately")
 def test_worker_exit_before_pidfd_open_fails_closed_without_foreign_kill(monkeypatch):
     import hark.speech as speech
     import hark.tts_isolation as isolation
@@ -3964,7 +3968,7 @@ def test_worker_exit_before_pidfd_open_fails_closed_without_foreign_kill(monkeyp
         owner._pool.shutdown(wait=False, cancel_futures=True)
 
 
-@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
+@pytest.mark.skipif(not _STDLIB_PIDFD_AVAILABLE, reason="requires native Python pidfd wrappers; libc adapter covered separately")
 @pytest.mark.parametrize("mode", ["withdraw", "raise"])
 def test_pidfd_publication_failure_closes_fd_and_unregisters_worker(monkeypatch, mode):
     import hark.speech as speech
@@ -3974,12 +3978,14 @@ def test_pidfd_publication_failure_closes_fd_and_unregisters_worker(monkeypatch,
 
     owner = speech._InterruptibleSynthPool()
     opened = []
+    identities: dict[int, os.stat_result] = {}
     spawned = []
     real_open = isolation.os.pidfd_open
     real_init = isolation._SYNTH_POPEN_INIT
 
     def visible_open(pid, flags=0):
         fd = real_open(pid, flags)
+        identities[fd] = os.fstat(fd)
         opened.append(fd)
         return fd
 
@@ -4019,9 +4025,7 @@ def test_pidfd_publication_failure_closes_fd_and_unregisters_worker(monkeypatch,
         assert len(spawned) == 1
         assert spawned[0].poll() is not None
         assert len(opened) == 1
-        with pytest.raises(OSError) as caught:
-            os.fstat(opened[0])
-        assert caught.value.errno == errno.EBADF
+        _assert_fd_released(opened[0], identities[opened[0]])
     finally:
         owner._pool.shutdown(wait=False, cancel_futures=True)
 
@@ -4061,6 +4065,7 @@ def test_from_raw_pre_adoption_failure_closes_unowned_descriptor(monkeypatch):
 
     source_fd = os.open(os.devnull, os.O_RDONLY)
     raw_pidfd = os.dup(source_fd)
+    descriptor_identity = os.fstat(raw_pidfd)
 
     def fail_authority_construction():
         raise MemoryError("pre-adoption primary")
@@ -4069,9 +4074,7 @@ def test_from_raw_pre_adoption_failure_closes_unowned_descriptor(monkeypatch):
     with pytest.raises(MemoryError, match="pre-adoption primary"):
         isolation._OwnedPidfd.from_raw(raw_pidfd)
 
-    with pytest.raises(OSError) as caught:
-        os.fstat(raw_pidfd)
-    assert caught.value.errno == errno.EBADF
+    _assert_fd_released(raw_pidfd, descriptor_identity)
     os.close(source_fd)
 
 
@@ -4080,6 +4083,7 @@ def test_raii_pidfd_closes_when_identity_construction_never_returns(monkeypatch)
 
     source_fd = os.open(os.devnull, os.O_RDONLY)
     raw_pidfd = os.dup(source_fd)
+    descriptor_identity = os.fstat(raw_pidfd)
 
     def fail_identity(owner):
         assert owner.fd == raw_pidfd
@@ -4089,16 +4093,14 @@ def test_raii_pidfd_closes_when_identity_construction_never_returns(monkeypatch)
     with pytest.raises(MemoryError, match="identity construction primary"):
         fail_identity(isolation._OwnedPidfd.from_raw(raw_pidfd))
 
-    with pytest.raises(OSError) as caught:
-        os.fstat(raw_pidfd)
-    assert caught.value.errno == errno.EBADF
+    _assert_fd_released(raw_pidfd, descriptor_identity)
     os.dup2(source_fd, raw_pidfd)
     os.fstat(raw_pidfd)
     os.close(raw_pidfd)
     os.close(source_fd)
 
 
-@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
+@pytest.mark.skipif(not _STDLIB_PIDFD_AVAILABLE, reason="requires native Python pidfd wrappers; libc adapter covered separately")
 def test_terminal_pidfd_cleanup_is_idempotent_and_closes_descriptor():
     import hark.speech as speech
     import hark.tts_isolation as isolation
@@ -4106,6 +4108,7 @@ def test_terminal_pidfd_cleanup_is_idempotent_and_closes_descriptor():
     process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     pool = speech._InterruptibleSynthPool()
     pidfd = os.pidfd_open(process.pid, 0)
+    descriptor_identity = os.fstat(pidfd)
     identity = isolation._IdentityToken(isolation._OwnedPidfd.from_raw(pidfd))
     try:
         pool.register_synth_process(process)
@@ -4114,9 +4117,7 @@ def test_terminal_pidfd_cleanup_is_idempotent_and_closes_descriptor():
         pool._terminate_synth_process_for_exit()
         pool._terminate_synth_process_for_exit()
 
-        with pytest.raises(OSError) as caught:
-            os.fstat(pidfd)
-        assert caught.value.errno == errno.EBADF
+        _assert_fd_released(pidfd, descriptor_identity)
         with pytest.raises(ProcessLookupError):
             os.kill(process.pid, 0)
     finally:
@@ -4126,7 +4127,7 @@ def test_terminal_pidfd_cleanup_is_idempotent_and_closes_descriptor():
         pool._pool.shutdown(wait=False, cancel_futures=True)
 
 
-@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
+@pytest.mark.skipif(not _STDLIB_PIDFD_AVAILABLE, reason="requires native Python pidfd wrappers; libc adapter covered separately")
 def test_pidfd_close_handoff_survives_nested_concurrent_finish_and_fd_reuse(
     monkeypatch,
 ):
@@ -4184,7 +4185,7 @@ def test_pidfd_close_handoff_survives_nested_concurrent_finish_and_fd_reuse(
         os.close(source_fd)
 
 
-@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
+@pytest.mark.skipif(not _STDLIB_PIDFD_AVAILABLE, reason="requires native Python pidfd wrappers; libc adapter covered separately")
 def test_pidfd_publication_interruption_has_one_close_owner_after_fd_reuse():
     import hark.tts_isolation as isolation
 
@@ -4201,6 +4202,7 @@ def test_pidfd_publication_interruption_has_one_close_owner_after_fd_reuse():
     authority = RaiseAfterIdentity(process, False)
     lifecycle._authority = authority
     pidfd = os.pidfd_open(process.pid, 0)
+    descriptor_identity = os.fstat(pidfd)
     identity = isolation._IdentityToken(isolation._OwnedPidfd.from_raw(pidfd))
     source_fd = os.open(os.devnull, os.O_RDONLY)
 
@@ -4215,9 +4217,7 @@ def test_pidfd_publication_interruption_has_one_close_owner_after_fd_reuse():
         assert authority.identity is identity
         assert identity.pidfd_mode is True
         assert lifecycle.cancel() is True
-        with pytest.raises(OSError) as caught:
-            os.fstat(pidfd)
-        assert caught.value.errno == errno.EBADF
+        _assert_fd_released(pidfd, descriptor_identity)
 
         # Emulate transport-finally cleanup after the descriptor integer has
         # been reused. Since lifecycle cleanup already consumed the token,
@@ -4325,6 +4325,7 @@ def test_post_mask_acquisition_failure_restores_sigint_and_close_retries(
     previous = real_mask(signal.SIG_BLOCK, set())
     source_fd = os.open(os.devnull, os.O_RDONLY)
     raw_pidfd = os.dup(source_fd)
+    descriptor_identity = os.fstat(raw_pidfd)
     owner = isolation._OwnedPidfd.from_raw(raw_pidfd)
     injected = False
 
@@ -4341,9 +4342,7 @@ def test_post_mask_acquisition_failure_restores_sigint_and_close_retries(
 
     assert injected is True
     assert real_mask(signal.SIG_BLOCK, set()) == previous
-    with pytest.raises(OSError) as caught:
-        os.fstat(raw_pidfd)
-    assert caught.value.errno == errno.EBADF
+    _assert_fd_released(raw_pidfd, descriptor_identity)
     os.close(source_fd)
 
 
@@ -4504,7 +4503,7 @@ def test_retire_post_effect_interrupt_rejects_late_borrow_after_fd_reuse(
     os.close(foreign_write)
 
 
-@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
+@pytest.mark.skipif(not _STDLIB_PIDFD_AVAILABLE, reason="requires native Python pidfd wrappers; libc adapter covered separately")
 def test_borrowed_pidfd_preserves_primary_and_never_closes_reused_fd(monkeypatch):
     import hark.tts_isolation as isolation
 
@@ -4542,7 +4541,7 @@ def test_borrowed_pidfd_preserves_primary_and_never_closes_reused_fd(monkeypatch
         process.wait(timeout=_WAIT_S)
 
 
-@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
+@pytest.mark.skipif(not _STDLIB_PIDFD_AVAILABLE, reason="requires native Python pidfd wrappers; libc adapter covered separately")
 def test_pidfd_error_after_concurrent_reap_never_falls_back_to_numeric_pid(
     monkeypatch,
 ):
@@ -4552,6 +4551,7 @@ def test_pidfd_error_after_concurrent_reap_never_falls_back_to_numeric_pid(
     lifecycle = isolation.SynthProcessLifecycle()
     lifecycle.preclaim(process)
     pidfd = os.pidfd_open(process.pid, 0)
+    descriptor_identity = os.fstat(pidfd)
     identity = isolation._IdentityToken(isolation._OwnedPidfd.from_raw(pidfd))
     assert lifecycle.publish(process, identity) is True
     authority = lifecycle._authority
@@ -4577,9 +4577,7 @@ def test_pidfd_error_after_concurrent_reap_never_falls_back_to_numeric_pid(
 
     assert numeric_sends == []
     assert lifecycle.active is False
-    with pytest.raises(OSError) as caught:
-        os.fstat(pidfd)
-    assert caught.value.errno == errno.EBADF
+    _assert_fd_released(pidfd, descriptor_identity)
 
 
 def test_waitpid_post_effect_failure_permanently_fences_numeric_pid_send(
@@ -4772,7 +4770,7 @@ def test_transport_wait_cannot_reap_while_portable_sender_owns_pid_fence(
     assert numeric_sends == [(process.pid, signal.SIGCONT)]
 
 
-@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="Linux pidfd regression")
+@pytest.mark.skipif(not _STDLIB_PIDFD_AVAILABLE, reason="requires native Python pidfd wrappers; libc adapter covered separately")
 def test_cleanup_baseexception_retains_authority_until_retry_confirms_reap(
     monkeypatch,
 ):
@@ -4788,6 +4786,7 @@ def test_cleanup_baseexception_retains_authority_until_retry_confirms_reap(
     lifecycle = isolation.SynthProcessLifecycle()
     lifecycle.preclaim(process)
     pidfd = os.pidfd_open(process.pid, 0)
+    descriptor_identity = os.fstat(pidfd)
     identity = isolation._IdentityToken(isolation._OwnedPidfd.from_raw(pidfd))
     assert lifecycle.publish(process, identity) is True
     real_wait = lifecycle._wait_direct_child
@@ -4804,9 +4803,7 @@ def test_cleanup_baseexception_retains_authority_until_retry_confirms_reap(
         monkeypatch.setattr(lifecycle, "_wait_direct_child", real_wait)
         assert lifecycle.cancel() is True
         assert lifecycle.active is False
-        with pytest.raises(OSError) as caught:
-            os.fstat(pidfd)
-        assert caught.value.errno == errno.EBADF
+        _assert_fd_released(pidfd, descriptor_identity)
         with pytest.raises(ProcessLookupError):
             os.kill(process.pid, 0)
     finally:
@@ -7909,6 +7906,7 @@ def test_direct_children_open_publishes_before_delivered_sigint(monkeypatch):
 
     real_open = os.open
     opened: list[int] = []
+    identities: dict[int, os.stat_result] = {}
 
     class Libc:
         @staticmethod
@@ -7917,6 +7915,7 @@ def test_direct_children_open_publishes_before_delivered_sigint(monkeypatch):
 
     def open_then_sigint(path, flags):
         fd = real_open(path, flags)
+        identities[fd] = os.fstat(fd)
         opened.append(fd)
         blocked = signal.pthread_sigmask(signal.SIG_BLOCK, set())
         assert signal.SIGINT in blocked
@@ -7938,6 +7937,4 @@ def test_direct_children_open_publishes_before_delivered_sigint(monkeypatch):
     assert len(opened) == 1
     assert worker._DIRECT_CHILDREN_AUTHORITY_FD == -1
     assert worker._DIRECT_CHILDREN_AUTHORITY_PID == -1
-    with pytest.raises(OSError) as caught:
-        os.fstat(opened[0])
-    assert caught.value.errno == errno.EBADF
+    _assert_fd_released(opened[0], identities[opened[0]])

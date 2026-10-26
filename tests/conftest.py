@@ -45,10 +45,10 @@ def _disable_update_check_network(monkeypatch: pytest.MonkeyPatch) -> None:
 # ways. A suite launched as a shell background job (or under ``nohup``)
 # inherits SIGINT=SIG_IGN, and the kernel then discards
 # ``os.kill(os.getpid(), signal.SIGINT)`` outright. And
-# ``hark.lifecycle.install_signal_handlers`` has no uninstall, so the first
-# test that runs an ambient loop leaves its ``_stop_handler`` -- which only
-# records a shutdown request and returns -- owning SIGINT and SIGTERM for
-# every later test in the session. Either way the signal never becomes an
+# Older lifecycle handling left its ``_stop_handler`` installed after ambient
+# loops. That handler records shutdown and returns, consuming later SIGINTs.
+# Keep this fixture independent of the lifecycle behavior under test so
+# every test establishes its own disposition. Otherwise the signal may never become an
 # exception, so the test fails in a full run and passes when run alone.
 _OWNED_SIGNALS = tuple(
     signum
@@ -71,10 +71,9 @@ def _clear_interrupt_backlog() -> None:
     that plants a SIGINT inside such a region then gets no exception at all
     ("DID NOT RAISE KeyboardInterrupt") and hands the still-pending signal to
     whichever later test next unblocks it, where it surfaces as a
-    KeyboardInterrupt in an unrelated frame and aborts the run. Guards left
-    unrestored for ``__del__`` to finish (``restore_suppressing`` keeps
-    ``_active`` set) are how SIGINT ends up blocked across a test boundary in
-    the first place, so drain the backlog at both edges of every test.
+    KeyboardInterrupt in an unrelated frame and aborts the run. Failed or
+    interrupted cleanup can leave SIGINT blocked, so drain the backlog at
+    both edges independently of the guard behavior under test.
     """
     if not hasattr(signal, "pthread_sigmask"):
         return
@@ -100,6 +99,8 @@ def _own_interrupt_dispositions() -> Iterator[None]:
 
     previous = {signum: signal.getsignal(signum) for signum in _OWNED_SIGNALS}
     handlers_installed = lifecycle._handlers_installed
+    previous_handlers = lifecycle._previous_handlers.copy()
+    installed_handlers = lifecycle._installed_handlers.copy()
     # Pin SIGINT only. A background-job launcher ignores SIGINT and SIGQUIT
     # but never SIGTERM, so restoring SIGTERM is enough for it, and pinning
     # SIGTERM to SIG_DFL would turn a test's mistimed self-signal into a kill
@@ -107,10 +108,16 @@ def _own_interrupt_dispositions() -> Iterator[None]:
     signal.signal(signal.SIGINT, signal.default_int_handler)
     _clear_interrupt_backlog()
     lifecycle._handlers_installed = False
+    lifecycle._previous_handlers.clear()
+    lifecycle._installed_handlers.clear()
     try:
         yield
     finally:
         lifecycle._handlers_installed = handlers_installed
+        lifecycle._previous_handlers.clear()
+        lifecycle._previous_handlers.update(previous_handlers)
+        lifecycle._installed_handlers.clear()
+        lifecycle._installed_handlers.update(installed_handlers)
         _clear_interrupt_backlog()
         for signum, handler in previous.items():
             # ``getsignal`` reports None for a disposition installed outside

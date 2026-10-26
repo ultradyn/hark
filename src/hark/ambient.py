@@ -22,6 +22,7 @@ from hark.lifecycle import (
     clear_shutdown_reason,
     get_shutdown_reason,
     install_signal_handlers,
+    uninstall_signal_handlers,
     reload_requested,
     reload_source,
     shutdown_phrase,
@@ -1610,6 +1611,24 @@ def run_ambient_loop(
     announce: bool = True,
     idle_log_s: float = 60.0,
 ) -> int:
+    """Run ambient with signal ownership scoped across every return path."""
+    installed_here = install_signal_handlers()
+    try:
+        return _run_ambient_loop(
+            cfg, out=out, announce=announce, idle_log_s=idle_log_s
+        )
+    finally:
+        if installed_here:
+            uninstall_signal_handlers()
+
+
+def _run_ambient_loop(
+    cfg: HarkConfig,
+    *,
+    out: TextIO | None = None,
+    announce: bool = True,
+    idle_log_s: float = 60.0,
+) -> int:
     """Continuous ambient: load vosk once, wake→prompt→repeat until Ctrl+C/SIGTERM.
 
     SIGTERM during an active listen does not abort mid-recording: we finish the
@@ -1622,7 +1641,6 @@ def run_ambient_loop(
     """
     out = out or sys.stdout
     cfg.ambient.enabled = True
-    install_signal_handlers()
 
     # Hardware unmute → OS unmute (Wave button / ALSA → Pulse)
     if getattr(cfg.audio, "sync_hw_unmute", True):

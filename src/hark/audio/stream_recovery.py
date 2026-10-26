@@ -430,6 +430,9 @@ class StreamRecoverySession:
             return
         self._flushing = True
         try:
+            # A prior interrupted write may have persisted bytes before its
+            # accounting assignment. Reconcile even when this flush is empty.
+            self._bytes_written = os.fstat(self._pcm_fd).st_size
             if self._buf:
                 view = bytes(self._buf)
                 # Transfer ownership before the first write. If cancellation

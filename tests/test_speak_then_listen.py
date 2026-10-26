@@ -1302,3 +1302,26 @@ def test_half_duplex_still_via_speech_import(monkeypatch):
     assert tts_info["ok"]
     assert listened.text == "hi"
     assert order == ["tts", "near", "tts_done", "listen"]
+
+
+@pytest.mark.parametrize("confirm_reply", [
+    "yes I cаn’t approve this", "yes I сan’t approve this",
+    "yes I ԁon’t approve this", "yes I wοn’t approve this",
+])
+def test_configured_r2_rejects_confusable_negative_contractions(monkeypatch, confirm_reply):
+    result = _run_ask_with_confirmation(
+        monkeypatch, confirm_reply, configured_mode="auto",
+    )
+    assert result["ok"] is False
+    assert result["cancelled"] is True
+    assert result["confirm_reply"] == confirm_reply
+
+
+@pytest.mark.parametrize("confirm_reply", [
+    "yes спасибо", "yes café looks good", "yes сantilever design",
+])
+def test_configured_r2_confusable_check_preserves_multilingual_prose(monkeypatch, confirm_reply):
+    result = _run_ask_with_confirmation(
+        monkeypatch, confirm_reply, configured_mode="auto",
+    )
+    assert result["ok"] is True

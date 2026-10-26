@@ -119,6 +119,27 @@ NEGATE = frozenset(
 _CONTRACTION_PARTS = tuple(
     tuple(phrase.split("'", 1)) for phrase in NEGATE if phrase.count("'") == 1
 )
+# A small, explicit lookalike set for the letters in spoken negative
+# contractions. Apply it only to complete contraction tokens, never to prose:
+# translating arbitrary multilingual text would invent refusals (B158).
+_CONTRACTION_CONFUSABLES = str.maketrans(
+    {
+        "а": "a",  # Cyrillic a
+        "с": "c",  # Cyrillic es
+        "ԁ": "d",  # Cyrillic komi de
+        "о": "o",  # Cyrillic o
+        "ο": "o",  # Greek omicron
+        "α": "a",  # Greek alpha
+        "τ": "t",  # Greek tau
+        "т": "t",  # Cyrillic te
+        "ԝ": "w",  # Cyrillic we
+    }
+)
+_NEGATIVE_CONTRACTION_TOKENS = frozenset(
+    token
+    for parts in _CONTRACTION_PARTS
+    for token in ("'".join(parts), "".join(parts))
+)
 _CONTRACTION_SEPARATOR_PATTERNS = tuple(
     re.compile(
         rf"{re.escape(left)}(?P<separator>[^a-z0-9]+){re.escape(right)}",
@@ -888,6 +909,15 @@ def _reply_has_negate(text: str) -> bool:
     return any(_contains_whole_phrase(padded, n) for n in NEGATE)
 
 
+def _has_confusable_negative_contraction(text: str) -> bool:
+    """Fail closed for bounded lookalike contractions, preserving word edges."""
+    for token in text.split():
+        skeleton = token.translate(_CONTRACTION_CONFUSABLES)
+        if skeleton != token and skeleton in _NEGATIVE_CONTRACTION_TOKENS:
+            return True
+    return False
+
+
 def classify_confirm_reply(text: str) -> str:
     """Classify a raw STT transcript as ``yes``, ``no``, or ``unclear``.
 
@@ -924,6 +954,8 @@ def classify_confirm_reply(text: str) -> str:
             return "unclear"
         return "no"
     if provenance.has_unsupported_separator:
+        return "unclear"
+    if _has_confusable_negative_contraction(t):
         return "unclear"
     # Defer, condition, and hedge markers block approval even when an
     # affirmative token is present at the start or end (B142 punctuated + B148).

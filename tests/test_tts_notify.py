@@ -263,23 +263,28 @@ def test_play_file_skip_does_not_fall_through_to_next_player(monkeypatch):
 
 
 def test_play_pcm16_skip_stops_sounddevice(monkeypatch):
-    """The sounddevice path registers an sd.stop() stopper (B161)."""
+    """Skip aborts and closes the owned stream, without global sd.stop()."""
     calls: list[str] = []
 
-    class FakeSd:
-        def play(self, samples, sample_rate):
-            calls.append("play")
-
-        def wait(self):
-            calls.append("wait")
+    class FakeStream:
+        def start(self):
+            calls.append("start")
             playback.request_playback_skip()  # user clicked Skip mid-play
 
-        def stop(self):
-            calls.append("stop")
+        def abort(self):
+            calls.append("abort")
+
+        def close(self):
+            calls.append("close")
+
+    class FakeSd:
+        def RawOutputStream(self, **kwargs):
+            assert kwargs["dtype"] == "int16"
+            return FakeStream()
 
     monkeypatch.setattr(playback, "sd", FakeSd())
     playback._play_pcm16(b"\x01\x00" * 100, 16000)
-    assert calls == ["play", "wait", "stop"]
+    assert calls == ["start", "abort", "close"]
 
 
 def _patch_run_tts_fakes(monkeypatch, play_impl):

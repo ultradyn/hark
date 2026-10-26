@@ -73,7 +73,11 @@ from hark.providers.tts_fallback import (
 )
 from hark.signal_safety import SigintMaskGuard
 from hark.syslog import log as syslog
-from hark.tts_interrupt_policy import TtsSynthesisInterrupted, cli_process_exit_expected
+from hark.tts_interrupt_policy import (
+    TtsSynthesisInterrupted,
+    cli_process_exit_expected,
+    register_cli_terminal_wait,
+)
 from hark.tts_notify import tts_skip_notification
 from hark.tts_isolation import (
     InProcessSynthTransport,
@@ -429,6 +433,8 @@ class _InterruptibleSynthPool:
         if not self._escalation_authorized:
             return
         self._terminal_exit_armed = True
+        if self._process_exit_expected and self._unfinished():
+            register_cli_terminal_wait(self._wait_for_cli_terminal_exit)
         if self._repeated_sigint_pending and self._unfinished():
             self._hard_exit()
             return
@@ -436,6 +442,40 @@ class _InterruptibleSynthPool:
         self._cancel_cleanup_deadline()
         if not self._unfinished() and not self._typed_interrupt_pending:
             self._restore_handler()
+
+    def _wait_for_cli_terminal_exit(self) -> None:
+        """Keep Python signal dispatch live after the CLI emits cancellation.
+
+        Executor interpreter-exit joins ignore shutdown(wait=False). A native
+        SIGINT delivered on another thread can leave Python's main-thread
+        handler pending forever in that join. Timed application waits provide
+        dispatch points without resending signals or abandoning library work.
+        """
+        if not self._unfinished():
+            if not self._typed_interrupt_pending:
+                self._restore_handler()
+            return
+        guard = SigintMaskGuard.acquire()
+        try:
+            # Ask's capture scope may have handed SIGINT back to the CLI after
+            # run_tts unwound. Own only this terminal wait and preserve that
+            # live predecessor, rather than reviving a closed capture scope.
+            current = signal.getsignal(signal.SIGINT)
+            if current is not self._handler:
+                self._previous_sigint = current
+                try:
+                    signal.signal(signal.SIGINT, self._handler)
+                finally:
+                    self._reconcile_handler_truth()
+        finally:
+            guard.restore_preserving_primary()
+        wakeup = threading.Event()
+        try:
+            while self._unfinished():
+                wakeup.wait(0.05)
+        finally:
+            if not self._unfinished() and not self._typed_interrupt_pending:
+                self._restore_handler()
 
     def _detach_after_interrupt(self) -> None:
         """Stop waiting without replacing the exception already unwinding."""

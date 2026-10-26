@@ -47,6 +47,7 @@ class SetupAnswers:
         default_factory=lambda: [{"id": "local"}]
     )
     notes: str = ""
+    minimax_ok: bool | None = None  # explicit consent only; None preserves configuration
 
 
 def setup_complete_path() -> Path:
@@ -214,6 +215,9 @@ def apply_answers_to_config(
             text, "tts", "provider", json.dumps(answers.tts_provider)
         )
 
+    if answers.minimax_ok is True:
+        text = _set_toml_key(text, "tts", "minimax_ok", "true")
+
     # Ambient names + engine
     text = _set_toml_list(text, "ambient", "names", list(answers.wake_names))
     text = _set_toml_key(text, "ambient", "wake_mode", json.dumps("names"))
@@ -304,6 +308,20 @@ def try_list_tts_samples() -> list[dict[str, str]]:
     return out
 
 
+def _report_speech_setup(cfg, *, out: TextIO, err: TextIO) -> int:
+    from hark.speech_readiness import speech_readiness
+    readiness = speech_readiness(cfg)
+    out.write("Configuration interview saved; runtime audio access has not been verified.\n")
+    for leg in ("stt", "tts"):
+        out.write(f"  {readiness[leg]['hint']}\n")
+    if not readiness["configured"]:
+        err.write("Speech setup is incomplete. Run hark doctor --plan for next actions.\n")
+        from hark.exitcodes import PROVIDER
+        return PROVIDER
+    return OK
+
+
+
 def run_setup(
     *,
     non_interactive: bool = False,
@@ -315,6 +333,7 @@ def run_setup(
     skip_doctor: bool = False,
     skip_download: bool = False,
     force: bool = False,
+    minimax_ok: bool = False,
     config_path: Path | None = None,
     inp: TextIO | None = None,
     out: TextIO | None = None,
@@ -327,16 +346,23 @@ def run_setup(
 
     existing = load_setup_complete()
     needs, missing = setup_needs_run(existing)
+    if minimax_ok:
+        from hark.providers.resolve import persist_tts_minimax_ok
+        persist_tts_minimax_ok(config_path)
+        out.write("Saved explicit MiniMax TTS consent.\n")
     if existing and not needs and not force:
         out.write(
-            f"Setup already complete (hark_version="
+            f"Configuration interview already saved (hark_version="
             f"{existing.get('hark_version')}, schema="
             f"{existing.get('setup_schema_version')}). "
             f"Use --force to re-run.\n"
         )
-        return OK
+        return _report_speech_setup(load_config(config_path), out=out, err=err)
 
     answers = SetupAnswers()
+    current_config = load_config(config_path)
+    answers.tts_provider = current_config.tts.provider
+    answers.minimax_ok = True if minimax_ok else None
     if existing and isinstance(existing.get("answers"), dict):
         prev = existing["answers"]
         answers.persona = str(prev.get("persona") or answers.persona)
@@ -532,7 +558,7 @@ def run_setup(
         "Next: confirm wake (say hey iris / hey mercury), then arm handsfree "
         "(see skill/hark/SETUP.md). Optional enroll: `hark wake-enroll` (beep-paced samples; I006).\n"
     )
-    return OK
+    return _report_speech_setup(load_config(cfg_path), out=out, err=err)
 
 
 def cmd_setup(args: Any) -> int:
@@ -547,6 +573,7 @@ def cmd_setup(args: Any) -> int:
         skip_doctor=bool(getattr(args, "skip_doctor", False)),
         skip_download=bool(getattr(args, "skip_download", False)),
         force=bool(getattr(args, "force", False)),
+        minimax_ok=bool(getattr(args, "minimax_ok", False)),
         config_path=(
             Path(args.config_path) if getattr(args, "config_path", None) else None
         ),

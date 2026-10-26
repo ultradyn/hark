@@ -164,6 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("doctor", help="check Herdr, auth, paths")
     d.add_argument("--json", action="store_true")
+    d.add_argument("--plan", action="store_true", help="show ordered setup repairs and documentation links")
 
     su = sub.add_parser(
         "setup",
@@ -204,6 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="comma sessions: local or id=ssh:host (e.g. local,work=ssh:box)",
     )
+    su.add_argument("--minimax-ok", action="store_true", help="explicitly permit and persist MiniMax TTS use")
     su.add_argument(
         "--skip-doctor",
         action="store_true",
@@ -1047,7 +1049,7 @@ def dispatch(args: argparse.Namespace, cfg) -> int:
     cmd = args.cmd
 
     if cmd == "doctor":
-        return run_doctor(cfg, as_json=bool(args.json))
+        return run_doctor(cfg, as_json=bool(args.json), plan=bool(getattr(args, "plan", False)))
 
     if cmd == "setup":
         from hark.setup_flow import cmd_setup
@@ -1994,9 +1996,10 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
             "tts": getattr(exc, "tts_info", None),
             "error": str(exc),
             "listen": None,
+            **({"tts_nudges": exc.tts_nudges} if getattr(exc, "tts_nudges", None) else {}),
             **_standalone_fields(),
         }
-        print(json.dumps(payload, indent=2 if args.json else None))
+        _emit_turn(payload, args, kind="tts_listen", prompt=text)
         return (
             TIMEOUT
             if "timeout" in str(exc).lower() or "empty" in str(exc).lower()
@@ -2011,6 +2014,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
             "text": listened.text,
             "tts": result,
             "stream_id": listened.stream_id,
+            **({"tts_nudges": listened.tts_nudges} if getattr(listened, "tts_nudges", None) else {}),
             **_standalone_fields(),
         }
         record_turn(
@@ -2031,6 +2035,7 @@ def cmd_tts(args: argparse.Namespace, cfg) -> int:
         "text": listened.text,
         "meta_command": listened.meta_command,
         "for_event": getattr(args, "event_id", None),
+        **({"tts_nudges": listened.tts_nudges} if getattr(listened, "tts_nudges", None) else {}),
         **_standalone_fields(),
         "listen": {
             "provider": listened.provider,
@@ -2214,16 +2219,27 @@ def cmd_listen(args: argparse.Namespace, cfg) -> int:
     from hark.meta_commands import classify_meta_command
     from hark.speech import run_listen
 
-    # bound_answer profile: arm_cue from [audio].answer_arm_cue via policy.
-    result = run_listen(
-        cfg,
-        profile="bound_answer",
-        provider=_arg_legs(args).stt,
-        end_mode=args.end_mode,
-    )
+    # Preserve answer-window diagnostics at the direct CLI boundary too.
+    try:
+        result = run_listen(
+            cfg, profile="bound_answer", provider=_arg_legs(args).stt,
+            end_mode=args.end_mode,
+        )
+    except Exception as exc:
+        if isinstance(exc, ProviderError):
+            failure = safe_provider_failure(exc)
+            error, code = failure.detail, failure.code
+        else:
+            error = str(exc)
+            code = TIMEOUT if isinstance(exc, TimeoutError) else AUDIO
+        payload = {"ok": False, "text": None, "error": error, "exit": code,
+                   **({"tts_nudges": exc.tts_nudges} if getattr(exc, "tts_nudges", None) else {})}
+        _emit_turn(payload, args, kind="listen")
+        return code
     if result.cancelled:
         eprint(f"cancelled via {result.end_phrase!r}")
-        cancelled = {"ok": False, "cancelled": True, "text": result.text}
+        cancelled = {"ok": False, "cancelled": True, "text": result.text,
+                     **({"tts_nudges": result.tts_nudges} if getattr(result, "tts_nudges", None) else {})}
         record_turn(
             {**cancelled, "provider": result.provider, "stream_id": result.stream_id},
             kind="listen",
@@ -2242,6 +2258,7 @@ def cmd_listen(args: argparse.Namespace, cfg) -> int:
         "end_mode": result.end_mode,
         "end_phrase": result.end_phrase,
         "stream_id": result.stream_id,
+        **({"tts_nudges": result.tts_nudges} if getattr(result, "tts_nudges", None) else {}),
     }
     _emit_turn(payload, args, kind="listen")
     return OK

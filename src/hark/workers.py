@@ -332,6 +332,18 @@ def start_workers(
             ),
         }
 
+    if "ambient" in missing:
+        from hark.config import load_config
+        from hark.wake_readiness import ambient_readiness
+        readiness = ambient_readiness(load_config())
+        if readiness["status"] not in ("ready", "probe"):
+            return {
+                "ok": False, "error": "ambient preflight failed: " + readiness["status"]
+                + "; " + "; ".join(readiness["warnings"] + readiness["hints"]),
+                "pids": [record.pid for record in existing_records], "roles": roles,
+                "ambient": readiness,
+            }
+
     # Keep healthy roles; spawn only the missing requested ones (B128).
     preserve_records = [
         record

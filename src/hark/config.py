@@ -1322,6 +1322,10 @@ def load_config(path: Path | None = None) -> HarkConfig:
     stt_provider = os.environ.get("HARK_STT_PROVIDER") or str(
         stt_raw.get("provider", "auto")
     )
+    if stt_provider.strip().lower() in ("minimax", "anthropic"):
+        warnings.append(
+            f"stt.provider={stt_provider!r} does not support STT; use auto|xai|openai|google|custom|local"
+        )
     stt_custom_base_url = os.environ.get("HARK_STT_CUSTOM_BASE_URL") or (
         str(stt_raw["custom_base_url"]).strip()
         if stt_raw.get("custom_base_url")

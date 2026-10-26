@@ -39,3 +39,5 @@ Bound synthesis/connect/read latency well below 80 seconds; provide prompt progr
 
 ## Suggested regression coverage
 Simulate a TTS provider read stall and assert a bounded deadline, visible progress/failure, fallback policy, queue release, and mic/media restoration.
+
+Implementation/decision receipt 2026-10-26: 30s synthesis wall deadline spans request upload, framed partial reads/body/EOF and supervisor reap; uses owned cancellation/queue cleanup. Google HTTP bounds 5s connect/20s read; no automatic timeout retry. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.

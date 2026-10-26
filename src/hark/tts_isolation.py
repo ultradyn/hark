@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum, auto
 from typing import Any, Protocol
 
+from hark import pidfd
 from hark.providers.base import ProviderError
 from hark.signal_safety import SigintMaskGuard
 
@@ -915,7 +916,7 @@ class SynthProcessLifecycle:
         if identity is not None and identity.pidfd_mode:
             assert identity.pidfd is not None
             try:
-                result = identity.pidfd.use(signal.pidfd_send_signal, signum)
+                result = identity.pidfd.use(pidfd.send_signal, signum)
             except (ProcessLookupError, OSError):
                 # Never fall back to a numeric PID after a pidfd syscall
                 # failure: a concurrent waiter may already have released the
@@ -1072,9 +1073,7 @@ class SubprocessSynthTransport:
         """Claim a reuse-safe parent handle before the worker protocol begins."""
         if sys.platform != "linux":
             return None
-        pidfd_open = getattr(os, "pidfd_open", None)
-        pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
-        if pidfd_open is None or pidfd_send_signal is None:
+        if not pidfd.available():
             return None
         pid = SynthProcessLifecycle._pid(process)
         if pid is None:
@@ -1086,7 +1085,7 @@ class SubprocessSynthTransport:
             # kernel fd creation through publication into its RAII owner. A
             # pending interrupt delivered during restoration therefore finds
             # the owner reachable through ``state.result``.
-            return _OwnedPidfd.from_raw(pidfd_open(pid, 0))
+            return _OwnedPidfd.from_raw(pidfd.open_pidfd(pid, 0))
 
         def close_published_owner() -> None:
             owner = state.result

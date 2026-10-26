@@ -27,3 +27,5 @@ Related and worth doing together: B187 fixed WHICH provider the nudge speaks thr
 Fix direction: narrow the except to the provider-error class, and surface the nudge outcome in the window result so it reaches the payload. Do not simply let it raise - a failed nudge must not abort a window that is otherwise fine.
 
 Documented as a known gap in docs/PROVIDERS.md under the "A downgrade is never silent" section - keep the doc and the fix in sync when this lands.
+
+Implementation/decision receipt 2026-10-26: Preserve tts_nudges and confirm_tts_nudges in listen/ask success/fail/interrupt results and diagnostic-only transcripts; separate confirm_tts question provenance. Timeout failures retain exit6; unexpected errors no longer silently swallowed. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.

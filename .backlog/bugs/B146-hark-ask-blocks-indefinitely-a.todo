@@ -16,3 +16,5 @@ title: hark ask blocks indefinitely acquiring TTS playback lock
 updated_at: "2026-07-19T09:43:12Z"
 ---
 A user-requested retry of 'hark ask --confirm never' printed the question banner but made no progress for about 90 seconds. Manual Ctrl-C showed it was blocked in claim_tts_play_ticket at fcntl.flock(fd, LOCK_EX), before the listen handoff. There was no lock timeout, owner diagnostic, stale-lock recovery, or structured failure. This likely explains some apparent ask/listen hangs tracked in B145. TTS playback lock acquisition should be bounded and report the owning process/queue state, with safe stale-owner recovery where possible.
+
+Audit 2026-10-26: already fixed on current master; no new implementation needed. Nonblocking flock uses finite default budget and typed owner/queue diagnostics; tests/test_tts_play_queue.py. Inspected whole ticket, code and regressions; final combined remote suite will validate integration.

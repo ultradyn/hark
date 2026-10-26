@@ -16,3 +16,5 @@ updated_at: "2026-10-26T00:19:47Z"
 ---
 
 hark start reports 'started missing workers ambient=<pid>' but the ambient worker dies instantly when the wake model is missing — start --status shows 'ambient: not running' seconds later. start should pre-flight the wake model/deps and refuse with a clear message instead of a phantom start.
+
+Implementation/decision receipt 2026-10-26: Missing ambient role preflights configured wake package/model artifacts before spawning; existing healthy workers preserved. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.

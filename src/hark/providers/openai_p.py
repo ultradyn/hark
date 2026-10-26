@@ -31,6 +31,9 @@ def _stt_model() -> str:
 
 class OpenAIStt:
     name = "openai"
+    # Explicit pins retain legacy per-model capability fallback. Auto should
+    # hand rejected credentials to the next provider without another upload.
+    allow_auth_model_fallback = True
 
     @provider_operation("OpenAI STT")
     def transcribe(self, wav_bytes: bytes, *, language: str | None = None) -> Transcript:
@@ -50,6 +53,7 @@ class OpenAIStt:
             # API keys often allow whisper-1; Codex OAuth often only allows gpt-4o-*.
             if (
                 r.status_code in (400, 401, 403, 404)
+                and (r.status_code not in (401, 403) or self.allow_auth_model_fallback)
                 and model != _FALLBACK_STT_MODEL
                 and not os.environ.get("OPENAI_STT_MODEL")
             ):

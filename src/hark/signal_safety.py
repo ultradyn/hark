@@ -53,7 +53,7 @@ class SigintMaskGuard:
         finally:
             # Unmasking a pending SIGINT can raise from its Python handler
             # after the kernel has already installed ``target``. Reconcile the
-            # actual mask in a finally so the guard/destructor never retries a
+            # actual mask in a finally so the guard never retries a
             # completed transition and delivers the same signal tail twice.
             primary = sys.exception()
             try:
@@ -70,18 +70,22 @@ class SigintMaskGuard:
         try:
             self.restore()
         except BaseException:
-            # Keep _active set for destructor retry. Cleanup must not replace
-            # an exception already unwinding through the guarded transition.
+            # Retry from this ordinary owner frame, never from a finalizer:
+            # Python discards interrupts raised during object finalization.
+            self.restore_suppressing()
             if primary is None:
                 raise
 
     def restore_suppressing(self) -> None:
-        try:
-            self.restore()
-        except BaseException:
-            # Keep _active set. __del__ makes one more idempotent attempt after
-            # injected post-syscall failures.
-            pass
-
-    def __del__(self) -> None:
-        self.restore_suppressing()
+        primary = sys.exception()
+        for _ in range(2):
+            try:
+                self.restore()
+                return
+            except (KeyboardInterrupt, SystemExit):
+                if primary is None:
+                    raise
+            except Exception:
+                # A failed mask syscall may have taken effect. Reconcile and
+                # retry explicitly while the operation's owner is still live.
+                continue

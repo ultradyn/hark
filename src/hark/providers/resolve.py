@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from hark.providers.auth import google_auth, minimax_auth, openai_auth, xai_auth
-from hark.providers.base import ProviderError, ProviderUnsupported, SttProvider, TtsProvider
+from hark.providers.auth_fallback import is_auth_failure
+from hark.providers.base import ProviderError, ProviderUnsupported, SttProvider, TtsProvider, safe_exception_detail
 from hark.providers.google_p import GoogleStt, GoogleTts
 from hark.providers.minimax import MinimaxStt, MinimaxTts
 from hark.providers.openai_p import OpenAIStt, OpenAITts
@@ -201,6 +202,49 @@ def _local_opts(stt_cfg: SttConfig | None) -> dict:
     }
 
 
+class _AutoStt:
+    """Keep STT auto usable after a credential is revoked or lacks audio scope."""
+
+    def __init__(self, first: SttProvider, disabled: set[str]) -> None:
+        self._provider = first
+        self._disabled = set(disabled)
+
+    @property
+    def name(self) -> str:
+        return self._provider.name
+
+    def transcribe(self, wav_bytes: bytes, *, language: str | None = None):
+        from hark.syslog import log as syslog
+
+        first_error: ProviderError | None = None
+        skipped = set(self._disabled)
+        while True:
+            try:
+                return self._provider.transcribe(wav_bytes, language=language)
+            except ProviderError as exc:
+                if not is_auth_failure(exc):
+                    raise
+                if first_error is None:
+                    first_error = exc
+                failed = self._provider.name
+                skipped.add(failed)
+                self._disabled.add(failed)
+                try:
+                    following = _resolve_cloud_stt("auto", disabled=skipped)
+                except ProviderError:
+                    raise first_error from None
+                log.warning("STT auto authentication failed for %s; using %s", failed, following.name)
+                syslog(
+                    "stt.provider_fallback", component="stt", level="warning",
+                    message="STT auto provider authentication failed; trying next provider",
+                    from_provider=failed, to_provider=following.name,
+                    error_class="authentication", error=safe_exception_detail(exc, limit=300),
+                )
+                # Retain the healthy provider for later radio segments. It is
+                # a concrete provider, so repeated auth failures never recurse.
+                self._provider = following._provider if isinstance(following, _AutoStt) else following
+
+
 def _resolve_cloud_stt(name: str = "auto", *, disabled: set[str] | None = None) -> SttProvider:
     name = (name or "auto").lower()
     disabled = disabled or set()
@@ -232,11 +276,13 @@ def _resolve_cloud_stt(name: str = "auto", *, disabled: set[str] | None = None) 
         if pname in disabled:
             continue
         if pname == "xai" and xai_auth().available:
-            return cls()
+            return _AutoStt(cls(), disabled)
         if pname == "openai" and openai_auth().available:
-            return cls()
+            provider = cls()
+            provider.allow_auth_model_fallback = False
+            return _AutoStt(provider, disabled)
         if pname == "google" and google_auth().available:
-            return cls()
+            return _AutoStt(cls(), disabled)
     raise ProviderError(
         "no STT provider available — grok login / agy / XAI_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY"
         + (f" (disabled: {sorted(disabled)})" if disabled else "")

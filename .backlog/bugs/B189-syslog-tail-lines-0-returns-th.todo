@@ -30,3 +30,5 @@ Also worth a look while in there: the same `[-n:]` shape appears in the read-blo
 Not fixed in B186 - correctly held as out of scope by the implementer.
 
 Implementation/decision receipt 2026-10-26: tail_lines returns empty for n<=0 before filesystem access; logs zero no longer reads whole file. watch-logs already guarded. Independent review and parent review completed; isolated-worktree code merged to master. Final combined remote gate pending.
+
+Final verification 2026-10-26: reviewed fix merged to master. Integrated x-tall CPython3.13.11 suite: 6525 passed, 104 skipped, 0 failed in151.61s. Independent review and parent review passed. Full receipt /tmp/hark-b135-full-final.log; per-task evidence and design above.

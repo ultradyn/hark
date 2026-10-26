@@ -1,17 +1,18 @@
 ---
+claimed_at: "2026-10-26T00:13:15Z"
+claimed_by: codex-stream-vapor-nm24
+completed_at: null
 complexity: medium
 created_at: "2026-08-23T05:41:36Z"
 depends_on: []
 estimate_hours: 1
 id: B189
 priority: medium
-status: pending
-tags:
-    - cli
-    - logs
-    - offbyone
+started_at: "2026-10-26T00:13:15Z"
+status: in_progress
+tags: []
 title: syslog.tail_lines(0) returns the whole file, so hark logs -n 0 and watch-logs -n 0 dump everything
-updated_at: "2026-08-23T05:41:36Z"
+updated_at: "2026-10-26T00:13:15Z"
 ---
 Found by the B186 implementation agent, 2026-08-23, and independently reproduced.
 

@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-10-26T00:13:03Z"
 claimed_by: codex-stream-vapor-nm24
-completed_at: null
+completed_at: "2026-10-26T00:46:42Z"
 complexity: medium
 created_at: "2026-08-11T12:20:47Z"
 depends_on: []
+duration_minutes: 33.650671770083335
 estimate_hours: 1
 id: B176
 priority: high
 started_at: "2026-10-26T00:13:03Z"
-status: in_progress
+status: done
 tags: []
 title: hark ask TTS start was inaudible/missed; operator suspects mute/media-duck sequencing muted the beginning. Reproduced during tm-plugin-skills Wayfinder bootstrap with google/eve TTS; subsequent short prompt reported the issue.
-updated_at: "2026-10-26T00:13:03Z"
+updated_at: "2026-10-26T00:46:42Z"
 ---
 
 hark ask TTS start was inaudible/missed; operator suspects mute/media-duck sequencing muted the beginning. Reproduced during tm-plugin-skills Wayfinder bootstrap with google/eve TTS; subsequent short prompt reported the issue.

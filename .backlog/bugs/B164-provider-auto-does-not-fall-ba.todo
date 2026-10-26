@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-10-26T00:12:47Z"
 claimed_by: codex-stream-vapor-nm24
-completed_at: null
+completed_at: "2026-10-26T00:46:42Z"
 complexity: medium
 created_at: "2026-07-23T09:26:35Z"
 depends_on: []
+duration_minutes: 33.91713105638333
 estimate_hours: 1
 id: B164
 priority: high
 started_at: "2026-10-26T00:12:47Z"
-status: in_progress
+status: done
 tags: []
 title: 'provider=auto does not fall back on auth errors: xAI 403 hard-failed hark tts and hark ask STT instead of skipping to next configured provider. Auth failures should trigger fallback like availability failures.'
-updated_at: "2026-10-26T00:12:47Z"
+updated_at: "2026-10-26T00:46:42Z"
 ---
 
 provider=auto does not fall back on auth errors: xAI 403 hard-failed hark tts and hark ask STT instead of skipping to next configured provider. Auth failures should trigger fallback like availability failures.

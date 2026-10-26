@@ -1,18 +1,19 @@
 ---
 claimed_at: "2026-10-26T00:12:47Z"
 claimed_by: codex-stream-vapor-nm24
-completed_at: null
+completed_at: "2026-10-26T00:46:42Z"
 complexity: medium
 created_at: "2026-08-11T16:07:29Z"
 depends_on: []
+duration_minutes: 33.91739186066667
 estimate_hours: 1
 id: B181
 priority: high
 started_at: "2026-10-26T00:12:47Z"
-status: in_progress
+status: done
 tags: []
 title: hark tts can block for 80-120s with no audible output before Gemini timeout
-updated_at: "2026-10-26T00:12:47Z"
+updated_at: "2026-10-26T00:46:42Z"
 ---
 ## Symptom
 During live dogfooding, `hark tts` remained blocked for more than 80 seconds with no audible speech. The operator independently reported hearing nothing. It eventually exited 4 after roughly 120 seconds.
